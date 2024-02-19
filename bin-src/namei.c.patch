@@ -1,0 +1,206 @@
+------------------------------
+
+From: torvalds@klaava.Helsinki.FI (Linus Benedict Torvalds)
+Subject: patches for sys_rename
+Date: 23 Jan 92 19:43:34 GMT
+
+Ok, here's the sys_rename patch to "linux/kernel/namei.c".  Additionally
+you need to remove the sys_rename stub function (just returns -ENOSYS)
+from "linux/kerne|/sys.c". This is not heavily tested: I wrote it today,
+but it seems to work.
+
+Patch the file, remove the stub and recompile linux: voila, you have a
+rename system call that actually works. It's not in the library, so
+you'll have to explicitly call it by using __asm__'s. A simple
+/usr/bin/mvdir command is here:
+
+#define __LIBRARY__
+#include <unistd.h>
+#include <stdio.h>
+
+int main(int argc, char ** argv)
+{
+        int i;
+
+        if (argc != 3)
+                return -1;
+        __asm__("int $0x80":"=a" (i):"0" (__NR_rename),
+                "b" ((long) argv[1]),
+                "c" ((long) argv[2]));
+        return i;
+}
+
+and with this in place mv seems to be able to move directories without
+problems. (You can also use mvdir to move non-directories, but who
+cares). And, yes, I'm interested in bug-reports if it doesn't work.
+
+                Linus
+
+---- snip snip -----------------------------------------
+*** linux/fs/namei.c    Sun Jan 12 06:09:58 1992
+--- namei.c     Thu Jan 23 23:05:53 1992
+***************
+*** 892,894 ****
+--- 892,1051 ----
+        iput(oldinode);
+        return 0;
+  }
++ 
++ static int subdir(struct m_inode * new, struct m_inode * old)
++ {
++       unsigned short fs;
++       int ino;
++       int result;
++ 
++       __asm__("mov %%fs,%0":"=r" (fs));
++       __asm__("mov %0,%%fs"::"r" ((unsigned short) 0x10));
++       new->i_count++;
++       result = 0;
++       for (;;) {
++               if (new == old) {
++                       result = 1;
++                       break;
++               }
++               if (new->i_dev != old->i_dev)
++                       break;
++               ino = new->i_num;
++               new = _namei("..",new,0);
++               if (new->i_num == ino)
++                       break;
++       }
++       iput(new);
++       __asm__("mov %0,%%fs"::"r" (fs));
++       return result;
++ }
++ 
++ #define PARENT_INO(buffer) \
++ (((struct dir_entry *) (buffer))[1].inode)
++ 
++ #define PARENT_NAME(buffer) \
++ (((struct dir_entry *) (buffer))[1].name)
++ 
++ /*
++  * rename uses the -ERESTARTNOINTR error return to avoid race conditions:
++  * it tries to allocate all the blocks, then sanity-checks, and if the sanity-
++  * checks fail, it tries to restart itself again. Very practical - no changes
++  * are done until we know everything works ok.. and then all the changes can be
++  * done in one fell swoop when we have claimed all the buffers needed.
++  *
++  * Anybody can rename anything that they have access to (and write access to the
++  * parents) - except the '.' and '..' directories.
++  */
++ static int do_rename(const char * oldname, const char * newname)
++ {
++       struct m_inode * inode;
++       struct m_inode * old_dir, * new_dir;
++       struct buffer_head * old_bh, * new_bh, * dir_bh;
++       struct dir_entry * old_de, * new_de;
++       const char * old_base, * new_base;
++       int old_len, new_len;
++       int retval;
++ 
++       inode = old_dir = new_dir = NULL;
++       old_bh = new_bh = dir_bh = NULL;
++       old_dir = dir_namei(oldname,&old_len,&old_base, NULL);
++       retval = -ENOENT;
++       if (!old_dir)
++               goto end_rename;
++       retval = -EPERM;
++       if (!old_len || get_fs_byte(old_base) == '.' &&
++           (old_len == 1 || get_fs_byte(old_base+1) == '.' &&
++            old_len == 2))
++               goto end_rename;
++       retval = -EACCES;
++       if (!permission(old_dir,MAY_WRITE))
++               goto end_rename;
++       old_bh = find_entry(&old_dir,old_base,old_len,&old_de);
++       retval = -ENOENT;
++       if (!old_bh)
++               goto end_rename;
++       inode = iget(old_dir->i_dev, old_de->inode);
++       if (!inode)
++               goto end_rename;
++       new_dir = dir_namei(newname,&new_len,&new_base, NULL);
++       if (!new_dir)
++               goto end_rename;
++       retval = -EPERM;
++       if (!new_len || get_fs_byte(new_base) == '.' &&
++           (new_len == 1 || get_fs_byte(new_base+1) == '.' &&
++            new_len == 2))
++               goto end_rename;
++       retval = -EACCES;
++       if (!permission(new_dir, MAY_WRITE))
++               goto end_rename;
++       if (new_dir->i_dev != old_dir->i_dev)
++               goto end_rename;
++       new_bh = find_entry(&new_dir,new_base,new_len,&new_de);
++       retval = -EEXIST;
++       if (new_bh)
++               goto end_rename;
++       retval = -EPERM;
++       if (S_ISDIR(inode->i_mode)) {
++               if (!permission(inode, MAY_WRITE))
++                       goto end_rename;
++               if (subdir(new_dir, inode))
++                       goto end_rename;
++               retval = -EIO;
++               if (!inode->i_zone[0])
++                       goto end_rename;
++               if (!(dir_bh = bread(inode->i_dev, inode->i_zone[0])))
++                       goto end_rename;
++               if (PARENT_INO(dir_bh->b_data) != old_dir->i_num)
++                       goto end_rename;
++       }
++       new_bh = add_entry(new_dir,new_base,new_len,&new_de);
++       retval = -ENOSPC;
++       if (!new_bh)
++               goto end_rename;
++ /* sanity checking before doing the rename - avoid races */
++       retval = -ERESTARTNOINTR;
++       if (new_de->inode || (old_de->inode != inode->i_num))
++               goto end_rename;
++ /* ok, that's it */
++       old_de->inode = 0;
++       new_de->inode = inode->i_num;
++       old_bh->b_dirt = 1;
++       new_bh->b_dirt = 1;
++       if (dir_bh) {
++               PARENT_INO(dir_bh->b_data) = new_dir->i_num;
++               dir_bh->b_dirt = 1;
++               old_dir->i_nlinks--;
++               new_dir->i_nlinks++;
++               old_dir->i_dirt = 1;
++               new_dir->i_dirt = 1;
++       }
++       retval = 0;
++ end_rename:
++       brelse(dir_bh);
++       brelse(old_bh);
++       brelse(new_bh);
++       iput(inode);
++       iput(old_dir);
++       iput(new_dir);
++       return retval;
++ }
++ 
++ /*
++  * Ok, rename also locks out other renames, as they can change the parent of
++  * a directory, and we don't want any races. Other races are checked for by
++  * "do_rename()", which restarts if there are inconsistencies.
++  */
++ int sys_rename(const char * oldname, const char * newname)
++ {
++       static struct task_struct * wait = NULL;
++       static int lock = 0;
++       int result;
++ 
++       while (lock)
++               sleep_on(&wait);
++       lock = 1;
++       result = do_rename(oldname, newname);
++       lock = 0;
++       wake_up(&wait);
++       return result;
++ }
+
+------------------------------
