@@ -1,0 +1,402 @@
+diff -ur linux-oem-109/config.in linux/config.in
+--- linux-oem-109/config.in     Tue Aug 29 14:26:40 1995
++++ linux/config.in     Wed Aug 30 11:10:34 1995
+@@ -7,11 +7,13 @@
+ *
+ bool 'Kernel math emulation' CONFIG_MATH_EMULATION y
+ bool 'Normal harddisk support' CONFIG_BLK_DEV_HD y
++bool 'RAM disk support' CONFIG_BLK_DEV_RAM n
+ bool 'XT harddisk support' CONFIG_BLK_DEV_XD n
+ bool 'TCP/IP networking' CONFIG_INET y
+ bool 'Limit memory to low 16MB' CONFIG_MAX_16M n
+ bool 'System V IPC' CONFIG_SYSVIPC y
+ bool 'Use -m486 flag for 486-specific optimizations' CONFIG_M486 y
++bool 'Loadable Module support' CONFIG_MODULES n
+ *
+ * Program binary formats
+ *
+diff -ur linux-oem-109/drivers/block/Makefile linux/drivers/block/Makefile
+--- linux-oem-109/drivers/block/Makefile        Mon Mar  7 00:08:21 1994
++++ linux/drivers/block/Makefile        Wed Aug 30 10:59:41 1995
+@@ -21,8 +21,8 @@
+ # In the future, some of these should be built conditionally.
+ #
+ 
+-OBJS := ll_rw_blk.o floppy.o ramdisk.o genhd.o 
+-SRCS := ll_rw_blk.c floppy.c ramdisk.c genhd.c 
++OBJS := ll_rw_blk.o floppy.o genhd.o 
++SRCS := ll_rw_blk.c floppy.c genhd.c 
+ 
+ ifdef CONFIG_CDU31A
+ OBJS := $(OBJS) cdu31a.o
+@@ -42,6 +42,11 @@
+ ifdef CONFIG_BLK_DEV_HD
+ OBJS := $(OBJS) hd.o
+ SRCS := $(SRCS) hd.c
++endif
++
++ifdef CONFIG_BLK_DEV_RAM
++OBJS := $(OBJS) ramdisk.o
++SRCS := $(SRCS) ramdisk.c
+ endif
+ 
+ ifdef CONFIG_BLK_DEV_XD
+diff -ur linux-oem-109/drivers/block/genhd.c linux/drivers/block/genhd.c
+--- linux-oem-109/drivers/block/genhd.c Wed Dec  1 23:44:15 1993
++++ linux/drivers/block/genhd.c Wed Aug 30 10:59:41 1995
+@@ -19,8 +19,10 @@
+ 
+ static int current_minor = 0;
+ extern int *blk_size[];
++#ifdef CONFIG_BLK_DEV_RAM
+ extern void rd_load(void);
+ extern int ramdisk_size;
++#endif
+ 
+ /*
+  * Create devices for each logical partition in an extended partition.
+@@ -209,8 +211,10 @@
+                nr += p->nr_real;
+        }
+                
++#ifdef CONFIG_BLK_DEV_RAM
+        if (ramdisk_size)
+                rd_load();
++#endif
+        mount_root();
+        return (0);
+ }
+diff -ur linux-oem-109/drivers/block/ll_rw_blk.c linux/drivers/block/ll_rw_blk.c
+--- linux-oem-109/drivers/block/ll_rw_blk.c     Tue Feb  1 18:03:51 1994
++++ linux/drivers/block/ll_rw_blk.c     Wed Aug 30 10:59:40 1995
+@@ -497,7 +497,9 @@
+ #ifdef CONFIG_SBPCD
+        mem_start = sbpcd_init(mem_start, mem_end);
+ #endif CONFIG_SBPCD
++#ifdef CONFIG_BLK_DEV_RAM
+        if (ramdisk_size)
+                mem_start += rd_init(mem_start, ramdisk_size*1024);
++#endif
+        return mem_start;
+ }
+diff -ur linux-oem-109/drivers/char/serial.c linux/drivers/char/serial.c
+--- linux-oem-109/drivers/char/serial.c Mon Mar 14 06:20:21 1994
++++ linux/drivers/char/serial.c Wed Aug 30 10:59:46 1995
+@@ -145,56 +145,6 @@
+        /* UART CLK   PORT IRQ     FLAGS        */
+        { BASE_BAUD, 0x3F8, 4, STD_COM_FLAGS },         /* ttyS0 */
+        { BASE_BAUD, 0x2F8, 3, STD_COM_FLAGS },         /* ttyS1 */
+-       { BASE_BAUD, 0x3E8, 4, STD_COM_FLAGS },         /* ttyS2 */
+-       { BASE_BAUD, 0x2E8, 3, STD_COM4_FLAGS },        /* ttyS3 */
+-
+-       { BASE_BAUD, 0x1A0, 9, FOURPORT_FLAGS },        /* ttyS4 */
+-       { BASE_BAUD, 0x1A8, 9, FOURPORT_FLAGS },        /* ttyS5 */
+-       { BASE_BAUD, 0x1B0, 9, FOURPORT_FLAGS },        /* ttyS6 */
+-       { BASE_BAUD, 0x1B8, 9, FOURPORT_FLAGS },        /* ttyS7 */
+-
+-       { BASE_BAUD, 0x2A0, 5, FOURPORT_FLAGS },        /* ttyS8 */
+-       { BASE_BAUD, 0x2A8, 5, FOURPORT_FLAGS },        /* ttyS9 */
+-       { BASE_BAUD, 0x2B0, 5, FOURPORT_FLAGS },        /* ttyS10 */
+-       { BASE_BAUD, 0x2B8, 5, FOURPORT_FLAGS },        /* ttyS11 */
+-       
+-       { BASE_BAUD, 0x330, 4, ACCENT_FLAGS },          /* ttyS12 */
+-       { BASE_BAUD, 0x338, 4, ACCENT_FLAGS },          /* ttyS13 */
+-       { BASE_BAUD, 0x000, 0, 0 },     /* ttyS14 (spare; user configurable) */
+-       { BASE_BAUD, 0x000, 0, 0 },     /* ttyS15 (spare; user configurable) */
+-
+-       { BASE_BAUD, 0x100, 12, BOCA_FLAGS },   /* ttyS16 */
+-       { BASE_BAUD, 0x108, 12, BOCA_FLAGS },   /* ttyS17 */
+-       { BASE_BAUD, 0x110, 12, BOCA_FLAGS },   /* ttyS18 */
+-       { BASE_BAUD, 0x118, 12, BOCA_FLAGS },   /* ttyS19 */
+-       { BASE_BAUD, 0x120, 12, BOCA_FLAGS },   /* ttyS20 */
+-       { BASE_BAUD, 0x128, 12, BOCA_FLAGS },   /* ttyS21 */
+-       { BASE_BAUD, 0x130, 12, BOCA_FLAGS },   /* ttyS22 */
+-       { BASE_BAUD, 0x138, 12, BOCA_FLAGS },   /* ttyS23 */
+-       { BASE_BAUD, 0x140, 12, BOCA_FLAGS },   /* ttyS24 */
+-       { BASE_BAUD, 0x148, 12, BOCA_FLAGS },   /* ttyS25 */
+-       { BASE_BAUD, 0x150, 12, BOCA_FLAGS },   /* ttyS26 */
+-       { BASE_BAUD, 0x158, 12, BOCA_FLAGS },   /* ttyS27 */
+-       { BASE_BAUD, 0x160, 12, BOCA_FLAGS },   /* ttyS28 */
+-       { BASE_BAUD, 0x168, 12, BOCA_FLAGS },   /* ttyS29 */
+-       { BASE_BAUD, 0x170, 12, BOCA_FLAGS },   /* ttyS30 */
+-       { BASE_BAUD, 0x178, 12, BOCA_FLAGS },   /* ttyS31 */
+-
+-/* You can have up to four HUB6's in the system, but I've only
+- * included two cards here for a total of twelve ports.
+- */
+-       { BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(0,0) },  /* ttyS32 */
+-       { BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(0,1) },  /* ttyS33 */
+-       { BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(0,2) },  /* ttyS34 */
+-       { BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(0,3) },  /* ttyS35 */
+-       { BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(0,4) },  /* ttyS36 */
+-       { BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(0,5) },  /* ttyS37 */
+-       { BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(1,0) },  /* ttyS32 */
+-       { BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(1,1) },  /* ttyS33 */
+-       { BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(1,2) },  /* ttyS34 */
+-       { BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(1,3) },  /* ttyS35 */
+-       { BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(1,4) },  /* ttyS36 */
+-       { BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(1,5) },  /* ttyS37 */
+ };
+ 
+ #define NR_PORTS       (sizeof(rs_table)/sizeof(struct async_struct))
+diff -ur linux-oem-109/drivers/net/ne.c linux/drivers/net/ne.c
+--- linux-oem-109/drivers/net/ne.c      Mon Mar  7 00:12:04 1994
++++ linux/drivers/net/ne.c      Wed Aug 30 10:59:36 1995
+@@ -175,29 +175,15 @@
+     }
+ #endif
+ 
+-    neX000 = (SA_prom[14] == 0x57  &&  SA_prom[15] == 0x57);
+-    ctron =  (SA_prom[0] == 0x00 && SA_prom[1] == 0x00 && SA_prom[2] == 0x1d);
+-    dlink =  (SA_prom[0] == 0x00 && SA_prom[1] == 0xDE && SA_prom[2] == 0x01);
+-    dfi   =  (SA_prom[0] == 'D' && SA_prom[1] == 'F' && SA_prom[2] == 'I');
+-
+     /* Set up the rest of the parameters. */
+-    if (neX000 || dlink || dfi) {
+-       if (wordlength == 2) {
+-           name = dlink ? "DE200" : "NE2000";
+-           start_page = NESM_START_PG;
+-           stop_page = NESM_STOP_PG;
+-       } else {
+-           name = dlink ? "DE100" : "NE1000";
+-           start_page = NE1SM_START_PG;
+-           stop_page = NE1SM_STOP_PG;
+-       }
+-    } else if (ctron) {
+-       name = "Cabletron";
+-       start_page = 0x01;
+-       stop_page = (wordlength == 2) ? 0x40 : 0x20;
++    if (wordlength == 2) {
++       name = "NE2000";
++       start_page = NESM_START_PG;
++       stop_page = NESM_STOP_PG;
+     } else {
+-       printk(" not found.\n");
+-       return 0;
++       name = "NE1000";
++       start_page = NE1SM_START_PG;
++       stop_page = NE1SM_STOP_PG;
+     }
+ 
+     if (dev->irq < 2) {
+diff -ur linux-oem-109/fs/proc/array.c linux/fs/proc/array.c
+--- linux-oem-109/fs/proc/array.c       Wed Aug 30 10:57:42 1995
++++ linux/fs/proc/array.c       Wed Aug 30 10:58:17 1995
+@@ -464,7 +464,9 @@
+        return sz;
+ }
+ 
++#ifdef CONFIG_MODULES
+ extern int get_module_list(char *);
++#endif
+ 
+ static int array_read(struct inode * inode, struct file * file,char * buf, int count)
+ {
+@@ -516,9 +518,11 @@
+                case 15:
+                        length = get_maps(pid, page);
+                        break;
++#ifdef CONFIG_MODULES
+                case 16:
+                        length = get_module_list(page);
+                        break;
++#endif
+                case 17:
+                        length = get_kstat(page);
+                        break;
+diff -ur linux-oem-109/fs/proc/root.c linux/fs/proc/root.c
+--- linux-oem-109/fs/proc/root.c        Wed Aug 30 10:57:42 1995
++++ linux/fs/proc/root.c        Wed Aug 30 10:58:16 1995
+@@ -65,7 +65,9 @@
+        {13,6,"malloc" },
+ #endif
+        {14,5,"kcore" },
++#ifdef CONFIG_MODULES
+        {16,7,"modules" },
++#endif
+        {17,4,"stat" },
+ };
+ 
+diff -ur linux-oem-109/init/main.c linux/init/main.c
+--- linux-oem-109/init/main.c   Wed Aug 30 10:57:48 1995
++++ linux/init/main.c   Wed Aug 30 10:58:37 1995
+@@ -63,8 +63,6 @@
+        return waitpid(-1,wait_stat,0);
+ }
+ 
+-static char printbuf[1024];
+-
+ extern int console_loglevel;
+ 
+ extern char empty_zero_page[PAGE_SIZE];
+@@ -135,17 +133,15 @@
+ static char * argv_init[MAX_INIT_ARGS+2] = { "init", NULL, };
+ static char * envp_init[MAX_INIT_ENVS+2] = { "HOME=/", term, NULL, };
+ 
+-static char * argv_rc[] = { "/bin/sh", NULL };
+-static char * envp_rc[] = { "HOME=/", term, NULL };
+-
+-static char * argv[] = { "-/bin/sh",NULL };
+-static char * envp[] = { "HOME=/usr/root", term, NULL };
+-
+ struct drive_info_struct { char dummy[32]; } drive_info;
+ struct screen_info screen_info;
+ 
+ unsigned char aux_device_present;
++
++#ifdef CONFIG_BLK_DEV_RAM
+ int ramdisk_size;
++#endif
++
+ int root_mountflags = 0;
+ 
+ static char fpu_error = 0;
+@@ -369,7 +365,9 @@
+        aux_device_present = AUX_DEVICE_INFO;
+        memory_end = (1<<20) + (EXT_MEM_K<<10);
+        memory_end &= PAGE_MASK;
++#ifdef CONFIG_BLK_DEV_RAM
+        ramdisk_size = RAMDISK_SIZE;
++#endif
+        copy_options(command_line,COMMAND_LINE);
+ #ifdef CONFIG_MAX_16M
+        if (memory_end > 16*1024*1024)
+@@ -474,20 +472,8 @@
+                idle();
+ }
+ 
+-static int printf(const char *fmt, ...)
+-{
+-       va_list args;
+-       int i;
+-
+-       va_start(args, fmt);
+-       write(1,printbuf,i=vsprintf(printbuf, fmt, args));
+-       va_end(args);
+-       return i;
+-}
+-
+ void init(void)
+ {
+-       int pid,i;
+ 
+        setup((void *) &drive_info);
+        sprintf(term, "TERM=con%dx%d", ORIG_VIDEO_COLS, ORIG_VIDEO_LINES);
+@@ -498,36 +484,4 @@
+        execve("/etc/init",argv_init,envp_init);
+        execve("/bin/init",argv_init,envp_init);
+        execve("/sbin/init",argv_init,envp_init);
+-       /* if this fails, fall through to original stuff */
+-
+-       if (!(pid=fork())) {
+-               close(0);
+-               if (open("/etc/rc",O_RDONLY,0))
+-                       _exit(1);
+-               execve("/bin/sh",argv_rc,envp_rc);
+-               _exit(2);
+-       }
+-       if (pid>0)
+-               while (pid != wait(&i))
+-                       /* nothing */;
+-       while (1) {
+-               if ((pid = fork()) < 0) {
+-                       printf("Fork failed in init\n\r");
+-                       continue;
+-               }
+-               if (!pid) {
+-                       close(0);close(1);close(2);
+-                       setsid();
+-                       (void) open("/dev/tty1",O_RDWR,0);
+-                       (void) dup(0);
+-                       (void) dup(0);
+-                       _exit(execve("/bin/sh",argv,envp));
+-               }
+-               while (1)
+-                       if (pid == wait(&i))
+-                               break;
+-               printf("\n\rchild %d died with code %04x\n\r",pid,i);
+-               sync();
+-       }
+-       _exit(0);
+ }
+diff -ur linux-oem-109/kernel/Makefile linux/kernel/Makefile
+--- linux-oem-109/kernel/Makefile       Wed Aug 30 10:57:48 1995
++++ linux/kernel/Makefile       Wed Aug 30 10:58:38 1995
+@@ -17,9 +17,13 @@
+        $(CC) $(CFLAGS) -c $<
+ 
+ OBJS  = sched.o sys_call.o traps.o irq.o dma.o fork.o \
+-       panic.o printk.o vsprintf.o sys.o module.o ksyms.o exit.o \
++       panic.o printk.o vsprintf.o sys.o module.o exit.o \
+        signal.o mktime.o ptrace.o ioport.o itimer.o \
+        info.o ldt.o time.o
++
++ifdef CONFIG_MODULES
++OBJS := $(OBJS) ksyms.o
++endif
+ 
+ all: kernel.o
+ 
+diff -ur linux-oem-109/kernel/module.c linux/kernel/module.c
+--- linux-oem-109/kernel/module.c       Wed Aug 30 10:57:50 1995
++++ linux/kernel/module.c       Wed Aug 30 10:58:41 1995
+@@ -7,6 +7,13 @@
+ #include <linux/sched.h>
+ #include <linux/malloc.h>
+ 
++/*
++ *     Reduce kernel bloat. Use dummy syscall functions for users 
++ *     who disable all module support. Similar to kernel/sys.c
++ */
++
++#ifdef CONFIG_MODULES          /* a *big* #ifdef block... */
++
+ struct module *module_list = NULL;
+ int freeing_modules;           /* true if some modules are marked for deletion */
+ 
+@@ -274,3 +281,30 @@
+        }
+        return p - buf;
+ }
++
++#else          /* CONFIG_MODULES */
++
++/* Dummy syscalls for people who don't want modules */
++
++asmlinkage unsigned long sys_create_module(void)
++{
++       return -ENOSYS;
++}
++
++asmlinkage int sys_init_module(void)
++{
++       return -ENOSYS;
++}
++
++asmlinkage int sys_delete_module(void)
++{
++       return -ENOSYS;
++}
++
++asmlinkage int sys_get_kernel_syms(void)
++{
++       return -ENOSYS;
++}
++
++#endif /* CONFIG_MODULES */
++
+diff -ur linux-oem-109/kernel/printk.c linux/kernel/printk.c
+--- linux-oem-109/kernel/printk.c       Wed Aug 30 10:57:49 1995
++++ linux/kernel/printk.c       Wed Aug 30 10:58:39 1995
+@@ -20,9 +20,9 @@
+ #include <linux/sched.h>
+ #include <linux/kernel.h>
+ 
+-#define LOG_BUF_LEN    4096
++#define LOG_BUF_LEN    1024
+ 
+-static char buf[1024];
++static char buf[256];
+ 
+ extern int vsprintf(char * buf, const char * fmt, va_list args);
+ extern void console_print(const char *);

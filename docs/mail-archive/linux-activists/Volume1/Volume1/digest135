@@ -1,0 +1,576 @@
+From:     Digestifier <Linux-Activists-Request@news-digests.mit.edu>
+To:       Linux-Activists@news-digests.mit.edu
+Reply-To: Linux-Activists@news-digests.mit.edu
+Date:     Sat, 21 Mar 92 23:15:09 EST
+Subject:  Linux-Activists Digest #135
+
+Linux-Activists Digest #135, Volume #1           Sat, 21 Mar 92 23:15:09 EST
+
+Contents:
+  Re: 33MHz vs 8Mhz (Drew Eckhardt)
+  diff for extended partitions (Charles Hedrick)
+  Re: diff for extended partitions (Charles Hedrick)
+  test program for extended partitions (Charles Hedrick)
+  Re: non-root login and vi (Drew Eckhardt)
+  Re: Free BSD release: future of Minix/Linux? (Michael L. Kaufman)
+  Where can I get Linux ? (Chris Kottaridis)
+  HD trouble with .95a (Lawrence C. Foard)
+  adduser (S3679988)
+
+----------------------------------------------------------------------------
+
+From: drew@cs.colorado.edu (Drew Eckhardt)
+Subject: Re: 33MHz vs 8Mhz
+Date: 22 Mar 92 00:19:56 GMT
+
+In article <dave.701137159@stat.tamu.edu> dave@stat.tamu.edu (Dave Perry) writes:
+>Hi,
+>
+>I hate to waste bandwidth, but... :)  I've successfully
+>installed basic linux on my pc (finally!) and have noticed
+>a few nagging problems.  One is the refusal of the filesystem
+>to run in 33MHz on my 486. Its a major bummer to have to 
+>resort to 8 and loose all that potential (uncompress is a
+>*chore*        ).  Does anyone have any suggestions? The other thing
+>is the lack of other niceties, such as job control, and the
+>inability of kermit to escape back to linux, which obviously
+>prevents me from using kermit (Not a bad idea, but when its 
+>all you have :)  Keep up the excellent work, Linus!
+>
+
+My guess would be that insufficient wait states are being
+added to bus accesses at 33Mhz.  Since most PC's on the market divide
+clock frequency to get the bus clock as this is cheaper than using a 
+separate clock circuit for the bus, the problem would not manifest itself 
+at 8Mhz when the bus is running at 1/4th the speed.
+
+This could corrupt data coming
+in off the hard disk, etc.  Most software deals with potentially
+slow devices on the bus by putting a jmp instruction after any port
+access - ie in MASM you would have something like
+
+foo:
+insb
+jmp $+2         ; flush pipeline
+loop foo
+
+as the jump will flush the pipeline and slow things down to a workable speed.
+
+If your CMOS has an extended setup, where bus waitstates can be set,
+you probably should increase them.  
+ 
+Otherwise, search the linux source code for any in, out, or ins / outs 
+assembler instructions where a jump like this is not being performed.
+Under gas, you would do this like
+
+outs
+jmp 1f
+1:
+outs 
+jmp 1f
+1:
+
+using the local labels.
+
+------------------------------
+
+From: hedrick@dartagnan.rutgers.edu (Charles Hedrick)
+Subject: diff for extended partitions
+Date: 22 Mar 92 00:33:14 GMT
+
+The following diff appears to fix extended partitions.  At least on my
+system I get the right list of partitions, and making a file system on
+one causes no visible damage.  Note that I've added code to print the
+start and end of all the partitions at startup.  Until we get
+confidence in this code I strongly recommend that you look carefully
+at the partitions to make sure that the logical partitions don't
+overlap each other or any real partitions.  Since the kernel defines
+partitions only by start and size, as long as those numbers are
+reasonable, the partitions should be safe to use.
+
+Unlike the previous posting, this one is NOT from Linus, and is not
+endorsed by him.  (In fact, he hasn't seen it yet.)
+
+It turns out that Linus' guess for how extended partitions would be
+done was not right.  He figured that the partition table in the
+extended partition would be used just like the main partition table.
+It appears that this is not the case.  The problem with that is that
+it would only allow 4 logical partitions.  In fact what they do is
+make a linked list of logical partitions, with each link in the list
+being a partition table.  The tricky thing about it is that in those
+link partition tables, the "start" fields are interpreted oddly.  The
+first one should be offset by the location of the partition table.
+The second one should be offset by the location of the main extended
+partition.
+
+I've tried this code on a machine with one disk and one extended
+partitions.  (I've set up a number of logical partitions, including a
+gap between two of them, just to make sure that I tested the code as
+much a possible.)  Be suspicious of what might happen on a machine
+with more than one disk or using DiskManager partitions (what ever
+that is).
+
+*** hd.c.ORIG   Sun Mar 22 00:15:32 1992
+--- hd.c        Sat Mar 21 23:57:51 1992
+***************
+*** 74,85 ****
+  
+  extern void hd_interrupt(void);
+  extern void rd_load(void);
+  
+  static unsigned int current_minor;
+  
+  static void check_partition(unsigned int dev)
+  {
+!       int minor, i;
+        struct buffer_head *bh;
+        struct partition *p;
+        unsigned long first_sector;
+--- 74,86 ----
+  
+  extern void hd_interrupt(void);
+  extern void rd_load(void);
++ static void extended_partition(unsigned int dev);
+  
+  static unsigned int current_minor;
+  
+  static void check_partition(unsigned int dev)
+  {
+!       int i;
+        struct buffer_head *bh;
+        struct partition *p;
+        unsigned long first_sector;
+***************
+*** 89,106 ****
+                printk("Unable to read partition table of device %04x\n",dev);
+                return;
+        }
+!       minor = current_minor;
+        if (*(unsigned short *) (bh->b_data+510) == 0xAA55) {
+                p = 0x1BE + (void *)bh->b_data;
+!               for (i=0 ; i<4 ; i++,p++) {
+!                       if (!(hd[i+minor].nr_sects = p->nr_sects))
+                                continue;
+!                       hd[i+minor].start_sect = first_sector + p->start_sect;
+                        if ((current_minor & 0x3f) >= 60)
+                                continue;
+                        if (p->sys_ind == EXTENDED_PARTITION) {
+!                               current_minor += 4;
+!                               check_partition(0x0300 | (i+minor));
+                        }
+                }
+                /*
+--- 90,109 ----
+                printk("Unable to read partition table of device %04x\n",dev);
+                return;
+        }
+!       current_minor += 4;  /* first "extra" minor */
+        if (*(unsigned short *) (bh->b_data+510) == 0xAA55) {
+                p = 0x1BE + (void *)bh->b_data;
+!               for (i=1 ; i<=4 ; i++,p++) {
+!                       if (!(hd[i].nr_sects = p->nr_sects))
+                                continue;
+!                       hd[i].start_sect = first_sector + p->start_sect;
+!                       printk("part %d start %d size %d end %d \n\r", i, 
+!                              hd[i].start_sect, hd[i].nr_sects, 
+!                              hd[i].start_sect + hd[i].nr_sects);
+                        if ((current_minor & 0x3f) >= 60)
+                                continue;
+                        if (p->sys_ind == EXTENDED_PARTITION) {
+!                               extended_partition(0x0300 | (i));
+                        }
+                }
+                /*
+***************
+*** 112,125 ****
+                                p--;
+                                if ((current_minor & 0x3f) >= 60)
+                                        break;
+!                               if (!(hd[current_minor+4].start_sect = p->start_sect))
+                                        continue;
+!                               hd[current_minor+4].nr_sects = p->nr_sects;
+                                current_minor++;
+                        }
+                }
+        } else
+                printk("Bad partition table on dev %04x\n",dev);
+        brelse(bh);
+  }
+  
+--- 115,206 ----
+                                p--;
+                                if ((current_minor & 0x3f) >= 60)
+                                        break;
+!                               if (!(hd[current_minor].start_sect = p->start_sect))
+                                        continue;
+!                               hd[current_minor].nr_sects = p->nr_sects;
+!                               printk("DM part %d start %d size %d end %d\n\r",
+!                                      current_minor,
+!                                      hd[current_minor].start_sect, 
+!                                      hd[current_minor].nr_sects,
+!                                      hd[current_minor].start_sect + 
+!                                      hd[current_minor].nr_sects);
+                                current_minor++;
+                        }
+                }
+        } else
+                printk("Bad partition table on dev %04x\n",dev);
++       brelse(bh);
++ }
++ 
++ /*
++  * Create devices for each logical partition in an extended partition.
++  * The logical partitions form a linked list, with each entry being
++  * a partition table with two entries.  The first entry
++  * is the real data partition (with a start relative to the partition
++  * table start).  The second is a pointer to the next logical partition
++  * (with a start relative to the entire extended partition).
++  * We do not create a Linux partition for the partition tables, but
++  * only for the actual data partitions.
++  */
++ 
++ static void extended_partition(unsigned int dev)
++ {
++       struct buffer_head *bh;
++       struct partition *p;
++       unsigned long first_sector, this_sector;
++ 
++       first_sector = hd[MINOR(dev)].start_sect;
++       this_sector = first_sector;
++ 
++       while (1) {
++         if ((current_minor & 0x3f) >= 60)
++           return;
++         if (!(bh = bread(dev,0))) {
++           printk("Unable to read partition table of device %04x\n",dev);
++           return;
++         }
++         /*
++          * This block is from a device that we're about to stomp on.
++          * So make sure nobody thinks this block is usable.
++          */
++         bh->b_dirt=0;
++         bh->b_uptodate=0;
++         if (*(unsigned short *) (bh->b_data+510) == 0xAA55) {
++               p = 0x1BE + (void *)bh->b_data;
++               /*
++                * Process the first entry, which should be the real
++                * data partition.
++                */
++               if (p->sys_ind == EXTENDED_PARTITION ||
++                   !(hd[current_minor].nr_sects = p->nr_sects))
++                 goto done;  /* shouldn't happen */
++               hd[current_minor].start_sect = this_sector + p->start_sect;
++               printk("Logical part %d start %d size %d end %d\n\r", 
++                      current_minor, hd[current_minor].start_sect, 
++                      hd[current_minor].nr_sects,
++                      hd[current_minor].start_sect + 
++                      hd[current_minor].nr_sects);
++               current_minor++;
++               p++;
++               /*
++                * Process the second entry, which should be a link
++                * to the next logical partition.  Create a minor
++                * for this just long enough to get the next partition
++                * table.  The minor will be reused for the real
++                * data partition.
++                */
++               if (p->sys_ind != EXTENDED_PARTITION ||
++                   !(hd[current_minor].nr_sects = p->nr_sects))
++                 goto done;  /* no more logicals in this partition */
++               hd[current_minor].start_sect = first_sector + p->start_sect;
++               this_sector = first_sector + p->start_sect;
++               dev = 0x0300 | current_minor;
++               brelse(bh);
++             }
++         else
++           goto done;
++       }
++       done:
+        brelse(bh);
+  }
+  
+
+------------------------------
+
+From: hedrick@dartagnan.rutgers.edu (Charles Hedrick)
+Subject: Re: diff for extended partitions
+Date: 22 Mar 92 00:56:51 GMT
+
+A PS to my extended partition code: This is based on 0.95a with the
+diffs from Linus that I posted in a previous message.  So you should
+apply those diffs first.  I think my code could be put in a stock
+0.95a, but some minor changes would probably be necessary.
+
+I know there's somebody keeping track of patches.  Do I need
+to do something separate to get them to you, and have them go
+onto tsx-11, etc., or do you pull all patches off the newsgroup?
+
+------------------------------
+
+From: hedrick@dartagnan.rutgers.edu (Charles Hedrick)
+Subject: test program for extended partitions
+Date: 22 Mar 92 01:08:35 GMT
+
+Here's an fdisk-like thing that uses the same method of handling
+extended partitions as my kernel patches.  (However it's a bit more
+limited: it only knows about one disk, /dev/hda, and can only handle
+one extended partition on that disk.)  If you're nervous about firing
+up kernel support, you can use this to check whether my code can
+figure out your disks.  [By the way, all this stuff I'm posting
+is also on athos.rutgers.edu:/pub/linux]
+
+char *parttype ();
+
+main (argc, argv)
+     int argc;
+     char **argv;
+{
+  int fd, i;
+  char buffer[1024];
+  char *p, *part;
+  unsigned long m, partition, start, size, next;
+
+  p = 0;
+  fd = open("/dev/hda", 0);
+  read(fd, buffer, 1024);
+  for (i = 1,part = buffer+ 0702; i <= 4; i++, part += 020) {
+    if (*part == 5)
+      p = part;
+    start = *(unsigned long *)(part + 4);
+    size = *(unsigned long *)(part + 8);
+    printf("/dev/hda%d: %6d blocks (%d sectors) %s at %d-%d\n", i, 
+           size  / 2, size,
+           parttype(*part), start, start+size);
+  }
+
+  if (! p)
+    exit(0);
+
+  printf("\nLogical partitions in extended partition:\n\n");
+
+  partition = *(unsigned long *)(p+4);
+  m = partition;
+  size =  *(unsigned long *)(p+4);
+
+  for(i = 5; ;i++) {
+
+    lseek(fd, partition * 512, 0);
+    read(fd, buffer, 1024);
+
+    start = *(unsigned long *)(buffer + 0706);
+    size = *(unsigned long *)(buffer + 0712);
+    next = *(unsigned long *)(buffer + 0726);
+
+    printf("/dev/hda%d: %6d blocks (%d sectors) %s at %d-%d\n", i, 
+           size  / 2, size,
+           parttype(*(buffer + 0702)), partition + start, 
+           partition+ start + size);
+
+    if (5 != *(buffer + 0722))
+      break;
+
+    partition = m + next;
+
+  }
+}
+
+char typebuf[32];
+
+char *parttype(i)
+     int i;
+{
+
+  if (i == 6)
+    return "16-bit DOS";
+  else if (i == 1)
+    return "12-bit DOS";
+  else if (i == 5)
+    return "extended partition";
+  else { 
+    sprintf(typebuf, "type %d", i);
+    return typebuf;
+  }
+}
+
+------------------------------
+
+From: drew@cs.colorado.edu (Drew Eckhardt)
+Subject: Re: non-root login and vi
+Date: 22 Mar 92 01:12:07 GMT
+
+In article <zhao.701198899@chilko.ucs.ubc.ca> zhao@unixg.ubc.ca (Jiansheng Zhao) writes:
+>I cann't use vi if I login as a non-root user:
+>error messge;"can't create temporary file, error 2."
+>Can someone tell me what I did wrong? I created a UserName under /usr and
+>logged in as UserName. Also, I made the file /usr/UserName/tmp and made 
+>changes in file "passwd" and "group."
+
+This is a problem with the permissions on /tmp.  You should set permissions on
+/tmp to 1777 - sticky, r/w/x all.  Tmp must be r/w all so anyone can make files
+there, and should be sticky so users cannot delete files they don't own.
+
+
+ 
+
+------------------------------
+
+From: kaufman@eecs.nwu.edu (Michael L. Kaufman)
+Crossposted-To: comp.os.minix
+Subject: Re: Free BSD release: future of Minix/Linux?
+Date: 21 Mar 92 16:04:52 GMT
+
+In article <1992Mar21.073048.1673@nntp.hut.fi> s32974l@kaira.hut.fi (Jussi Markus V{h{passi) writes:
+>Users of PS/2 70/80 etc. with MICROCHANNEL are stuck with Minix, too, like it
+>or not.
+
+Maybe not. If I get some free time, I may do a PS/2 port. I have already ported
+another Unix to the PS/2, so it shouldn't be too big a deal.
+
+Michael
+
+
+
+-- 
+Michael Kaufman | I've seen things you people wouldn't believe. Attack ships on
+ kaufman        | fire off the shoulder of Orion. I watched C-beams glitter in
+  @eecs.nwu.edu | the dark near the Tannhauser gate. All those moments will be
+                | lost in time - like tears in rain. Time to die.     Roy Batty 
+
+------------------------------
+
+From: chrisk@Ceram.COM (Chris Kottaridis)
+Subject: Where can I get Linux ?
+Date: 21 Mar 92 05:47:03 GMT
+
+I am looking for an OS to run on my 386 PC. It was recommended that I
+monitor this newsgroup for a while. I like what I see and would like
+to know how to get source for linux. I can ask a favor of a friend to
+get Internet access if that is required, but email or UUCP would be
+easier for me.
+
+        Thanks
+
+        Chris Kottaridis        Chris.Kottaridis@Ceram.COM
+
+------------------------------
+
+From: entropy@ee.WPI.EDU (Lawrence C. Foard)
+Subject: HD trouble with .95a
+Reply-To: entropy@ee.WPI.EDU (Lawrence C. Foard)
+Date: Sun, 22 Mar 1992 02:46:07 GMT
+
+
+I just tried compiling the new .95a kernel and my hard drive does weird
+things after booting. It acts like the driver is putting it at a very
+low step rate. Any idea of how this can be corrected?
+
+------------------------------
+
+From: S3679988@deimos.ucc.umass.edu (S3679988)
+Subject: adduser
+Date: Sun, 22 Mar 1992 03:37:59 GMT
+
+here is a utility that i wrote to add new users to a linux system.
+
+It asks for the username (and checks if it is in user).
+the group id, and user id (sorry, you still have to manage these),
+the users root directory, shell, and default password.
+
+this was a quick hack, i haven't seen any bugs, though.
+
+-- craig hagan
+
+
+========================= cut here =============================
+begin 644 adduser.tar.Z
+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
+FN91,V91.^910&952.9546956>958F95:N95<V95>^95@&99B.18'
+ 
+end
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Activists-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and alt.os.linux) via:
+
+    Internet: Linux-Activists@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    tupac-amaru.informatik.rwth-aachen.de	pub/msdos/replace
+
+The current version of Linux is 0.12, released on Jan 14, 1992
+
+End of Linux-Activists Digest
+******************************

@@ -1,0 +1,616 @@
+Subject: Linux-Development Digest #586
+From: Digestifier <Linux-Development-Request@senator-bedfellow.MIT.EDU>
+To: Linux-Development@senator-bedfellow.MIT.EDU
+Reply-To: Linux-Development@senator-bedfellow.MIT.EDU
+Date:     Mon, 28 Mar 94 19:13:12 EST
+
+Linux-Development Digest #586, Volume #1         Mon, 28 Mar 94 19:13:12 EST
+
+Contents:
+  ioperm(1) - run user programs with io permissions [Linux, source] (Olaf Titz)
+  Re: IPX compliancy? (Cary Whitney)
+  Re: unsupported keys (scancode (xx) not in range 00 - 5f) (Robert Sanders)
+  swapoff does not seem to work with swapfiles (David Boyd)
+
+----------------------------------------------------------------------------
+
+Crossposted-To: alt.sources
+From: olaf@bigred.ka.sub.org (Olaf Titz)
+Subject: ioperm(1) - run user programs with io permissions [Linux, source]
+Date: Mon, 28 Mar 1994 00:43:40 GMT
+
+Archive-name: ioperm.1
+Submitted-by: Olaf Titz <olaf@bigred.ka.sub.org>
+
+Some time ago, I was asked by a friend about how user-level programs
+could access I/O ports (for specialized hardware, in his case) without
+the need to run as root all the time (obvious security
+considerations). This got me the idea of setting up a program that
+would run as root, set the I/O permissions, reset the UID and exec the
+user program. With a configuration file, the hardware access rights
+for several user programs could easily be specified.
+
+Originally, the version (0.8.something) of svgalib running on my
+machine had the same problem - every svgalib program must run setuid
+root. This is reflected by the enclosed examples and man pages. I just
+recently learned that newer versions of this particular library reset
+the UID on their own, so this isn't that necessary, but it could
+remain as an example on how to avoid setuid root programs if possible.
+The executed programs don't get any privileges other than I/O access
+to a specified range of ports and optionally a specified GID. For the
+svgalib case, the GID needs write access to /dev/mem which can be
+abused to get root, so this doesn't help against deliberate Trojan
+Horses but it can perhaps help against exploitable program bugs. This
+is of particular interest wrt. the original question where very
+special hardware and potentially large and complex user programs are
+involved. 
+
+Olaf
+
+#! /bin/sh
+# This is a shell archive.  Remove anything before this line, then unpack
+# it by saving it into a file and typing "sh file".  To overwrite existing
+# files, type "sh file -c".  You can also feed this as standard input via
+# unshar, or by typing "sh <file", e.g..  If this archive is complete, you
+# will see the following message at the end:
+#               "End of shell archive."
+# Contents:  ioperm ioperm/Makefile ioperm/ioperm.c ioperm/ioperm.1
+#   ioperm/ioperm.conf ioperm/ioperm.conf.5
+# Wrapped by olaf@bigred on Mon Mar 28 02:39:22 1994
+PATH=/bin:/usr/bin:/usr/ucb ; export PATH
+if test ! -d 'ioperm' ; then
+    echo shar: Creating directory \"'ioperm'\"
+    mkdir 'ioperm'
+fi
+if test -f 'ioperm/Makefile' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'ioperm/Makefile'\"
+else
+echo shar: Extracting \"'ioperm/Makefile'\" \(763 characters\)
+sed "s/^X//" >'ioperm/Makefile' <<'END_OF_FILE'
+X# A rather generic Makefile
+X# $Id: Makefile,v 1.1 1994/03/28 00:34:48 olaf Exp $
+X
+XCC     = gcc
+XCFLAGS = -Wall -O3 -s
+XINSTALL        = install
+XINSTDIR        = /usr/local/bin
+XMAN1DIR        = /usr/man/man1
+XMAN5DIR = /usr/man/man5
+X
+XPROGS  = ioperm
+X
+Xall: $(PROGS)
+X
+Xioperm: ioperm.c
+X       $(CC) $(CFLAGS) -o ioperm ioperm.c
+X
+Xinstall: all
+X       $(INSTALL) -o root -m 4755 ioperm $(INSTDIR)
+X       $(INSTALL) -m 444 ioperm.1 $(MAN1DIR)
+X       $(INSTALL) -m 444 ioperm.conf.5 $(MAN5DIR)
+X       -mv -f /etc/ioperm.conf /etc/ioperm.conf.OLD
+X       $(INSTALL) -m 644 ioperm.conf /etc
+X
+Xclean:
+X       rm -f $(PROGS) core core.* a.out *.o *.s *~
+X
+Xdist: clean Makefile ioperm.c ioperm.1 ioperm.conf ioperm.conf.5
+X       cd ..; shar ioperm ioperm/Makefile ioperm/ioperm.c \
+X               ioperm/ioperm.1 ioperm/ioperm.conf \
+X               ioperm/ioperm.conf.5 > ioperm.shar
+END_OF_FILE
+if test 763 -ne `wc -c <'ioperm/Makefile'`; then
+    echo shar: \"'ioperm/Makefile'\" unpacked with wrong size!
+fi
+# end of 'ioperm/Makefile'
+fi
+if test -f 'ioperm/ioperm.c' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'ioperm/ioperm.c'\"
+else
+echo shar: Extracting \"'ioperm/ioperm.c'\" \(3288 characters\)
+sed "s/^X//" >'ioperm/ioperm.c' <<'END_OF_FILE'
+X/*
+X   ioperm(1)  -  run program with ioperm and gid set
+X   $Id: ioperm.c,v 1.2 1994/03/28 00:34:48 olaf Exp $
+X*/
+X
+X#include <stdio.h>
+X#include <stdlib.h>
+X#include <string.h>
+X#include <unistd.h>
+X#include <grp.h>
+X
+X/* Here lives the config file
+X*/
+X#define PATH_IOPERM_CONF "/etc/ioperm.conf"
+X
+X#define DELIM " \t\n"          /* whitespace */
+X#define MAX_LEN 120            /* max len of any string */
+X
+X/* Check for error after operation
+X*/
+Xvoid success(int value, const char *name)
+X{
+X       if (value < 0) {
+X               perror(name);
+X               exit(1);
+X       }
+X#ifdef DEBUG
+X       printf("%s: success\n", name);
+X#endif
+X}
+X
+X/* Signal error in config file
+X*/
+Xvoid conferr(const char *cause)
+X{
+X       fprintf(stderr, "%s: %s\n", PATH_IOPERM_CONF, cause);
+X       exit(1);
+X}
+X
+X/* Alloc and init string
+X*/
+Xchar *stralloc(const char *s)
+X{
+X       char *n = strdup(s);
+X
+X       if (!n) {
+X               fprintf(stderr, "malloc failed\n");
+X               exit(1);
+X       }
+X       return n;
+X}
+X
+X/* Set the GID to specified group
+X*/
+Xvoid setgroup(const char *group)
+X{
+X       struct group *g = getgrnam(group);
+X
+X       if (g)
+X               success(setgid(g->gr_gid), "setgid");
+X}
+X
+X/* run the ioperm call
+X*/
+X#ifdef DEBUG
+X#define iopermd(a,b,c) printf("ioperm(%u,%u,%u)\n",(a),(b),(c)); \
+X        success(ioperm((a),(b),(c)),"ioperm");
+X#else
+X#define iopermd(a,b,c) success(ioperm((a),(b),(c)),"ioperm");
+X#endif
+X
+X/* Set IO permissions according to string
+X*/
+Xvoid setupperm(char *perm)
+X{
+X       int a, b;
+X
+X       while ((perm) && (*perm)) {
+X               a = strtol(perm, &perm, 0);
+X               switch (*perm) {
+X               case '-':
+X                       b = strtol(&perm[1], &perm, 0);
+X                       if (b > 1023) {
+X#ifdef DEBUG
+X                               printf("iopl(3)\n");
+X#endif
+X                               success(iopl(3), "iopl");
+X                       } else {
+X                               iopermd(a, b - a + 1, 1);
+X                       }
+X                       ++perm;
+X                       break;
+X               case ',':
+X                       iopermd(a, 1, 1);
+X                       ++perm;
+X                       break;
+X               default:
+X                       return;
+X               }
+X       }
+X}
+X
+X/* print out ptr value and string pointed to
+X*/
+X#ifdef DEBUG
+X#define prtag(a,x) printf("%s:%x>%s<\n", (a), (int)(x), ((x))?(x):"");
+X#else
+X#define prtag(a,x)             /* no-op */
+X#endif
+X
+X/* Search for tagname in the config file. Set up permissions and return
+X   the binary path or NULL.
+X*/
+Xchar *prepareprog(const char *tagname)
+X{
+X       FILE *cf;
+X       char line[MAX_LEN];
+X       char *tag, *path, *grp, *perm;
+X
+X       cf = fopen(PATH_IOPERM_CONF, "r");
+X       if (!cf)
+X               conferr("open failed");
+X       while (fgets(line, MAX_LEN - 1, cf)) {
+X               tag = strtok(line, DELIM);
+X#ifdef DEBUG2
+X               prtag("tag", tag);
+X#endif
+X               /* ignore empty line or line starting with # */
+X               if ((!tag) || (tag[0] == '#') || (tag[0] == '\n'))
+X                       continue;
+X               path = strtok(NULL, DELIM);
+X#ifdef DEBUG2
+X               prtag("path", path);
+X#endif
+X               if (!path)
+X                       conferr("Incomplete line");
+X               if (!strcmp(tag, tagname)) {
+X                       grp = strtok(NULL, DELIM);
+X                       if (!grp)
+X                               conferr("Incomplete line");
+X                       /* Group "-" means same as user. */
+X                       if (grp[0] != '-')
+X                               setgroup(grp);
+X                       perm = strtok(NULL, DELIM);
+X#ifdef DEBUG
+X                       printf(">%s=%s,%s\n", tag, path, perm);
+X#endif
+X                       fclose(cf);
+X                       setupperm(perm);
+X                       return path;
+X               }
+X       }
+X       fclose(cf);
+X       return NULL;
+X}
+X
+Xvoid main(int argc, char *argv[], char *envp[])
+X{
+X       uid_t ruid = getuid();
+X       char *pn = prepareprog(argv[1]);
+X
+X       if (!pn) {
+X               fprintf(stderr, "%s not defined in %s\n", argv[1], PATH_IOPERM_CONF);
+X               exit(1);
+X       }
+X       success(setuid(ruid), "setuid");
+X#ifdef DEBUG
+X       printf("ruid=%u, euid=%u, rgid=%u, egid=%u\n", getuid(), geteuid(),
+X              getgid(), getegid());
+X#endif
+X       success(execve(pn, &argv[1], envp), "exec");
+X}
+END_OF_FILE
+if test 3288 -ne `wc -c <'ioperm/ioperm.c'`; then
+    echo shar: \"'ioperm/ioperm.c'\" unpacked with wrong size!
+fi
+# end of 'ioperm/ioperm.c'
+fi
+if test -f 'ioperm/ioperm.1' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'ioperm/ioperm.1'\"
+else
+echo shar: Extracting \"'ioperm/ioperm.1'\" \(1641 characters\)
+sed "s/^X//" >'ioperm/ioperm.1' <<'END_OF_FILE'
+X.\" -*- nroff -*-
+X.ig
+X$Id: ioperm.1,v 1.1 1994/03/15 23:57:46 olaf Exp $
+X..
+X.TH IOPERM 1 "Mar 15, 1994" Linux
+X.SH NAME
+Xioperm \- run programs with I/O permissions
+X.SH SYNOPSIS
+X.B ioperm name
+X.SH DESCRIPTION
+X.BR ioperm
+Xallows to run programs specified in a config file with I/O
+Xpermissions. The programs have not to run setuid root.
+X.SH PARAMETER
+X.TP
+X.IR name
+XSpecifies the program to run. This must match an entry in the config
+Xfile. 
+X.BR ioperm
+Xsets up the permissions needed for this program to run and execs the
+Xprogram with the real and effective UID of the caller and real and
+Xeffective GID specified in the config file.
+X.SH EXAMPLES
+XSuppose you have the following line in
+X.IR /etc/ioperm.config:
+X.RS
+X\fCfun\ \ \ /usr/local/bin/fun\ \ \ mem\ \ \ 0x3bd-0x3df\fP
+X.RE
+Xfor the 
+X.IR fun
+Xdemo program of
+X.IR svgalib.
+XThen the command
+X.RS
+X\fCioperm fun\fP
+X.RE
+Xruns /usr/local/bin/fun under GID mem, with the ports 0x3bd up to
+X0x3df accessible. This is the typical situation for 
+X.IR svgalib
+Xprograms, which need to access the mentioned ports and 
+X.IR /dev/mem. 
+XMake
+X.IR /dev/mem 
+Xwritable for group
+X.IR mem.
+X.SH DIAGNOSTICS
+XEvery system call is tested for error return. In case of any error,
+Xthe program prints a description and exits with exit code 1.
+X.SH FILES
+X.BR /etc/ioperm.conf
+Xspecifies which programs to run with which permissions.
+X.SH SEE ALSO
+X.BR ioperm.conf (5),
+X.BR ioperm (2),
+X.BR iopl (2)
+X.SH BUGS
+XNone in this program (I hope). In order to run as given above, 
+X.IR svgalib
+Xhas to be modified to take out all
+X.IR iopl
+Xand
+X.IR ioperm
+Xsystem calls.
+X.SH VERSION
+X1.1 as of 15 Mar 1994.
+X.SH AUTHOR
+XOlaf Titz <olaf@bigred.ka.sub.org>
+END_OF_FILE
+if test 1641 -ne `wc -c <'ioperm/ioperm.1'`; then
+    echo shar: \"'ioperm/ioperm.1'\" unpacked with wrong size!
+fi
+# end of 'ioperm/ioperm.1'
+fi
+if test -f 'ioperm/ioperm.conf' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'ioperm/ioperm.conf'\"
+else
+echo shar: Extracting \"'ioperm/ioperm.conf'\" \(792 characters\)
+sed "s/^X//" >'ioperm/ioperm.conf' <<'END_OF_FILE'
+X# $Id: ioperm.conf,v 1.1 1994/03/16 00:05:27 olaf Exp $
+X#
+X# Configuration file for ioperm(1)
+X#
+X# Every program that needs I/O permissions as non-root is listed here
+X# with complete path, group (this effects setgid) and port access.
+X# The path names need to be full absolute, the programs themselves
+X# neither setuid nor setgid.
+X
+X# name         path                                    group   ports
+X# ----         ----                                    -----   -----
+X
+X# The svgalib demo programs - note: svgalib needs to be patched
+Xfun            /usr/src/svgalib081/gl/fun              mem     0x3bd-0x3df
+Xvgatest                /usr/src/svgalib081/vgatest             mem     0x3bd-0x3df
+Xdumpreg                /usr/src/svgalib081/dumpreg             mem     0x3bd-0x3df
+Xtestgl         /usr/src/svgalib081/gl/testgl           mem     0x3bd-0x3df
+Xspeedtest      /usr/src/svgalib081/gl/speedtest        mem     0x3bd-0x3df
+X
+X# An svgalib application
+Xspic           /usr/src/spic/spic                      mem     0x3bd-0x3df
+END_OF_FILE
+if test 792 -ne `wc -c <'ioperm/ioperm.conf'`; then
+    echo shar: \"'ioperm/ioperm.conf'\" unpacked with wrong size!
+fi
+# end of 'ioperm/ioperm.conf'
+fi
+if test -f 'ioperm/ioperm.conf.5' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'ioperm/ioperm.conf.5'\"
+else
+echo shar: Extracting \"'ioperm/ioperm.conf.5'\" \(2778 characters\)
+sed "s/^X//" >'ioperm/ioperm.conf.5' <<'END_OF_FILE'
+X.\" -*- nroff -*-
+X.ig
+X$Id: ioperm.conf.5,v 1.1 1994/03/15 23:57:46 olaf Exp $
+X..
+X.TH IOPERM.CONF 5 "Mar 15, 1994" Linux
+XThe file
+X.IR /etc/ioperm.conf
+Xcontrols the operation of the 
+X.BR ioperm(1)
+Xcommand. With this command, a user program (e.g.,
+X.IR svgalib
+Xapplication) need not run setuid root just in order to get I/O
+Xpermissions or
+X.IR /dev/mem
+Xaccess.
+X.BR ioperm(1) 
+Xlooks in the configuration file which ports an application needs,
+Xenables access to these ports and runs via
+X.IR exec(2)
+Xthe application with real and effective UID re-set to that of the
+Xuser. The GID may be different and is specified in the config file.
+X.SH FILE FORMAT
+XThe file consists of lines that each have four fields. Blank lines and
+Xlines starting with a 
+X.B "#"
+X(hash) mark are ignored. Fields are separated by (an
+Xarbitrary number of) blanks or tabs. The first field of each line
+Xcontains the name of the program, i.e. the name under which it is
+Xstarted with
+X.BR ioperm(1).
+XThe second field contains the full absolute path name of the
+Xapplication. Note that anything other than a full absolute path name
+Xhere might constitute a security risk.
+XThe third field has the group name under which the program is to run.
+XIf this contains just a single
+X.B "-"
+X(dash) then the group is not changed, i.e. the program runs under the
+Xuser's original GID.
+XThe fourth field lists the port numbers that are made available to the
+Xprogram. The fourth field is broken by 
+X.B ","
+X(comma) signs into subfields.
+XEach subfield may contain either one number, designating one port, or
+Xtwo numbers separated by
+X.B "-"
+X(dash), designating a range of ports as from-to (including both given
+Xnumbers). 
+X.SH EXAMPLE
+X.RS
+X\fCfun\ \ \ /usr/local/bin/fun\ \ \ mem\ \ \ 0x3bd-0x3df\fP
+X\fChwtest\ \ \ /usr/local/bin/hwtest\ \ \ \-\ \ \ 0\-10000\fP
+X.RE
+XThe first line describes a 
+X.IR svgalib
+Xprogram. In this case,
+X.IR svgalib
+Xhas to be modified to not make any 
+X.IR ioperm(2)
+Xor
+X.IR iopl(2)
+Xcalls by itself. The easiest way to accomplish this is to include in
+Xthe 
+X.IR libvga.a
+Xlibrary dummy versions of these functions that always return 0.
+X.IR svgalib
+Xrequires access to the ports 0x3bd-0x3df (VGA hardware registers) and 
+X.IR /dev/mem,
+Xwhich is given by making
+X.IR /dev/mem
+Xwritable by group 
+X.IR mem
+Xand running the programs under this group.
+X.br
+XThe second example might be a program that needs access to all
+Xhardware ports. The range of ports given here exceeds the range
+Xallowed by 
+X.IR ioperm(2),
+Xso a call to
+X.IR iopl(2)
+Xis used instead and enables access to all ports, no matter which
+Xnumbers are actually given. Use this only if absolutely necessary.
+X.SH FILES
+X.BR /etc/ioperm.conf
+X.SH SEE ALSO
+X.BR ioperm (1),
+X.BR ioperm (2),
+X.BR iopl (2)
+X.SH VERSION
+X1.1 as of 15 Mar 1994.
+X.SH AUTHOR
+XOlaf Titz <olaf@bigred.ka.sub.org>
+END_OF_FILE
+if test 2778 -ne `wc -c <'ioperm/ioperm.conf.5'`; then
+    echo shar: \"'ioperm/ioperm.conf.5'\" unpacked with wrong size!
+fi
+# end of 'ioperm/ioperm.conf.5'
+fi
+echo shar: End of shell archive.
+exit 0
+-- 
+        olaf titz     o       olaf@bigred.ka.sub.org          praetorius@irc
+  comp.sc.student    _>\ _         s_titz@ira.uka.de      LINUX - the choice
+karlsruhe germany   (_)<(_)      uknf@dkauni2.bitnet     of a GNU generation
+what good is a photograph of you? everytime i look at it it makes me feel blue
+
+------------------------------
+
+From: whitney@genisys.unomaha.edu (Cary Whitney)
+Subject: Re: IPX compliancy?
+Date: Mon, 28 Mar 1994 16:43:56 GMT
+
+: In article <1994Mar22.145503.28541@uk.ac.swan.pyr> iiitac@uk.ac.swan.pyr (Alan Cox) writes:
+: >In article <1994Mar14.185508.46244@ucl.ac.uk> zceed04@ucl.ac.uk (Mr Ivan Alastair Beveridge) writes:
+: >>Basically, I was wondering if anyone has made Linux compliant with Netware
+: >>at all. As I do not really know much about protocols, I cannot really ask
+: >>much more than this.
+: >
+: >There is a beta test IPX layer for Linux, but no netware support. Novell
+: >guards its netware details with lawyers and complex licensing agreements
+: >involving thousands of dollars. So forget it - Linux does Lan manager and NFS
+
+Where can a person get information about this test IPX layer?
+
+Thanks
+
+Cary
+
+--
+- Cary Whitney -/- System Specialist ------Internet: whitney@unomaha.edu
+University of Nebraska at Omaha - Library          : whitney@cwis.unomaha.edu
+UUCP: uunet!unocss!whitney                         : whitney@unocss.unomaha.edu
+
+------------------------------
+
+From: gt8134b@prism.gatech.edu (Robert Sanders)
+Subject: Re: unsupported keys (scancode (xx) not in range 00 - 5f)
+Date: 27 Mar 1994 12:45:58 -0500
+
+kaz@lilia.iijnet.or.jp (Kaz Sasayama) writes:
+
+>My keyboard generates scancodes not in range 00 - 5f for some keys.
+>How can I use them?
+
+>press any key (program terminates after 10s of last keypress)...
+>0x9c 
+>0x7b 
+>0xfb 
+>0x79 
+>0xf9 
+>0x70 
+>0xf0 
+>0x7d 
+>0xfd 
+
+Are you using one of the newer "programmable" keyboards, such as the
+Northgage Omnikey or the Focus 9001?  I'm using the latter, and get
+similar messages when I press the PF keys.  I just got the keyboard, 
+but I'll look into it when I get the time.
+
+-- 
+ _g,  '96 --->>>>>>>>>>   gt8134b@prism.gatech.edu  <<<<<<<<<---  CompSci  ,g_
+W@@@W__        |-\      ^        | disclaimer:  <---> "Bow before ZOD!" __W@@@W
+W@@@@**~~~'  ro|-<ert s/_\ nders |   who am I???  ^  from Superman  '~~~**@@@@W
+`*MV' hi,ocie! |-/ad! /   \ss!!  | ooga ooga!!    |    II (cool)!         `VW*'
+
+------------------------------
+
+From: dwb@ITD.Sterling.COM (David Boyd)
+Subject: swapoff does not seem to work with swapfiles
+Date: 28 Mar 1994 16:35:40 GMT
+
+Hello fellow linuxers:
+        I seem to have encountered a small problem with Linux (1.0.4) and
+the swapoff command.  I am using a swap file (I know partitions are faster
+but I don't always need swap and it is much easier to change the size of
+a file) on my second IDE hard drive.  The drive is mounted after disk
+checks and then the swapon command is called.  When I do a shutdown or
+a reboot the swapoff command is called and then an attempt is made to
+dismount the file system the swapfile is one.  The dismount always comes
+back with a "filesystem busy" message.  I have know processes running from
+that disk (it is used entirely for source trees and swap).  Has anyone
+seen this? I am running the Slackware 1.2.0 distribution.  I will try
+to chase this down in the kernel code if I have time this week but wanted
+to check if this was a known problem first.
+-- 
+David W. Boyd                UUCP:     uunet!sparky!dwb
+Sterling Software ITD        INTERNET: Dave_Boyd@Sterling.COM
+1404 Ft. Crook Rd. South     Phone:    (402) 291-8300 
+Bellevue, NE. 68005-2969     FAX:      (402) 291-4362
+Reston Va Phone: (703)264-8008
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

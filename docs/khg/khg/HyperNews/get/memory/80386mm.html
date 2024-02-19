@@ -1,0 +1,434 @@
+
+<HTML>
+<HEAD>
+<TITLE>80386 Memory Management</TITLE>
+<LINK rel="owner" href="mailto:">
+<SCRIPT LANGUAGE="JavaScript">
+<!-- hide this
+
+function help(message) {
+  self.status = message;
+  return true;
+}
+// stop hiding -->
+</SCRIPT>
+
+</HEAD>
+<BODY>
+<strong>The
+HyperNews <a href="../khg.html">Linux KHG</a>
+Discussion Pages</strong>
+<hr>
+<h3>80386 Memory Management</h3>
+
+<p>A logical address specified in an instruction is first
+translated to a linear address by the segmenting hardware. This
+linear address is then translated to a physical address by the
+paging unit.
+
+<h4>Paging on the 386</h4>
+
+<p>There are two levels of indirection in address translation
+by the paging unit. A <b>page directory</b> contains pointers
+to 1024 page tables. Each <b>page table</b> contains pointers
+to 1024 pages. The register CR3 contains the physical base
+address of the page directory and is stored as part of the TSS
+in the <tt>task_struct</tt> and is therefore loaded on each
+task switch.
+
+<p>A 32-bit Linear address is divided as follows:<br>
+<table border>
+<tr><th>31 ...... 22</th><th>21 ...... 12</th><th>11 ...... 0</th></tr>
+<tr><td align="center">DIR</td><td align="center">TABLE</td><td align="center">OFFSET</td></tr>
+</table><br>
+Physical address is then computed (in hardware) as:<br>
+<table border>
+<tr><td align="right">CR3 + DIR</td><td>points to the table_base.</td></tr>
+<tr><td align="right">table_base + TABLE</td><td>points to the page_base.</td></tr>
+<tr><td align="right">physical_address =</td><td>page_base + OFFSET</td></tr>
+</table>
+
+<p>Page directories (page tables) are page aligned so the lower
+12 bits are used to store useful information about the page
+table (page) pointed to by the entry.
+
+<p>Format for Page directory and Page table entries:<br>
+<table border>
+<tr><th>31 ...... 12</th><th>11 .. 9</th><th>8</th><th>7</th><th>6</th><th>5</th><th>4</th><th>3</th><th align="center">2</th><th align="center">1</th><th>0</th></tr>
+<tr><td align="center">ADDRESS</td><td align="center">OS</td><td>0</td><td>0</td><td>D</td><td>A</td><td>0</td><td>0</td><td>U/S</td><td>R/W</td><td>P</td></tr>
+</table><br>
+<table>
+<tr><td>D</td><td>1 means page is dirty (undefined for page directory entry).</td></tr>
+<tr><td>R/W</td><td>0 means readonly for user.</td></tr>
+<tr><td>U/S</td><td>1 means user page.</td></tr>
+<tr><td>P</td><td>1 means page is present in memory.</td></tr>
+<tr><td>A</td><td>1 means page has been accessed (set to 0 by aging).</td></tr>
+<tr><td>OS</td><td>bits can be used for LRU etc, and are defined by the OS.</td></tr>
+</table><br>
+The corresponding definitions for Linux are in <tt><linux/mm.h></tt>.
+
+<p>When a page is swapped, bits 1-31 of the page table entry
+are used to mark where a page is stored in swap (bit 0 must be
+0).
+
+<p>Paging is enabled by setting the highest bit in CR0. <b>[in
+head.S?]</b> At each stage of the address translation access
+permissions are verified and pages not present in memory and
+protection violations result in page faults.  The fault handler
+(in memory.c) then either brings in a new page or
+unwriteprotects a page or does whatever needs to be done.
+
+
+<h4>Page Fault handling Information</h4>
+
+<ul>
+<li>The register CR2 contains the linear address that caused
+the last page fault.
+<li>Page Fault Error Code (16 bits):<br>
+<table border>
+<tr><td align="center">bit</td><td>cleared</td><td>set</td></tr>
+<tr><td align="center">0</td><td>page not present</td><td>page level protection</td></tr>
+<tr><td align="center">1</td><td>fault due to read</td><td>fault due to write</td></tr>
+<tr><td align="center">2</td><td>supervisor mode</td><td>user mode</td></tr>
+</table><br>
+The rest are undefined. These are extracted in sys_call.S.
+</ul>
+
+<p>The Translation Lookaside Buffer (TLB) is a hardware cache
+for physical addresses of the most recently used virtual
+addresses. When a virtual address is translated the 386 first
+looks in the TLB to see if the information it needs is
+available. If not, it has to make a couple of memory references
+to get at the page directory and then the page table before it
+can actually get at the page. Three physical memory references
+for address translation for every logical memory reference
+would kill the system, hence the TLB.
+
+<p>The TLB is flushed if CR3 loaded or by task switch that
+changes CR0. It is explicitly flushed in Linux by calling
+<tt>invalidate()</tt> which just reloads CR3.
+
+<h4>Segments in the 80386</h4>
+
+<p>Segment registers are used in address translation to
+generate a linear address from a logical (virtual) address.<br>
+<tt>linear_address = segment_base + logical_address</tt><br>
+The linear address is then translated into a physical address
+by the paging hardware.
+
+<p>Each segment in the system is described by a 8 byte segment
+descriptor which contains all pertinent information (base,
+limit, type, privilege).
+
+<p>The segments are:
+<dl>
+<dt><b>Regular segments</b>
+<dd><ul><li>code and data segments</ul>
+<dt><b>System segments</b>
+<dd><ul>
+ <li>(TSS) task state segments
+ <li>(LDT) local descriptor tables
+</ul>
+</dl>
+
+<p><b>Characteristics of system segments</b>
+<ul>
+<li>System segments are task specific.
+
+<li>There is a Task State Segment (TSS) associated with each task
+in the system. It contains the <tt>tss_struct</tt> (sched.h). The size
+of the segment is that of the <tt>tss_struct</tt> excluding the
+<tt>i387_union</tt> (232 bytes).  It contains all the information necessary
+to restart the task.
+
+<li>The LDT's contain regular segment descriptors that are private
+to a task.  In Linux there is one LDT per task.  There is room for
+32 descriptors in the linux <tt>task_struct</tt>. The normal LDT
+generated by Linux has a size of 24 bytes, hence room for only 3
+entries as above.  Its contents are:
+  <dl>
+  <dt>LDT[0]
+  <dd>Null (mandatory)
+  <dt>LDT[1]
+  <dd>user code segment descriptor.
+  <dt>LDT[2]
+  <dd>user data/stack segment descriptor.
+  </dl>
+
+<li>The user segments all have base=0x00 so that the linear address
+is the same as the logical address. 
+</ul>
+
+<p>To keep track of all these segments, the 386 uses a global
+descriptor table (GDT) that is setup in memory by the system
+(located by the GDT register).  The GDT contains a segment
+descriptors for each task state segment, each local descriptor
+tablet and also regular segments. The Linux GDT contains just
+two normal segment entries:
+<ul>
+<li>GDT[0] is the null descriptor. 
+<li>GDT[1] is the kernel code segment descriptor.
+<li>GDT[2] is the kernel data/stack segment descriptor. 
+</ul>
+The rest of the GDT is filled with TSS and LDT system descriptors:
+<ul>
+<li>GDT[3]    ???
+<li>GDT[4] = TSS0, GDT[5] = LDT0, 
+<li>GDT[6] = TSS1, GDT[7] = LDT1
+<li>... etc. ...
+</ul>
+
+<p><b>LDT[<i>n</i>] != LDT<i>n</i></b>
+<table>
+<tr><td align="right">LDT[<i>n</i>]</td><td>= the <i>n</i>th descriptor in the LDT of the current task.</td></tr>
+<tr><td align="right">LDT<i>n</i></td><td>= a descriptor in the GDT for the LDT of the <i>n</i>th task.</td></tr>
+</table>
+
+<p>The kernel segments have base 0xc0000000 which is where the
+kernel lives in the linear view. Before a segment can be used,
+the contents of the descriptor for that segment must be loaded
+into the segment register. The 386 has a complex set of
+criteria regarding access to segments so you can't simply load
+a descriptor into a segment register. Also these segment
+registers have programmer invisible portions. The visible
+portion is what is usually called a segment register: cs, ds,
+es, fs, gs, and ss.
+
+<p>The programmer loads one of these registers with a 16-bit
+value called a selector. The selector uniquely identifies a
+segment descriptor in one of the tables. Access is validated
+and the corresponding descriptor loaded by the hardware.
+
+<p>Currently Linux largely ignores the (overly?) complex
+segment level protection afforded by the 386. It is biased
+towards the paging hardware and the associated page level
+protection. The segment level rules that apply to user
+processes are
+<ol>
+<li>A process cannot directly access the kernel data or code segments 
+<li>There is always limit checking but given that every user segment 
+goes from 0x00 to 0xc0000000 it is unlikely to apply. <b>[This
+has changed, and needs updating, please.]</b>
+</ol>
+
+<h4>Selectors in the 80386</h4>
+
+<p>A segment selector is loaded into a segment register (cs,
+ds, etc.) to select one of the regular segments in the system
+as the one addressed via that segment register.
+
+<p>Segment selector Format:
+<table border>
+<tr><th>15 ...... 3</th><th>2 1</th><th>0</th></tr>
+<tr><td align="center">index</td><td>TI</td><td>RPL</td></tr>
+</table>
+<dl>
+<dt><b>TI</b> Table indicator:
+<dd>0 means selector indexes into GDT<br>
+1 means selector indexes into LDT
+<dt><b>RPL</b> Privelege level.  Linux uses only two privelege levels.
+<dd>0 means kernel<br>
+3 means user
+</dl>
+
+<p>Examples:
+<dl>
+<dt><b>Kernel code segment</b>
+<dd>TI=0, index=1, RPL=0, therefore selector = 0x08 (GDT[1])
+<dt><b>User data segment</b>
+<dd>TI=1, index=2, RPL=3, therefore selector = 0x17 (LDT[2])
+</dl>
+
+<p>Selectors used in Linux:
+<table border>
+<tr><th>TI</th><th>index</th><th>RPL</th><th>selector</th><th>segment</th><th></th></tr>
+<tr><td>0</td><td>1</td><td>0</td><td>0x08</td><td>kernel code</td><td>GDT[1]</td></tr>
+<tr><td>0</td><td>2</td><td>0</td><td>0x10</td><td>kernel data/stack</td><td>GDT[2]</td></tr>
+<tr><td>0</td><td>3</td><td>0</td><td>???</td><td>???</td><td>GDT[3]</td></tr>
+<tr><td>1</td><td>1</td><td>3</td><td>0x0F</td><td>user code</td><td>LDT[1]</td></tr>
+<tr><td>1</td><td>2</td><td>3</td><td>0x17</td><td>user data/stack</td><td>LDT[2]</td></tr>
+</table>
+Selectors for system segments are not to be loaded directly into
+segment registers. Instead one must load the TR or LDTR.
+
+<p>On entry into syscall:
+<ul>
+<li>ds and es are set to the kernel data segment (0x10)
+<li>fs is set to the user data segment (0x17) and is used to access
+data pointed to by arguments to the system call.
+<li>The stack segment and pointer are  automatically set to ss0 and
+esp0 by the interrupt and the old values restored when the syscall returns.
+</ul>
+
+<h4>Segment descriptors</h4>
+
+<p>There is a segment descriptor used to describe each
+segment in the system. There are regular descriptors and system
+descriptors. Here's a descriptor in all its glory. The strange
+format is essentially to maintain compatibility with the 286.
+Note that it takes 8 bytes.
+<table border>
+<tr><th>63-54</th><th>55</th><th>54</th><th>53</th><th>52</th><th>51-48</th><th>47</th><th>46</th><th>45</th><th>44-40</th><th>39-16</th><th>15-0</th></tr>
+<tr><td align="center" rowspan="2">Base<Br>31-24</td><td rowspan="2">G</td><td rowspan="2">D</td><td rowspan="2">R</td><td rowspan="2">U</td><td align="center" rowspan="2">Limit<br>19-16</td><td rowspan="2">P</td><td rowspan="2">DPL</td><td rowspan="2">S</td><td rowspan="2">TYPE</td><td align="center" rowspan="2">Segment Base<br>23-0</td><td align="center" rowspan="2">Segment Limit<br>15-0</td><tr>
+</table>
+
+<p>Explanation:
+<table>
+<tr><td><b>R</b></td><td>reserved (0)</td></tr>
+<tr><td><b>DPL</b></td><td>0 means kernel, 3 means user</td></tr>
+<tr><td><b>G</b></td><td>1 means 4K granularity (Always set in Linux)</td></tr>
+<tr><td><b>D</b></td><td>1 means default operand size 32bits</td></tr>
+<tr><td><b>U</b></td><td>programmer definable</td></tr>
+<tr><td><b>P</b></td><td>1 means present in physical memory</td></tr>
+<tr><td><b>S</b></td><td>0 means system segment, 1 means normal code or data segment.</td></tr>
+<tr><td><b>Type</b></td><td rowspan="2">There are many possibilities.
+Interpreted differently for system and normal descriptors.</td></tr>
+</table>
+
+<p><b>Linux system descriptors:</b><br>
+TSS:  P=1, DPL=0, S=0, type=9, limit = 231 room for 1 <tt>tss_struct</tt>.<br>
+LDT:  P=1, DPL=0, S=0, type=2, limit = 23  room for 3 segment descriptors.<br>
+The base is set during <tt>fork()</tt>. There is a TSS and LDT for each task.
+
+<p><b>Linux regular kernel descriptors:</b> (head.S)<br>
+code: P=1, DPL=0, S=1, G=1, D=1, type=a, base=0xc0000000, limit=0x3ffff<br>
+data: P=1, DPL=0, S=1, G=1, D=1, type=2, base=0xc0000000, limit=0x3ffff<br>
+
+<p><b>The LDT for task[0] contains:</b> (sched.h)<br>
+code: P=1, DPL=3, S=1, G=1, D=1, type=a, base=0xc0000000, limit=0x9f<br>
+data: P=1, DPL=3, S=1, G=1, D=1, type=2, base=0xc0000000, limit=0x9f<br>
+
+<p><b> The default LDT for the remaining tasks:</b> (<tt>exec()</tt>)<br>
+code: P=1, DPL=3, S=1, G=1, D=1, type=a, base=0, limit= 0xbffff<br>
+data: P=1, DPL=3, S=1, G=1, D=1, type=2, base=0, limit= 0xbffff<br>
+
+<p>The size of the kernel segments is 0x40000 pages (4KB pages
+since G=1 = 1 Gigabyte). The type implies that the permissions
+on the code segment is read-exec and on the data segment is
+read-write.
+
+<p><b>Registers associated with segmentation.</b>
+
+<p>Format of segment register: (Only the selector is programmer
+visible)
+<table border>
+<tr><th>16-bit</th><th>32-bit</th><th>32-bit</th><th></th></tr>
+<tr><td>selector</td><td>physical base addr</td><td>segment limit</td><td>attributes </td></tr>
+</table>
+The invisible portion of the segment register is more
+conveniently viewed in terms of the format used in the
+descriptor table entries that the programmer sets up. The
+descriptor tables have registers associated with them that are
+used to locate them in memory. The GDTR (and IDTR) are
+initialized at startup once the tables are defined. The LDTR is
+loaded on each task switch.
+
+<p><b>Format of GDTR (and IDTR):</b>
+<table border>
+<tr><th>32-bits</th><th>16-bits</th></tr>
+<tr><td>Linear base addr</td><td>table limit</td></tr>
+</table>
+
+<p>The TR and LDTR are loaded from the GDT and so have the
+format of the other segment registers.  The task register (TR)
+contains the descriptor for the currently executing task's TSS.
+The execution of a jump to a TSS selector causes the state to
+be saved in the old TSS, the TR is loaded with the new
+descriptor and the registers are restored from the new TSS.
+This is the process used by schedule to switch to various user
+tasks.  Note that the field <tt>tss_struct.ldt</tt> contains a
+selector for the LDT of that task. It is used to load the LDTR.
+(sched.h)
+
+<h4>Macros used in setting up descriptors</h4>
+
+<p>Some assembler macros are defined in sched.h and system.h to
+ease access and setting of descriptors. Each TSS entry and LDT
+entry takes 8 bytes.
+
+<p><b>Manipulating GDT system descriptors:</b>
+<dl>
+<dt><tt>_TSS(<i>n</i>)</tt>, <tt>_LDT(<i>n</i>)</tt>
+<dd>These provide the index into the GDT for the <i>n</i>'th task.
+<dt><tt>_LDT(n)</tt> is stored in the the ldt field of the
+<tt>tss_struct</tt> by fork.
+<dt><tt>_set_tssldt_desc(n, addr, limit, type)</tt>
+<dd><tt>ulong *n</tt> points to the GDT entry to set (see fork.c).<br>
+  The segment base (TSS or LDT) is set to 0xc0000000 + <tt>addr</tt>.<br>
+  Specific instances of the above are, where ltype refers to the byte
+  containing P, DPL, S and type:
+  <dl>
+  <dt><tt>set_ldt_desc(n, addr)</tt> ltype = 0x82
+        <dd>P=1, DPL=0, S=0, type=2 means LDT entry.<br>
+        limit = 23 => room for 3 segment descriptors.
+  <dt><tt>set_tss_desc(n, addr)</tt> ltype = 0x89
+        <dd>P=1, DPL=0, S=0, type = 9, means available 80386 TSS 
+        limit = 231 room for 1 tss_struct.
+  </dl>
+
+<dt><tt>load_TR(n)</tt>,
+<dd><tt>load_ldt(n)</tt> load descriptors for task
+number n into the task register and ldt register. 
+<dt><tt>ulong get_base (struct desc_struct ldt)</tt>
+<dd>gets the base from a descriptor. 
+<dt><tt>ulong get_limit (ulong segment)</tt> 
+<dd>gets the limit (size) from a segment selector. <br>
+Returns the size of the segment in bytes.
+<dt><tt>set_base(struct desc_struct ldt, ulong base)</tt>,<br>
+<tt>set_limit(struct desc_struct ldt, ulong limit)</tt>
+<dd>Will set the base and limit for descriptors (4K granular segments).<br>
+The limit here is actually the size in bytes of the segment.
+
+<dt><tt>_set_seg_desc(gate_addr, type, dpl, base, limit)</tt>
+<dd>Default values 0x00408000 => D=1, P=1, G=0<br>
+Present, operation size is 32 bit and max size is 1M.<br>
+<tt>gate_addr</tt> must be a <tt>(ulong *)</tt>
+</dl>
+
+<p>Copyright (C) 1992, 1993, 1996 Michael K. Johnson,
+johnsonm@redhat.com.<br>
+
+</body>
+</html>
+Copyright (C) 1992, 1993 Krishna Balasubramanian and Douglas Johnson
+<P>
+<P><HR SIZE=3>
+<P><B><A NAME="Messages">Messages</A></B>
+<NOBR>
+<font size=-1>
+
+
+
+
+
+
+
+</font>
+</NOBR>
+ <P>
+<NOBR>
+<DL COMPACT>
+<DT> 1. <IMG src="../../../Icons/feedback.gif" ALT="Feedback:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="80386mm/1.html">
+paging initialization, doc update</A> <i> by <A HREF="http://www.cs.unm.edu/~droux">droux@cs.unm.edu</A></i> </DT>
+<DT> 2. <IMG src="../../../Icons/feedback.gif" ALT="Feedback:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="80386mm/2.html">
+User Code and Data Segment no longer in LDT.</A> <i> by Lennart Benschop</i> </DT>
+</DL>
+</NOBR>
+
+<P>
+<P>
+
+
+
+  
+
+
+
+
+
+<BR> 
+ 
+<BR></BODY>
+</HTML>

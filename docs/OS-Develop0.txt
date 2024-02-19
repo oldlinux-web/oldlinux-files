@@ -1,0 +1,787 @@
+---[  Phrack Magazine   Volume 8, Issue 52 January 26, 1998, article 17 of 20
+
+
+-------------------------[  Protected mode programming and O/S development
+
+
+--------[  Mythrandir <jwthomp@cu-online.com>
+
+
+
+
+----[  Forward
+
+
+About two months ago I decided to begin learning about developing an operating
+system from the ground up.  I have been involved in trusted operating systems
+development for over two years now but have always done my work with
+pre-existing operating systems.  Mucking with this driver model, deciphering
+that streams implementation, loving this, hating that.  I decided it was time
+to begin fresh and start really thinking about how to approach the design
+of one, so that I would be happy with every part.  At least if I wasn't, I
+would only be calling myself names.
+
+This article is the first tentative step in my development of an operating
+system.  What is here is not really much of a kernel yet.  The big focus of
+this article will be getting a system up and running in protected mode with a
+very minimal kernel.  I stress minimal.  I have been asked repeatedly what my
+design goals for this operating system are.  The fact is the operating system
+itself was the goal for this part.  There was simply to much that I didn't
+know about this stage of the development to go on designing something.  It
+would be like asking a kindergarten fingerpainter what her final masterpiece
+was going to look like.
+
+However, now that I have this phase reasonably done, it is time to begin
+thinking about such issues as: a security subsystem, a driver subsystem, as
+well as developing a real task manager and a real memory manager.  Hopefully,
+by the next phrack I will be able to not only answer what I want for these
+topics but have also implemented many of them.  This will leave me with a much
+more solid kernel that can be built upon.
+
+So, why write this article?  There are several reasons.  First, writing down
+what you have done always help solidify your thoughts and understanding.
+Second, having to write an article imposes a deadline on me which forces me to
+get the job done.  Finally, and most importantly I hope to give out enough
+knowledge that others who are interested in the subject can begin to do some
+work in it.
+
+One comment on the name.  JeffOS is not going to be the final name for this OS.
+In fact several names have been suggested.  However, I have no idea yet what I
+want to call it, mostly because it just isn't solidified enough for a name.
+When its all said and done, I do hope I can come up with something better than
+JeffOS.  For now, getting a real working kernel is more important than a real
+working name.
+
+I hope that you find the following information interesting, and worth
+investigating further.
+
+Cheers,
+Jeff Thompson
+AKA Mythrandir
+
+
+PS: Some words on the Cryptography article.  First a thank you for all of the
+letters that I received on the article.  I am happy to find that many people
+found the article interesting.  For several people it rekindled an old interest
+which is always great to hear.  However, for several people I have unfortunate
+news as well.  The next article in the series will have to be postponed for
+a few issues until I complete this operating system.  As is with many people,
+I have been caught by a new bug (The OS bug) and have set myself up to be
+committed to the work for some time.  I am of course still interested in
+discussing the topic with others and look forward to more email on the subject.
+
+
+The winners of the decryption contest were:
+
+1st message:
+1st) Chaos at chaos@vector.nevtron.si
+2nd) Oxygen at oxygen@james.kalifornia.com
+
+Solution:
+The baron's army will attack at dawn. Ready the Templar knights and strike his
+castle while we hold him.
+
+2nd message:
+
+1st) Chaos
+
+Solution:
+MULTICAST PROTOCOLS HAVE BEEN DEVELOPED TO SUPPORT GROUP COMMUNICATIONS
+THESE PROTOCOLS USE A ONE TO MANY PARADIGM FOR TRANSMISSION TYPICALLY
+USING CLASS D INTERNET PROTOCOL ADDRESSES TO SPECIFY SPECIFIC MULTICAST GROUPS
+
+Also, there is one typo in my article.  The book which was written without the
+letter 'e' was not The Great Gatsby, but rather Gadsby.  Thanks to Andy
+Magnusson for pointing that out.
+
+
+Great job guys!
+
+
+----[  Acknowledgements
+
+
+I owe a certain debt to two people who have been available to me during my
+development work.  Both have done quite a bit of work developing their own
+protected mode operating systems.  I would like to thank Paul Swanson of the
+ACM@UIUC chapter for helping solve several bugs and for giving me general tips
+on issues I encountered.  I would also like to thank Brian Swetland of
+Neoglyphics for giving me a glimpse of his operating system.  He was also nice
+enough to allow me to steal some of his source code for my use.  This source
+include the console io routines which saved me a great deal of time.  Also,
+the i386 functions were given to me by Paul Swanson which has made a lot of
+the common protected mode instructions easily useable.
+
+Following new releases and information on this operating systems work, I am
+currently redoing my web site and will have it up by Feb 1, 1998.  I will be
+including this entire article on that site along with all updates to the
+operating system as I work on it.  One of the first things that I will be
+doing is rewriting all of the kernel.  A large part of what is contained
+within these pages was a learning experience.  Unfortunately, one consequence
+of trying to get this thing done was it becoming fairly messy and hackish.  I
+would like to clean it up and begin to build upon it.  Having a good code base
+will be invaluable to this.  So please watch for the next, and future releases
+of this code and feel free to contact me with any feedback or questions.  I
+will do my best to help.  I won't be able to answer every question but I will
+certainly try.  Also, please be patient as I have a very busy schedule outside
+of this project and am often times caught up by it.
+
+I can be reached at:
+        jwthomp@cu-online.com
+and my web site is at:
+        http://www.cu-online.com/~jwthomp/ (Up Feb 1, 1998)
+
+
+----[  Introduction
+
+
+Throughout this document I assume a certain level of knowledge on the part of
+the reader.  This knowledge includes c and assembly language programming, and
+x86 architecture.
+
+The development requirements for the GuildOS operating system are:
+
+An ELF compiler
+    I used the gnu ELF compiler which comes with linux.  It is possible to use
+    other ELF cross compilers on other systems as well.
+
+a386 assembler
+    This can be obtained from:
+
+    Eric Isaacson
+    416 E. University Ave.
+    Bloomington IN 47401-4739
+    71333.3154@compuserve.com
+
+    or call 1-812-335-1611
+    A86+D86+A386+D386 is $80
+    Printed manual $10
+
+    This is a really nice assembler.  Buy a copy.  I did.
+
+    It is also possible to convert the boot loader assembly code to another
+    assembler.
+
+A 486+ machine
+    You must have a machine to test the OS on.
+
+Great books to read to gain an understanding of the various topics presented
+in the following pages are:
+
+Protected Mode Software Architecture by Tom Shanley from MindShare, Inc.
+ISBN 0-201-55447-X  $29.95 US
+
+This book covers the protected mode architecture of the x86.  It also explains
+the differences between real mode and protected mode programming.  This book
+contains much of the information which is in the Intel Operating Systems
+Developers guide, but also explains things much more in depth.
+
+
+Developing Your Own 32-Bit Operating System by Richard A. Burgess from SAMS
+Publishing.  ISBN  0-672-30655-7
+
+This book covers the development of a complete 32-bit OS.  The author also
+creates his own 32-bit assembler and compiler.  Considerable portions of the
+code are written in asm, but there is still quite a bit in C.
+
+The entire Intel architecture series and their OS developers guides which are
+available from their web site for free.
+
+
+----[  Chapter 1 - Booting into protected mode
+
+
+The first step in setting up an operating system on the x86 architecture is to
+switch the machine into protected mode.  Protected mode allows you to use
+hardware protection schemes to provide operating system level security.
+
+The first component which I began working on was the first stage boot loader
+which is located in "JeffOS/loader/first/".
+
+The first stage boot loader is placed on the first sector of the floppy.  Each
+sector is 512 bytes.  This is not a lot of room to write all of the code
+required to boot into protected mode the way I would like to so I had to break
+the boot loader into two parts.  Thus the first and second stage floppy loader.
+
+After the Power On Self-Test (POST) test this first sector is loaded up into
+memory location 0000:7C00.  I designed the first stage of the floppy boot
+loader to load up all of the files into memory to be executed.  The first
+instruction in the boot loader jumps to the boot code.  However, between the
+jump and the boot code are some data structures.  
+
+The first section is the disk parameters.  I'm not currently using any of this
+information but will in future versions.  The next set of structures contain
+information on the other data files on the floppy disk.  Each structure looks
+like this in assembly:
+
+APCX	DW	0000h		; Specifies CX value for INT 13h BIOS routine
+APDX	DW	0000h		;           DX
+APES	DW	0000h		;           ES
+APBX	DW	0000h		;           BX
+APSZ	DB	0h		; Specifies number of sectors to read in
+APSZ2	DB	0h		; Unused
+
+There are four copies of this structure (APxx, BPxx, CPxx, DPxx).
+
+The INT 13h BIOS call has the following arguments:
+
+ch: Cylinder number to start reading from.
+cl: Sector number to start at.
+dh: Head number of drive to read from (00h or 01h for 1.44M floppy disk drives)
+dl: Drive number (00h for Disk A)
+es: Segment to store the read in sectors at.
+bx: Offset into the segment to read the sectors into.
+ah: Number of sectors to read in.
+al: Function number for INT 13h. (02h is to read in from the disk)
+
+I use the APxx to load the second stage boot loader. BPxx is being used
+to load the first stage kernel loader.  CPxx is used to load a simple user
+program.  Finally, DPxx is used to load the kernel in.
+
+Following the loader structures are two unused bytes which are used to store
+temporary data. SIZE is used but SIZE2 is not currently used.
+
+The boot code follows these structures.  This boot code relocates itself into
+another section of memory (9000:0000 or 90000h linear).  Once relocated, it
+loads all of the files into memory and then jumps into the beginning of the
+second stage boot loader.
+
+The first part of the second stage boot loader contains a macro which is used
+to easily define a Global Descriptor Table (GDT) entry.  In protected mode the
+GDT is used to store information on selectors.  A selector in protected mode
+is referred to by a number stored in any of the segment registers.  A selector
+has the following format:
+
+Bits        Use
+15 - 3      Descriptor Table Index
+2           Table Indicator
+1  - 0      The Requestor Privilege Level
+
+The Descriptor Table Index or (DT) is an index into the GDT.  The first entry
+in the GDT is 00h, the second is 08h, then 10h, etc..  The reason that the
+entries progress in this manner is because the 3 least significant bits are
+used for other information.  So to find the index into the GDT you do a
+segment & 0xfff8 (DT = Selector & 0xfff8).
+
+The Table Indicator selects whether you are using a GDT or a Local Descriptor
+Table (LDT).  I have not yet had a reason to use LDT's so I will leave this
+information to your own research for now.
+
+Finally, the Requestor Privilege Level is used to tell the processor what
+level of access you would like to have to the selector.
+0 = OS
+1 = OS (but less privileged than 0)
+2 = OS (but less privileged than 1)
+3 = User level
+
+Typically levels 0 and 3 are the only ones used in modern operating systems.
+
+The GDT entries which describe various types of segments have the following
+form:
+
+63 - 56    Upper Byte of Base Address
+55         Granularity Bit
+54         Default Bit
+53         0
+52         Available for Use (free bit)
+51 - 48    Upper Digit of Limit
+47         Segment Present Bit
+46 - 45    Descriptor Privilege Level
+44         System Bit
+43         Data/Code Bit
+42         Conforming Bit
+41         Readable bit
+40         Accessed bit
+39 - 32    Third Byte of Base Address
+31 - 24    Second Byte of Base Address
+23 - 16    First Byte of Base Address
+15 - 8     Second Byte of Limit
+7 - 0      First Byte of Limit
+
+
+The base address is the starting location of the segment descriptor (for code
+or data segments). The limit is the number of bytes or 4k pages.  Whether it
+is bytes or 4k pages depends on the setting of the granularity but.  If the
+granularity bit is set to 0 then the limit specifies the length in bytes.  If
+it is set to 1 then the limit specifies the length of the segment in 4k pages.
+
+The default bit specifies whether the code segment is 32bit or 16bit.  If it is
+set to 0 then it is 16bit.  If it is set to 1 then it is 32bit.
+
+The present bit is set to one if the segment is currently in memory.  This is
+used for virtual paging.
+
+The descriptor privilege level is similar to the RPL.  The DPL simply states at
+what protection level the segment exists at.  The values are the same as for
+the RPL.
+
+The system bit is used to specify whether the segment contains a system segment.
+It is set to 0 if it is a system(OS) segment.
+
+The data/code bit is used to specify whether the segment is to be used as a
+code segment or as a data segment.  A code segment is used to execute code
+from and is not writable.  A data segment is used for stacks and program
+data.  It's format is slightly different from the code segment depicted above.
+
+The readable bit is used to specify whether information can be read from the
+segment or whether it is execute only.
+
+The next part of the second stage floppy boot loader contains the code which
+is used to enable the A20 address line.  This address line allows you to
+access beyond the 1MB limit that was imposed on normal DOS real mode
+operation. For a discussion of this address line I recommend looking at the
+Intel architecture books.
+
+Once enabled the GDT that exists as data at the end of the assembly file is
+loaded into the GDT register. This must be done before the switch into
+protected mode.  Other wise any memory accesses will not have a valid selector
+described for them and will cause a fault (I learned this from experience).
+
+Once this is completed the move is made to protected mode by setting the
+protected mode bit in the CR0 register to 1.
+
+Following the code which enables protected mode, there is data which represents
+a far call into the next portion of the second stage boot loader.  This causes
+a new selector to be used for CS as opposed to an undefined one.
+
+The code that is jumped into simply sets up the various selectors for the data
+segments.
+
+There is then some simple debugging code which prints to the screen.  This was
+used for myself and can be removed.
+
+The stack segment is then set up along with the stack pointer.  I placed the
+stack at 90000h.
+
+Finally I push the value for the stack onto the stack (to be retrieved by the
+kernel) and then call linear address 100080h which contains the first stage
+loader for the kernel.
+
+
+----[  Chapter 2 - The first stage kernel boot loader
+
+
+The first stage kernel boot loader is located in \boot.
+
+First some notes on what is happening with the first stage boot loader.  The
+boot loader is compiled to ELF at a set TEXT address so that I can jump into
+the code and have it execute for me.  In the makefile I specify the text
+address to be 10080.  The first 80h bytes are used as the ELF header.  I
+completely ignore this information and jump directly into linear memory
+address 10080h.  It is my understanding that newer versions of the ELF compiler
+have a slightly different header length and may cause this number to need to be
+modified.  This can be determined by using a dissasembler (i.e. DEBUG in DOS)
+to determine where the text segment is beginning.
+
+The two files of importance to the boot loader are main.c and mem.c.
+
+main.c contains the function `void _start(unsigned long blh);`.  This function
+must be the first function linked in.  So main.c must be the first file which
+is linked and _start() must be the first function in it.  This guarantees that
+start will be at 10080h.  The parameter blh is the value which was pushed in
+by the second stage boot loader.  This originally had meaning, but no longer
+does.
+
+The first thing that _start does is to call kinit_MemMgmt which is the
+initialization routine for memory.
+
+The first thing that kinit_MemMgmt does is set nMemMax to 0xfffff.  This is
+the maximum number of bytes on the system.  This value is 1MB.  kinit_MemMgmt
+then calls kmemcount which attempts to calculate the amount of free memory on 
+the system.  Currently this routine does not work properly and assumes that
+there is 2MB of free memory on the system.  This is sufficient for now but
+needs to be fixed in the future.
+
+kinit_MemMgmt then calls kinit_page which sets of the page tables for the
+kernel. 
+
+Paging is the mechanism used to define what memory a task is able to access.
+This is done by creating a "virtual" memory space which the task accesses.
+Whenever an access to memory occurs the processor looks into the page tables
+to determine what "real" physical memory is pointed to by this memory location.
+For example, the kernel could designate that each task will get 32k (8 pages)
+of memory to use for the stack.  Without using paged memory each of these
+memory locations would occur at a different address.  However, by using paging
+you can map each of these physical memory allocations to a paged address
+which allows each of these allocations to appear to occur at the same location.
+
+The page tables are broken up in the following manner.  First is the page
+directory.  It is composed of 1024 entries which have the following properties:
+
+31 - 12    Page Table Base Address
+11 - 9     Unused (Free bits)
+8          0
+7          Page Size Bit
+6          0
+5          Accessed Bit
+4          Page Cache Disable Bit
+3          Page Write Through Bit
+2          User/Supervisor Bit
+1          Read/Write Bit
+0          Page Present Bit
+
+The Page Table Base address is an index to the page table which contains
+information about this memory location. When a memory location is accessed
+the most significant 10 bits are used to reference one of the 1024 entries in 
+the page directory. This entry will point to a page table which has a physical
+memory address equal to the Page Table Base Address.  This table is then 
+referenced to one of its 1024 entries by the 21 - 12 bits of the memory
+address.
+
+The Page Size Bit tells whether each page is equal to (Bit = 0) 4kb or 
+(Bit = 1) 4MB.  
+
+The accessed bit is used to show whether the page has ever been accessed.  Once
+set to 1, the OS must reset it to 0. This is used for virtual paging.
+
+The Page Cache Disable Bit and Page Write Bit are not currently used by me, so
+I will leave its definition as an exercise to the reader (enjoy).
+
+The User/Supervisor Bit specifies whether access to the page table is
+restricted to access by tasks with privilege level 0,1,2 or 3.  If the bit is
+set to 0 then only tasks with level 0, 1, or 2 can access this page table.  If
+the bit is set to 1, then tasks with level 0, 1, 2, or 3 can access this page
+table.
+
+The Read/Write bit is used to specify whether a user level task can write to
+this page table. If it is set to 0 then it is read only to "User" tasks.  If
+it is set to 1 then it is read/writable by all tasks.
+
+Finally, the Present Bit is used to specify whether the page table is present
+in memory.  If this is set to 1 then it is.
+
+
+Once the page directory is referenced, the offset into the page table is 
+selected.  Using the next 10 bits of the memory reference.  Each page table
+has 1024 entries with each entry having the following structure:
+
+31 - 12    Page Base Address
+11 - 9     Unused (Free bits)
+8 - 7      0
+6          Dirty Bit
+5          Accessed Bit
+4          Page Cache Disable Bit
+3          Page Write Through Bit
+2          User/Supervisor Bit
+1          Read/Write Bit
+0          Page Present Bit
+
+The Page Base Address points to the upper 20 bits in physical memory where
+the memory access points to.  The lower 12 bits are taken from the original
+linear memory access.
+
+The Dirty, Accessed, Page Cache, and Page Write Through Bits are all used for
+virtual memory and other areas which I have not yet been concerned yet.  So
+they are relegated to the reader (for now).
+
+The remaining three bits behave just as in the page directory except that
+they apply to the physical memory page as opposed to a page table.  All
+kernel pages are set to have Supervisor, Read/Write, and Page Present bits
+set.  User pages do not have the supervisor bits set.
+
+The code in kinit_page creates the page directory in the first of the three
+physical pages that it set aside.  The next page is used to create a low (user)
+memory area of 4MB (One page table of 1024 entries points to 1024 4kb pages, 
+Thus 4MB).  The third page is used to point to high (OS) memory.
+
+The kinit_page function sets all of the low page memory equal to physical
+memory.  This means that there is a one to one correlation for the first 4MB
+of memory to paged memory.  kinit_page then maps in ten pages starting at
+70000h linear into 0x80000000.  Entry number 0 of the page directory is then
+set to point to the low page table.  Entry number 512 is set to point to the
+high page table.
+
+Finally the kinit_page function places the address of the page directory
+into the cr3 register.  This tells the processor where to look for the page
+tables.  Finally, cr0 has its paging bit turned on which informs the processor
+that memory accesses should go through the page table rather than just being
+direct physical memory accesses.
+
+After this the _start function is returned into and k_start() has been set to 
+0x80000080 which points to the _start() function in the main kernel.
+_start in the boot code calls this function which starts the real kernel off.
+
+
+----[  Chapter 3 - The Kernel
+
+
+The kernel is where all of the fun begins.  Unfortunately, this is the place
+that needs the most work.  However, there is enough here to demonstrate the
+beginnings of what needs to be done to build a viable kernel for your own work.
+
+The kernel boot loader created the kernel page table and then jumped into the
+kernel at _start(); _start() then sets up the console, clears it, and displays
+the message "Main kernel loaded.".  Once this is done it runs the memory
+manager initialization routine 'kinit_page()'.
+
+The memory manager initialization routine begins by initializing a structure
+called the PMAT.  The PMAT is a giant bit field (2048 bytes), where each bit
+represents one page of physical memory.  If a bit is set to 1, the
+corresponding page of memory is considered allocated.  If the bit is set to 0
+then it is considered unallocated.  Once this array is initialized the memory
+management code sets aside the chunks of physical memory which are already in
+use.  This include the system BUS memory areas, as well as the location of the
+kernel itself in physical memory.  Once this is completed the memory manager
+returns to the _start() function so that it can proceed with kernel
+initialization.
+
+The _start() function then calls a temporary function which I am using now to
+allocate memory which is use by the user program loading in by the first
+stage floppy loader.  This will go away after I add the loading of processes
+off of disk during run time. This function sets aside the physical memory
+which is located at 20000h linear.
+
+Now that the basic memory system is set up the _start() function calls the 
+kinit_task() function.  kinit_task() sets up the kernel task so that it can
+run as a task rather than as a the only process on the system.
+
+kinit_task() is really a shell function which calls two other functions: 
+kinit_gdt() and kinit_ktask(); kinit_gdt() initializes a new kernel GDT which
+is to be used by the kernel rather than the previous temporary one which was
+set up by the second stage floppy boot loader.  Once the new location for the
+gdt is mapped into memory several selectors are added to it.  Kernel Code and
+Data selectors are added.  Also, User Code and Data selectors are added.  Once
+these selectors are put into place, the new gdt is placed in the gdt register
+on the processor so that it can be used.
+
+kinit_task() now calls the kinit_ktask() function.  This task creates a task
+which the kernel code will be executed as.  The first thing this function does
+is to clear out the kernels task list.  This list contains a list of tasks
+on the system.  Next a 4k page is allocated for the kernel task segment.  The
+current executing task is then set to the kernel task. Next the task segment
+is added to the GDT.  This task segment has the following structure and is
+filled out for the kernel with the following values by me.  In fact all tasks
+will start out with these settings.
+
+
+struct TSS {
+    ushort link;            // set to 0
+    ushort unused0;
+    ulong esp0;             // set to the end of the task segment page
+    ushort ss0;             // set to SEL_KDATA (Kernel Data segment)
+    ushort unused1;
+    ulong esp1;             // set to 0
+    ushort ss1;             // set to 0
+    ushort unused2;
+    ulong esp2;             // set to 0
+    ushort ss2;             // set to 0
+    ushort unused3;
+    ulong cr3;              // set to the physical address of this tasks page 
+                            // tables
+    ulong eip;              // set to the entry point to this tasks code
+    ulong eflags;           // set to 0x4202
+    ulong eax, ecx, edx, ebx, esp, ebp, esi, edi; // set to garbage values
+    ushort es;              // set to SEL_KDATA (Kernel data segment)
+    ushort unused4;
+    ushort cs;              // set to SEL_KCODE (Kernel code segment)
+    ushort unused5;
+    ushort ss;              // set to SEL_KDATA
+    ushort unused6;
+    ushort ds;              // set to SEL_KDATA
+    ushort unused7;
+    ushort fs;              // set to SEL_KDATA
+    ushort unused8;
+    ushort gs;              // set to SEL_KDATA
+    ushort unused9;
+    ushort ldt;             // set to 0
+    ushort unused10;
+    ushort debugtrap;       // set to 0
+    ushort iomapbase;       // set to 0
+};
+
+
+The link field is used by the processor when an interrupt is called.  The
+processor places a pointer to the task segment which was running prior to the
+interrupt.  This is useful for determining access rights based on the calling
+process.
+
+The espx and ssx parameters are used to store a pointer to a stack which will 
+be used when a task with a lower privilege level tries to access a high level
+privilege area.
+
+The cr3 parameter is used to store a pointer to the physical address of this
+tasks page table.  Whenever this task is switched to, the processor will load
+the value stored in cr3 into the cr3 register. This means that each task can
+have a unique set of page tables and mappings.
+
+The eax, ebx, etc.. registers are all set to a garbage value as they are
+uninitialized and will only gain values once they are used. When the processor
+switches to this task these parameters will be loaded into their respective
+processor registers.
+
+The cs, es, ss, ds, fs, and gs parameters are all set to meaningful values
+which will be loaded into their respective processor registers when this
+task is switched to.
+
+As I am not using a local descriptor I set this parameter to 0 along with the
+debugtrap and iomapbase parameters.
+
+As I have mentioned every time a task is switched to the processor will load
+all of the parameters from the task segment into their respective registers.
+Likewise, when a task is switched out of, all of the registers will be stored
+in their respective parameters.  This allows tasks to be suspended and to
+restart with the state they left off at.
+
+Switching tasks will be discussed later when the point in the kernel where this
+takes place at is reached.
+
+Once this task state segment is created it is necessary to create an entry in
+the GDT which points to this task segment. The format of this 64 bit entry is
+as follows:
+
+63 - 56    Fourth Byte of Base Address
+55         Granularity Bit
+54 - 53    0
+52         Available for use (free bit)
+51 - 48    Upper Nibble of Size
+47         Present in Memory Bit
+46 - 45    Descriptor Privilege Level
+44         System Built
+43         16/32 Bit
+42         0
+41         Busy Bit
+40         1
+39 - 32    Third Byte of Base Address
+31 - 24    Second Byte of Base Address
+23 - 16    First Byte of Base Address
+15 - 8     Second Byte of Segment Size
+7 - 0      First Byte of Segment Size
+
+As you have probably noticed, this structure is very similar to the code
+segment descriptor. The differences are the 16/32 bit, and the Busy Bit.
+
+The 16/32 Bit specifies whether the task state segment is 16 bit or 32 bit.
+We will only be using the 32 Bit task segment (Bit = 1).  The 16 bit task state
+segment was used for the 286 and was replaced by a 32 bit task state segment on
+the 386+ processors.
+
+The busy bit specifies whether the task is currently busy.  
+
+Once the kernel task is allocated, a new kernel stack is allocated and made
+active. This allows the stack to be in a known and mapped in location which
+uses the memory manager of the kernel.
+
+The user tasks is then created in a similar fashion as the kernel task.  In
+this current implementation the user task is located at 0x20000.  Its stack
+is located at 0x2107c.  Currently, this user task operates with OS level
+privilege.  I encountered some problems when changing its selectors to user
+entries in the GDT.  As soon as I fix this problem I will post a fix on my web
+site.  After the user task is created it is added to the task queue to be
+switched to once the scheduler starts.
+
+Now that the kernel task and a user task (though running with kernel privilege
+level) have been created it is necessary to set up the interrupt tables.  This
+is done by a call to the kinit_idt() function.
+
+kinit_idt() starts by setting all of the interrupts to point to a null 
+interrupt function.  This means that for most interrupts a simple return
+occurs.  However, interrupt handlers for the timer as well as for one system
+call.  Also, interrupts are set up to handle the various exceptions.  Once
+this table is filled out the interrupt descriptor table (IDT) is loaded into
+the idt register. The interrupts are then enabled to allow them to be called.
+
+The timer interrupt handler is a simple function which calls a task switch
+every time the hardware timer fires.
+
+The system call (interrupt 22h) is called, the handler will print out on the
+console the string which is pointed to be the eax register.
+
+The exception handling routine will dump the task registers and then hang the
+system.  The jump.S file in JeffOS/kernel/ contains the assembly wrappers which
+are called when an interrupt occurs.  These wrapper functions then call the C
+handler functions.  
+
+Now that the IDT is set up and interrupts are occurring task switches can occur.
+These occur when the swtch() function is called in the task.c file.  The
+swtch() function locates the next task in its queue and does a call to the
+selector address of the new task.  This causes the processor to look up the
+selector and switch to the new task.
+
+You now have a very simple multi-tasking kernel.
+
+
+----[  Chapter 4 - User level libraries
+
+
+The user level libraries are fairly simplistic.
+
+There are two files in this directory.  The first is the crt0.c file.
+This file contains one function which is the _start() function.  This function
+makes a call to main which will be defined in user code.  This stub function
+must always be linked in first as it will be jumped into by the kernel to
+begin running the process.
+
+The second file is the syscall.c file.  This file contains one system call
+function which is simply an interrupt 22.  This interrupt calls the console
+system call.  eax is passed in as a pointer to a string which is printed to
+the system console.
+
+Both of these source files are compiled to objects and are used during the
+linking phase of any user code.
+
+
+----[  Chapter 5 - User code
+
+
+The user code is stored in one file called test.c.  This file is located in
+the /user/ directory.  All this code does is call the console system call
+function provided by the library, wait a short amount of time, and call it
+again in a non-terminating loop (good thing, as I don't handle task
+termination yet).
+
+The important thing to note is that when linking this user process is set to
+have a text segment of 20000h linear.  Also the crt0.o and syscall.o files are
+linked in as well.  crt0.o is linked in first to insure that its _start()
+function is at 20080h so it will be jumped into by the kernel.  In truth,
+_start() is the real main as opposed to the main() everyone is used to dealing
+with.
+
+This code is the task which is created and run alongside the kernel, as
+described in chapter 3.
+
+
+----[  Chapter 6 - Creating a disk image out of the binaries
+
+
+Once you have compiled all of the binaries and placed them into the build
+directory you will need to create two more files before continuing.  These
+files are called STUFF.BIN and STUFF2.BIN.  These files are simply containers
+of empty space to cause alignment of other binaries.  The floppy loader
+expects the user program to be 1k in size.  If the user program is not exactly
+this size then STUFF2.BIN needs to be created and be of such a size that when
+added to USER.BIN the size is 1024 bytes.  Also, the floppy boot loader
+expects the kernel boot loader to be 3.5k (3584 bytes) in size.  STUFF.BIN
+needs to be made of such length that when added to the size of the BOOT.BIN
+(kernel boot loader) file the size will be 3584 bytes.  In the future I will
+try to automate this process, but for now this is simply how it must be done.
+Once this is complete the shell program 'go' must be run.  This will place all
+of the binary files into one file called 'os.bin'.  This file can then be
+written to disk by one of the following two methods.
+
+If you want to do it from linux you can do the following command:
+
+dd if=os.bin of=/dev/fd0  (places os.bin directly onto the floppy disk)
+
+or from DOS you can obtain the rawrite command and run it and follow its
+directions.
+
+
+----[  Conclusion
+
+
+The kernel contained within is far from complete.  However, it is a first step
+towards creating a real protected mode operating system.  It is also enough to
+begin working with, or to refer to during you own work on a protected mode
+operating system.  Doing this work is simply both one of the most rewarding
+things you will ever do, and one of the most frustrating.  Many a night has
+been spent at the local tavern telling war stories about this stuff.  But in
+the end, it has all been great fun.
+
+I wish you all the best of luck!
+
+Jeff Thompson
+jwthomp@cu-online.com
+http://www.cu-online.com/~jwthomp/
+
+
+----[  EOF

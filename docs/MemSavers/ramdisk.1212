@@ -1,0 +1,115 @@
+diff -ur linux-oem-1212/arch/i386/config.in linux/arch/i386/config.in
+--- linux-oem-1212/arch/i386/config.in  Mon Jul 31 16:22:13 1995
++++ linux/arch/i386/config.in   Mon Jul 31 16:26:29 1995
+@@ -7,6 +7,7 @@
+ 
+ bool 'Kernel math emulation' CONFIG_MATH_EMULATION n
+ bool 'Normal floppy disk support' CONFIG_BLK_DEV_FD y
++bool 'RAM disk support' CONFIG_BLK_DEV_RAM n
+ bool 'Normal (MFM/RLL) disk and IDE disk/cdrom support' CONFIG_ST506 y
+ if [ "$CONFIG_ST506" = "y" ]; then
+   comment 'Please see drivers/block/README.ide for help/info on IDE drives'
+diff -ur linux-oem-1212/drivers/block/Makefile linux/drivers/block/Makefile
+--- linux-oem-1212/drivers/block/Makefile       Mon Jun 12 23:27:43 1995
++++ linux/drivers/block/Makefile        Mon Jul 31 16:41:39 1995
+@@ -21,9 +21,14 @@
+ # In the future, some of these should be built conditionally.
+ #
+ 
+-OBJS := ll_rw_blk.o ramdisk.o genhd.o 
+-SRCS := ll_rw_blk.c ramdisk.c genhd.c 
++OBJS := ll_rw_blk.o genhd.o 
++SRCS := ll_rw_blk.c genhd.c 
+ BLOCK_MODULE_OBJS =
++
++ifdef CONFIG_BLK_DEV_RAM
++OBJS := $(OBJS) ramdisk.o
++SRCS := $(SRCS) ramdisk.c
++endif
+ 
+ ifdef CONFIG_BLK_DEV_FD
+ OBJS := $(OBJS) floppy.o
+diff -ur linux-oem-1212/drivers/block/genhd.c linux/drivers/block/genhd.c
+--- linux-oem-1212/drivers/block/genhd.c        Fri May 26 15:23:33 1995
++++ linux/drivers/block/genhd.c Mon Jul 31 15:24:31 1995
+@@ -19,8 +19,6 @@
+ 
+ static int current_minor = 0;
+ extern int *blk_size[];
+-extern void rd_load(void);
+-extern int ramdisk_size;
+ 
+ static char minor_name (struct gendisk *hd, int minor)
+ {
+@@ -218,7 +216,4 @@
+                setup_dev(p);
+                nr += p->nr_real;
+        }
+-               
+-       if (ramdisk_size)
+-               rd_load();
+ }
+diff -ur linux-oem-1212/drivers/block/ll_rw_blk.c linux/drivers/block/ll_rw_blk.c
+--- linux-oem-1212/drivers/block/ll_rw_blk.c    Mon Apr 10 18:22:45 1995
++++ linux/drivers/block/ll_rw_blk.c     Mon Jul 31 15:11:34 1995
+@@ -597,7 +597,9 @@
+ #ifdef CONFIG_SBPCD
+        mem_start = sbpcd_init(mem_start, mem_end);
+ #endif CONFIG_SBPCD
++#ifdef CONFIG_BLK_DEV_RAM
+        if (ramdisk_size)
+                mem_start += rd_init(mem_start, ramdisk_size*1024);
++#endif
+        return mem_start;
+ }
+diff -ur linux-oem-1212/fs/filesystems.c linux/fs/filesystems.c
+--- linux-oem-1212/fs/filesystems.c     Mon Jul 25 00:39:44 1994
++++ linux/fs/filesystems.c      Mon Jul 31 15:23:53 1995
+@@ -22,6 +22,8 @@
+ #include <linux/hpfs_fs.h>
+ 
+ extern void device_setup(void);
++extern void rd_load(void);
++extern int ramdisk_size;
+ 
+ /* This may be used only once, enforced by 'static int callable' */
+ asmlinkage int sys_setup(void)
+@@ -33,6 +35,11 @@
+        callable = 0;
+ 
+        device_setup();
++
++#ifdef CONFIG_BLK_DEV_RAM
++       if (ramdisk_size)
++               rd_load();
++#endif
+ 
+ #ifdef CONFIG_MINIX_FS
+        register_filesystem(&(struct file_system_type)
+diff -ur linux-oem-1212/init/main.c linux/init/main.c
+--- linux-oem-1212/init/main.c  Mon Jul 31 16:22:18 1995
++++ linux/init/main.c   Mon Jul 31 16:26:31 1995
+@@ -131,7 +131,9 @@
+        void (*setup_func)(char *, int *);
+ } bootsetups[] = {
+        { "reserve=", reserve_setup },
++#ifdef CONFIG_BLK_DEV_RAM
+        { "ramdisk=", ramdisk_setup },
++#endif
+ #ifdef CONFIG_BUGi386
+        { "no-hlt", no_halt },
+        { "no387", no_387 },
+@@ -209,11 +211,13 @@
+        { 0, 0 }
+ };
+ 
++#ifdef CONFIG_BLK_DEV_RAM
+ void ramdisk_setup(char *str, int *ints)
+ {
+    if (ints[0] > 0 && ints[1] >= 0)
+       ramdisk_size = ints[1];
+ }
++#endif
+ 
+ static int checksetup(char *line)
+ {

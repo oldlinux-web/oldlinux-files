@@ -1,0 +1,463 @@
+
+<HTML>
+<HEAD>
+<TITLE>A tour of the Linux VFS</TITLE>
+<LINK rel="owner" href="mailto:">
+<SCRIPT LANGUAGE="JavaScript">
+<!-- hide this
+
+function help(message) {
+  self.status = message;
+  return true;
+}
+// stop hiding -->
+</SCRIPT>
+
+</HEAD>
+<BODY>
+<strong>The
+HyperNews <a href="../khg.html">Linux KHG</a>
+Discussion Pages</strong>
+<hr>
+<h2>A tour of the Linux VFS</h2>
+
+<blockquote><i>
+I'm not an expert on this topic.  I've never written a filesystem
+from scratch; I've only worked on the proc filesystem, and I didn't
+do much real filesystem hacking there, only extensions to what was
+already there.
+
+<p>So if you see any mistakes or ommissions here (there have
+<b>got</b> to be ommissions in a piece this short on a topic
+this large), please respond, in order to let me fix them and
+let other people know about them.
+</i></blockquote>
+
+<p>In Linux, all files are accessed through the Virtual
+Filesystem Switch, or VFS. This is a layer of code which
+implements generic filesystem actions and vectors requests to
+the correct specific code to handle the request.  Two main
+types of code modules take advantage of the VFS services,
+device drivers and filesystems. Because
+<A HREF="../devices/devices.html">device drivers</a> are
+covered elsewhere in the KHG, we won't cover them explicitly here.
+This tour will focus on filesystems.  Because the VFS doesn't
+exist in a vacuum, we'll show its relationship with the
+favorite Linux filesystem, the ext2 filesystem.
+
+<p>One warning: without a decent understanding of the system
+calls that have to do with files, you are not likely to be able
+to make heads or tails of filesystems.  Most of the VFS and
+most of the code in a normal Linux filesystem is pretty
+directly related to completing normal system calls, and you
+will not be able to understand how the rest of the system works
+without understanding the system calls on which it is based.
+
+<h3>Where to find the code</h3>
+
+<p>The source code for the VFS is in the fs/ subdirectory of the
+Linux kernel source, along with a few other related pieces, such
+as the buffer cache and code to deal with each executable file
+format. Each specific filesystem is kept in a
+lower subdirectory; for example, the ext2 filesystem source code
+is kept in fs/ext2/.
+
+<p>This table gives the names of the files in the fs/
+subdirectory and explains the basic purpose of each one. The
+middle column, labeled <b>system</b>, is supposed to show to
+which major subsystem the file is (mainly) dedicated. EXE means
+that it is used for recognizing and loading executable files.
+DEV means that is for device driver support. BUF means buffer
+cache. VFS means that it is a part of the VFS, and delegates
+some functionality to filesystem-specific code. VFSg means that
+this code is completely generic and never delegates part of its
+operation to specific filesystem code (that I noticed, anyway)
+and which you shouldn't have to worry about while writing a
+filesystem.
+
+<p><table border>
+<tr><th>Filename</th><th>system</th><th>Purpose</th></tr>
+<tr><td>binfmt_aout.c</td><td>EXE</td><td>Recognize and execute old-style a.out executables.</td></tr>
+<tr><td>binfmt_elf.c</td><td>EXE</td><td>Recognize and execute new ELF executables</td></tr>
+<tr><td>binfmt_java.c</td><td>EXE</td><td>Recognize and execute Java apps and applets</td></tr>
+<tr><td>binfmt_script.c</td><td>EXE</td><td>Recognize and execute <tt>#!</tt>-style scripts</td></tr>
+<tr><td>block_dev.c</td><td>DEV</td><td>Generic read(), write(), and fsync() functions for block devices.</td></tr>
+<tr><td>buffer.c</td><td>BUF</td><td>The buffer cache, which caches blocks read from block devices.</td></tr>
+<tr><td>dcache.c</td><td>VFS</td><td>The directory cache, which caches directory name lookups.</td></tr>
+<tr><td>devices.c</td><td>DEV</td><td>Generic device support functions, such as registries.</td></tr>
+<tr><td>dquot.c</td><td>VFS</td><td>Generic disk quota support.</td></tr>
+<tr><td>exec.c</td><td>VFSg</td><td>Generic executable support.  Calls functions in the binfmt_* files.</td></tr>
+<tr><td>fcntl.c</td><td>VFSg</td><td>fcntl() handling.</td></tr>
+<tr><td>fifo.c</td><td>VFSg</td><td>fifo handling.</td></tr>
+<tr><td>file_table.c</td><td>VFSg</td><td>Dynamically-extensible list of open files on the system.</td></tr>
+<tr><td>filesystems.c</td><td>VFS</td><td>All compiled-in filesystems are initialized from here by calling <tt>init_<i>name</i>_fs()</tt>.</td></tr>
+<tr><td>inode.c</td><td>VFSg</td><td>Dynamically-extensible list of open inodes on the system.</td></tr>
+<tr><td>ioctl.c</td><td>VFS</td><td>First-stage handling for ioctl's; passes handling to the filesystem or device driver if necessary.</td></tr>
+<tr><td>locks.c</td><td>VFSg</td><td>Support for fcntl() locking, flock() locking, and manadatory locking.</td></tr>
+<tr><td>namei.c</td><td>VFS</td><td>Fills in the inode, given a pathname. Implements several name-related system calls.</td></tr>
+<tr><td>noquot.c</td><td>VFS</td><td>No quotas: optimization to avoid <tt>#ifdef</tt>'s in dquot.c</td></tr>
+<tr><td>open.c</td><td>VFS</td><td><b>Lots</b> of system calls including (surprise) open(), close(), and vhangup().</td></tr>
+<tr><td>pipe.c</td><td>VFSg</td><td>Pipes.</td></tr>
+<tr><td>read_write.c</td><td>VFS</td><td>read(), write(), readv(), writev(), lseek().</td></tr>
+<tr><td>readdir.c</td><td>VFS</td><td>Several different interfaces for reading directories.</td></tr>
+<tr><td>select.c</td><td>VFS</td><td>The guts of the select() system call</td></tr>
+<tr><td>stat.c</td><td>VFS</td><td>stat() and readlink() support.</td></tr>
+<tr><td>super.c</td><td>VFS</td><td>Superblock support, filesystem registry, mount()/umount().</td></tr>
+</table>
+
+<h3>Attaching a filesystem to the kernel</h3>
+
+<p>If you look at the code in any filesystem for
+<tt>init_<i>name</i>_fs()</tt>, you will find that it
+probably contains about one line of code.  For instance, in the ext2fs,
+it looks like this (from fs/ext2/super.c):
+<pre>
+   int init_ext2_fs(void)
+   {
+           return register_filesystem(&amp;ext2_fs_type);
+   }
+</pre>
+All it does is register the filesystem with the registry kept
+in fs/super.c. <tt>ext2_fs_type</tt> is a pretty simple structure:
+<pre>
+   static struct file_system_type ext2_fs_type = {
+           ext2_read_super, "ext2", 1, NULL
+   };
+</pre>
+The <tt>ext2_read_super</tt> entry is a pointer to a function
+which allows a filesystem to be mounted (among other things;
+more later). <tt>"ext2"</tt> is the name of the filesystem
+type, which is used (when you type <tt>mount ... -t ext2</tt>)
+to determine which filesystem to use to mount a device. The
+<tt>1</tt> says that it needs a device to be mounted on (unlike
+the proc filesyste or a network filesystem), and the
+<tt>NULL</tt> is required to fill up space that will be used to
+keep a linked list of filesystem types in the filesystem
+registry, kept in (look it up in the table!) fs/super.c.
+
+<p>It's possible for a filesystem to support more than one
+type of filesystem.  For instance, in fs/sysv/inode.c, three
+possible filesystem types are supported by one filesystem,
+with this code:
+<pre>
+   static struct file_system_type sysv_fs_type[3] = {
+           {sysv_read_super, "xenix", 1, NULL},
+           {sysv_read_super, "sysv", 1, NULL},
+           {sysv_read_super, "coherent", 1, NULL}
+   };
+
+   int init_sysv_fs(void)
+   {
+           int i;
+           int ouch;
+   
+           for (i = 0; i &lt; 3; i++) {
+                   if ((ouch = register_filesystem(&sysv_fs_type[i])) != 0)
+                           return ouch;
+           }
+           return ouch;
+   }
+</pre>
+
+<h3>Connecting the filesystem to a disk</h3>
+
+<p>The rest of the communication between the filesystem code
+and the kernel doesn't happen until a device bearing that type
+of file system is mounted. When you mount a device containing
+an ext2 file system, <tt>ext2_read_super()</tt> is called. If
+it succeeds in reading the superblock and is able to mount the
+filesystem, it fills in the <tt>super_block</tt> structure with
+information that includes a pointer to a structure called
+<tt>super_operations</tt>, which contains pointers to functions
+which do common operations related to superblocks; in this
+case, pointers to functions specific to ext2.
+
+<p>A superblock is the block that defines an entire filesystem
+on a device. It is sometimes mythical, as in the case of the
+DOS filesystem--that is, the filesystem may or may not actually
+have a block on disk that is the real superblock.  If not, it
+has to make something up.  Operations that pertain to the
+filesystem as a whole (as opposed to individual files) are
+considered superblock operations. The <tt>super_operations</tt>
+structure contains pointers to functions which manipulate
+inodes, the superblock, and which refer to or change the status
+of the filesystem as a whole (<tt>statfs()</tt> and
+<tt>remount()</tt>).
+
+<p>You have probably noticed that there are a lot of pointers,
+and especially pointers to functions, here. The good news is
+that all the messy pointer work is done; that's the VFS's job.
+All the author for the filesystem needs to do is fill in
+(usually static) structures with pointers to functions, and
+pass pointers to those structures back to the VFS so it can get
+at the filesystem and the files.
+
+<p>For example, the super_operations structure looks like
+this (from <tt>&lt;linux/fs.h&gt;</tt>):
+<pre>
+   struct super_operations {
+           void (*read_inode) (struct inode *);
+           int (*notify_change) (struct inode *, struct iattr *);
+           void (*write_inode) (struct inode *);
+           void (*put_inode) (struct inode *);
+           void (*put_super) (struct super_block *);
+           void (*write_super) (struct super_block *);
+           void (*statfs) (struct super_block *, struct statfs *, int);
+           int (*remount_fs) (struct super_block *, int *, char *);
+   };
+</pre>
+That's the VFS part.  Here's the much simpler declaration of
+the ext2 instance of that structure, in fs/ext2/super.c:
+<pre>
+   static struct super_operations ext2_sops = {
+           ext2_read_inode,
+           NULL,
+           ext2_write_inode,
+           ext2_put_inode,
+           ext2_put_super,
+           ext2_write_super,
+           ext2_statfs,
+           ext2_remount
+   };
+</pre>
+First, notice that an unneeded entry has simply been set to
+<tt>NULL</tt>. That's pretty normal Linux behavior; whenever
+there is a sensible default behavior of a function pointer,
+and that sensible default is what you want, you are almost
+sure to be able to provide a <tt>NULL</tt> pointer and get
+the default painlessly. Second, notice how simple and clean
+the declaration is. All the painful stuff like
+<tt>sb-&gt;s_op-&gt;write_super(sb);</tt>
+s hidden in the VFS implementation.
+
+<p>The details of how the filesystem actually reads and writes
+the blocks, including the superblock, from and to the disk will
+be covered in a different section.  There will actually be (I hope)
+two descriptions--a simple, functional one in a section on how
+to write filesystems, and a more detailed one in a tour through
+the buffer cache.
+For now, assume that it is done by magic...
+<!--FIXME-->
+
+<h3>Mounting a filesystem</h3>
+
+<p>When a filesystem is mounted (which file is in charge of
+mounting a filesystem?  Look at the table above, and find that
+it is fs/super.c.  You might want to follow along in
+fs/super.c), <tt>do_umount()</tt> calls read_super, which ends
+up calling (in the case of the ext2 filesystem),
+<tt>ext2_read_super()</tt>, which returns the superblock. That
+superblock includes a pointer to that structure of pointers to
+functions that we see in the definition of <tt>ext2_sops</tt>
+above. It also includes a lot of other data; you can look at
+the definition of <tt>struct super_block</tt> in
+include/linux/fs.h if you like.
+
+<h3>Finding a file</h3>
+
+<p>Once a filesystem is mounted, it is possible to access files
+on that filesystem.  There are two main steps here: looking up
+the name to find what inode it points to, and then accessing
+the inode.
+
+<p>When the VFS is looking at a name, it includes a path.
+Unless the filename is absolute (it starts with a <tt>/</tt>
+character), it is relative to the current directory of the
+process that made the system call that included a path. It uses
+filesystem-specific code to look up files on the filesystems
+specified. It takes the path name one component (filename
+components are separated with <tt>/</tt> characters) at a time,
+and looks it up. If it is a directory, then the next component
+is looked up in the directory returned by the previous lookup.
+Every component which is looked up, whether it is a file or a
+directory, returns an <b>inode number</b> which uniquely
+identifies it, and by which its contents are accessed.
+
+<p>If the file turns out to be a symbolic link to another file,
+then the VFS starts over with the new name which is retrieved
+from the symbolic link.  In order to prevent infinite
+recursion, there's a limit on the <b>depth</b> of symlinks; the
+kernel will only follow so many symlinks in a row before giving
+up.
+
+<p>When the VFS and the filesystem together have resolved a
+name into an inode number (that's the <tt>namei()</tt> function
+in namei.c), then the inode can be accessed. The
+<tt>iget()</tt> function finds <b>and returns</b> the inode
+specified by an inode number. The <tt>iput()</tt> function is
+later used to release access to the inode. It is kind of like
+<tt>malloc()</tt> and <tt>free()</tt>, except that more than
+one process may hold an inode open at once, and a reference
+count is maintained to know when it's free and when it's not.
+
+<p>The integer file handle which is passed back to the
+application code is an offset into a file table for that
+process. That file table slot holds the inode number that was
+looked up with the <tt>namei()</tt> function until the file is
+closed or the process terminates. So whenever a process does
+anything to a ``file'' using a file handle, it is really
+manipulating the inode in question.
+
+<h3>inode Operations</h3>
+
+<p>That inode number and <tt>inode</tt> structure have to come
+from somewhere, and the VFS can't make them up on it's own.
+They have to come from the filesystem. So how does the VFS look
+up the name in the filesystem and get an <tt>inode</tt> back?
+
+<p>It starts at the beginning of the path name and looks up the
+inode of the first directory in the path.  Then it uses that
+inode to look up the next directory in the path.  When it
+reachs the end, it has found the inode of the file or directory
+it is trying to look up.  But since it needs an <tt>inode</tt>
+to get started, how <b>does</b> it get started with the first
+lookup?  There is an inode pointer kept in the superblock
+called <tt>s_mounted</tt> which points at an inode structure
+for the filesystem.  This inode is allocated when the
+filesystem is mounted and de-allocated when the filesystem is
+unmounted.  Normally, as in the ext2 filesystem, the
+<tt>s_mounted</tt> inode is the inode of the root directory of
+the filesystem.  From there, all the other inodes can be looked
+up.
+
+<p>Each inode includes a pointer to a structure of pointers to
+functions.  Sound familiar?  This is the
+<tt>inode_operations</tt> structure.  One of the elements of
+that structure is called <tt>lookup()</tt>, and it is used to
+look up another inode on the same filesystem.  In general,
+a filesystem has only one <tt>lookup()</tt> function that
+is the same in every inode on the filesystem, but it is
+possible to have several different <tt>lookup()</tt> functions
+and assign them as appropriate for the filesystem; the proc
+filesystem does this because different directories in the
+proc filesystem have different purposes.
+
+The <tt>inode_operations</tt> structure looks like this (defined,
+like most everything we are looking at, in <tt>&lt;linux/fs.h&gt;</tt>):
+<pre>
+   struct inode_operations {
+           struct file_operations * default_file_ops;
+           int (*create) (struct inode *,const char *,int,int,struct inode **);
+           int (*lookup) (struct inode *,const char *,int,struct inode **);
+           int (*link) (struct inode *,struct inode *,const char *,int);
+           int (*unlink) (struct inode *,const char *,int);
+           int (*symlink) (struct inode *,const char *,int,const char *);
+           int (*mkdir) (struct inode *,const char *,int,int);
+           int (*rmdir) (struct inode *,const char *,int);
+           int (*mknod) (struct inode *,const char *,int,int,int);
+           int (*rename) (struct inode *,const char *,int,struct inode *,const char *,int);
+           int (*readlink) (struct inode *,char *,int);
+           int (*follow_link) (struct inode *,struct inode *,int,int,struct inode **);
+           int (*readpage) (struct inode *, struct page *);
+           int (*writepage) (struct inode *, struct page *);
+           int (*bmap) (struct inode *,int);
+           void (*truncate) (struct inode *);
+           int (*permission) (struct inode *, int);
+           int (*smap) (struct inode *,int);
+   };
+</pre>
+
+<p>Most of these functions map directly to system calls.
+
+<p>In the ext2 filesystem, directories, files, and symlinks
+have different <tt>inode_operations</tt> (this is normal). The
+file fs/ext2/dir.c contains <tt>ext2_dir_inode_operations</tt>,
+the file fs/ext2/file.c contains
+<tt>ext2_file_inode_operations</tt>, and the file
+fs/ext2/symlink.c contains
+<tt>ext2_symlink_inode_operations</tt>.
+
+<p>There are many system calls related to files (and
+directories) which aren't accounted for in the
+<tt>inode_operations</tt> structure; those are found in the
+<tt>file_operations</tt> structure.  The
+<tt>file_operations</tt> structure is the same one used when
+writing <A HREF="../devices/devices.html">device drivers</a>
+and contains operations that work specifically on files, rather
+than inodes:
+<pre>
+   struct file_operations {
+           int (*lseek) (struct inode *, struct file *, off_t, int);
+           int (*read) (struct inode *, struct file *, char *, int);
+           int (*write) (struct inode *, struct file *, const char *, int);
+           int (*readdir) (struct inode *, struct file *, void *, filldir_t);
+           int (*select) (struct inode *, struct file *, int, select_table *);
+           int (*ioctl) (struct inode *, struct file *, unsigned int, unsigned long);
+           int (*mmap) (struct inode *, struct file *, struct vm_area_struct *);
+           int (*open) (struct inode *, struct file *);
+           void (*release) (struct inode *, struct file *);
+           int (*fsync) (struct inode *, struct file *);
+           int (*fasync) (struct inode *, struct file *, int);
+           int (*check_media_change) (kdev_t dev);
+           int (*revalidate) (kdev_t dev);
+   };
+</pre>
+There are also a few functions which aren't directly related to
+system calls--and where they don't apply, they can simply be set
+to <tt>NULL</tt>.
+
+<h3>Summary</h3>
+
+<p>The role of the VFS is:
+<ul>
+<li>Keep track of available filesystem types.
+<li>Associate (and disassociate) devices with instances of the
+appropriate filesystem.
+<li>Do any reasonable generic processing for operations involving
+files.
+<li>When filesystem-specific operations become necessary, vector
+them to the filesystem in charge of the file, directory, or inode in
+question.
+</ul>
+The interaction between the VFS and specific filesystem types
+occurs through two main data structures, the <tt>super_block</tt>
+structure and the <tt>inode</tt> structure, and their associated
+data structures, including <tt>super_operations</tt>,
+<tt>inode_operations</tt>, <tt>file_operations</tt>, and others,
+which are kept in the include file <tt>&lt;linux/fs.h&gt;</tt>.
+
+<p>Therefore, the role of a specific filesystem code is to
+provide a superblock for each filesystem mounted and a unique
+inode for each file on the filesystem, and to provide code to
+carry out actions specific to filesystems and files that are
+requested by system calls and sorted out by the VFS.
+
+<p>Copyright (C) 1996 Michael K. Johnson, johnsonm@redhat.com.<br>
+<P>
+<P><HR SIZE=3>
+<P><B><A NAME="Messages">Messages</A></B>
+<NOBR>
+<font size=-1>
+
+
+
+
+
+
+
+</font>
+</NOBR>
+ <P>
+<NOBR>
+<DL COMPACT>
+<DT> 1. <IMG src="../../../Icons/feedback.gif" ALT="Feedback:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="vfstour/1.html">
+A couple of comments and corrections</A> <i> by Jeremy Fitzhardinge</i> </DT>
+</DL>
+</NOBR>
+
+<P>
+<P>
+
+
+
+  
+
+
+
+
+
+<BR> 
+ 
+<BR></BODY>
+</HTML>

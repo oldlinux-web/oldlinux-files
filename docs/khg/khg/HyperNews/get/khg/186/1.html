@@ -1,0 +1,223 @@
+
+<HTML>
+<HEAD>
+<TITLE>SOCK_PACKET</TITLE>
+<LINK rel="owner" href="mailto:">
+<SCRIPT LANGUAGE="JavaScript">
+<!-- hide this
+
+function help(message) {
+  self.status = message;
+  return true;
+}
+// stop hiding -->
+</SCRIPT>
+
+</HEAD>
+<BODY>
+<strong>The
+<a href="http://www.hypernews.org/HyperNews/get/hypernews.html">
+HyperNews <a href="../../khg.html">Linux KHG</a>
+Discussion Pages</strong>
+<hr>
+<NOBR>
+
+
+
+
+
+</NOBR><BR>
+<H2><IMG src="../../../../Icons/note.gif" ALT=""
+  WIDTH=15 HEIGHT=15
+  ALIGN="bottom">
+SOCK_PACKET</H2>
+
+<DL> <DD>
+<NOBR>
+<font size=+1><I>Forum:</I> <A HREF="../../khg.html" >
+ The Linux Kernel Hackers' Guide</A> </font><BR>
+
+<I>Re</I>: 
+  <IMG SRC="../../../../Icons/question.gif" 
+   WIDTH=15 HEIGHT=15
+   ALT="Question" ALIGN="absmiddle">
+  <A HREF="../186.html" >
+   Difference between SOCK_RAW SOCK_PACKET</A>  (Chris Leung)<BR>
+<I>Keywords:</I> SOCK_PACKET <BR>
+<I>Date:</I> Wed, 10 Jun 1998 18:01:01 GMT <BR>
+<I>From:</I> Eddie Leung &lt;<A HREF="mailto:edleung@uclink4.berkeley.edu" >edleung@uclink4.berkeley.edu</A>&gt; <BR>
+
+<I>Body-URL:</I> <A HREF="http://www.senie.com/dan/technology/sock_packet.html" >http://www.senie.com/dan/technology/sock_packet.html</A> <BR>
+</NOBR>
+</DD> </DL>
+
+<P>
+<table border cellpadding=5 cellspacing=0 
+ width="100%" BGCOLOR="#FFFFFF">
+ <tr><td>
+f78
+<HTML>
+<HEAD>
+<TITLE>Using SOCK_PACKET to gain full access to Ethernet</TITLE>
+</HEAD>
+<BODY>
+<CENTER>
+<H2>Using the SOCK_PACKET mechanism in Linux<BR>
+To Gain Complete Control of an Ethernet Interface</H2>
+<H3>Daniel Senie<BR>
+Amaranth Networks, Inc.</H3>
+</CENTER>
+<P>I have put together this web page in response to many queries from
+multiple people. Rather than continue to write individual responses, I
+have put together this page to explain what I was trying to do, and how
+I got it to work.<p>
+<P>First, some background. To simulate software that was intended to run
+on a different (and not yet built) platform, I needed a convenient way to
+exercise the code against live networks. I first tried using a Solaris
+system, using the DLPI driver. This allowed me to do most things, but failed
+when I needed to be able to set the source Ethernet MAC address. The Solaris
+DLPI driver provides no way to override the hardware on a per-packet basis.<P>
+<P>Next, I started looking at mechanisms in Linux. The mechanism that seemed
+to fit the best was SOCK_PACKET, which is used by tcpdump among other things.
+To Make this work for me, though, it was necessary to keep the Linux machine
+from doing anything on the interface, other than letting my programs at it.</P>
+<H4>How To Do It</H4>
+<P>This information and these instructions work for RedHat Linux 4.2 with a
+2.0.30 kernel. I expect they'll work fine on a 2.0.32 kernel as well, and with
+other Linux distributions. I have heard that a better mechanism for providing
+this facility is coming in a newer kernel. If or when I get more information
+on that, I'll see about adding another page on that.</P>
+<P>First, the interface needs to be told NOT to run ARP. Promiscuous mode should
+be enabled if you need to hear everything on the wire.:</P>
+<PRE>
+        ifconfig eth1 -ARP PROMISC UP 10.1.1.1
+</PRE>
+<P>Then tell the Linux stack it's not supposed to see any of the traffic to
+or from this port:<P>
+<PRE>
+	ipfwadm -O -a deny -P all -S 0/0 -D 0/0 -W eth1
+	ipfwadm -I -a deny -P all -S 0/0 -D 0/0 -W eth1
+</PRE>
+
+<P>In the program, you need to do several things. First, the socket call:</P>
+<PRE>
+        s = socket(AF_INET, SOCK_PACKET, htons(0x0003));
+</PRE>
+<P>to get the socket set up.</P>
+
+<P>Next I bind the specific Ethernet NIC I want:</P>
+<PRE>
+        struct sockaddr myaddr;
+
+        memset(&myaddr, '\0', sizeof(myaddr));
+        myaddr.sa_family = AF_INET;
+        strcpy(myaddr.sa_data, "eth1");  /* or whatever device */
+
+        r = bind(s, &myaddr, sizeof(struct sockaddr));
+</PRE>
+<P>and check the return code for any errors.</P>
+
+<P>Now, when you want to send or receive, this socket is bound to the
+proper device. One word of caution, though, ALWAYS check the received
+packets to be sure you got them on the right device. There's a race
+condition between making the socket call and the bind call where you'll
+get all packets from ALL interfaces... not what you want!</P>
+
+<P>So, to send a packet:</P>
+<PRE>
+        struct sockaddr from;
+        int fromlen;
+
+        memset(&from, '\0', sizeof(from));
+        from.sa_family = AF_INET;
+        strcpy(from.sa_data, "eth1"); /* or whatever device */
+        fromlen = sizeof(from);
+
+        r = sendto(s, msg, msglen, 0, &from, fromlen);
+</PRE>
+<P>and check the return code. Note that msg is the pointer to the packet,
+starting with the MAC header. Be sure you put the proper source MAC
+address into your packets! Also, msglen is the length of the packet
+including the MAC header, but not including the CRC (which I do not
+worry about, but the hardware does supply).</P>
+
+<P>Receive is pretty similar:</P>
+<PRE>
+        struct sockaddr from;
+        int fromlen;
+
+        fromlen = sizeof(from);
+
+        r = recvfrom(s, msg, 2048, 0, &from, &fromlen);
+        if (r == -1)
+        {
+                /* deal with error */
+        }
+        if 
+5fc
+(strcmp(from.sa_data, "eth1") != 0)
+        {
+                /* not from the interface we wanted, discard */
+        }
+</PRE>
+<P>if r == -1, you have an error. If r > 0, then r is the length of the
+received packet. The strcmp ensures the packet came from the right
+interface.</P>
+
+<P>If you want to receive for MAC addresses other than the one the board
+has in it, use promiscuous mode. To get the mac address from your
+program, there's an ioctl call SIOCGIFHWADDR. In the return from that
+call is also the hardware type, so you can ensure it's Ethernet. Another
+call, SIOCGIFMTU will tell you the MTU of the interface.</P>
+
+<H4>Caveats</H4>
+<UL>
+<LI><B>Do not</B> use this methodology on your primary Ethernet interface.
+Instead, install a second (and if needed, third) NIC card for use in this
+way. I've successfully used 5 NIC cards in one machine, 1 under the control
+of Linux, the rest bypassed to my programs.
+<LI><B>Be VERY sure</B> you set up the <B>ipfwadm</B> commands. Failure to
+do so will make a huge mess, likely causing networking problems for other
+hosts on your lan.
+</UL>
+<HR>
+<ADDRESS>
+<P>If you found this information helpful and useful, please let me know. If
+you require further information or assistance in this area, this can be
+arranged. For consultation beyond simple questions, Amaranth Networks, Inc.
+can provide advice, services and information for a fee.<P>
+<CENTER>
+Copyright &copy; 1998, Amaranth Networks, Inc.<BR>
+All Rights Reserved
+</CENTER>
+</BODY>
+</HTML>
+
+0
+
+</td></tr>
+</table>
+<P><NOBR>
+
+
+
+
+
+</NOBR><BR>
+
+<P>
+<P>
+
+
+
+  
+
+
+
+
+
+
+<BR> 
+ 
+<BR></BODY>
+</HTML>

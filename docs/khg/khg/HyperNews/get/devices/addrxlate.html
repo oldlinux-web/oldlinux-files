@@ -1,0 +1,274 @@
+
+<HTML>
+<HEAD>
+<TITLE>Translating Addresses in Kernel Space</TITLE>
+<LINK rel="owner" href="mailto:">
+<SCRIPT LANGUAGE="JavaScript">
+<!-- hide this
+
+function help(message) {
+  self.status = message;
+  return true;
+}
+// stop hiding -->
+</SCRIPT>
+
+</HEAD>
+<BODY>
+<strong>The
+HyperNews <a href="../khg.html">Linux KHG</a>
+Discussion Pages</strong>
+<hr>
+<h2>Translating Addresses in Kernel Space</h2>
+
+<blockquote><i>
+From a message from Linus Torvalds to the linux-kernel mailing list
+of 27 Sep 1996, edited.
+</i></blockquote>
+
+I'll take this opportunity to tell all device driver writers about
+the ugly secrets of portability.  Things are actually worse than just
+physical and virtual addresses.
+
+<p>
+The aha1542 is a bus-master device, and [a patch posted to the
+linux-kernel list] makes the driver give the controller the physical
+address of the buffers, which is correct on x86, because all bus master
+devices see the physical memory mappings directly.
+
+<p>
+However, on many setups, there are actually <i>three</i> different ways
+of looking at memory addresses, and in this case we actually want the
+third, the so-called "bus address".
+
+<p>
+Essentially, the three ways of addressing memory are (this is "real memory",
+i.e. normal RAM; see later about other details): 
+<ul>
+<li>CPU untranslated. This is the "physical" address, ie physical address 
+0 is what the CPU sees when it drives zeroes on the memory bus.
+
+<li>CPU translated address. This is the "virtual" address, and is 
+completely internal to the CPU itself with the CPU doing the appropriate
+translations into "CPU untranslated". 
+
+<li>Bus address. This is the address of memory as seen by OTHER devices, 
+not the CPU. Now, in theory there could be many different bus 
+addresses, with each device seeing memory in some device-specific way, but
+happily most hardware designers aren't actually actively trying to make
+things any more complex than necessary, so you can assume that all 
+external hardware sees the memory the same way. 
+</ul>
+Now, on normal PC's, the bus address is exactly the same as the physical
+address, and things are very simple indeed. However, they are that simple
+because the memory and the devices share the same address space, and that is
+not generally necessarily true on other PCI/ISA setups. 
+
+<p>
+Now, just as an example, on the PReP (PowerPC Reference Platform), the 
+CPU sees a memory map something like this (this is from memory):
+<dl>
+<dt>0-2GB<dd>"real memory"
+<dt>2GB-3GB<dd>"system IO" (ie inb/out type accesses on x86)
+<dt>3GB-4GB<dd>"IO memory" (ie shared memory over the IO bus)
+</dl>
+Now, that looks simple enough. However, when you look at the same thing from
+the viewpoint of the devices, you have the reverse, and the physical memory
+address 0 actually shows up as address 2GB for any IO master.
+
+<p>
+So when the CPU wants any bus master to write to physical memory 0, it 
+has to give the master address <tt>0x80000000</tt> as the memory address.
+
+<p>
+So, for example, depending on how the kernel is actually mapped on the 
+PPC, you can end up with a setup like this:
+<dl>
+<dt>physical address:<dd>0
+<dt>virtual address:<dd>0xC0000000
+<dt>bus address:<dd>0x80000000
+</dl>
+where all the addresses actually point to the same thing, it's just seen 
+through different translations.
+
+<p>
+Similarly, on the alpha, the normal translation is
+<dl>
+<dt>physical address:<dd>0
+<dt>virtual address:<dd>0xfffffc0000000000
+<dt>bus address:<dd>0x40000000
+</dl>
+(but there are also alpha's where the physical address and the bus address
+are the same). 
+
+<p>
+Anyway, the way to look up all these translations, you do:
+<pre>
+        #include &lt;asm/io.h&gt;
+
+        phys_addr = virt_to_phys(virt_addr);
+        virt_addr = phys_to_virt(phys_addr);
+         bus_addr = virt_to_bus(virt_addr);
+        virt_addr = bus_to_virt(bus_addr);
+</pre>
+Now, when do you need these?
+
+<p>
+You want the <i>virtual</i> address when you are actually going to access
+that pointer from the kernel.  So you can have something like this (from
+the aha1542 driver):
+<pre>
+        /*
+         * this is the hardware "mailbox" we use to communicate with
+         * the controller. The controller sees this directly.
+         */
+        struct mailbox {
+                __u32 status;
+                __u32 bufstart;
+                __u32 buflen;
+                ..
+        } mbox;
+
+                unsigned char * retbuffer;
+
+                /* get the address from the controller */
+                retbuffer = bus_to_virt(mbox.bufstart);
+                switch (retbuffer[0]) {
+                        case STATUS_OK:
+                                ...
+</pre>
+On the other hand, you want the bus address when you have a buffer that 
+you want to give to the controller:
+<pre>
+        /* ask the controller to read the sense status into "sense_buffer" */
+        mbox.bufstart = virt_to_bus(&sense_buffer);
+        mbox.buflen = sizeof(sense_buffer);
+        mbox.status = 0;
+        notify_controller(&mbox);
+</pre>
+And you generally <i>never</i> want to use the physical address, because
+you can't use that from the CPU (the CPU only uses translated virtual
+addresses), and you can't use it from the bus master.
+
+<p>
+So why do we care about the physical address at all? We do need the
+physical address in some cases, it's just not very often in normal code.
+The physical address is needed if you use memory mappings, for example,
+because the <tt>remap_page_range()</tt> mm function wants the physical
+address of the memory to be remapped (the memory management layer doesn't
+know about devices outside the CPU, so it shouldn't need to know about
+"bus addresses" etc).
+
+<p>
+<b>NOTE NOTE NOTE!</b> The above is only one part of the whole
+equation. The above only talks about "real memory", i.e. CPU memory, i.e. RAM.
+
+<p>
+There is a completely different type of memory too, and that's the "shared
+memory" on the PCI or ISA bus. That's generally not RAM (although in the case
+of a video graphics card it can be normal DRAM that is just used for a frame
+buffer), but can be things like a packet buffer in a network card etc. 
+
+<p>
+This memory is called "PCI memory" or "shared memory" or "IO
+memory" or whatever, and there is only one way to access it: the
+<tt>readb</tt>/<tt>writeb</tt> and related functions. You should never
+take the address of such memory, because there is really nothing you can
+do with such an address: it's not conceptually in the same memory space as
+"real memory" at all, so you cannot just dereference a pointer. (Sadly,
+on x86 it <i>is</i> in the same memory space, so on x86 it actually
+works to just deference a pointer, but it's not portable).
+
+<p>
+For such memory, you can do things like
+<dl>
+<dt><b>Reading:</b>
+<dd><pre>
+        /*
+         * read first 32 bits from ISA memory at 0xC0000, aka
+         * C000:0000 in DOS terms
+         */
+        unsigned int signature = readl(0xC0000);
+</pre>
+<dt><b>Remapping and writing:</b>
+<dd><pre>
+        /*
+         * remap framebuffer PCI memory area at 0xFC000000,
+         * size 1MB, so that we can access it: We can directly
+         * access only the 640k-1MB area, so anything else
+         * has to be remapped.
+         */
+        char * baseptr = ioremap(0xFC000000, 1024*1024);
+
+        /* write a 'A' to the offset 10 of the area */
+        writeb('A',baseptr+10);
+
+        /* unmap when we unload the driver */
+        iounmap(baseptr);
+</pre>
+<dt><b>Copying and clearing:</b>
+<dd><pre>
+        /* get the 6-byte ethernet address at ISA address E000:0040 */
+        memcpy_fromio(kernel_buffer, 0xE0040, 6);
+        /* write a packet to the driver */
+        memcpy_toio(0xE1000, skb->data, skb->len);
+        /* clear the frame buffer */
+        memset_io(0xA0000, 0, 0x10000);
+</pre>
+</dl>
+Ok, that just about covers the basics of accessing IO portably.
+Questions?  Comments? You may think that all the above is overly complex,
+but one day you might find yourself with a 500MHz alpha in front of you,
+and then you'll be happy that your driver works <tt>;)</tt>
+
+<p>
+Note that kernel versions 2.0.x (and earlier) mistakenly called
+<tt>ioremap()</tt> "<tt>vremap()</tt>".  <tt>ioremap()</tt> is the
+proper name, but I didn't think straight when I wrote it originally.
+People who have to support both can do something like:
+<pre>
+	/* support old naming sillyness */
+	#if LINUX_VERSION_CODE &lt; 0x020100
+	#define ioremap vremap
+	#define iounmap vfree
+	#endif
+</pre>
+at the top of their source files, and then they can use the right
+names even on 2.0.x systems.
+
+<p>
+And the above sounds worse than it really is. Most real drivers really
+don't do all that complex things (or rather: the complexity is not so much
+in the actual IO accesses as in error handling and timeouts etc). It's
+generally not hard to fix drivers, and in many cases the code actually
+looks better afterwards:
+<pre>
+        unsigned long signature = *(unsigned int *) 0xC0000;
+</pre>
+vs.
+<pre>
+        unsigned long signature = readl(0xC0000);
+</pre>
+I think the second version actually is more readable, no?
+
+<p>
+<pre>                     Linus</pre>
+
+<P>
+<P><HR SIZE=3>
+
+<P>
+<P>
+
+
+
+  
+
+
+
+
+
+<BR> 
+ 
+<BR></BODY>
+</HTML>

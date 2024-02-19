@@ -1,0 +1,703 @@
+
+<HTML>
+<HEAD>
+<TITLE>Device Driver Basics</TITLE>
+<LINK rel="owner" href="mailto:">
+<SCRIPT LANGUAGE="JavaScript">
+<!-- hide this
+
+function help(message) {
+  self.status = message;
+  return true;
+}
+// stop hiding -->
+</SCRIPT>
+
+</HEAD>
+<BODY>
+<strong>The
+HyperNews <a href="../khg.html">Linux KHG</a>
+Discussion Pages</strong>
+<hr>
+<h3>Device Driver Basics</h3>
+
+<p>We will assume that you decide that you do not wish to write
+a user-space device, and would rather implement your device in
+the kernel.  You will probably be writing writing two files, a
+<tt>.c</tt> file and a <tt>.h</tt> file, and possibly modifying
+other files as well, as will be described below.  We will refer
+to your files as foo.c and foo.h, and your driver will be the
+<tt>foo</tt> driver.
+
+<h4>Namespace</h4>
+
+<p>One of the first things you will need to do, before writing
+any code, is to name your device.  This name should be a short
+(probably two or three character) string.  For instance, the
+parallel device is the ``<tt>lp</tt>'' device, the floppies are
+the ``<tt>fd</tt>'' devices, and SCSI disks are the
+``<tt>sd</tt>'' devices.  As you write your driver, you will
+give your functions names prefixed with your chosen string to
+avoid any namespace confusion.  We will call your prefix
+<tt>foo,</tt> and give your functions names like
+<tt>foo_read(), foo_write(),</tt> etc.
+
+<h4>Allocating memory</h4>
+
+<p>Memory allocation in the kernel is a little different from
+memory allocation in normal user-level programs.  Instead of
+having a <tt>malloc()</tt> capable of delivering almost
+unlimited amounts of memory, there is a <tt>kmalloc()</tt>
+function that is a bit different:
+<ul>
+<li>Memory is provided in pieces whose size is a power of 2, except
+that pieces larger than 128 bytes are allocated in blocks whose size
+is a power of 2 minus some small amount for overhead.
+You can request any odd size, but memory will not be used any more
+efficiently if you request a 31-byte piece than it will if you request
+a 32 byte piece.  Also, there is a limit to the amount of memory that
+can be allocated, which is currently 131056 bytes.
+<li><tt>kmalloc()</tt> takes a second argument, the priority.  This is
+used as an argument to the <tt>get_free_page()</tt> function, where it
+is used to determine when to return.  The usual priority is
+<tt>GFP_KERNEL</tt>.  If it may be called from within an interrupt, use
+<tt>GFP_ATOMIC</tt> and be truly prepared for it to fail (don't panic).
+This is because if you specify <tt>GFP_KERNEL</tt>, <tt>kmalloc()</tt> may
+sleep, which cannot be done on an interrupt.  The other option is
+<tt>GFP_BUFFER</tt>, which is used only when the kernel is allocating buffer
+space, and never in device drivers.
+</ul>
+
+<p>To free memory allocated with <tt>kmalloc()</tt>, use one of
+two functions: <tt>kfree()</tt> or <tt>kfree_s()</tt>.  These
+differ from <tt>free()</tt> in a few ways as well:
+<ul>
+<li><tt>kfree()</tt> is a macro which calls <tt>kfree_s()</tt> and acts
+like the standard <tt>free()</tt> outside the kernel.
+<li>If you know what size object you are freeing, you can speed
+things up by calling <tt>kfree_s()</tt> directly.  It takes two
+arguments:  the first is the pointer that you are freeing, as in the
+single argument to <tt>kfree()</tt>, and the second is the size of the
+object being freed.
+</ul>
+
+<p>See <A HREF="reference.html">Supporting Functions</a> for
+more information on <tt>kmalloc()</tt>, <tt>kfree()</tt>, and
+other useful functions.
+
+<p>Be gentle when you use kmalloc.  Use only what you have to.
+Remember that kernel memory is unswappable, and thus allocating
+extra memory in the kernel is a far worse thing to do in the
+kernel than in a user-level program.  Take only what you need,
+and free it when you are done, unless you are going to use it
+right away again.
+
+<h4>Character vs. block devices</h4>
+
+<p>There are two main types of devices under all Unix systems,
+character and block devices.  Character devices are those for
+which no buffering is performed, and block devices are those
+which are accessed through a cache.  Block devices must be
+random access, but character devices are not required to be,
+though some are.  Filesystems can only be mounted if they are
+on block devices.
+
+<p>Character devices are read from and written to with two
+function: <tt>foo_read()</tt> and <tt>foo_write()</tt>.  The
+<tt>read()</tt> and <tt>write()</tt> calls do not return until
+the operation is complete.  By contrast, block devices do not
+even implement the <tt>read()</tt> and <tt>write()</tt>
+functions, and instead have a function which has historically
+been called the ``strategy routine.'' Reads and writes are done
+through the buffer cache mechanism by the generic functions
+<tt>bread(),</tt> <tt>breada(),</tt> and <tt>bwrite()</tt>.
+These functions go through the buffer cache, and so may or may
+not actually call the strategy routine, depending on whether or
+not the block requested is in the buffer cache (for reads) or
+on whether or not the buffer cache is full (for writes).  A
+request may be asyncronous: <tt>breada()</tt> can request the
+strategy routine to schedule reads that have not been asked
+for, and to do it asyncronously, in the background, in the
+hopes that they will be needed later.
+
+<p>The sources for character devices are kept in drivers/char/,
+and the sources for block devices are kept in drivers/block/.
+They have similar interfaces, and are very much alike, except
+for reading and writing.  Because of the difference in reading
+and writing, initialization is different, as block devices have
+to register a strategy routine, which is registered in a
+different way than the <tt>foo_read()</tt> and
+<tt>foo_write()</tt> routines of a character device driver.
+Specifics are dealt with in
+<A HREF="char.html#init">Character Device Initialization</a> and
+<A HREF="block.html#init">Block Device Initialization</a>.
+
+<h4>Interrupts vs. Polling</h4>
+
+<p>Hardware is slow.  That is, in the time it takes to get
+information from your average device, the CPU could be off
+doing something far more useful than waiting for a busy but
+slow device.  So to keep from having to <b>busy-wait</b> all
+the time, <b>interrupts</b> are provided which can interrupt
+whatever is happening so that the operating system can do some
+task and return to what it was doing without losing
+information.  In an ideal world, all devices would probably
+work by using interrupts.  However, on a PC or clone, there are
+only a few interrupts available for use by your peripherals, so
+some drivers have to poll the hardware: ask the hardware if it
+is ready to transfer data yet.  This unfortunately wastes time,
+but it sometimes needs to be done.
+
+<p>Some hardware (like memory-mapped displays) is as fast
+as the rest of the machine, and does not generate output
+asyncronously, so an interrupt-driven driver would be rather
+silly, even if interrupts were provided.
+
+<p>In Linux, many of the drivers are interrupt-driven, but some
+are not, and at least one can be either, and can be switched
+back and forth at runtime.  For instance, the <tt>lp</tt>
+device (the parallel port driver) normally polls the printer to
+see if the printer is ready to accept output, and if the
+printer stays in a not ready phase for too long, the driver
+will sleep for a while, and try again later.  This improves
+system performance.  However, if you have a parallel card that
+supplies an interrupt, the driver will utilize that, which will
+usually make performance even better.
+
+<p>There are some important programming differences between
+interrupt-driven drivers and polling drivers.  To understand
+this difference, you have to understand a little bit of how
+system calls work under Unix.  The kernel is not a separate
+task under Unix. Rather, it is as if each process has a copy of
+the kernel.  When a process executes a system call, it does not
+transfer control to another process, but rather, the process
+changes execution modes, and is said to be ``in kernel mode.''
+In this mode, it executes kernel code which is trusted to be
+safe.
+
+<p>In kernel mode, the process can still access the user-space
+memory that it was previously executing in, which is done
+through a set of macros: <tt>get_fs_*()</tt> and
+<tt>memcpy_fromfs()</tt> read user-space memory, and
+<tt>put_fs_*()</tt> and <tt>memcpy_tofs()</tt> write to
+user-space memory.  Because the process is still running, but
+in a different mode, there is no question of where in memory to
+put the data, or where to get it from.  However, when an
+interrupt occurs, any process might currently be running, so
+these macros cannot be used--if they are, they will either
+write over random memory space of the running process or cause
+the kernel to panic.
+
+<p>Instead, when scheduling the interrupt, a driver must also
+provide temporary space in which to put the information, and
+then sleep.  When the interrupt-driven part of the driver has
+filled up that temporary space, it wakes up the process, which
+copies the information from that temporary space into the
+process' user space and returns.  In a block device driver,
+this temporary space is automatically provided by the buffer
+cache mechanism, but in a character device driver, the driver
+is responsible for allocating it itself.
+
+<h4>The sleep-wakeup mechanism</h4>
+
+<b>[Begin by giving a general description of how sleeping is used
+and what it does.  This should mention things like all processes
+sleeping on an event are woken at once, and then they contend for the
+event again, etc...]</b>
+
+<p>Perhaps the best way to try to understand the Linux
+sleep-wakeup mechanism is to read the source for the
+<tt>__sleep_on()</tt> function, used to implement both the
+<tt>sleep_on()</tt> and <tt>interruptible_sleep_on()</tt>
+calls.
+<pre>
+static inline void __sleep_on(struct wait_queue **p, int state)
+{
+    unsigned long flags;
+    struct wait_queue wait = { current, NULL };
+
+    if (!p)
+        return;
+    if (current == task[0])
+        panic("task[0] trying to sleep");
+    current-&gt;state = state;
+    add_wait_queue(p, &wait);
+    save_flags(flags);
+    sti();
+    schedule();
+    remove_wait_queue(p, &amp;wait);
+    restore_flags(flags);
+}
+</pre>
+
+<p>A <tt>wait_queue</tt> is a circular list of pointers to task
+structures, defined in <tt>&lt;linux/wait.h&gt;</tt> to be
+<pre>
+struct wait_queue {
+    struct task_struct * task;
+    struct wait_queue * next;
+};
+</pre>
+<tt>state</tt> is either <tt>TASK_INTERRUPTIBLE</tt> or
+<tt>TASK_UNINTERUPTIBLE</tt>, depending on whether or not the
+sleep should be interruptable by such things as system calls.
+In general, the sleep should be interruptible if the device is
+a slow one; one which can block indefinitely, including
+terminals and network devices or pseudodevices.
+
+<p><tt>add_wait_queue()</tt> turns off interrupts, if they were
+enabled, and adds the new <tt>struct wait_queue</tt> declared
+at the beginning of the function to the list <tt>p</tt>.  It
+then recovers the original interrupt state (enabled or
+disabled), and returns.
+
+<p><tt>save_flags()</tt> is a macro which saves the process
+flags in its argument.  This is done to preserve the previous
+state of the interrupt enable flag.  This way, the
+<tt>restore_flags()</tt> later can restore the interrupt state,
+whether it was enabled or disabled. <tt>sti()</tt> then allows
+interrupts to occur, and <tt>schedule()</tt> finds a new
+process to run, and switches to it.  Schedule will not choose
+this process to run again until the state is changed to
+<tt>TASK_RUNNING</tt> by <tt>wake_up()</tt> called on the same
+wait queue, <tt>p</tt>, or conceivably by something else.
+
+<p>The process then removes itself from the
+<tt>wait_queue</tt>, restores the orginal interrupt condition
+with <tt>restore_flags()</tt>, and returns.
+
+<p>Whenever contention for a resource might occur, there needs
+to be a pointer to a <tt>wait_queue</tt> associated with that
+resource.  Then, whenever contention does occur, each process
+that finds itself locked out of access to the resource sleeps
+on that resource's <tt>wait_queue</tt>.  When any process is
+finished using a resource for which there is a
+<tt>wait_queue</tt>, it should wake up and processes that might
+be sleeping on that <tt>wait_queue</tt>, probably by calling
+<tt>wake_up()</tt>, or possibly
+<tt>wake_up_interruptible()</tt>.
+
+<p>If you don't understand why a process might want to sleep,
+or want more details on when and how to structure this
+sleeping, I urge you to buy one of the operating systems
+textbooks listed in the
+<A HREF="../bib/bib.html">Annotated Bibliography</a> and look up
+<b>mutual exclusion</b> and <b>deadlock</b>.
+
+<h4>More advanced sleeping</h4>
+
+<p>If the <tt>sleep_on()</tt>/<tt>wake_up()</tt> mechanism in
+Linux does not satisfy your device driver needs, you can code
+your own versions of <tt>sleep_on()</tt> and <tt>wake_up()</tt>
+that fit your needs.  For an example of this, look at the
+serial device driver (drivers/char/serial.c) in function
+<tt>block_til_ready()</tt>, where quite a bit has to be done
+between the <tt>add_wait_queue()</tt> and the
+<tt>schedule()</tt>.
+
+<h4>The VFS</h4>
+
+<p>The Virtual Filesystem Switch, or <b>VFS</b>, is the
+mechanism which allows Linux to mount many different
+filesystems at the same time.  In the first versions of Linux,
+all filesystem access went straight into routines which
+understood the <tt>minix</tt> filesystem.  To make it possible
+for other filesystems to be written, filesystem calls had to
+pass through a layer of indirection which would switch the call
+to the routine for the correct filesystem.  This was done by
+some generic code which can handle generic cases and a
+structure of pointers to functions which handle specific cases.
+One structure is of interest to the device driver writer; the
+<tt>file_operations</tt> structure.
+
+<p>From /usr/include/linux/fs.h:
+<pre>
+struct file_operations {
+    int  (*lseek)   (struct inode *, struct file *, off_t, int);
+    int  (*read)    (struct inode *, struct file *, char *, int);
+    int  (*write)   (struct inode *, struct file *, char *, int);
+    int  (*readdir) (struct inode *, struct file *, struct dirent *, int count);
+    int  (*select)  (struct inode *, struct file *, int, select_table *);
+    int  (*ioctl)   (struct inode *, struct file *, unsigned int, unsigned int);
+    int  (*mmap)    (struct inode *, struct file *, unsigned long, size_t, int, unsigned long);
+    int  (*open)    (struct inode *, struct file *);
+    void (*release) (struct inode *, struct file *);
+};
+</pre>
+Essentially, this structure constitutes a parital list of
+the functions that you may have to write to create your driver.
+
+<p>This section details the actions and requirements of the
+functions in the <tt>file_operations</tt> structure.  It
+documents all the arguments that these functions take.  <b>[It
+should also detail all the defaults, and cover more carefully
+the possible return values.]</b>
+
+<h4>The <tt>lseek()</tt> function</h4>
+
+<p>This function is called when the system call
+<tt>lseek()</tt> is called on the device special file
+representing your device.  An understanding of what the system
+call <tt>lseek()</tt> does should be sufficient to explain this
+function, which moves to the desired offset.  It takes these
+four arguments:
+<dl>
+<dt><tt>struct inode * inode</tt>
+<dd>Pointer to the inode structure for this device.
+<dt><tt>struct file * file</tt>
+<dd>Pointer to the file structure for this device.
+<dt><tt>off_t offset</tt>
+<dd>Offset <b>from origin</b> to move to.
+<dt><tt>int origin</tt>
+<dd>0 = take the offset from absolute offset 0 (the beginning).<br>
+1 = take the offset from the current position.<br>
+2 = take the offset from the end.
+</dl>
+<tt>lseek()</tt> returns <tt>-errno</tt> on error, or the absolute
+position (&gt;= 0) after the lseek.
+
+<p>If there is no <tt>lseek()</tt>, the kernel will take the
+default action, which is to modify the <tt>file->f_pos</tt>
+element.  For an <tt>origin</tt> of 2, the default action is to
+return <tt>-EINVAL</tt> if <tt>file->f_inode</tt> is NULL,
+otherwise it sets <tt>file->f_pos</tt> to
+<tt>file->f_inode->i_size</tt> + <tt>offset</tt>.  Because of
+this, if <tt>lseek()</tt> should return an error for your
+device, you must write an <tt>lseek()</tt> function which
+returns that error.
+
+<h4>The <tt>read()</tt> and <tt>write()</tt> functions</h4>
+
+<p>The read and write functions read and write a character
+string to the device.  If there is no <tt>read()</tt> or
+<tt>write()</tt> function in the <tt>file_operations</tt>
+structure registered with the kernel, and the device is a
+character device, <tt>read()</tt> or <tt>write()</tt> system
+calls, respectively, will return <tt>-EINVAL</tt>.  If the
+device is a block device, these functions should not be
+implemented, as the VFS will route requests through the buffer
+cache, which will call your strategy routine.  The
+<tt>read</tt> and <tt>write</tt> functions take these
+arguments:
+<dl>
+<dt><tt>struct inode * inode</tt>
+<dd>This is a pointer to the inode of the device special file which was
+accessed.  From this, you can do several things, based on the
+<tt>struct inode</tt> declaration about 100 lines into
+/usr/include/linux/fs.h.  For instance, you can find the minor number
+of the file by this construction: <tt>unsigned int minor =
+MINOR(inode->i_rdev);</tt> The definition of the <tt>MINOR</tt> macro is in
+<tt><linux/fs.h></tt>, as are many other useful definitions.  Read fs.h
+and a few device drivers for more details, and see
+<A HREF="reference.html">Supporting Functions</a>
+for a short description.  <tt>inode->i_mode</tt>
+can be used to find the mode of the file, and there are macros
+available for this, as well.
+<dt><tt>struct file * file</tt>
+<dd>Pointer to file structure for this device.
+<dt><tt>char * buf</tt>
+<dd>This is a buffer of characters to read or write.  It is
+located in <i>user-space</i> memory, and therefore must be
+accessed using the <tt>get_fs*(), put_fs*(),</tt> and
+<tt>memcpy*fs()</tt> macros detailed in <A
+HREF="reference.html">Supporting Functions</a>.  User-space
+memory is inaccessible during an interrupt, so if your driver
+is interrupt driven, you will have to copy the contents of your
+buffer into a queue.
+<dt><tt>int count</tt>
+<dd>This is a count of characters in <tt>buf</tt> to
+be read or written.  It is the size of <tt>buf</tt>, and is how you know
+that you have reached the end of <tt>buf</tt>, as <tt>buf</tt> is not
+guaranteed to be null-terminated.
+</dl>
+
+<h4>The <tt>readdir()</tt> function</h4>
+
+<p>This function is another artifact of
+<tt>file_operations</tt> being used for implementing
+filesystems as well as device drivers.  Do not implement it.
+The kernel will return <tt>-ENOTDIR</tt> if the system call
+<tt>readdir()</tt> is called on your device special file.
+
+<h4>The <tt>select()</tt> function</h4>
+
+<p>The <tt>select()</tt> function is generally most useful with
+character devices.  It is usually used to multiplex reads
+without polling--the application calls the <tt>select()</tt>
+system call, giving it a list of file descriptors to watch, and
+the kernel reports back to the program on which file descriptor
+has woken it up.  It is also used as a timer.  However, the
+<tt>select()</tt> function in your device driver is not
+directly called by the system call <tt>select()</tt>, and so
+the <tt>file_operations</tt> <tt>select()</tt> only needs to do
+a few things. Its arguments are:
+<dl>
+<dt><tt>struct inode * inode</tt>
+<dd>Pointer to the inode structure for this device.
+<dt><tt>struct file * file</tt>
+<dd>Pointer to the file structure for this device.
+<dt><tt>int sel_type</tt> 
+<dd>The select type to perform:
+<table border>
+<tr><td><tt>SEL_IN</tt></td><td>read</td></tr>
+<tr><td><tt>SEL_OUT</tt></td><td>write</td></tr>
+<tr><td><tt>SEL_EX</tt></td><td>exception</td></tr>
+</table>
+<dt><tt>select_table * wait</tt>
+<dd>If <tt>wait</tt> is not NULL and there is no error condition caused by
+the select, <tt>select()</tt> should put the process to sleep, and
+arrange to be woken up when the device becomes ready, usually through
+an interrupt.  If <tt>wait</tt> is NULL, then the driver should quickly
+see if the device is ready, and return even if it is not.  The
+<tt>select_wait()</tt> function does this already.
+</dl>
+
+<p>If the calling program wants to wait until one of the
+devices upon which it is selecting becomes available for the
+operation it is interested in, the process will have to be put
+to sleep until one of those operations becomes available.  This
+does <b>not</b> require use of a <tt>sleep_on*()</tt> function,
+however.  Instead the <tt>select_wait()</tt> function is used.
+(See <A HREF="reference.html">Supporting Functions</a> for the
+definition of the <tt>select_wait()</tt> function).  The sleep
+state that <tt>select_wait()</tt> will cause is the same as
+that of <tt>sleep_on_interruptible()</tt>, and, in fact,
+<tt>wake_up_interruptible()</tt> is used to wake up the
+process.
+
+<p>However, <tt>select_wait()</tt> will not make the process go
+to sleep right away.  It returns directly, and the
+<tt>select()</tt> function you wrote should then return.  The
+process isn't put to sleep until the system call
+<tt>sys_select()</tt>, which originall called your
+<tt>select()</tt> function, uses the information given to it by
+the <tt>select_wait()</tt> function to put the process to
+sleep. <tt>select_wait()</tt> adds the process to the wait
+queue, but <tt>do_select()</tt> (called from
+<tt>sys_select()</tt>) actually puts the process to sleep by
+changing the process state to <tt>TASK_INTERRUPTIBLE</tt> and
+calling <tt>schedule()</tt>.
+
+<p>The first argument to <tt>select_wait()</tt> is the same
+<tt>wait_queue</tt> that should be used for a
+<tt>sleep_on()</tt>, and the second is the
+<tt>select_table</tt> that was passed to your <tt>select()</tt>
+function.
+
+<p>After having explained all this in excruciating detail, here
+are two rules to follow:
+<ol>
+<li>Call <tt>select_wait()</tt> if the device is not ready, and return 0.
+<li>Return 1 if the device is ready.
+</ol>
+
+<p>If you provide a <tt>select()</tt> function, do not provide
+timeouts by setting <tt>current-&gt;timeout</tt>, as the
+<tt>select()</tt> mechanism uses <tt>current-&gt;timeout</tt>,
+and the two methods cannot co-exist, as there is only one
+<tt>timeout</tt> for each process.  Instead, consider using a
+timer to provide timeouts.  See the description of the
+<tt>add_timer()</tt> function in
+<A HREF="reference.html">Supporting Functions</a>
+for details.
+
+<h4>The <tt>ioctl()</tt> function</h4>
+
+<p>The <tt>ioctl()</tt> function processes ioctl calls.  The
+structure of your <tt>ioctl()</tt> function will be: first
+error checking, then one giant (possibly nested) switch
+statement to handle all possible ioctls.  The ioctl number is
+passed as <tt>cmd</tt>, and the argument to the ioctl is passed
+as <tt>arg</tt>.  It is good to have an understanding of how
+<tt>ioctls</tt> ought to work before making them up.  If you
+are not sure about your ioctls, do not feel ashamed to ask
+someone knowledgeable about it, for a few reasons: you may not
+even need an ioctl for your purpose, and if you do need an
+ioctl, there may be a better way to do it than what you have
+thought of.  Since ioctls are the least regular part of the
+device interface, it takes perhaps the most work to get this
+part right.  Take the time and energy you need to get it right.
+
+<p>The first thing you need to do is look in
+Documentation/ioctl-number.txt, read it, and pick an unused number.
+Then go from there.
+<dl>
+<dt><tt>struct inode * inode</tt>
+<dd>Pointer to the inode structure for this device.
+<dt><tt>struct file * file</tt>
+<dd>Pointer to the file structure for this device.
+<dt><tt>unsigned int cmd</tt>
+<dd>This is the ioctl command.  It is
+generally used as the switch variable for a case statement.
+<dt><tt>unsigned int arg</tt>
+<dd>This is the argument to the command.
+This is user defined.   Since this is the same size as a
+<tt>(void *)</tt>, this can be used as a pointer to user space, accessed
+through the fs register as usual.
+</dl>
+<dl>
+<dt><b>Returns:</b>
+<dd><tt>-errno</tt> on error<br>
+Every other return is user-defined.
+</dl>
+
+If the <tt>ioctl()</tt> slot in the <tt>file_operations</tt> structure is
+not filled in, the VFS will return <tt>-EINVAL</tt>.  However, in
+all cases, if <tt>cmd</tt> is one of <tt>FIOCLEX</tt>, <tt>FIONCLEX</tt>,
+<tt>FIONBIO</tt>, or <tt>FIOASYNC</tt>, default processing will be done:
+<dl>
+<dt><tt>FIOCLEX</tt> (0x5451)
+<dd>Sets the close-on-exec bit.
+<dt><tt>FIONCLEX</tt> (0x5450)
+<dd>Clears the close-on-exec bit.
+<dt><tt>FIONBIO</tt> (0x5421)
+<dd>If <tt>arg</tt> is non-zero, set <tt>O_NONBLOCK</tt>,
+otherwise clear <tt>O_NONBLOCK</tt>.
+<dt><tt>FIOASYNC</tt> (0x5452)
+<dd>If <tt>arg</tt> is non-zero, set <tt>O_SYNC</tt>,
+otherwise clear <tt>O_SYNC</tt>.  <tt>O_SYNC</tt> is not yet implemented,
+but it is documented here and parsed in the kernel for completeness.
+</dl>
+Note that you have to avoid these four numbers when creating
+your own ioctls, since if they conflict, the VFS ioctl code
+will interpret them as being one of these four, and act
+appropriately, causing a very hard-to-track-down bug.
+
+<h4>The <tt>mmap()</tt> function</h4>
+
+<dl>
+<dt><tt>struct inode * inode</tt>
+<dd>Pointer to inode structure for device.
+<dt><tt>struct file * file</tt>
+<dd>Pointer to file structure for device.
+<dt><tt>unsigned long addr</tt>
+<dd>Beginning of address in main memory
+to <tt>mmap()</tt> into.
+<dt><tt>size_t len</tt>
+<dd>Length of memory to <tt>mmap()</tt>.
+<dt><tt>int prot</tt>
+<dd>One of:
+<table border>
+<tr><td><tt>PROT_READ</tt></td><td>region can be read.</td></tr>
+<tr><td><tt>PROT_WRITE</tt></td><td>region can be written.</td></tr>
+<tr><td><tt>PROT_EXEC</tt></td><td>region can be executed.</td></tr>
+<tr><td><tt>PROT_NONE</tt></td><td>region cannot be accessed.</td></tr>
+</table>
+<dt><tt>unsigned long off</tt>
+<dd>Offset in the file to <tt>mmap()</tt> from.
+This address in the file will be mapped to address <tt>addr</tt>.
+</dl>
+
+<h4>The <tt>open()</tt> and <tt>release()</tt> functions</h4>
+
+<dl>
+<dt><tt>struct inode * inode</tt>
+<dd>Pointer to inode structure for device.
+<dt><tt>struct file * file</tt>
+<dd>Pointer to file structure for device.
+</dl>
+
+<p><tt>open()</tt> is called when a device special files is
+opened.  It is the policy mechanism responsible for ensuring
+consistency.  If only one process is allowed to open the device
+at once, <tt>open()</tt> should lock the device, using whatever
+locking mechanism is appropriate, usually setting a bit in some
+state variable to mark it as busy.  If a process already is
+using the device (if the busy bit is already set) then
+<tt>open()</tt> should return <tt>-EBUSY</tt>.  If more than
+one process may open the device, this function is responsible
+to set up any necessary queues that would not be set up in
+<tt>write()</tt>.  If no such device exists, <tt>open()</tt>
+should return <tt>-ENODEV</tt> to indicate this. Return 0 on
+success.
+
+<p><tt>release()</tt> is called only when the process closes
+its last open file descriptor on the files. <b>[I am not sure
+this is true; it might be called on every close.]</b> If
+devices have been marked as busy, <tt>release()</tt> should
+unset the busy bits if appropriate.  If you need to clean up
+<tt>kmalloc()</tt>'ed queues or reset devices to preserve their
+sanity, this is the place to do it.  If no <tt>release()</tt>
+function is defined, none is called.
+
+<h4>The <tt>init()</tt> function</h4>
+
+<p>This function is not actually included in the
+<tt>file_operations</tt> structure, but you are required to
+implement it, because it is this function that registers the
+<tt>file_operations</tt> structure with the VFS in the first
+place--without this function, the VFS could not route any
+requests to the driver.  This function is called when the
+kernel first boots and is configuring itself.  The init
+function then detects all devices.  You will have to call your
+<tt>init()</tt> function from the correct place: for a
+character device, this is <tt>chr_dev_init()</tt> in
+drivers/char/mem.c.
+
+<p>While the <tt>init()</tt> function runs, it registers your
+driver by calling the proper registration function.  For
+character devices, this is <tt>register_chrdev()</tt>. (See
+<A HREF="reference.html">Supporting Functions</a>
+for more information on the registration functions.)
+<tt>register_chrdev()</tt> takes three arguments: the major
+device number (an int), the ``name'' of the device (a string),
+and the address of the <tt><i>device</i>_fops</tt>
+<tt>file_operations</tt> structure.
+
+<p>When this is done, and a character or block special file is
+accessed, the VFS filesystem switch automagically routes the
+call, whatever it is, to the proper function, if a function
+exists.  If the function does not exist, the VFS routines take
+some default action.
+
+<p>The <tt>init()</tt> function usually displays some
+information about the driver, and usually reports all hardware
+found.  All reporting is done via the <tt>printk()</tt>
+function.
+
+<p>Copyright (C) 1992, 1993, 1994, 1996 Michael K. Johnson,
+johnsonm@redhat.com.<br>
+<P>
+<P><HR SIZE=3>
+<P><B><A NAME="Messages">Messages</A></B>
+<NOBR>
+<font size=-1>
+
+
+
+
+
+
+
+</font>
+</NOBR>
+ <P>
+<NOBR>
+<DL COMPACT>
+<DT> 1. <IMG src="../../../Icons/question.gif" ALT="Question:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="basics/1.html">
+using XX_select() for device without interrupts</A> <i> by <A HREF="http://iraf.noao.edu/~ecdowney">Elwood Downey</A></i> </DT>
+<DT> 2. <IMG src="../../../Icons/feedback.gif" ALT="Feedback:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="basics/2.html">
+found reason for select() problem</A><i></i> </DT>
+<DT> 3. <IMG src="../../../Icons/question.gif" ALT="Question:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="basics/3.html">
+Why do VFS functions get both structs inode and file?</A> <i> by Reinhold J. Gerharz</i> </DT>
+</DL>
+</NOBR>
+
+<P>
+<P>
+
+
+
+  
+
+
+
+
+
+<BR> 
+ 
+<BR></BODY>
+</HTML>

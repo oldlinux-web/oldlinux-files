@@ -1,0 +1,1195 @@
+
+<HTML>
+<HEAD>
+<TITLE>Writing a SCSI Device Driver</TITLE>
+<LINK rel="owner" href="mailto:">
+<SCRIPT LANGUAGE="JavaScript">
+<!-- hide this
+
+function help(message) {
+  self.status = message;
+  return true;
+}
+// stop hiding -->
+</SCRIPT>
+
+</HEAD>
+<BODY>
+<strong>The
+HyperNews <a href="../khg.html">Linux KHG</a>
+Discussion Pages</strong>
+<hr>
+<h3>Writing a SCSI Device Driver</h3>
+
+<p>Copyright (C) 1993 Rickard E. Faith (faith@cs.unc.edu).<br>
+Written at the University of North Carolina, 1993, for COMP-291.
+The information contained herein comes with ABSOLUTELY NO WARRANTY.<br>
+All rights reserved. Permission is granted to make and
+distribute verbatim copies of this paper provided the copyright
+notice and this permission notice are preserved on all copies.
+
+<p><font size="-2">This is (with the author's explicit permission)
+a modified copy of the original document.  If you wish to
+reproduce this document, you are advised to get the
+original version by ftp from
+<A href="ftp://ftp.cs.unc.edu/pub/users/faith/papers/scsi.paper.tar.gz">
+ftp://ftp.cs.unc.edu/pub/users/faith/papers/scsi.paper.tar.gz</a></font>
+
+<p><b>[Note that this document has not been revised since its
+copyright date of 1993.  Most things still apply, but some of the
+facts like the list of currently supported SCSI host adaptors are
+rather out of date by now.]</b>
+
+<h4>Why You Want to Write a SCSI Driver</h4>
+
+<p>Currently, the Linux kernel contains drivers for the
+following SCSI host adapters: Adaptec 1542, Adaptec 1740,
+Future Domain TMC-1660/TMC-1680, Seagate ST-01/ST-02, UltraStor
+14F, and Western Digital WD-7000.  You may want to write your
+own driver for an unsupported host adapter.  You may also want
+to re-write or update one of the existing drivers.
+
+<h4>What is SCSI?</h4>
+
+The foreword to the SCSI-2 standard draft [ANS] gives a
+succinct definition of the Small Computer System Interface and briefly
+explains how SCSI-2 is related to SCSI-1 and CCS:
+<blockquote>
+    The SCSI protocol is designed to provide an efficient peer-to-peer I/O
+    bus with up to 8 devices, including one or more hosts.  Data may be
+    transferred asynchronously at rates that only depend on device
+    implementation and cable length.  Synchronous data transfers are
+    supported at rates up to 10 mega-transfers per second.  With the 32 bit
+    wide data transfer option, data rates of up to 40 megabytes per second
+    are possible.
+
+    <p>SCSI-2 includes command sets for magnetic and optical disks, tapes,
+    printers, processors, CD-ROMs, scanners, medium changers, and
+    communications devices.
+
+    <p>In 1985, when the first SCSI standard was being finalized as an
+    American National Standard, several manufacturers approached the X3T9.2
+    Task Group.  They wanted to increase the mandatory requirements of SCSI
+    and to define further features for direct-access devices.  Rather than
+    delay the SCSI standard, X3T9.2 formed an ad hoc group to develop a
+    working paper that was eventually called the Common Command Set
+    (CCS).  Many disk products were designed using this working paper in
+    conjunction with the SCSI standard.
+
+    <p>In parallel with the development of the CCS working paper, X3T9.2 began
+    work on an enhanced SCSI standard which was named SCSI-2.  SCSI-2
+    included the results of the CCS working paper and extended them to all
+    device types.  It also added caching commands, performance enhancement
+    features, and other functions that X3T9.2 deemed worthwhile.  While
+    SCSI-2 has gone well beyond the original SCSI standard (now referred to
+    as SCSI-1), it retains a high degree of compatibility with SCSI-1
+    devices.
+</blockquote>
+
+
+<h4>SCSI phases</h4>
+<A name="sec:status"></a>
+<A name="sec:message"></a>
+
+The ``SCSI bus'' transfers data and state information between
+interconnected SCSI devices.  A single transaction between an ``initiator''
+and a ``target'' can involve up to 8 distinct ``phases.''  These phases are
+almost entirely determined by the target (e.g., the hard disk drive).  The
+current phase can be determined from an examination of five SCSI bus
+signals, as shown in this table [LXT91, p. 57].
+
+<table border>
+<tr><td>-SEL</td><td>-BSY</td><td>-MSG</td><td>-C/D</td><td>-I/O</td><td>PHASE</td></tr>
+<tr><td>HI</td><td>HI</td><td>?</td><td>?</td><td>?</td><td>BUS FREE</td></tr>
+<tr><td>HI</td><td>LO</td><td>?</td><td>?</td><td>?</td><td>ARBITRATION</td></tr>
+<tr><td>I</td><td>I&amp;T</td><td>?</td><td>?</td><td>?</td><td>SELECTION</td></tr>
+<tr><td>T</td><td>I&amp;T</td><td>?</td><td>?</td><td>?</td><td>RESELECTION</td></tr>
+<tr><td>HI</td><td>LO</td><td>HI</td><td>HI</td><td>HI</td><td>DATA OUT</td></tr>
+<tr><td>HI</td><td>LO</td><td>HI</td><td>HI</td><td>LO</td><td>DATA IN</td></tr>
+<tr><td>HI</td><td>LO</td><td>HI</td><td>LO</td><td>HI</td><td>COMMAND</td></tr>
+<tr><td>HI</td><td>LO</td><td>HI</td><td>LO</td><td>LO</td><td>STATUS</td></tr>
+<tr><td>HI</td><td>LO</td><td>LO</td><td>LO</td><td>HI</td><td>MESSAGE OUT</td></tr>
+<tr><td>HI</td><td>LO</td><td>LO</td><td>LO</td><td>LO</td><td>MESSAGE IN</td></tr>
+</table><font size="-3">I = Initiator Asserts, T = Target Asserts, ? = HI or LO</font>
+
+<p>Some controllers (notably the inexpensive Seagate
+controller) require direct manipulation of the SCSI bus--other
+controllers automatically handle these low-level details.  Each
+of the eight phases will be described in detail.
+
+<dl>
+<dt>BUS FREE Phase
+<dd>The BUS FREE phase indicates that the SCSI bus is
+  idle and is not currently being used.
+<dt>ARBITRATION Phase
+<dd>The ARBITRATION phase is entered when a SCSI
+  device attempts to gain control of the SCSI bus.  Arbitration can start
+  only if the bus was previously in the BUS FREE phase.  During
+  arbitration, the arbitrating device asserts its SCSI ID on the DATA
+  BUS.  For example, if the arbitrating device's SCSI ID is 2, then the
+  device will assert <tt>0x04</tt>.  If multiple devices attempt
+  simultaneous arbitration, the device with the highest SCSI ID will win.
+  Although ARBITRATION is optional in the SCSI-1 standard, it is a required
+  phase in the SCSI-2 standard.
+<dt>SELECTION Phase
+<dd>After ARBITRATION, the arbitrating device (now
+  called the initiator) asserts the SCSI ID of the target on the DATA
+  BUS.  The target, if present, will acknowledge the selection by raising
+  the -BSY line.  This line remains active as long as the target is
+  connected to the initiator.
+<dt>RESELECTION Phase
+<dd>The SCSI protocol allows a device to disconnect
+  from the bus while processing a request.  When the device is ready, it
+  reconnects to the host adapter.  The RESELECTION phase is identical to
+  the SELECTION phase, with the exception that it is used by the
+  disconnected target to reconnect to the original initiator.  Drivers
+  which do not currently support RESELECTION do not allow the SCSI target
+  to disconnect.  RESELECTION should be supported by all drivers, however,
+  so that multiple SCSI devices can simultaneously process commands.  This
+  allows dramatically increased throughput due to interleaved I/O requests.
+<dt>COMMAND Phase
+<dd>During this phase, 6, 10, or 12 bytes of command
+  information are transferred from the initiator to the target.
+<dt>DATA OUT and DATA IN Phases
+<dd>During these phases, data are
+  transferred between the initiator and the target.  For example, the DATA
+  OUT phase transfers data from the host adapter to the disk drive.  The
+  DATA IN phase transfers data from the disk drive to the host adapter.  If
+  the SCSI command does not require data transfer, then neither phase is
+  entered.
+<dt>STATUS Phase
+<dd>This phase is entered after completion of all commands,
+  and allows the target to send a status byte to the initiator.  There are
+  nine valid status bytes, as shown in the table below
+  [ANS, p. 77].  Note that since bits 1-5 (bit 0 is the
+    least significant bit) are used for the status code (the other
+  bits are reserved), the status byte should be masked with <tt>0x3e</tt>
+  before being examined.
+  <table border>
+     <tr><th>Value*</th><th>Status</th></tr>
+     <tr><td>0x00</td><td>GOOD</td></tr>
+     <tr><td>0x02</td><td>CHECK CONDITION</td></tr>
+     <tr><td>0x04</td><td>CONDITION MET</td></tr>
+     <tr><td>0x08</td><td>BUSY</td></tr>
+     <tr><td>0x10</td><td>INTERMEDIATE</td></tr>
+     <tr><td>0x14</td><td>INTERMEDIATE-CONDITION MET</td></tr>
+     <tr><td>0x18</td><td>RESERVATION CONFLICT</td></tr>
+     <tr><td>0x22</td><td>COMMAND TERMINATED</td></tr>
+     <tr><td>0x28</td><td>QUEUE FULL</td></tr>
+  </table><font size="-3">*After masking with 0x3e</font>
+
+  <p>The meanings of the three most important status codes are outlined below:
+  <dl>
+  <dt>GOOD
+  <dd>The operation completed successfully.
+  <dt>CHECK CONDITION
+  <dd>An error occurred.  The REQUEST SENSE command
+    should be used to find out more information about the error (see
+    <A href="#sec:scsi.commands">SCSI Commands</a>).
+  <dt>BUSY
+  <dd>The device was unable to accept a command.  This may occur
+    during a self-test or shortly after power-up.
+  </dl>
+
+<dt>MESSAGE OUT and MESSAGE IN Phases
+<dd>Additional information is
+  transferred between the target and the initiator.  This information may
+  regard the status of an outstanding command, or may be a request for a
+  change of protocol.  Multiple MESSAGE IN and MESSAGE OUT phases may occur
+  during a single SCSI transaction.  If RESELECTION is supported, the
+  driver must be able to correctly process the SAVE DATA POINTERS, RESTORE
+  POINTERS, and DISCONNECT messages.  Although required by the SCSI-2
+  standard, some devices do not automatically send a SAVE DATA POINTERS
+  message prior to a DISCONNECT message.
+</dl>
+
+
+<h4>SCSI Commands</h4>
+<A name="sec:scsi.commands"></a>
+
+<p>Each SCSI command is 6, 10, or 12 bytes long.  The following commands must
+be well understood by a SCSI driver developer.
+<dl>
+<dt>REQUEST SENSE
+<dd>Whenever a command returns a CHECK CONDITION status,
+  the high-level Linux SCSI code automatically obtains more information
+  about the error by executing the REQUEST SENSE.  This command returns a
+  sense key and a sense code (called the ``additional sense code,'' or ASC,
+  in the SCSI-2 standard [ANS]).  Some SCSI devices may
+  also report an ``additional sense code qualifier'' (ASCQ).  The 16
+  possible sense keys are described in the next table.  For
+  information on the ASC and ASCQ, please refer to the SCSI standard
+  [ANS] or to a SCSI device technical manual.
+
+  <table border>
+      <tr><th>Sense Key</th><th>Description</th></tr>
+      <tr><td><tt>0x00</tt></td><td>NO SENSE</td></tr>
+      <tr><td><tt>0x01</tt></td><td>RECOVERED ERROR</td></tr>
+      <tr><td><tt>0x02</tt></td><td>NOT READY</td></tr>
+      <tr><td><tt>0x03</tt></td><td>MEDIUM ERROR</td></tr>
+      <tr><td><tt>0x04</tt></td><td>HARDWARE ERROR</td></tr>
+      <tr><td><tt>0x05</tt></td><td>ILLEGAL REQUEST</td></tr>
+      <tr><td><tt>0x06</tt></td><td>UNIT ATTENTION</td></tr>
+      <tr><td><tt>0x07</tt></td><td>DATA PROTECT</td></tr>
+      <tr><td><tt>0x08</tt></td><td>BLANK CHECK</td></tr>
+      <tr><td><tt>0x09</tt></td><td>(Vendor specific error)</td></tr>
+      <tr><td><tt>0x0a</tt></td><td>COPY ABORTED</td></tr>
+      <tr><td><tt>0x0b</tt></td><td>ABORTED COMMAND</td></tr>
+      <tr><td><tt>0x0c</tt></td><td>EQUAL</td></tr>
+      <tr><td><tt>0x0d</tt></td><td>VOLUME OVERFLOW</td></tr>
+      <tr><td><tt>0x0e</tt></td><td>MISCOMPARE</td></tr>
+      <tr><td><tt>0x0f</tt></td><td>RESERVED</td></tr>
+  </table>
+  
+<dt>TEST UNIT READY
+<dd>This command is used to test the target's status.
+  If the target can accept a medium-access command (e.g., a READ or a
+  WRITE), the command returns with a GOOD status.  Otherwise, the command
+  returns with a CHECK CONDITION status and a sense key of NOT READY.
+  This response usually indicates that the target is completing power-on
+  self-tests.
+<dt>INQUIRY
+<dd>This command returns the target's make, model, and device
+  type.  The high-level Linux code uses this command to differentiate
+  among magnetic disks, optical disks, and tape drives (the high-level code
+  currently does not support printers, processors, or juke boxes).
+<dt>READ and WRITE
+<dd>These commands are used to transfer data from and to
+  the target.  You should be sure your driver can support simpler commands,
+  such as TEST UNIT READY and INQUIRY, before attempting to use the READ and
+  WRITE commands.
+</dl>
+
+
+
+<h4>Getting Started</h4>
+
+
+<p>The author of a low-level device driver will need to have an
+understanding of how interruptions are handled by the kernel.
+At minimum, the kernel functions that disable (<tt>cli()</tt>)
+and enable (<tt>sti()</tt>) interruptions should be understood.
+The scheduling functions (e.g., <tt>schedule()</tt>,
+<tt>sleepon()</tt>, and <tt>wakeup()</tt>) may also be needed
+by some drivers.  A detailed explanation of these functions can
+be found in <A HREF="reference.html">Supporting Functions</a>.
+
+
+<h4>Before You Begin: Gathering Tools</h4>
+
+<p>Before you begin to write a SCSI driver for Linux, you will
+need to obtain several resources.
+
+<p>The most important is a bootable Linux system--preferably
+one which boots from an IDE, RLL, or MFM hard disk.  During the
+development of your new SCSI driver, you will rebuild the
+kernel and reboot your system many times.  Programming errors
+may result in the destruction of data on your SCSI drive
+<i>and</i> on your non-SCSI drive.  <i>Back up your system
+before you begin</i>.
+
+<p>The installed Linux system can be quite minimal: the GCC
+compiler distribution (including libraries and the binary
+utilities), an editor, and the kernel source are all you need.
+Additional tools like <tt>od</tt>, <tt>hexdump</tt>, and
+<tt>less</tt> will be quite helpful.  All of these tools will
+fit on an inexpensive 20-30~MB hard disk. (A used 20 MB MFM
+hard disk and controller should cost less than US$100.)
+
+<p>Documentation is essential.  At minimum, you will need a
+technical manual for your host adapter.  Since Linux is freely
+distributable, and since you (ideally) want to distribute your
+source code freely, avoid non-disclosure agreements (NDA).
+Most NDA's will prohibit you from releasing your source
+code--you might be allowed to release an object file containing
+your driver, but this is simply not acceptable in the Linux
+community at this time.
+
+<p>A manual that explains the SCSI standard will be helpful.
+Usually the technical manual for your disk drive will be
+sufficient, but a copy of the SCSI standard will often be
+helpful. (The October 17, 1991, draft of the SCSI-2 standard
+document is available via anonymous ftp from
+<tt>sunsite.unc.edu</tt> in
+<tt>/pub/Linux/development/scsi-2.tar.Z</tt>, and is available
+for purchase from Global Engineering Documents (2805 McGaw,
+Irvine, CA 92714), (800)-854-7179 or (714)-261-1455.  Please
+refer to document X3.131-199X.  In early 1993, the manual cost
+US$60--70.)
+
+<p>Before you start, make hard copies of <tt>hosts.h</tt>,
+<tt>scsi.h</tt>, and one of the existing drivers in the Linux
+kernel.  These will prove to be useful references while you
+write your driver.
+
+<h4>The Linux SCSI Interface</h4>
+
+<p>The high-level SCSI interface in the Linux kernel manages
+all of the interaction between the kernel and the low-level
+SCSI device driver. Because of this layered design, a low-level
+SCSI driver need only provide a few basic services to the
+high-level code.  The author of a low-level driver does not
+need to understand the intricacies of the kernel I/O system
+and, hence, can write a low-level driver in a relatively short
+amount of time.
+
+<p>Two main structures (<tt>Scsi_Host</tt> and
+<tt>Scsi_Cmnd</tt>) are used to communicate between the
+high-level code and the low-level code.  The next two sections
+provide detailed information about these structures and the
+requirements of the low-level driver.
+
+<h4>The <tt>Scsi_Host</tt> Structure</h4>
+
+The <tt>Scsi_Host</tt> structure serves to describe the low-level driver to
+the high-level code.  Usually, this description is placed in the device
+driver's header file in a C preprocessor definition:
+<pre>
+    #define FDOMAIN_16X0  { "Future Domain TMC-16x0",          \
+                             fdomain_16x0_detect,              \
+                             fdomain_16x0_info,                \
+                             fdomain_16x0_command,             \
+                             fdomain_16x0_queue,               \
+                             fdomain_16x0_abort,               \
+                             fdomain_16x0_reset,               \
+                             NULL,                             \
+                             fdomain_16x0_biosparam,           \
+                             1, 6, 64, 1 ,0, 0}
+    #endif
+</pre>
+
+<p>The <tt>Scsi_Host</tt> structure is presented next. Each of
+the fields will be explained in detail later in this section.
+
+<pre>
+    typedef struct     
+    {
+      char               *name;
+      int                (* detect)(int); 
+      const char         *(* info)(void);
+      int                (* queuecommand)(Scsi_Cmnd *,
+                          void (*done)(Scsi_Cmnd *));
+      int                (* command)(Scsi_Cmnd *);
+      int                (* abort)(Scsi_Cmnd *, int);
+      int                (* reset)(void);
+      int                (* slave_attach)(int, int);
+      int                (* bios_param)(int, int, int []);
+      int                can_queue;
+      int                this_id;
+      short unsigned int sg_tablesize;
+      short              cmd_per_lun;
+      unsigned           present:1;     
+      unsigned           unchecked_isa_dma:1;
+    } Scsi_Host;
+</pre>
+
+
+<h4>Variables in the <tt>Scsi_Host</tt> structure</h4>
+
+<p>In general, the variables in the <tt>Scsi_Host</tt>
+structure are not used until after the <tt>detect()</tt>
+function (see section <A href="#sec:detect"><tt>detect()</tt></a>)
+is called. Therefore, any variables which cannot be assigned
+before host adapter detection should be assigned during
+detection.  This situation might occur, for example, if a
+single driver provided support for several host adapters with
+very similar characteristics.  Some of the parameters in the
+<tt>Scsi_Host</tt> structure might then depend on the specific
+host adapter detected.
+
+<h5><tt>name</tt></h5>
+
+<p><tt>name</tt> holds a pointer to a short description of the
+SCSI host adapter.
+
+<h5><tt>can_queue</tt></h5>
+<A name="sec:can.queue"></a>
+
+<p><tt>can_queue</tt> holds the number of outstanding commands
+the host adapter can process.  Unless RESELECTION is supported
+by the driver and the driver is interrupt-driven, (some of the
+early Linux drivers were not interrupt driven and,
+consequently, had very poor performance) this variable should
+be set to 1.
+
+<h5><tt>this_id</tt></h5>
+
+<p>Most host adapters have a specific SCSI ID assigned to them.
+This SCSI ID, usually 6 or 7, is used for RESELECTION.  The
+<tt>this_id</tt> variable holds the host adapter's SCSI ID.  If
+the host adapter does not have an assigned SCSI ID, this
+variable should be set to -1 (in this case, RESELECTION cannot
+be supported).
+
+<h5><tt>sg_tablesize</tt></h5>
+
+<p>The high-level code supports ``scatter-gather,'' a method of
+increasing SCSI throughput by combining many small SCSI
+requests into a few large SCSI requests.  Since most SCSI disk
+drives are formatted with 1:1 interleave, (``1:1 interleave''
+means that all of the sectors in a single track appear
+consecutively on the disk surface) the time required to perform
+the SCSI ARBITRATION and SELECTION phases is longer than the
+rotational latency time between sectors. (This may be an
+over-simplification.  On older devices, the actual command
+processing can be significant.  Further, there is a great deal
+of layered overhead in the kernel: the high-level SCSI code,
+the buffering code, and the file-system code all contribute to
+poor SCSI performance.) Therefore, only one SCSI request can be
+processed per disk revolution, resulting in a throughput of
+about 50 kilobytes per second.  When scatter-gather is
+supported, however, average throughput is usually over 500
+kilobytes per second.
+
+<p>The <tt>sg_tablesize</tt> variable holds the maximum
+allowable number of requests in the scatter-gather list.  If
+the driver does not support scatter-gather, this variable
+should be set to <tt>SG_NONE</tt>.  If the driver can support
+an unlimited number of grouped requests, this variable should
+be set to <tt>SG_ALL</tt>.  Some drivers will use the host
+adapter to manage the scatter-gather list and may need to limit
+<tt>sg_tablesize</tt> to the number that the host adapter
+hardware supports.  For example, some Adaptec host adapters
+require a limit of 16.
+
+<h5><tt>cmd_per_lun</tt></h5>
+
+<p>The SCSI standard supports the notion of ``linked
+commands.'' Linked commands allow several commands to be queued
+consecutively to a single SCSI device.  The
+<tt>cmd_per_lun</tt> variable specifies the number of linked
+commands allowed.  This variable should be set to 1 if command
+linking is not supported.  At this time, however, the
+high-level SCSI code will not take advantage of this feature.
+
+<p>Linked commands are fundamentally different from multiple
+outstanding commands (as described by the <tt>can_queue</tt>
+variable).  Linked commands always go to the same SCSI target
+and do not necessarily involve a RESELECTION phase.  Further,
+linked commands eliminate the ARBITRATION, SELECTION, and
+MESSAGE OUT phases on all commands after the first one in the
+set.  In contrast, multiple outstanding commands may be sent to
+an arbitrary SCSI target, and <i>require</i> the ARBITRATION,
+SELECTION, MESSAGE OUT, and RESELECTION phases.
+
+<h5><tt>present</tt></h5>
+
+<p>The <tt>present</tt> bit is set (by the high-level code) if
+the host adapter is detected.
+
+<h5><tt>unchecked_isa_dma</tt></h5>
+<A name="sec:dma"></a>
+
+<p>Some host adapters use Direct Memory Access (DMA) to read
+and write blocks of data directly from or to the computer's
+main memory.  Linux is a virtual memory operating system that
+can use more than 16 MB of physical memory.  Unfortunately, on
+machines using the ISA bus (the so-called ``Industry Standard
+Architecture'' bus was introduced with the IBM PC/XT and IBM
+PC/AT computers), DMA is limited to the low 16 MB of physical
+memory.
+
+<p>If the <tt>unchecked_isa_dma</tt> bit is set, the high-level
+code will provide data buffers which are guaranteed to be in
+the low 16 MB of the physical address space.  Drivers written
+for host adapters that do not use DMA should set this bit to
+zero.  Drivers specific to EISA bus (the ``Extended Industry
+Standard Architecture'' bus is a non-proprietary 32-bit bus for
+386 and i486 machines) machines should also set this bit to
+zero, since EISA bus machines allow unrestricted DMA access.
+
+<h4>Functions in the <tt>Scsi_Host</tt> Structure</h4>
+
+<h5><tt>detect()</tt></h5>
+<A name="sec:detect"></a>
+
+<p>The <tt>detect()</tt> function's only argument is the ``host
+number,'' an index into the <tt>scsi_hosts</tt> variable (an
+array of type <tt>struct Scsi_Host</tt>).  The
+<tt>detect()</tt> function should return a non-zero value if
+the host adapter is detected, and should return zero otherwise.
+
+<p>Host adapter detection must be done carefully.  Usually the
+process begins by looking in the ROM area for the ``BIOS
+signature'' of the host adapter. On PC/AT-compatible computers,
+the use of the address space between <tt>0xc0000</tt> and
+<tt>0xfffff</tt> is fairly well defined.  For example, the
+video BIOS on most machines starts at <tt>0xc0000</tt> and the
+hard disk BIOS, if present, starts at <tt>0xc8000</tt>.  When a
+PC/AT-compatible computer boots, every 2-kilobyte block from
+<tt>0xc0000</tt> to <tt>0xf8000</tt> is examined for the 2-byte
+signature (<tt>0x55aa</tt>) which indicates that a valid BIOS
+extension is present [Nor85].
+
+<p>The BIOS signature usually consists of a series of bytes that uniquely
+identifies the BIOS.  For example, one Future Domain BIOS signature is
+the string
+<pre>
+    FUTURE DOMAIN CORP. (C) 1986-1990 1800-V2.07/28/89
+</pre>
+found exactly five bytes from the start of the BIOS block.
+
+<p>After the BIOS signature is found, it is safe to test for
+the presence of a functioning host adapter in more specific
+ways.  Since the BIOS signatures are hard-coded in the kernel,
+the release of a new BIOS can cause the driver to mysteriously
+fail.  Further, people who use the SCSI adapter exclusively for
+Linux may want to disable the BIOS to speed boot time. For
+these reasons, if the adapter can be detected safely without
+examining the BIOS, then that alternative method should be
+used.
+
+<p>Usually, each host adapter has a series of I/O port
+addresses which are used for communications.  Sometimes these
+addresses will be hard coded into the driver, forcing all Linux
+users who have this host adapter to use a specific set of I/O
+port addresses.  Other drivers are more flexible, and find the
+current I/O port address by scanning all possible port
+addresses. Usually each host adapter will allow 3 or 4 sets of
+addresses, which are selectable via hardware jumpers on the
+host adapter card.
+
+<p>After the I/O port addresses are found, the host adapter can
+be interrogated to confirm that it is, indeed, the expected
+host adapter. These tests are host adapter specific, but
+commonly include methods to determine the BIOS base address
+(which can then be compared to the BIOS address found during
+the BIOS signature search) or to verify a unique identification
+number associated with the board.  For MCA bus (the
+``Micro-Channel Architecture'' bus is IBM's proprietary 32 bit
+bus for 386 and i486 machines) machines, each type of board is
+given a unique identification number which no other
+manufacturer can use--several Future Domain host adapters, for
+example, also use this number as a unique identifier on ISA bus
+machines.  Other methods of verifying the host adapter
+existence and function will be available to the programmer.
+
+
+<h4>Requesting the IRQ</h4>
+
+<p>After detection, the <tt>detect()</tt> routine must request
+any needed interrupt or DMA channels from the kernel.  There
+are 16 interrupt channels, labeled IRQ 0 through IRQ 15.  The
+kernel provides two methods for setting up an IRQ handler:
+<tt>irqaction()</tt> and <tt>request_irq()</tt>.
+
+<p>The <tt>request_irq()</tt> function takes two parameters,
+the IRQ number and a pointer to the handler routine.  It then
+sets up a default <tt>sigaction</tt> structure and calls
+<tt>irqaction()</tt>.  The code (Linux 0.99.7 kernel source
+code, <tt>linux/kernel/irq.c</tt>) for the
+<tt>request_irq()</tt> function is shown below.  I will limit
+my discussion to the more general <tt>irqaction()</tt>
+function.
+<pre>
+    int request_irq( unsigned int irq, void (*handler)( int ) )
+    {
+      struct sigaction sa;
+    
+      sa.sa_handler  = handler;
+      sa.sa_flags    = 0;
+      sa.sa_mask     = 0;
+      sa.sa_restorer = NULL;
+      return irqaction( irq, &amp;sa );
+    }
+</pre>
+
+<p>The declaration (Linux 0.99.5 kernel source code,
+  <tt>linux/kernel/irq.c</tt>) for the <tt>irqaction()</tt> function is
+<pre>
+    int irqaction( unsigned int irq, struct sigaction *new )
+</pre>
+where the first parameter, <tt>irq</tt>, is the number of the IRQ
+that is being requested, and the second parameter, <tt>new</tt>, is a
+structure with the definition (Linux 0.99.5 kernel source code,
+<tt>linux/include/linux/signal.h</tt>) shown here:
+<pre>
+    struct sigaction
+    {
+      __sighandler_t sa_handler;
+      sigset_t       sa_mask;
+      int            sa_flags;
+      void           (*sa_restorer)(void);
+    };
+</pre>
+
+<p>In this structure, <tt>sa_handler</tt> should point to your
+interrupt handler routine, which should have a definition
+similar to the following:
+<pre>
+    void fdomain_16x0_intr( int irq )
+</pre>
+where <tt>irq</tt> will be the number of the IRQ which caused the
+interrupt handler routine to be invoked.
+
+<p>The <tt>sa_mask</tt> variable is used as an internal flag by
+the <tt>irqaction()</tt> routine.  Traditionally, this variable
+is set to zero prior to calling <tt>irqaction()</tt>.
+
+<p>The <tt>sa_flags</tt> variable can be set to zero or to
+<tt>SA_INTERRUPT</tt>.  If zero is selected, the interrupt
+handler will run with other interrupts enabled, and will return
+via the signal-handling return functions.  This option is
+recommended for relatively slow IRQ's, such as those associated
+with the keyboard and timer interrupts.  If
+<tt>SA_INTERRUPT</tt> is selected, the handler will be called
+with interrupts disabled and return will avoid the
+signal-handling return functions. <tt>SA_INTERRUPT</tt> selects
+``fast'' IRQ handler invocation routines, and is recommended
+for interrupt driven hard disk routines.  The interrupt handler
+should turn interrupts on as soon as possible, however, so that
+other interrupts can be processed.
+
+<p>The <tt>sa_restorer</tt> variable is not currently used, and
+is traditionally set to <tt>NULL</tt>.
+
+<p>The <tt>request_irq()</tt> and <tt>irqaction()</tt>
+functions will return zero if the IRQ was successfully assigned
+to the specified interrupt handler routine.  Non-zero result
+codes may be interpreted as follows:
+<dl>
+<dt><tt>-EINVAL</tt>
+<dd>Either the IRQ requested was larger than 15, or a
+  <tt>NULL</tt> pointer was passed instead of a valid pointer to the
+  interrupt handler routine.
+<dt><tt>-EBUSY</tt>
+<dd>The IRQ requested has already been allocated to another
+  interrupt handler.  This situation should never occur, and is reasonable
+  cause for a call to <tt>panic()</tt>.
+</dl>
+
+<p>The kernel uses an Intel ``interrupt gate'' to set up IRQ
+handler routines requested via the <tt>irqaction()</tt>
+function.  The Intel i486 manual [Int90, p. 9-11] explains the
+interrupt gate as follows:
+<blockquote>
+    Interrupts using... interrupt gates... cause the TF flag [trap
+    flag] to be cleared after its current value is saved on the stack as
+    part of the saved contents of the EFLAGS register.  In so doing, the
+    processor prevents instruction tracing from affecting interrupt
+    response.  A subsequent IRET [interrupt return] instruction restores
+    the TF flag to the value in the saved contents of the EFLAGS register
+    on the stack.
+
+    <p>... An interrupt which uses an interrupt gate clears the IF flag
+    [interrupt-enable flag], which prevents other interrupts from
+    interfering with the current interrupt handler.  A subsequent IRET
+    instruction restores the IF flag to the value in the saved contents of
+    the EFLAGS register on the stack.
+</blockquote>
+
+<h5>Requesting the DMA channel</h5>
+
+<p>Some SCSI host adapters use DMA to access large blocks of
+data in memory. Since the CPU does not have to deal with the
+individual DMA requests, data transfers are faster than
+CPU-mediated transfers and allow the CPU to do other useful
+work during a block transfer (assuming interrupts are enabled).
+
+<p>The host adapter will use a specific DMA channel.  This DMA
+channel will be determined by the <tt>detect()</tt> function
+and requested from the kernel with the <tt>request_dma()</tt>
+function.  This function takes the DMA channel number as its
+only parameter and returns zero if the DMA channel was
+successfully allocated.  Non-zero results may be interpreted as
+follows:
+<dl>
+<dt><tt>-EINVAL</tt>
+<dd>The DMA channel number requested was larger than 7.
+<dt><tt>-EBUSY</tt>
+<dd>The requested DMA channel has already been allocated.
+  This is a very serious situation, and will probably cause any SCSI
+  requests to fail.  It is worthy of a call to <tt>panic()</tt>.
+</dl>
+
+
+<h5><tt>info()</tt></h5>
+
+<p>The <tt>info()</tt> function merely returns a pointer to a
+static area containing a brief description of the low-level
+driver.  This description, which is similar to that pointed to
+by the <tt>name</tt> variable, will be printed at boot time.
+
+
+<h5><tt>queuecommand()</tt></h5>
+<A name="sec:queuecommand"></a>
+
+<p>The <tt>queuecommand()</tt> function sets up the host
+adapter for processing a SCSI command and then returns.  When
+the command is finished, the <tt>done()</tt> function is called
+with the <tt>Scsi_Cmnd</tt> structure pointer as a parameter.
+This allows the SCSI command to be executed in an
+interrupt-driven fashion.  Before returning, the
+<tt>queuecommand()</tt> function must do several things:
+<ol>
+<li>Save the pointer to the <tt>Scsi_Cmnd</tt> structure.
+<li>Save the pointer to the <tt>done()</tt> function in the
+  <tt>scsi_done()</tt> function pointer in the <tt>Scsi_Cmnd</tt> structure.
+  See section <A href="#sec:done"><tt>done()</tt></a> for more information.
+<li>Set up the special <tt>Scsi_Cmnd</tt> variables required by the driver.
+  See section <A href="#sec:scsi.cmnd">The <tt>Scsi_Cmnd</tt> Structure</a> for detailed information on the
+  <tt>Scsi_Cmnd</tt> structure.
+<li>Start the SCSI command.  For an advanced host adapter, this may be as
+  simple as sending the command to a host adapter ``mailbox.''  For less
+  advanced host adapters, the ARBITRATION phase is manually started.
+</ol>
+
+<p>The <tt>queuecommand()</tt> function is called <i>only</i>
+if the <tt>can_queue</tt> variable (see section <A
+href="#sec:can.queue"><tt>can_queue</tt></a>) is non-zero.
+Otherwise the <tt>command()</tt> function is used for all SCSI
+requests.  The <tt>queuecommand()</tt> function should return
+zero on success (the current high-level SCSI code presently
+ignores the return value).
+
+
+<h5><tt>done()</tt></h5>
+<A name="sec:done"></a>
+
+<p>The <tt>done()</tt> function is called after the SCSI
+command completes.  The single parameter that this command
+requires is a pointer to the same <tt>Scsi_Cmnd</tt> structure
+that was previously passed to the <tt>queuecommand()</tt>
+function.  Before the <tt>done()</tt> function is called, the
+<tt>result</tt> variable must be set correctly.  The
+<tt>result</tt> variable is a 32 bit integer, each byte of
+which has specific meaning:
+<dl>
+<dt>Byte 0 (LSB)
+<dd>This byte contains the SCSI STATUS code for the
+  command, as described in section <A href="#sec:status">SCSI phases</a>.
+<dt>Byte 1
+<dd>This byte contains the SCSI MESSAGE, as described in
+  section <A href="#sec:message">SCSI phases</a>.
+<dt>Byte 2
+<dd>This byte holds the host adapter's return code.  The valid
+  codes for this byte are given in <tt>scsi.h</tt> and are described below:
+  <dl>
+  <dt><tt>DID_OK</tt>
+  <dd>No error.
+  <dt><tt>DID_NO_CONNECT</tt>
+  <dd>SCSI SELECTION failed because there was no
+    device at the address specified.
+  <dt><tt>DID_BUS_BUSY</tt>
+  <dd>SCSI ARBITRATION failed.
+  <dt><tt>DID_TIME_OUT</tt>
+  <dd>A time-out occurred for some unknown reason,
+    probably during SELECTION or while waiting for RESELECTION.
+  <dt><tt>DID_BAD_TARGET</tt>
+  <dd>The SCSI ID of the target was the same as
+    the SCSI ID of the host adapter.
+  <dt><tt>DID_ABORT</tt>
+  <dd>The high-level code called the low-level
+    <tt>abort()</tt> function (see section <A href="#sec:abort"><tt>abort()</tt></a>).
+  <dt><tt>DID_PARITY</tt>
+  <dd>A SCSI PARITY error was detected.
+  <dt><tt>DID_ERROR</tt>
+  <dd>An error occurred which lacks a more appropriate
+    error code (for example, an internal host adapter error).
+  <dt><tt>DID_RESET</tt>
+  <dd>The high-level code called the low-level
+    <tt>reset()</tt> function (see section <A href="#sec:reset"><tt>reset()</tt></a>).
+  <dt><tt>DID_BAD_INTR</tt>
+  <dd>An unexpected interrupt occurred <i>and</i>
+    there is no appropriate way to handle this interrupt.
+  </dl>
+
+  Note that returning <tt>DID_BUS_BUSY</tt> will force the command to be
+  retried, whereas returning <tt>DID_NO_CONNECT</tt> will abort the command.
+<dt>Byte 3 (MSB)
+<dd>This byte is for a high-level return code, and should
+  be left as zero by the low-level code.
+</dl>
+
+<p>Current low-level drivers do not uniformly (or correctly)
+implement error reporting, so it may be better to consult
+scsi.c to determine exactly how errors should be reported,
+rather than exploring existing drivers.
+
+
+<h5><tt>command()</tt></h5>
+
+<p>The <tt>command()</tt> function processes a SCSI command and
+returns when the command is finished.  When the original SCSI
+code was written, interrupt-driven drivers were not supported.
+The old drivers are much less efficient (in terms of response
+time and latency) than the current interrupt-driven drivers,
+but are also much easier to write.  For new drivers, this
+command can be replaced with a call to the
+<tt>queuecommand()</tt> function, as demonstrated here. (Linux
+0.99.5 kernel, linux/kernel/blk_drv/scsi/aha1542.c, written by
+Tommy Thorn.)
+
+<pre>
+    static volatile int internal_done_flag    = 0;
+    static volatile int internal_done_errcode = 0;
+    static void         internal_done( Scsi_Cmnd *SCpnt )
+    {
+      internal_done_errcode = SCpnt-&gt;result;
+      ++internal_done_flag;
+    }
+
+    int aha1542_command( Scsi_Cmnd *SCpnt )
+    {
+      aha1542_queuecommand( SCpnt, internal_done );
+
+      while (!internal_done_flag);
+      internal_done_flag = 0;
+      return internal_done_errcode;
+    }
+</pre>
+
+<p>The return value is the same as the <tt>result</tt> variable
+in the <tt>Scsi_Cmnd</tt> structure.  Please see sections
+<A href="#sec:done"><tt>done()</tt></a> and
+<A href="#sec:scsi.cmnd">The <tt>Scsi_Cmnd</tt> Structure</a> for
+more details.
+
+
+<h5><tt>abort()</tt></h5>
+<A name="sec:abort"></a>
+
+<p>The high-level SCSI code handles all timeouts.  This frees
+the low-level driver from having to do timing, and permits
+different timeout periods to be used for different devices
+(e.g., the timeout for a SCSI tape drive is nearly infinite,
+whereas the timeout for a SCSI disk drive is relatively short).
+
+<p>The <tt>abort()</tt> function is used to request that the
+currently outstanding SCSI command, indicated by the
+<tt>Scsi_Cmnd</tt> pointer, be aborted.  After setting the
+<tt>result</tt> variable in the <tt>Scsi_Cmnd</tt> structure,
+the <tt>abort()</tt> function returns zero.  If <tt>code</tt>,
+the second parameter to the <tt>abort()</tt> function, is zero,
+then <tt>result</tt> should be set to <tt>DID_ABORT</tt>.
+Otherwise, <tt>result</tt> shoudl be set equal to
+<tt>code</tt>.  If <tt>code</tt> is not zero, it is usually
+<tt>DID_TIME_OUT</tt> or <tt>DID_RESET</tt>.
+
+<p>Currently, none of the low-level drivers is able to
+correctly abort a SCSI command.  The initiator should request
+(by asserting the <tt>-ATN</tt> line) that the target enter a
+MESSAGE OUT phase.  Then, the initiator should send an ABORT
+message to the target.
+
+
+<h5><tt>reset()</tt></h5>
+<A name="sec:reset"></a>
+
+<p>The <tt>reset()</tt> function is used to reset the SCSI bus.
+After a SCSI bus reset, any executing command should fail with
+a <tt>DID_RESET</tt> result code (see section <A
+href="#sec:done"><tt>done()</tt></a>).
+
+<p>Currently, none of the low-level drivers handles resets
+correctly.  To correctly reset a SCSI command, the initiator
+should request (by asserting the <tt>-ATN</tt> line) that the
+target enter a MESSAGE OUT phase.  Then, the initiator should
+send a BUS DEVICE RESET message to the target.  It may also be
+necessary to initiate a SCSI RESET by asserting the
+<tt>-RST</tt> line, which will cause all target devices to be
+reset.  After a reset, it may be necessary to renegotiate a
+synchronous communications protocol with the targets.
+
+
+<h5><tt>slave_attach()</tt></h5>
+
+<p>The <tt>slave_attach()</tt> function is <i>not</i> currently
+implemented. This function would be used to negotiate
+synchronous communications between the host adapter and the
+target drive.  This negotiation requires an exchange of a pair
+of SYNCHRONOUS DATA TRANSFER REQUEST messages between the
+initiator and the target.  This exchange should occur under the
+following conditions [LXT91]:
+<blockquote>
+    A SCSI device that supports synchronous data transfer recognizes it has
+    not communicated with the other SCSI device since receiving the last
+    ``hard'' RESET.
+
+    <p>A SCSI device that supports synchronous data transfer recognizes it has
+    not communicated with the other SCSI device since receiving a BUS
+    DEVICE RESET message.
+</blockquote>
+
+
+<h5><tt>bios_param()</tt></h5>
+
+<p>Linux supports the MS-DOS (MS-DOS is a registered trademark
+of Microsoft Corporation) hard disk partitioning system.  Each
+disk contains a ``partition table'' which defines how the disk
+is divided into logical sections.  Interpretation of this
+partition table requires information about the size of the disk
+in terms of cylinders, heads, and sectors per cylinder.  SCSI
+disks, however, hide their physical geometry and are accessed
+logically as a contiguous list of sectors.  Therefore, in order
+to be compatible with MS-DOS, the SCSI host adapter will
+``lie'' about its geometry.  The physical geometry of the SCSI
+disk, while available, is seldom used as the ``logical
+geometry.'' (The reasons for this involve archaic and arbitrary
+limitations imposed by MS-DOS.)
+
+<p>Linux needs to determine the ``logical geometry'' so that it
+can correctly modify and interpret the partition table.
+Unfortunately, there is no standard method for converting
+between physical and logical geometry. Hence, the
+<tt>bios_param()</tt> function was introduced in an attempt to
+provide access to the host adapter geometry information.
+
+<p>The <tt>size</tt> parameter is the size of the disk in
+sectors.  Some host adapters use a deterministic formula based
+on this number to calculate the logical geometry of the drive.
+Other host adapters store geometry information in tables which
+the driver can access.  To facilitate this access, the
+<tt>dev</tt> parameter contains the drive's device number.  Two
+macros are defined in <tt>linux/fs.h</tt> which will help to
+interpret this value: <tt>MAJOR(dev)</tt> is the device's major
+number, and <tt>MINOR(dev)</tt> is the device's minor number.
+These are the same major and minor device numbers used by the
+standard Linux <b>mknod</b> command to create the device in the
+/dev directory.  The <tt>info</tt> parameter points to an array
+of three integers that the <tt>bios_param()</tt> function will
+fill in before returning:
+<dl>
+<dt><tt>info[0]</tt>
+<dd>Number of heads
+<dt><tt>info[1]</tt>
+<dd>Number of sectors per cylinder
+<dt><tt>info[2]</tt>
+<dd>Number of cylinders
+</dl>
+
+<p>The information in <tt>info</tt> is <i>not</i> the physical
+geometry of the drive, but only a <i>logical</i> geometry that
+is identical to the <i>logical</i> geometry used by MS-DOS to
+access the drive.  The distinction between physical and logical
+geometry cannot be overstressed.
+
+
+<h4>The <tt>Scsi_Cmnd</tt> Structure</h4>
+<A name="sec:scsi.cmnd"></a>
+
+<p>The <tt>Scsi_Cmnd</tt> structure, (Linux 0.99.7 kernel,
+linux/kernel/blk_drv/scsi/scsi.h) as shown below, is used by
+the high-level code to specify a SCSI command for execution by
+the low-level code.  Many variables in the <tt>Scsi_Cmnd</tt>
+structure can be ignored by the low-level device driver--other
+variables, however, are extremely important.
+<pre>
+    typedef struct scsi_cmnd
+    {
+      int              host;
+      unsigned char    target,
+                       lun,
+                       index;
+      struct scsi_cmnd *next,
+                       *prev;   
+
+      unsigned char    cmnd[10];
+      unsigned         request_bufflen;
+      void             *request_buffer;
+
+      unsigned char    data_cmnd[10];
+      unsigned short   use_sg;
+      unsigned short   sglist_len;
+      unsigned         bufflen;
+      void             *buffer;
+        
+      struct request   request;
+      unsigned char    sense_buffer[16];
+      int              retries;
+      int              allowed;
+      int              timeout_per_command,
+                       timeout_total,
+                       timeout;
+      unsigned char    internal_timeout;
+      unsigned         flags;
+                
+      void (*scsi_done)(struct scsi_cmnd *);  
+      void (*done)(struct scsi_cmnd *);
+
+      Scsi_Pointer     SCp;
+      unsigned char    *host_scribble;
+      int              result;
+      
+    } Scsi_Cmnd;                 
+</pre>
+
+<h4>Reserved Areas</h4>
+
+<h5>Informative Variables</h5>
+
+<p><tt>host</tt> is an index into the <tt>scsi_hosts</tt>
+array.
+
+<p><tt>target</tt> stores the SCSI ID of the target of the SCSI
+command.  This information is important if multiple outstanding
+commands or multiple commands per target are supported.
+
+<p><tt>cmnd</tt> is an array of bytes which hold the actual
+SCSI command.  These bytes should be sent to the SCSI target
+during the COMMAND phase. <tt>cmnd[0]</tt> is the SCSI command
+code.  The <tt>COMMAND_SIZE</tt> macro, defined in
+<tt>scsi.h</tt>, can be used to determine the length of the
+current SCSI command.
+
+<p><tt>result</tt> is used to store the result code from the
+SCSI request. Please see section
+<A href="#sec:done"><tt>done()</tt></a> for more information about
+this variable. This variable <i>must</i> be correctly set
+before the low-level routines return.
+
+
+<h5>The Scatter-Gather List</h5>
+
+<p><tt>use_sg</tt> contains a count of the number of pieces in
+the scatter-gather chain.  If <tt>use_sg</tt> is zero, then
+<tt>request_buffer</tt> points to the data buffer for the SCSI
+command, and <tt>request_bufflen</tt> is the length of this
+buffer in bytes.  Otherwise, <tt>request_buffer</tt> points to
+an array of <tt>scatterlist</tt> structures, and
+<tt>use_sg</tt> will indicate how many such structures are in
+the array.  The use of <tt>request_buffer</tt> is non-intuitive
+and confusing.
+
+<p>Each element of the <tt>scatterlist</tt> array contains an
+<tt>address</tt> and a <tt>length</tt> component.  If the
+<tt>unchecked_isa_dma</tt> flag in the <tt>Scsi_Host</tt>
+structure is set to 1 (see section
+<A href="#sec:dma"><tt>unchecked_isa_dma</tt></a> for more
+information on DMA transfers), the address is guaranteed to be
+within the first 16 MB of physical memory.  Large amounts of
+data will be processed by a single SCSI command.  The length of
+these data will be equal to the sum of the lengths of all the
+buffers pointed to by the <tt>scatterlist</tt> array.
+
+
+
+<h4>Scratch Areas</h4>
+
+<p>Depending on the capabilities and requirements of the host
+adapter, the scatter-gather list can be handled in a variety of
+ways.  To support multiple methods, several scratch areas are
+provided for the exclusive use of the low-level driver.
+
+<h5>The <tt>scsi_done()</tt> Pointer</h5>
+
+<p>This pointer should be set to the <tt>done()</tt> function
+pointer in the <tt>queuecommand()</tt> function (see section
+<A href="#sec:queuecommand"><tt>queuecommand()</tt></a> for more
+information).  There are no other uses for this pointer.
+
+<h5>The <tt>host_scribble</tt> Pointer</h5>
+
+<p>The high-level code supplies a pair of memory allocation
+functions, <tt>scsi_malloc()</tt> and <tt>scsi_free()</tt>,
+which are guaranteed to return memory in the first 16 MB of
+physical memory.  This memory is, therefore, suitable for use
+with DMA.  The amount of memory allocated per request
+<i>must</i> be a multiple of 512 bytes, and <i>must</i> be less
+than or equal to 4096 bytes.  The total amount of memory
+available via <tt>scsi_malloc()</tt> is a complex function of
+the <tt>Scsi_Host</tt> structure variables
+<tt>sg_tablesize</tt>, <tt>cmd_per_lun</tt>, and
+<tt>unchecked_isa_dma</tt>.
+
+<p>The <tt>host_scribble</tt> pointer is available to point to
+a region of memory allocated with <tt>scsi_malloc()</tt>.  The
+low-level SCSI driver is responsible for managing this pointer
+and its associated memory, and should free the area when it is
+no longer needed.
+
+<h5>The <tt>Scsi_Pointer</tt> Structure</h5>
+
+The <tt>SCp</tt> variable, a structure of type <tt>Scsi_Pointer</tt>, is
+described here:
+<pre>
+    typedef struct scsi_pointer
+    {
+      char               *ptr;             /* data pointer */
+      int                this_residual;    /* left in this buffer */
+      struct scatterlist *buffer;          /* which buffer */
+      int                buffers_residual; /* how many buffers left */
+
+      volatile int       Status;
+      volatile int       Message;
+      volatile int       have_data_in;
+      volatile int       sent_command;
+      volatile int       phase;
+    } Scsi_Pointer;
+</pre>
+The variables in this structure can be used in <i>any</i> way
+necessary in the low-level driver.  Typically, <tt>buffer</tt>
+points to the current entry in the <tt>scatterlist</tt>,
+<tt>buffers_residual</tt> counts the number of entries
+remaining in the <tt>scatterlist</tt>, <tt>ptr</tt> is used as
+a pointer into the buffer, and <tt>this_residual</tt> counts
+the characters remaining in the transfer.  Some host adapters
+require support of this detail of interaction--others can
+completely ignore this structure.
+
+<p>The second set of variables provide convenient locations to
+store SCSI status information and various pointers and flags.
+
+<h3>Acknowledgements</h3>
+
+<p>Thanks to Drew Eckhardt, Michael K. Johnson, Karin Boes,
+Devesh Bhatnagar, and Doug Hoffman for reading early versions
+of this paper and for providing many helpful comments.  Special
+thanks to my official COMP-291 (Professional Writing in
+Computer Science) ``readers,'' Professors Peter Calingaert and
+Raj Kumar Singh.
+
+<h3>Bibliography</h3>
+
+<dl>
+<dt>[ANS]
+<dd><i>Draft Proposed American National Standard for Information Systems:
+Small Computer System Interface-2 (SCSI-2).</i> (X3T9.2/86-109,
+revision 10h, October 17, 1991).
+<dt>[Int90]
+<dd>Intel. <i>i486 Processor Programmer's Reference Manual.</i>
+Intel/McGraw-Hiull, 1990.
+<dt>[LXT91]
+<dd><i>LXT SCSI Products: Specification and OEM Technical Manual,</i> 1991.
+<dt>[Nor85]
+<dd>Peter Norton. <i>The Peter Norton Programmer's Guide to the IBM PC.</i>
+Bellevue, Washington: Microsoft Press, 1985.
+</dl>
+<P>
+<P><HR SIZE=3>
+<P><B><A NAME="Messages">Messages</A></B>
+<NOBR>
+<font size=-1>
+
+
+
+
+
+
+
+</font>
+</NOBR>
+ <P>
+<NOBR>
+<DL COMPACT>
+<DT> 1. <IMG src="../../../Icons/feedback.gif" ALT="Feedback:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="scsi/1.html">
+Writing a SCSI Device Driver</A> <i> by rohit patil</i> </DT>
+</DL>
+</NOBR>
+
+<P>
+<P>
+
+
+
+  
+
+
+
+
+
+<BR> 
+ 
+<BR></BODY>
+</HTML>

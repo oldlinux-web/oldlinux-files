@@ -1,0 +1,168 @@
+
+<HTML>
+<HEAD>
+<TITLE>Explaining syscall macros</TITLE>
+<LINK rel="owner" href="mailto:">
+<SCRIPT LANGUAGE="JavaScript">
+<!-- hide this
+
+function help(message) {
+  self.status = message;
+  return true;
+}
+// stop hiding -->
+</SCRIPT>
+
+</HEAD>
+<BODY>
+<strong>The
+<a href="http://www.hypernews.org/HyperNews/get/hypernews.html">
+HyperNews <a href="../../../khg.html">Linux KHG</a>
+Discussion Pages</strong>
+<hr>
+<NOBR>
+
+
+
+
+
+</NOBR><BR>
+<H2><IMG src="../../../../../Icons/more.gif" ALT="More:"
+  WIDTH=15 HEIGHT=15
+  ALIGN="bottom">
+Explaining syscall macros</H2>
+
+<DL> <DD>
+<NOBR>
+<font size=+1><I>Forum:</I> <A HREF="../../syscall86.html" >
+ How System Calls Work on Linux/i86</A> </font><BR>
+
+<I>Re</I>: 
+  <IMG SRC="../../../../../Icons/note.gif" 
+   WIDTH=15 HEIGHT=15
+   ALT="Note" ALIGN="absmiddle">
+  <A HREF="../3.html" >
+   would be nice to explain syscall macros</A>  (Tim Bird)<BR>
+<I>Keywords:</I> syscall <BR>
+<I>Date:</I> Mon, 18 May 1998 16:49:41 GMT <BR>
+<I>From:</I> Wormo &lt;<A HREF="mailto:sjl@zorbas.ece.ucsb.edu" >sjl@zorbas.ece.ucsb.edu</A>&gt; <BR>
+
+</NOBR>
+</DD> </DL>
+
+<P>
+<table border cellpadding=5 cellspacing=0 
+ width="100%" BGCOLOR="#FFFFFF">
+ <tr><td>
+<H1>The _syscallN Family of Macros</H1>
+(By which, I mean the macros _syscall0,...,_syscall5) 
+<H2>Location:</H2> include/asm-i386/unistd.h
+<P>
+<H2>Definition:</H2>
+(or rather a general rule for the definitions, if you want to see all 6 definitions written out in their entirety go look in the source)
+<P>
+#define _syscallN(type,name,type1,arg1,...,typeN,argN) \<BR>
+                                type name(type1 arg1,...,typeN argN) \<BR>
+                                { \<BR>
+                                &nbsp;&nbsp;  long __res; \<BR>
+                                &nbsp;&nbsp;  __asm__ volatile ("int $0x80" \<BR>
+                                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp: "=a" (__res) \<BR>
+                                          &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: "0" (__NR_##name), \<BR>
+                                            &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"b" ((long)(arg1)), \<BR>
+
+                                             &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;.<BR>
+                                             &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;.<BR>
+
+                                            &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<I>Nth CONSTRAINT</I> ((long)(argN))); \<BR>
+                                  &nbsp;&nbsp;if (__res >= 0) \<BR>
+                                   &nbsp;&nbsp;&nbsp;&nbsp; return (type) __res; \<BR>
+                                  &nbsp;&nbsp;errno = -__res; \<BR>
+                                  &nbsp;&nbsp;return -1; \<BR>
+                                }<BR>
+                          where N the number of arguments the system call takes
+                          and is a number from 0-5, and <I>Nth CONSTRAINT</I> is the
+                          appropriate constraint for the input operand
+                          corresponding to the Nth argument and is assigned
+                          in order according to the following table: 
+<PRE>
+N      Constraint       Meaning 
+1      "b"             value placed in %ebx register
+2      "c"             value placed in %ecx register
+3      "d"             value placed in %edx register
+4      "S"             value placed in %esi register
+5      "D"             value placed in %edi register
+</PRE>
+<P>
+info gcc for further details on this asm syntax (try node Extended Asm)
+<P>
+<H2>Example usage:</H2>
+static inline _syscall2(int,clone,unsigned long,
+                                                     flags,char *,esp)
+<P>
+Expands to:
+<P>
+                               static inline int clone(unsigned long flags,
+                                                       char * esp)<BR>
+                               {<BR>
+                                 &nbsp;&nbsp;long __res;<BR>
+                                 &nbsp;&nbsp;__asm__ volatile ("int $0x80"<BR>
+                                                   &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: "=a" (__res)<BR>
+                                                   &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: "0" (__NR_##name),<BR>
+                                                     &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"b" ((long)(flags)),<BR>
+                                                     &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"c" ((long)(esp)));<BR>
+                                 &nbsp;&nbsp;if (__res >= 0)<BR>
+                                  &nbsp;&nbsp;&nbsp;&nbsp; return (int) __res;<BR>
+                                 &nbsp;&nbsp;errno = -__res;<BR>
+                                 &nbsp;&nbsp;return -1;<BR>
+                               }<BR>
+<P>
+<H2>Purpose:</H2>Each of these macros is a template used to create the function definition for system calls with the corresponding number of arguments. A function generated from this macro: 
+<OL>
+<LI>places
+                       the appropriate system call number into %eax,
+<LI> loads
+                       parameters as needed into the other general registers
+                       (%ebx, %ecx, %edx, %esi, %edi in that order),
+<LI> does
+                       an inturrupt 0x80 which has the general system_call()
+                       asm function from arch/i386/kernel/entry.S as its
+                       interrupt handler,
+<LI> lets system_call() call the specific
+                       system call code (generally in a function named something like <I>sys_NameOfThisSyscall</I>),
+<P>
+and, after the specific code is finished and system_call() returns,
+<P>
+<LI> processes the return code that was returned
+                       in %eax -- returning the result if system call was successful,
+                       or returning -1 and setting errno appropriately if system call was unsuccessful.
+
+</LI>
+<P>
+Hack on happy linuxites,<BR>
+--Wormo
+</td></tr>
+</table>
+<P><NOBR>
+
+
+
+
+
+</NOBR><BR>
+
+<P>
+<P>
+
+
+
+  
+
+
+
+
+
+
+<BR> 
+ 
+<BR></BODY>
+</HTML>

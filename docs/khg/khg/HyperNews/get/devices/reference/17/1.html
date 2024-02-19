@@ -1,0 +1,124 @@
+
+<HTML>
+<HEAD>
+<TITLE>My approach ...</TITLE>
+<LINK rel="owner" href="mailto:">
+<SCRIPT LANGUAGE="JavaScript">
+<!-- hide this
+
+function help(message) {
+  self.status = message;
+  return true;
+}
+// stop hiding -->
+</SCRIPT>
+
+</HEAD>
+<BODY>
+<strong>The
+<a href="http://www.hypernews.org/HyperNews/get/hypernews.html">
+HyperNews <a href="../../../khg.html">Linux KHG</a>
+Discussion Pages</strong>
+<hr>
+<NOBR>
+
+
+
+
+
+</NOBR><BR>
+<H2><IMG src="../../../../../Icons/feedback.gif" ALT="Feedback:"
+  WIDTH=15 HEIGHT=15
+  ALIGN="bottom">
+My approach ...</H2>
+
+<DL> <DD>
+<NOBR>
+<font size=+1><I>Forum:</I> <A HREF="../../reference.html" >
+ Supporting Functions</A> </font><BR>
+
+<I>Re</I>: 
+  <IMG SRC="../../../../../Icons/question.gif" 
+   WIDTH=15 HEIGHT=15
+   ALT="Question" ALIGN="absmiddle">
+  <A HREF="../17.html" >
+   How to use interruptible_sleep_on() ???</A>  (Ziv Barber)<BR>
+<I>Date:</I> Thu, 15 Jan 1998 10:17:20 GMT <BR>
+<I>From:</I> <A HREF="http://hni.uni-paderborn.de/rip/mitarbeiter/miksic/" >Miran Miksic</A> &lt;<A HREF="mailto:mmiksic@hni.uni-paderborn.de" >mmiksic@hni.uni-paderborn.de</A>&gt; <BR>
+
+</NOBR>
+</DD> </DL>
+
+<P>
+<table border cellpadding=5 cellspacing=0 
+ width="100%" BGCOLOR="#FFFFFF">
+ <tr><td>
+
+Hi,
+<P>
+
+I agree that this issue is not quite good described in the documents, so I'll post my principles of using it.
+<P>
+
+1. I always use interruptible_*() calls. I didn't have a hardware device which would have been confused by it.
+<P>
+
+2. In the init_*() function, I always probe for a device and if successful, I reserve the io space and the irq. I also maintain one 'struct wait_queue *' for each /dev/* file I am supporting with my driver. Here I initiate this pointer to be NULL. I do not allow device to generate interrupts yet.
+<P>
+
+3. In open_*() function, I initiate input and output buffers for device, and enable it to generate interrupts.
+<P>
+
+4. In read_*() and write_*() functions, I look if something can be read/written from/to the input/output buffers and do it. I look if the operation has completed (all bytes read/written). If yes, I return. If not, I look at the O_NONBLOCK flag and return -EWOULDBLOCK if this flag is set, otherwise I call sleep_on_interruptible(&amp;wait_queue), with the address of my pointer as the argument. When I'm woken up, I look if (current-&gt;signal &amp; ~current-&gt;blocked) is set. If yes, I return -EINTR, otherwise I repeat the step 4 again to read/write more bytes.
+<P>
+
+5. In my interrupt handling routine I first figure out which device generated it, finding in such a way it's corresponding 'struct wait_queue *' and input/output buffers. Then I do the io operations, using the data in input/output buffers. At the end, I call wake_up_interruptible(&amp;wait_queue).
+<P>
+
+6. In close() I usually disable device generating interrupts, and optionally call wake_up_interruptible(), just to be sure.
+<P>
+
+NOTE 1: You do not maintain the structure, only the pointer to the 'struct wait_queue'. The queue is beeing maintained behind sleep_*() wake_up_*() calls. Empty queue &lt;-&gt; NULL pointer.
+<P>
+
+NOTE 2: The biggest problem is to do the right action when the device generates an interrupt. You should study documentation for your device very carefully. I always have fears that the interrupt will be generated when I am not prepared to handle it (device not opened, no input/output buffers).
+<P>
+
+NOTE 3: The other problem is to ensure the things going on when you are not able to handle an interrupt immediatelly. Suppose that device has notified you that there is some input data pending, but you have no input buffers available to acquire it. So, you have to note this case, and handle it properly in your read() function, where you actually free the input buffers. However, normally you do the io operations in the interrupt handling routine, beeing non-preemptive. So, you have to mask the interrupt and then do the io operations...
+<P>
+
+There are some more fine things in the adventure of writing device drivers story, but you have to find them out alone, and they depend a lot on the hardware interface provided. In few words, be VERY, VERY careful, hendling interrupts is far from a trivial task and may easy couse you system to hang.
+<P>
+
+Hope it helps.
+<P>
+
+Miran
+<P>
+
+</td></tr>
+</table>
+<P><NOBR>
+
+
+
+
+
+</NOBR><BR>
+
+<P>
+<P>
+
+
+
+  
+
+
+
+
+
+
+<BR> 
+ 
+<BR></BODY>
+</HTML>

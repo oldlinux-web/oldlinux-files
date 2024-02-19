@@ -1,0 +1,730 @@
+Subject: Linux-Development Digest #563
+From: Digestifier <Linux-Development-Request@senator-bedfellow.MIT.EDU>
+To: Linux-Development@senator-bedfellow.MIT.EDU
+Reply-To: Linux-Development@senator-bedfellow.MIT.EDU
+Date:     Sat, 19 Mar 94 02:13:05 EST
+
+Linux-Development Digest #563, Volume #1         Sat, 19 Mar 94 02:13:05 EST
+
+Contents:
+  Mapping the text screen into user space (i.e. KDMAPDISP, mmap, etc) (Mahesh Neelakanta)
+  Re: Interesting use of "buffers" in new Linux 1.0 (+ late pl15) (Linus Torvalds)
+  SIGIO with Non-Blocking sockets? (Kwun Han)
+  Future Domian 1680 SVP (Brandon Fisher)
+  Starting a Linux Bibliography (James H. Haynes)
+  tcpdump and SLIP (Rob Newberry)
+  Re: 127.x.x.x (was Re: UDP report card) (Art Berggreen)
+  slip + ftp question (Dan Tran)
+  select() - are the defaults good? (Johannes Stille)
+  Re: Amiga FileSystem, Anyone? (Kai Henningsen)
+  Re: Amiga FileSystem, Anyone? (Kai Henningsen)
+  VM performance tuning via program restructuring (Greg McGary)
+  Re: Real-Time Linux and a/d device drivers (Donald Jeff Dionne)
+  Re: blank_screen patch for Laptops (Questions) (Donald J. Becker)
+
+----------------------------------------------------------------------------
+
+From: mahesh@sendai.seq.com (Mahesh Neelakanta)
+Subject: Mapping the text screen into user space (i.e. KDMAPDISP, mmap, etc)
+Date: Fri, 18 Mar 1994 18:32:28 GMT
+
+
+Greetings,
+ I am having some problems trying to map the video text screen (0xB8000)
+into user space using the mmap function. I've included my test program below
+for others to try out. Basically, I can map the memory location into my 
+program and read/write to it. But, the mapping doesn't always work. I.e.
+sometimes the program doesn't write anything to the screen at all. This
+is reproducible especially when the cursor is at the bottom of the screen.
+
+For some reason, if I switch to another vt and then swap back before running 
+the program, this problem goes away..
+
+Also, the free at the bottom of the code causes a seg-fault! Perhaps i
+am missing something very obvious here :-(...
+
+BTW, I am using this method because the KDMAPDISP/KDUNMAPDISP routines haven't
+been written yet (see vt.c in the kernel source). I'm game for helping out
+in writing this little snipet with some initial help.
+
+Oh, btw, I stole, err..borrowed the mmap code from the svgalib sources.
+
+I am running linux-1.0 with libc 4.4.4.
+
+Thanks,
+mahesh@seq.com
+
+/* test program to show video text mmap problem. */
+
+#include <stdio.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <termios.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <sys/kd.h>
+#include <sys/stat.h>
+#include <sys/vt.h>
+#include <linux/mm.h>
+#include <stdlib.h>
+#include <stdarg.h>
+
+
+unsigned char *AllocateScreen()
+{
+  int mem_fd, tty0_fd;
+  unsigned char * graph_mem;
+
+   if ((mem_fd = open("/dev/mem", O_RDWR) ) < 0) {
+      printf("VGAlib: can't open /dev/mem \n");
+      exit (-1);
+   }
+
+   if ((graph_mem = valloc(4000)) == NULL) {
+       printf("VGAlib: allocation error \n");
+        exit (-1);
+    }
+
+    graph_mem = (unsigned char *)mmap(
+        (caddr_t)graph_mem, 
+        4000,
+        PROT_READ|PROT_WRITE,
+        MAP_SHARED,
+        mem_fd, 
+        0xB8000
+    );
+    if ((long)graph_mem < 0) {
+        printf("VGAlib: mmap error \n");
+        exit (-1);
+    }
+    
+    return graph_mem;
+}
+
+main()
+{
+ /* Because there are two-bytes per char..attribute+character */
+ unsigned short *screen; 
+ int row, col;
+ 
+ screen = (short *) AllocateScreen();
+
+ /* write a bunch of blue 0's */
+
+ for(row = 0; row < 11; row++)
+    for(col = 0; col < 21; col++)
+       *(screen + (row*80) + col) = 0x0130; /* blue, number '0' */
+
+ /* free(screen); */ /* this causes a seg fault! */
+}
+
+
+------------------------------
+
+From: torvalds@klaava.Helsinki.FI (Linus Torvalds)
+Subject: Re: Interesting use of "buffers" in new Linux 1.0 (+ late pl15)
+Date: 16 Mar 1994 19:38:45 +0200
+
+In article <wpp.763820890@marie>,
+Kai Petzke <wpp@marie.physik.tu-berlin.de> wrote:
+>
+>Well, I noticed with some pl15 kernel, that the buffers would not 
+>go below half of the memory I had.  This was real bad, when doing
+>memory extensive work under X.  With pre-1.0, it went away, again.
+>Linux still seems to give more priority to buffers, than it used
+>to be before, but this is ok.
+>
+>I think, it is a good idea to have more buffers than just a minimum.
+>Otherwise, the kernel will read the same blocks (like currently
+>used inodes and directories) again and again.  Better do some
+>swapping instead.
+
+Yes, linux starts swapping a bit earlier in pl15g and later: this was
+due to Stephen Tweedie noticing that the buffers that were shared with
+code pages tended to get removed a bit too eagerly whenever there was
+any slight shortage of memory.  After all, buffers that are shrared with
+code pages are usually otherwise idle, so the memory routines just
+removed them hoping for more free memory. 
+
+The new code doesn't remove buffers that are shared until the kernel
+notices that we really start to need the memory, so linux tends to use a
+few swap-pages even though it's not strictly necessary.  The idea is
+that it's better to swap lightly than reading in code pages more often. 
+
+When memory *really* gets tight, linux will naturally reclain all the
+pages it can, so you'll see the buffer cache starting to shrink then. 
+Just write a program that allocates lots of memory, and you should be
+able to shrink your buffer cache down to a few hundred kB (going below
+that is hard: ext2fs, for example, hard-caches 16 buffers per filesystem
+for free-block bitmaps etc as those are needed for filesystem internal
+operations). 
+
+                Linus
+
+------------------------------
+
+From: kwh@cs.brown.edu (Kwun Han)
+Subject: SIGIO with Non-Blocking sockets?
+Date: Fri, 18 Mar 1994 05:30:59 GMT
+
+Hi Linux hackers out there,
+
+        I am writing a program which requires non-blocking sockets in
+Linux, however, I am not getting the right behaviour. What I did was,
+I first register the signal handler for SIGIO, then I established the
+socket connection, then I used the ioctl -> FIONBIO, FIOSETOWN
+FIOASYNC to make sure that the socket will signal my process when it
+gets something.
+
+Here is where the problem is:
+
+When I send some stuff from the other side of the socket, the stuff
+get read if I do an infinite loop polling the socket, but I am not
+getting signaled at all.
+
+I tested the code in both SunOS and Solaris, they works as
+expected. So I am sure this has something to do with Linux, am I
+missing something here??
+
+Thanks!
+
+Kwun
+-- 
+*********************************************************************
+kwh@cs.brown.edu                Box #2392, Brown University,
+ST002255@brownvm.brown.edu      Providence, RI 02912
+GE/CS d? p c++(+++) l(++)+++ u e+ m++@ s+/- n+@ h* f(+) g+ w+ t r- y?
+*********************************************************************
+
+------------------------------
+
+From: b45313@achilles.ctd.anl.gov (Brandon Fisher)
+Subject: Future Domian 1680 SVP
+Date: Fri, 18 Mar 1994 16:20:41 GMT
+
+Is there anyone out there working on a driver for the Future Domain 1680
+SVP SCSI board?  The current Future Domain driver (fdomain.c) works with
+BIOS up to version 3.2, the latest is version 3.4.  Please let me know if
+there is someone using this board or working on an device driver.  Thanks
+in advance.
+
+Brandon Fisher.
+b45313@achilles.ctd.anl.gov
+
+------------------------------
+
+From: haynes@cats.ucsc.edu (James H. Haynes)
+Crossposted-To: comp.os.linux.admin,comp.os.linux.misc
+Subject: Starting a Linux Bibliography
+Date: 18 Mar 1994 05:52:29 GMT
+
+
+I'm starting a bibliography of publications likely to be helpful in the
+Linux community.  Please send me information about things you think should
+be included.  The following is what I have for a starter.  When there's more
+I will probably turn it into a HOWTO file and post it periodically.
+Please include your comments on the items so it become an annotated
+bibliography.
+
+
+I. Hardware
+
+   Upgrading and Repairing PCs; Mueller, Scott; Que Corp.; ISBN 0-88022-856-3;
+   1298pp; 2nd ed. 1992; $34.95 (USA).  This is a book I bought when I was
+   struggling with an AT-clone.  It is best on XTs and ATs and IBM PS/2s. 
+   Still, there is a wealth of information common to all models.  EISA and
+   VESA are mentioned only in the glossary.
+
+   80386 Hardware Reference Manual; Intel Corp.; ISBN 1-55512-024-5; ?pp.;
+   1986; $?.  Pin connections, timing, waveforms, block diagrams, voltages,
+   all that kind of stuff.
+
+
+II. Processor architecture and programming
+
+    80386 Programmer's Reference Manual; Intel Corp.; ISBN 1-55512-022-9;
+    ?pp.; 1986; $?.  Part I. Applications Programming, data types, memory
+    model, instruction set.  Part II. Systems Programming, architecture,
+    memory management, protection, multitasking, I/O, exceptions and
+    interrupts, initialization, coprocessing and multiprocessing. Part III.
+    Compatibility (with earlier x86 machines).  Part IV. Instruction Set.
+
+    80386 System Software Writer's Guide; Intel Corp.; ISBN 1-55512-023-7;
+    ?pp.; 1987; $?.  This explains the 386 features for operating system
+    writers.  It includes a chapter on Unix implementation.  A lot of the
+    80386 architecture seems to have been designed with Multics in mind;
+    the features are not used by DOS or by Unix.
+
+    Programming the 80386; Crawford, John H., and Gelsinger, Patrick P.;
+    Sybex; ISBN 0-89588-381-3; 774pp.; $26.95 (USA).  This is the book the
+    Jolitzes used when they ported BSD to the 386 architecture.
+
+    Pentium Processor User's Manual: Volume 3, Architecture and Programming
+    Manual; Intel Corp.; ISBN 1-55512-195-0; ?pp.; 1993; $?.  Pretty much
+    the Pentium version of the 80386 Programmer's manual listed above.
+
+
+III. Unix Kernel Implementation
+
+     The Design of the Unix Operating System; Bach, Maurice J.; Prentice-
+     Hall; ISBN 0-13-201799-7; 470pp.; $60 (USA).  The book that got Linus
+     started.
+
+     The Design and Implementation of the 4.3BSD Unix Operating System;
+     Leffler, Samuel J., McKusick, Marshall Kirk, Karels, Michael J., and
+     Quarterman, John S.; Addison-Wesley; ISBN 0-201-06196-1; 471 pp.;
+     1989, 1990; $44.95 (USA).  So, it's not about Linux, but can you
+     afford to ignore it?
+
+     Kernel Hacker's Guide; Linux Documentation Project; FTP sites;
+     1994.
+
+IV. System Calls
+
+    The Posix.1 Standard: A Programmer's Guide; Zlotnick, Fred; Benjamin/
+    Cummings; ISBN 0-8053-9605-5; 379pp.; 1991; $35.95 (USA).  When I
+    complained about the lack of Section 2 man pages in Linux, somebody
+    told me just to get a POSIX book, because that's what Linux does.
+    I like this book because I'm not a professional programmer and the
+    author gives copious explanations and examples.  
+
+
+V. Networking
+
+   Unix Network Programming; Stevens. W. Richard; PTR Prentice Hall;
+   ISBN 0-13-949876-1; 772 pp.; $54 (USA).  Everything you might want to
+   know about the subject, and some things you probably don't want to
+   know (really, XNS!?).
+
+   Networking Guide; Linux Documentation Project; FTP sites; 1993.
+
+VI. General (or hard-to-classify)
+
+   Bell System Technical Journal, July-August 1978, Vol. 57, No. 6, part 2;
+   AT&T; 416 pp.  Many papers on Unix, including Ritchie & Thompson,
+   "The UNIX Time Sharing System"; Thompson, "UNIX Implementation";
+   Ritchie, "A Retrospective"; Bourne, "The UNIX Shell"...
+
+VII. System Installation
+
+     Linux Installation and Getting Started; Linux Documentation Project;
+     FTP sites; 175 pp.; 1994.
+
+VIII. System Administration
+
+     Linux System Administrator's Guide; Linux Documentation Project;
+     FTP sites; 1993.
+-- 
+haynes@cats.ucsc.edu
+haynes@cats.bitnet
+
+"Ya can talk all ya wanna, but it's dif'rent than it was!"
+"No it aint!  But ya gotta know the territory!"
+        Meredith Willson: "The Music Man"
+
+
+------------------------------
+
+From: rob-n@clark.net (Rob Newberry)
+Crossposted-To: comp.os.linux.misc,comp.os.linux.help
+Subject: tcpdump and SLIP
+Date: 19 Mar 1994 01:03:06 GMT
+
+Has anyone used tcpdump for SLIP interfaces under Linux?
+I need to dump the output of my SLIP connection to
+look at it.
+
+Thanks for any help.
+
+Rob Newberry
+rob-n@clark.net
+
+
+------------------------------
+
+Crossposted-To: comp.protocols.tcp-ip
+From: art@acc.com (Art Berggreen)
+Subject: Re: 127.x.x.x (was Re: UDP report card)
+Date: Fri, 18 Mar 1994 23:45:05 GMT
+
+Warner Losh (imp@boulder.parcplace.com) spoke thus:
+[...]
+: No.  127.* is a special network.  It was born special.  IP
+: implementations should ***ALWAYS*** ignore everything they get from
+: this address if it comes in over the wire and should ***NEVER*** send
+: packets to this address out over the wire.  And it should do this be
+: default.  Robust implementations should enforce this compeletely and
+: leave no room for the user to configure this.  127.* ARP requests as
+: well should never be on the wire, and completely ignored if they are
+: seen by a host on the wire.  ICMP messages should likewise be treated.
+
+Actually, I don't remember net 127 being allocated as the the loopback
+net until after BSD unix started binding it's loopback psuedo interface
+to address 127.0.0.1.  Maybe Jon Postel remembers more clearly than I.
+In a lot of ways, BSD unix is responsible for the success of IP, but it
+is also responsible for introducing some questionable practices as well.
+
+Art
+
+
+------------------------------
+
+From: dant@minerva.rolm.com (Dan Tran)
+Subject: slip + ftp question
+Date: 19 Mar 1994 01:36:04 GMT
+Reply-To: dant@minerva.rolm.com
+
+
+
+
+Hi I have  a technical question that I hope the netters can set 
+some light for me.
+
+The question is: 
+
+                        Lan connection
+        Station A <---------------------------> Station C
+
+                         Slip Connection
+        Station B <---------------------------> Station C
+
+
+Station A and B are using the same operation systems (say Linux )
+
+
+Do I need separate implementations of ftp  to transfer data between from
+A to C, and B to C.  Due to different hardwares.
+
+
+Thanks,
+
+
+
+------------------------------
+
+From: johannes@titan.westfalen.de (Johannes Stille)
+Subject: select() - are the defaults good?
+Date: Fri, 18 Mar 1994 20:16:57 GMT
+
+
+Hello everyone!
+
+I experimented a little with the select() system call and got a few
+strange results from the default implementation (used if there is no
+select pointer in the fops structure).
+
+If, in the following description, I write "selecting a file for
+reading/writing/exceptions returns true/false", this means that the
+corresponding bit in the first/second/third fd_set parameter
+will not/will be cleared if it was set.
+
+
+Now for a regular file, selecting always returns true. I think this is a
+bug if selecting for exceptions - there is nothing wrong with the file.
+
+Also wouldn't it be better to do some checks when selecting on a regular
+file for reading/writing, e.g. check whether we're at the end of the
+file when selecting for reading, check whether there is some space left
+when selecting for writing.
+
+
+For a non-regular file, selecting returns false if there is no special
+select routine for this kind of file or device. This results e.g. in
+selecting /dev/zero for reading or /dev/null for writing always
+returning "not ready". IMHO at least these two devices should get real
+select functions. And what would be the appropriate result for selecting
+on a block device?
+
+
+And while I'm at it, another minor point:
+It seems that there is no check whether the operation selected for is
+permitted, so you can e.g. select a read-only file for writing and get a
+positive result. Of course it is your fault if you do this, but wouldn't
+it make sense to change the select() behaviour?
+
+
+
+Any comments?
+
+        Johannes
+
+------------------------------
+
+Date: 18 Mar 1994 19:44:00 +0100
+From: kai@khms.westfalen.de (Kai Henningsen)
+Subject: Re: Amiga FileSystem, Anyone?
+
+dholland@husc7.harvard.edu wrote on 15.03.94 in <DHOLLAND.94Mar15155406@husc7.harvard.edu>:
+
+>  > > So when is the ext2fs for DOS going to be ready? :-]
+>  >
+>  > Hmm. Now, how large would that be? Could we do something useful with it
+>  > without using a DOS-extender? :-)
+>
+> Doubtful...
+
+Now, what I'd *really* like is see that as an IFS for OS/2 ... :-)
+
+Kai
+--
+Internet: kh@ms.maus.de, kai@khms.westfalen.de
+Bang: major_backbone!{ms.maus.de!kh,khms.westfalen.de!kai}
+## CrossPoint v2.93 ##
+
+------------------------------
+
+Date: 18 Mar 1994 19:55:00 +0100
+From: kai@khms.westfalen.de (Kai Henningsen)
+Subject: Re: Amiga FileSystem, Anyone?
+
+kevin@frobozz.sccsi.com wrote on 16.03.94 in <CMs1B6.I42@frobozz.sccsi.com>:
+
+> a filesystem.  Everything else is effectively variable: filename
+> conventions, block size, directory layout, block allocation mechanisms, etc.
+
+> To me, then, the claim that some piece of software (I won't go so far as to
+> say that DOS is an "operating system", but we've been through this before)
+> supports "alternate filesystems" implies that it supports variability in
+> the things that define the implementation of a filesystem.
+
+Now, would you say that a system that doesn't allow a binary of EMACS as a  
+legal filename has no "true" support for this, or do you accept that wha's  
+a legal filename is usually restricted in some way?
+
+Of course, you could say 8+3 is not enough (it's certainly uncomfortable),  
+but not on the grounds of your above arguments.
+
+By the way, what about mandatory locking? Is that an essential feature?  
+DOS has it.
+
+> Linux has true alternate filesystem support, in that it leaves it up to the
+> filesystem implementation to define such things as filename conventions,
+> block allocation, directory layout, etc., and just defines the API you use
+> to access the filesystem.
+>
+> DOS doesn't do this, if it defines what filenames are to look like (what
+
+Linux doesn't do that as well. Ever try to use the filename "/\0/" in a  
+filesystem? Ever try to use a regular file named "."? :-)
+
+> *else* do they define for you?).  At best, one can say that DOS provides
+> partial alternate filesystem support if, for instance, it doesn't insist
+> on defining things like directory layout, block allocation, or other
+> filesystem-dependent attributes.
+
+It doesn't. DOS can (and does) use filesystems like NFS or HPFS or ISO  
+9660.
+
+> Regardless of the details, I suspect we all agree that the alternate
+> filesystem support in DOS is suboptimal, at least when compared to the
+> support found in (for instance) Linux.
+
+Considering the restrictions DOS is under, no, I don't agree.
+
+It's not even so much DOS. I think DOS could learn to use more lenient  
+filename conventions, but that would break *lots* of programs.
+
+Kai
+--
+Internet: kh@ms.maus.de, kai@khms.westfalen.de
+Bang: major_backbone!{ms.maus.de!kh,khms.westfalen.de!kai}
+## CrossPoint v2.93 ##
+
+------------------------------
+
+From: gkm@tmn.com (Greg McGary)
+Subject: VM performance tuning via program restructuring
+Date: 19 Mar 1994 01:54:15 -0500
+Reply-To: gkm@tmn.com (Greg McGary)
+
+For four years now, I've had a good OS project on my back burner and I
+still haven't found time to do it.  Rather than hoard this idea in the
+hope I might one day clear the decks enough to win fame and glory by
+doing it myself, (;-)  I'll throw it out to the Linux community.
+
+Run "ps amx" or top(1) sometime and observe the RSS (resident set size)
+of the programs running on the system.  You'll notice that the X
+server is particularly large, usually between 2 and 3 Mb.  I'll wager
+that X exhibits poor locality of reference and that if its functions
+were reordered to exhibit better locality, its resident-set size could
+be cut in half or better.  The problem is that infrequently called
+"inactive" code resides in the same pages with frequently called
+"active" code.  The idea is to group active code into pages with other
+active code, and the inactive code could be grouped with other
+inactive code.  If this was done for all of the biggest and most used
+programs on a system, then the system could run more and bigger
+programs, or page less, or both, without adding RAM.
+
+Program reorganization to improve VM performance is a very old idea
+dating back as long as there has been VM.  Research papers began
+appearing on this topic during the late '60s and have appeared
+regularly in the literature ever since.  I particularly recommend "A
+Study of Program Restructuring in a Virtual Memory System" by Jerry
+Breecher in the journal _Performance Evaluation_ 10 (1989) pp. 79-92,
+as a *practical* overview.  (It's been a few years since I've dug
+through the Computer and Control Abstracts looking for program
+reorganization papers, but I'll bet a few more have appeared since I
+last looked!)
+
+It's been a few years since I've paid any attention to the UNIX
+industry, so I'd be curious to know if any of the major UNIX vendors
+have made restructuring tools available.  I know that three or four
+years ago, a friend of mine at Sun was working on reorganization for
+the purpose of improving the performance of (surprise!) the X11/NeWS
+server, but I doubt that his tools were ever released for anything
+other than Sun's internal use.
+
+Conceptually, the project is simple and has these three elements:
+
+1) A profiler that's capable of gathering usage statistics at a level
+   of granularity no coarser than the function.  (Actually, you won't
+   want to go any finer than that either.  It would be a nightmare to
+   introduce the possibility of rearranging the basic blocks of a
+   function to be in different pages depending on their usage.)
+   The simplest approach, which also gives the most bang for the least
+   buck, is to do simple call counts.
+
+2) An tool that analyzes the statistics gathered in (1) and recommends
+   an improved ordering for the functions--one that groups the most
+   active code together. For simple call counts, we sort numerically
+   by call count, so the most called functions are grouped together.
+   Naturally, to be useful the profiling should be done over a long
+   period of time, and for "typical" use of the program.
+
+3) A linker that can be directed to write function definitions in a
+   particular order in the executable.  The link phase will be
+   directed by the results of (2).  I believe that GNU ld is already
+   capable of doing this.  Can someone who's intimate with the innards
+   of GNU ld confirm this?
+
+There are many subtleties to the project--finer granularity of
+reorganization, analyzing the "affinity" that code chunks have for
+each other over time, etc...  Breecher observes that most of these are
+dead ends in the sense that they greatly increase the complexity of
+the problem (and the solution) for very little incremental
+benefit--the simplest restructuring techniques yield significant
+paging performance improvements that rival the results obtained with
+the most complex techniques.  One subtlty that is worthy of attention
+is that "custom fit" is superior to "one size fits all"--e.g., the way
+I use X is likely to be different from the way you use X: I might use
+lots of text-based programs, so that the X's drawing primitives are
+part of my list of "inactive" code, whereas you might run lots of CAD
+software.  On large timesharing systems, "one size fits all" might
+unfortunately be the best one can do.  The vast majority Linux users,
+however, use personal workstations, so the performance improvements
+associated with with "custom fit" are readily available.  There's also
+the issue of how to reorganize shared libraries so that locality is
+improved for all concurrent library users.
+
+To my mind, after a quarter of a century of study, the jury is in.
+Program restructuring for improved locality of reference is a valid
+performance tuning technique.  It's time to "just do it."
+
+PS: As I've been out of touch with the UNIX industry and with the USENET
+    comp.os groups for a few years now, I'm curious to know if this topic
+    has received any attention from either of these quarters.  Please
+    email me if you know anything about this.
+
+--
+Greg McGary          (703) 729-6217          gkm@tmn.com
+525K East Market Street, #110, Leesburg, Virginia, 22075
+
+------------------------------
+
+From: jeff@ee.ryerson.ca (Donald Jeff Dionne)
+Subject: Re: Real-Time Linux and a/d device drivers
+Date: 18 Mar 1994 22:03:11 GMT
+
+Matthew Donadio (donadio@mxd120.rh.psu.edu) wrote:
+: Scott McClung (mcclung@squire.chinalake.navy.mil) wrote:
+: : Have I gone off the deep end to even ask these questions?  I doubt that
+: : many of us need a RTOS, but it would be neat anyway...
+
+: The people that neet real-time probably also have the money for
+: something like LynxOS or QNX and also have the money for a better
+: architecture like VME....
+
+What?  Who's got the money for that?  Real time extensions could be a real
+big plus (in conjunction with a-d cards? OH YEAH!).  where's the logic in 
+a statement that implies that only people with money have real time 
+applications?  That's nonsense.
+
+: Seriously, what I would like to see is kernel level threads.  Pthreads
+: exists right now, but only on the user level.  Does anybody out there
+: know anythings about how hard this would be to implement?  I don't
+: know much about kernel stuff (just a little about drivers), so I'm not
+: one to begin work on it...
+
+: --
+: Beaker aka Matt Donadio   | Life is short,     ---   __ o    __~o    __ o
+: donadio@mxd120.rh.psu.edu |    ride like    ----    _`\<,   _`\<,   _`\<,
+: --- Penn State Cycling ---|      the wind.    ---  ( )/( ) ( )/( ) ( )/( )
+
+Jeff@EE.Ryerson.Ca
+
+------------------------------
+
+From: becker@super.org (Donald J. Becker)
+Subject: Re: blank_screen patch for Laptops (Questions)
+Date: Fri, 18 Mar 1994 06:42:38 GMT
+
+In article <2ma7hr$439@wsdnws.cfi.waseda.ac.jp>,
+Alexander During <63912i@cfi.waseda.ac.jp> wrote:
+>Two questions remain. First, why is blank_screen() directly 
+>hooked to the blank timer and at the same time used by XFree 2.0
+>to clear the character buffer (or better, save it) at startup?
+>The problem arising is XFree switching off the screen when
+>it starts :-( I fixed this for the moment by checking for
+>the expires field of the timer_table entry, but this seems
+
+I fixed it by splitting the blank screen function.  One is now
+blank_screen() (for X, etc.) and the other is idle_blank_screen().
+The idle_blank_screen() calls a chipset-specific blank-screen function if
+one is defined.  I did this while experimenting with the power management
+code for a WD7600-based laptop.
+
+>Next question: Those computers were sold a lot in Germany under
+>various brands and I also saw a review on it in PC magazine.
+...
+>under DOS (not neccessary), have a key named 'Fn' in blue 
+>next to Left-Alt and some blue notes on the function keys,
+
+This is superficially similar to the MidWest-Micro subnotebook that I have
+been using with Linux recently.  (BTW, an excellent machine for the price --
+$1600 for 340M disk, 4M, 4 lbs.)  I haven't yet discovered the chipset it
+uses, but I'll get the databook and start writing PM code when I do.
+
+>of applicable computers. I will of course provide a command
+>line program first, so you can check without a kernel patch
+>(and having 10min to wait :-)).
+
+Please post it, or at least mail it to me :->.
+
+-- 
+
+Donald Becker                                          becker@super.org
+IDA Supercomputing Research Center
+17100 Science Drive, Bowie MD 20715                        301-805-7482
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

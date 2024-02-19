@@ -1,0 +1,1287 @@
+This is Info file linux-faq.info, produced by Makeinfo-1.55 from the
+input file faq.texi.
+
+   Answers to Frequently asked questions about Linux (v1.19) Last
+Modified 93/06/11 v1.19
+
+
+File: linux-faq.info,  Node: IX-18,  Next: IX-19,  Prev: IX-17,  Up: IXA-00
+
+(IX.18)  I heard malloc (0) wouldn't work with Linux, what should I do?
+=======================================================================
+
+   ANSWER: It *does* work in a manner which POSIX allows; unfortunately,
+pre-POSIX code frequently assumes that malloc(0) will not return 0 -
+the standard version of malloc under Linux *does* return 0.  By
+including <stdlib.h>, you get a definition of malloc which behaves more
+traditionally.  If you define NO_FIX_MALLOC, then you will get the
+default (non-traditional) form.  If you are trying to develop POSIX
+compliant code under Linux, you should probably define NO_FIX_MALLOC to
+ensure that your code doesn't make assumptions about malloc() which
+will not work on other systems.  (Note: NO_FIX_MALLOC is specific to
+Linux.)
+
+   (Provided by Phil.Richards@prg.oxford.ac.uk. Thanks.)
+
+
+File: linux-faq.info,  Node: IX-19,  Next: IX-20,  Prev: IX-18,  Up: IXA-00
+
+(IX.19)  Why does gcc say "xxxxx..h not found"?
+===============================================
+
+   ANSWER: see QUESTION: What are the contents of them?
+
+
+File: linux-faq.info,  Node: IX-20,  Next: IX-21,  Prev: IX-19,  Up: IXA-00
+
+(IX.20)  I really followed every step in the documentation, but when I do "make", why does it say "don't how to make xxxxxx"?
+=============================================================================================================================
+
+   ANSWER: The dependency in Makefile is dated, you need to make a new
+one. Please get some guide on make and read Makefile. For the kernel
+sources, please do
+
+     cd src/linux
+     make dep
+
+
+File: linux-faq.info,  Node: IX-21,  Next: IX-22,  Prev: IX-20,  Up: IXA-00
+
+(IX.21)  How do I compile programs under Linux?
+===============================================
+
+   ANSWER: The Linux C library is trying to be ANSI/POSIX compliant. It
+is also very compatible with SYSV and BSD. The C library is loaded with
+SYSV and BSD functions. There are three exceptions:
+
+1. signal in Linux is POSIX.
+2. tty in Linux is POSIX.
+3. time functions are POSIX, plus a few BSD and SYSV extensions.
+4. setjmp/longjmp functions are POSIX. But you can use -D__FAVOR_BSD
+   to make it BSD or use sigsigjmp/siglongjmp.
+
+   When you compile a program under Linux, your best bet is include all
+the appropriate header files and use -Wall. All the usable functions
+and global variables are declared in the corresponding header files.
+YOU SHOULD NOT DEFINE ANY functions or global variables OF THE LINUX C
+LIBRARY IN YOUR CODE IF YOU WANT TO USE THE SHARED LIBRARIES.
+
+   After saying all those, you now should know you can compile a program
+with -D_POSIX_SOURCE or -D_GNU_SOURCE (read <features.h> for details).
+With a few modifications you can even use -DSYSV, -DUSG or -DBSD. Some
+codes need to define -DSTDC_HEADERS for ANSI C compiler like gcc here.
+
+   To use malloc () and calloc () safely under Linux, please include
+<stdlib.h> and don't define NO_FIX_MALLOC.
+
+   BTW, gcc -traditional should work with gcc 2.2.2d or above.
+
+   Please also read ChangeLog for the latest enhancement.
+
+   Please read the header files for details. Maybe you should get a book
+on POSIX. Any suggestion of the book list?
+
+   >From Steve Robbins  -  steve@nyongwa.cam.org
+
+--------
+I like "POSIX Programmer's Guide", by Donald Lewine.  Its essentially
+a list of POSIX functions' man pages, with a very brief guide in the
+beginning of a few things.  It's published by O'Reilly & Associates,
+Inc.
+--------
+
+
+File: linux-faq.info,  Node: IX-22,  Next: IX-23,  Prev: IX-21,  Up: IXA-00
+
+(IX.22)  How can I get bsd style signal?
+========================================
+
+   ANSWER: Use -D__USE_BSD_SIGNAL.
+
+
+File: linux-faq.info,  Node: IX-23,  Next: IX-24,  Prev: IX-22,  Up: IXA-00
+
+(IX.23)  Why does a program that should only poll for input become a CPU hog?
+=============================================================================
+
+   ANSWER: The select() system call. The timeout parameter was
+classically used read-only by the system. Some manual pages already
+notes three years ago:
+
+     select() should probably return the  time  remaining  from
+     the  original timeout, if any, by modifying the time value
+     in place.  This may be implemented in future  versions  of
+     the system.  Thus, it is unwise to assume that the timeout
+     pointer will be unmodified by the select() call.
+
+   If you do not take this advice seriously you get a zero timeout
+written back to your timeout structure, which means that future calls to
+select() using the same timeout structure will immediately return.
+
+Fix:
+
+   Put the timeout value into that structure every time you call
+select().  Change code like
+
+     struct timeval timeout;
+     timeout.tv_sec = 1; timeout.tv_usec = 0;
+     while (some_condition)
+       { select(n,readfds,writefds,exceptfds,&timeout); }
+
+   to
+
+     struct timeval timeout;
+     while (some_condition)
+       { timeout.tv_sec = 1; timeout.tv_usec = 0;
+         select(n,readfds,writefds,exceptfds,&timeout);
+       }
+
+
+File: linux-faq.info,  Node: IX-24,  Next: IXB-00,  Prev: IX-23,  Up: IXA-00
+
+(IX.24)  When a program is stopped using Ctrl-Z and then restarted, or in other situations that generate signals: Ctrl-C interruption, termination of a child process etc. why does it complain about "interrupted system call" or "write: unknown error" or things like that.
+==============================================================================================================================================================================================================================================================================
+
+   ANSWER: The system call the program was executing has been
+interrupted to process the signal, and then it returned -1 and set
+errno = EINTR.  The program then was likely to draw bad conclusions
+from that.
+
+   Explanation: Your program has signal handlers installed, using
+signal() or sigaction(). When the signal occurred, your signal handler
+was invoked. In other Unix systems, this usually happens asynchronously
+or in a few slow system calls:
+
+     When a signal is caught during the execution of system calls such as
+     read(2), write(2), open(2) or ioctl(2) on a slow device (such as a
+     terminal, but not a file), during a pause(2) system call or a wait(2)
+     system call that does not return immediately because a previously
+     stopped or zombie process already exists, the signal-catching
+     function is executed and the interrupted system call then returns a
+     -1 to the calling process with errno set to EINTR.
+
+   Linux (following POSIX) checks for signals and may execute signal
+handlers
+
+* asynchronously (at a timer tick),
+* on return from *any* system call,
+* during the execution of the following system calls:
+  select(),
+  pause(),
+  connect(), accept(),
+  read() on terminals or sockets or pipes or /proc files,
+  write() on terminals or sockets or pipes or line printer,
+  open() on FIFOs or PTYs or serial lines,
+  ioctl() on terminals,
+  fcntl() with command F_SETLKW,
+  wait4(),
+  syslog(),
+  any TCP or NFS operations.
+  [For other operating systems you may have to include the system calls
+   creat(), close(), getmsg(), putmsg(), msgrcv(), msgsnd(), recv(),
+   send(), wait(), waitpid(), wait3(), tcdrain(), sigpause(), semop()
+   to this list.]
+
+   In the last two cases and assuming the program's signal handler
+returns, the system call returns -1 and sets errno to EINTR.
+
+   If the SA_INTERRUPT flag is not set for the corresponding signal,
+however, in most cases the system call is automatically restarted
+(continued) after execution of the signal handler, and your program
+won't see any EINTR.
+
+   You may ask why this is not the default behavior when the default
+Linux signal () is used to install the signal handler. This is because
+POSIX adopted this. As for which one is better, it is a matter of
+opinion.
+
+   Note that in some versions of BSD Unix the default behavior is to
+restart system calls. To get system calls interrupted you have to use
+the SA_INTERRUPT flag.
+
+Fix:
+
+   Either add -D__USE_BSD_SIGNAL to your CFLAGS. Or for every signal
+handler that you install with signal(), use sigaction() instead,
+without setting SA_INTERRUPT.
+
+   Note that while this applies to most system calls, you must still
+check for EINTR on read(), write(), ioctl(), select(), pause(),
+connect().  You may do it like this:
+
+              int result;
+              while (len > 0)
+                { result = read(fd,buffer,len);
+                  if (result < 0) break;
+                  buffer += result; len -= result;
+                }
+        -->
+              int result;
+              while (len > 0)
+                { result = read(fd,buffer,len);
+                  if (result < 0) { if (errno != EINTR) break; }
+                  else { buffer += result; len -= result; }
+                }
+
+and
+
+              int result;
+              result = ioctl(fd,cmd,addr);
+        -->
+              int result;
+              do { result = ioctl(fd,cmd,addr); }
+                 while ((result == -1) && (errno == EINTR));
+
+
+File: linux-faq.info,  Node: IXB-00,  Next: IX-25,  Prev: IX-24,  Up: IX-00
+
+(IX.B.) OTHERS
+==============
+
+* Menu:
+
+*  IX-25::  I seem to be unable to compile anything with gcc. Why?
+*  IX-26::  gcc complains about not finding crt0.o and the system
+     include files What am I doing wrong ?
+*  IX-27::  I tried to port a /new/ version of gnu stuff. But in the
+     linking phase, gcc complains about the missing libg.a.
+*  IX-28::  How to compile programs which may be debugged with gdb?
+*  IX-29::  When compiling some code, cc1 complains about some insn
+     code, what's that?
+*  IX-30::  When compiling #$!, I've got some problems with "SIGBUS"
+     signal that doesn't exist. Any clue ?
+*  IX-31::  How can I write codes suitable for building shared library ?
+
+
+File: linux-faq.info,  Node: IX-25,  Next: IX-26,  Prev: IXB-00,  Up: IXB-00
+
+(IX.25)  I seem to be unable to compile anything with gcc. Why?
+===============================================================
+
+   ANSWER: If you have only 2 MB RAM, gcc will die silently without
+compiling anything. You must have at least 4 MB to do compilations
+
+   BTW Since swapping is possible, I have heard that compilation works
+with only 2Meg and a lot disk traffic :) Isn't it great?
+
+
+File: linux-faq.info,  Node: IX-26,  Next: IX-27,  Prev: IX-25,  Up: IXB-00
+
+(IX.26)  gcc complains about not finding crt0.o and the system include files What am I doing wrong ?
+====================================================================================================
+
+   ANSWER: The include files normal place is in /usr/include. lib*.a and
+*.o should be in /usr/lib or /usr/local/lib
+
+
+File: linux-faq.info,  Node: IX-27,  Next: IX-28,  Prev: IX-26,  Up: IXB-00
+
+(IX.27)  I tried to port a /new/ version of gnu stuff. But in the linking phase, gcc complains about the missing libg.a.
+========================================================================================================================
+
+   ANSWER: Yes this is well known for compiler version earlier than
+2.2.2, throw away the flag -g that's all, anyway libg.a is /only/ for
+debugging purpose.
+
+
+File: linux-faq.info,  Node: IX-28,  Next: IX-29,  Prev: IX-27,  Up: IXB-00
+
+(IX.28)  How to compile programs which may be debugged with gdb?
+================================================================
+
+   ANSWER: There are different ways to handle this problem. If you have
+the gcc2.2.2 or later it's simple, use the -g flag. Otherwise there are
+different possibilities:
+
+1) As there is no libg.a, you should throw away the -g flag in link
+phase, this means that the compilation must be done in two steps
+example: instead of "gcc -g monprog.c -o monprog", use the following
+"gcc -g -c monprog.c" and then "gcc -o monprog monprog.o" Alas this
+method is not that good if you are using Makefile.
+
+2) The other way is to create an empty libg.a as follows (Peter
+MacDonald trick):
+
+- create libfake.c containing libgfake() {}
+- compile it with: gcc -c libfake.c
+- create the libg.a with: ar r libg.a libfake.o
+
+2bis) The more tricky Humberto method:
+
+     cd /usr/lib
+     ranlib libg.a
+
+then gcc -g monprog.c -o monprog will produce a debuggable monprog
+
+
+File: linux-faq.info,  Node: IX-29,  Next: IX-30,  Prev: IX-28,  Up: IXB-00
+
+(IX.29)  When compiling some code, cc1 complains about some insn code, what's that?
+===================================================================================
+
+   ANSWER: An insn is an internal representation that gcc uses when
+compiling. The main part of gcc is to take ordinary c (or c++) code,
+and compile it, while ding optimizations in insn part, which is
+soft/hard independant. Then another part which is hard/Os dependant
+takes the insns and translate it in assembly language. The fix is only
+to turn off the optimization flag (-O).
+
+
+File: linux-faq.info,  Node: IX-30,  Next: IX-31,  Prev: IX-29,  Up: IXB-00
+
+(IX.30)  When compiling #$@!, I've got some problems with "SIGBUS"
+==================================================================
+
+   signal that doesn't exist. Any clue ?
+
+   ANSWER: (Louis J. LaBash, Jr.) SIGBUS is a common problem, its not
+needed, just comment it all out, something like:
+
+     #ifdef SIGBUS
+     .. normal sigbus code ..
+     #endif
+
+
+File: linux-faq.info,  Node: IX-31,  Next: X-00,  Prev: IX-30,  Up: IXB-00
+
+(IX.31)  How can I write codes suitable for building shared library ?
+=====================================================================
+
+   ANSWER: (Eric Youngdale, eric@tantalus.nrl.navy.mil, 3/1/93)
+
+   In general there are very few restrictions as long as you are using
+the new tools for building sharable libraries.  Before the DLL
+libraries were available there were all kinds of things you had to
+watch out for, but currently you can more or less build a sharable
+library out of the box without making any source code modifications.
+See the README in the tools-m-n.tar.z distribution for more information
+on how to build a sharable library.
+
+
+File: linux-faq.info,  Node: X-00,  Next: X-01,  Prev: IX-31,  Up: Top
+
+(X.) SCSI SPECIAL
+*****************
+
+     *** This section is written by Drew Eckhardt, mail him for
+     information, questions related to this section.
+
+     *** Last update May 1993.
+
+* Menu:
+
+*   X-01::  What hardware is supported?
+*   X-02::  What hardware is not supported?
+*   X-03::  How do I get SCSI information?
+*   X-04::  Where is the latest version maintained?
+*   X-05::  I've found one of the following bugs :
+*   X-06::  What do I do if I find a bug that still looks like a
+     bug after I've read the FAQ?
+*   X-07::  What SCSI disks are supported?
+*   X-08::  What about CD ROMS?
+*   X-09::  What about SCSI tapes ?
+*   X-10::  How do I partition the disk?
+*   X-11::  The linux partitioning programs don't work.
+*   X-12::  My partitioning program can't figure out the disk geoemetry
+*   X-13::  What are the major / minor numbers for SCSI drives?
+*   X-14::  My tape drive or other removeable media device isn't recognized
+     at boot time.
+*   X-15::  How do I reduce kernel bloat and eliminate the drivers I
+     don't want?
+*   X-16::  I get SCSI timeouts.
+*   X-17::  My Seagate / Future Domain TMC-88x board is not detected.
+*   X-18::  The Seagate / Future Domain TMC-88x driver doesn't work.
+*   X-19::  The Adaptec driver doesn't work.
+*   X-20::  The WD-7000FASST driver doesn't work
+*   X-21::  My Ultrastor 14F or 34F isn't detected
+*   X-22::  When using a Seagate / Future Domain TMC-88x, why does my system
+     hang when syncing to disk?
+*   X-23::  My system is dog slow (ie, 60k/sec)
+
+
+File: linux-faq.info,  Node: X-01,  Next: X-02,  Prev: X-00,  Up: X-00
+
+(X.01)  What hardware is supported?
+===================================
+
+   ANSWER: The Adaptec 154x, Adaptec 174x, Future Domain 8xx (TMC 950
+based boards?), 16x0,  Seagate ST0x, Ultrastor 14F (Some of the new
+ALPHA code makes attempts to deal with the 34F) and Western Digital
+7000 are supported.  Various Adaptec clones from Bustek and Future
+Domain are known to work, in both ISA and EISA flavors.
+
+   There is an alpha driver for the Ultrastor 24F -
+
+     tsx-11.mit.edu:/pub/alpha/scsi/u24f-driver.tar.z
+
+   Some of the SCSI drivers will not autodetect your SCSI host if the
+BIOS is disabled, and there may be IRQ, DRQ, address restrictions
+compiled into the distribution kernel.
+
+   Virtually all SCSI disks, CD ROMS, and tapes should work.
+
+
+File: linux-faq.info,  Node: X-02,  Next: X-03,  Prev: X-01,  Up: X-00
+
+(X.02)  What hardware is not supported?
+=======================================
+
+   ANSWER: The Adaptec 152x, 151x, Always IN-2000, DTC, Mylex, PS/2
+SCSI boards, all SCSI ports on sound boards, the trantor parallel->SCSI
+adapter, Rancho SCSI boards, Grass Roots SCSI boards, Trantor SCSI
+boards, etc.
+
+   Someone is working on a driver for the IN-2000, if you want to run
+Linux on one of the other boards, you'll have to get technical docs on
+it, and write a driver yourself or bribe someone to do it.
+
+
+File: linux-faq.info,  Node: X-03,  Next: X-04,  Prev: X-02,  Up: X-00
+
+(X.03)  How do I get SCSI information?
+======================================
+
+   ANSWER: Subscribe to the SCSI channel of the linux-activists mailing
+list.  mail linux-activists@joker.cs.hut.fi And put in the header.
+
+            X-MN-Admin: join SCSI
+
+
+File: linux-faq.info,  Node: X-04,  Next: X-05,  Prev: X-03,  Up: X-00
+
+(X.04)  Where is the latest version maintained?
+===============================================
+
+   ANSWER: tsx-11.mit.edu:/pub/linux/ALPHA/scsi
+
+   Please join the SCSI channel of linux-activists@joker.cs.hut.fi
+before you grab anything.
+
+
+File: linux-faq.info,  Node: X-05,  Next: X-06,  Prev: X-04,  Up: X-00
+
+(X.05)  I've found one of the following bugs :
+==============================================
+
+- I can't swap to a SCSI disk, or mount one as /
+
+- I get a READ CAPACITY FAILED message on bootup.
+
+- I have a removeable disk (ie Sysquest) and have problems when I change
+        media.
+
+- I have a Seagate / Future Domain TMC-88x and the kernel panics with a
+        kernel paging message.
+
+- I have an Adaptec 1742 and am experiencing data corruption
+
+- I have an Insite floptical drive and it won't work.
+
+- I have a TANDBERG TDC 3600 revision U07, SONYCD-ROM CDU-541 revision
+        4.3d, DENON DRD-25X revision V, or a SEAGATE ST296 revision
+        921 and the system hangs or reports multiple devices.
+
+- My Adaptec 1542C isn't recognized.
+
+   ANSWER: All of these bugs have been fixed, so UPGRADE.
+
+
+File: linux-faq.info,  Node: X-06,  Next: X-07,  Prev: X-05,  Up: X-00
+
+(X.06)  What do I do if I find a bug that still looks like a bug after I've read the FAQ?
+=========================================================================================
+
+   ANSWER: Your best bet is to send it to the SCSI channel of the
+mailing list, where it will be seen by all of the people who've
+contributed to the SCSI drivers.
+
+   In your bug report, please provide as much information as possible
+regarding your hardware configuration, and all of the messages that
+Linux prints when it boots.  Your chances of getting the bug fixed
+increase exponentially with the amount of information provided.
+
+   The bottom line is that if we can't reproduce your bug, and you can't
+point at us what's broken, it won't get fixed.
+
+
+File: linux-faq.info,  Node: X-07,  Next: X-08,  Prev: X-06,  Up: X-00
+
+(X.07)  What SCSI disks are supported?
+======================================
+
+   ANSWER: Disks up to two terabytes in size will work, since the sd
+driver switches to 10 byte reads when necessary.
+
+   Flopticals, Bernoulis, Sysquests, and other removeable media devices
+are supported by the normal SCSI disk driver.
+
+
+File: linux-faq.info,  Node: X-08,  Next: X-09,  Prev: X-07,  Up: X-00
+
+(X.08)  What about CD ROMS?
+===========================
+
+   ANSWER: CD ROMS are supported. The ISO-9660 file system with
+Rockridge extensions is supported.  You will have to make sure that you
+have configured the kernel to include the isofs filesystem or otherwise
+you will not be able to use the cdrom.
+
+
+File: linux-faq.info,  Node: X-09,  Next: X-10,  Prev: X-08,  Up: X-00
+
+(X.09)  What about SCSI tapes ?
+===============================
+
+   ANSWER: Tapes are supported.  You may wish to obtain the utility
+program mt, which is usually available from tsx-11.mit.edu in
+pub/linux/ALPHA/scsi.
+
+
+File: linux-faq.info,  Node: X-10,  Next: X-11,  Prev: X-09,  Up: X-00
+
+(X.10)  How do I partition the disk?
+====================================
+
+   ANSWER: Use fdisk, efdisk, pfdisk or the DOS parititioning program of
+your choice.
+
+
+File: linux-faq.info,  Node: X-11,  Next: X-12,  Prev: X-10,  Up: X-00
+
+(X.11)  The linux partitioning programs don't work.
+===================================================
+
+   ANSWER: Some of these default to /dev/hd*, which are disks on
+WD-1003 compatable controllers (IDE, MFM, RLL, ESDI, etc), rather than
+/dev/sd* (SCSI disks).   Your solutions are to
+
+1.  Call the partitioning program with a device name, ie
+
+     pfdisk /dev/sda
+
+2.  Make links from /dev/hd* to /dev/sd*.
+
+
+File: linux-faq.info,  Node: X-12,  Next: X-13,  Prev: X-11,  Up: X-00
+
+(X.12)  My partitioning program can't figure out the disk geoemetry
+===================================================================
+
+   The problem with partitioning SCSI disks and Linux is that Linux
+talks directly to the SCSI interface.  Each disk is viewed as the SCSI
+host sees it : N blocks, numbered from 0 to N-1, all error free.  There
+is no portable way to get disk geometry.
+
+   However, DOS doesn't like things like this, it demmands that BIOS
+present it with a normal Cylinder / Head / Sector coordinates.  So,
+BIOS does, and it comes up with some fabrication that fits what DOS
+wants to see.  You don't want to disagree with what BIOS thinks when
+you write the partition table.
+
+   The newest SCSI code will return the mapped geometry for some host
+adapter / disk combinations.  Kernel release 0.99 and later should have
+this capability.
+
+   QUESTION :  I can't make a filesystem on /dev/hd*
+
+   ANSWER : /dev/hd* aren't your SCSI disks.  /dev/sd* are.  See below
+for approproate major / minor numbers if they do not exist on your root
+diskette.
+
+
+File: linux-faq.info,  Node: X-13,  Next: X-14,  Prev: X-12,  Up: X-00
+
+(X.13)  What are the major / minor numbers for SCSI drives?
+===========================================================
+
+   ANSWER: Because of the large number of devices that can be hung off
+of a SCSI bus (as many as 56 if you use SCSI fanouts or bridge boards),
+and the possibility of 16 partitions on a SCSI disk, we'd run out of
+minor numbers if they were statically allocated - so a dynamic
+numbering scheme is used.
+
+   Block device major 8 is used for SCSI drives, 11 for CD-ROMs.
+Character device major 9 is used for SCSI tapes.
+
+   Minors are assigned in increments of 16 to SCSI disks as they are
+found, scaning from host 0, ID 0 to host n, ID 7, excluding the host
+ID.  Most hosts use ID 7 for themselves.
+
+   A minor where minor mod 16 = 0 is the whole drive, where minor mod 16
+is between 1 and 4, that partition, extended partitions dynamically
+assigned from 5 to 15 inclusive.  Note that the gendisk.c module prints
+partition tables on initialization - you should be able to see them
+there.
+
+   Example : I have three SCSI disks, set up as follows
+
+        Seagate ST02, ID=0
+        Seagate ST02, ID = 5
+        Adaptec 1542, ID = 0
+
+   The first disk on the seagate at ID 0 will become minors 0-15
+inclusive, the second at ID5 16-31 inclusive, the disk on the Adaptec
+48-63.
+
+
+File: linux-faq.info,  Node: X-14,  Next: X-15,  Prev: X-13,  Up: X-00
+
+(X.14)  My tape drive or other removeable media device isn't recognized at boot time.
+=====================================================================================
+
+   ANSWER: Try booting with a tape in the drive.
+
+
+File: linux-faq.info,  Node: X-15,  Next: X-16,  Prev: X-14,  Up: X-00
+
+(X.15)  How do I reduce kernel bloat and eliminate the drivers I don't want?
+============================================================================
+
+   ANSWER: For kernel release 0.99 and later, just go to the to
+directory in the kernel source tree, and type "make config", and answer
+the questions.  For older kernel distributions, simply
+
+     #undef CONFIG_DISTRIBUTION
+
+   in include/linux/config.h, and define the macros for the SCSI hosts
+you want enabled.
+
+
+File: linux-faq.info,  Node: X-16,  Next: X-17,  Prev: X-15,  Up: X-00
+
+(X.16)  I get SCSI timeouts.
+============================
+
+   ANSWER: Make sure your board has interrupts enabled correctly, and
+that there are no conflicts with other devices (Sound boards and serial
+boards sometimes try to use IRQ5).
+
+
+File: linux-faq.info,  Node: X-17,  Next: X-18,  Prev: X-16,  Up: X-00
+
+(X.17)  My Seagate / Future Domain TMC-88x board is not detected.
+=================================================================
+
+   ANSWER: The Seagate and Future Domain boards have memory mapped
+registers.  To detect them, Linux scans for a signature in the ROM BIOS
+(typically, a copyright message) and sets the register addresses
+relative to that.
+
+This can fail for two reasons
+
+   1) If the BIOS is disabled.
+
+   In this case, you should edit kernel/blk_drv/scsi/Makefile and add
+-DOVERIDE=x -DCONTROLLER=y where x is the base address of your
+controller (the factory default setting is 0xc8000) - note that this is
+*not* the segment (ie, 0xc800), and y is the controller type, either
+SEAGATE or FD.
+
+   2) If we don't know about your BIOS yet
+
+   Please use DOS and DEBUG to find us a signature that will detect
+your board -
+
+   Ie, if your board lives at 0xc800 do
+
+     debug
+     d c800:0
+     q
+
+   and send me (drew@cs.colorado.edu) the nearest convienient ASCII
+message, with the length and offset from c800:0 or whereever.
+
+
+File: linux-faq.info,  Node: X-18,  Next: X-19,  Prev: X-17,  Up: X-00
+
+(X.18)  The Seagate / Future Domain TMC-88x driver doesn't work.
+================================================================
+
+   ANSWER: There are several possibilities
+
+   1) Is the board jumpered for IRQ5 ?
+
+   The factory settings are for MSDOS, and have interrupts disabled.
+
+   On the Seagate, Interrupts are controlled by the W3 (ST01) or JP3
+(ST02) jumper.  Shorting pins F-G selects IRQ5.
+
+   2) Cached machines will not have problems if the Seagate's address
+space (typically C8000 - CAFFFF) is not marked "non cacheable." This
+applies to the i486 internal cache as well as i386/i486 external caches.
+
+   This can be set in the XCMOS of most machines.  If you can't disable
+cache for the Seagate's area (16K in size, starting at the base
+address), then you must disable the cache entirely, otherwise it won't
+work.
+
+   3) If you've defined -DFAST or -DFAST32 in the kernel, blind
+transfers will be used.  This works fine with most disks, but some
+won't respond fast enough, the read/write will timeout and things will
+get out of sync, resulting in timeouts.  Try recompiling your kernel
+without -DFAST or -DFAST32.
+
+
+File: linux-faq.info,  Node: X-19,  Next: X-20,  Prev: X-18,  Up: X-00
+
+(X.19)  The Adaptec driver doesn't work.
+========================================
+
+   ANSWER: A common source of difficulty is a conflict between two
+different boards for an IRQ level, a DMA channel, or an I/O address.
+Check the settings for the boards you have in your system (music boards
+are known to use similar IRQ or I/O addresses as the Adaptec.  In the
+new scsi code the Adaptec can use any of the IRQ levels that it can be
+strapped for, it can use I/O address 0x330 or 0x334, and it can use DMA
+channels 5, 6 or 7.
+
+
+File: linux-faq.info,  Node: X-20,  Next: X-21,  Prev: X-19,  Up: X-00
+
+(X.20)  The WD-7000FASST driver doesn't work
+============================================
+
+   ANSWER: According to Keith Smith,
+
+   "There are two different versions of the WD7000/FASST2  One uses a
+WD33C93A the other a WD33C93.  Firmware incompatibilities in the board
+bios could cause a problem as the former chip fixes some problems that
+were discovered on the latter.  We're talking BOARD firmware, as well as
+BIOS firmware."
+
+
+File: linux-faq.info,  Node: X-21,  Next: X-22,  Prev: X-20,  Up: X-00
+
+(X.21)  My Ultrastor 14F or 34F isn't detected
+==============================================
+
+   ANSWER: The Ultrastor 14F driver won't probe for an Adapter at
+address 0x310.  Either move it do a different address, or recompile the
+kernel, adding a rule to kernel/blk_drv/scsi/Makefile
+
+     ultrastor.o: ultrastor.c
+             $(CC) $(CFLAGS) -DOVERIDE_PORT=0x310 -c ultrastor.c
+
+
+File: linux-faq.info,  Node: X-22,  Next: X-23,  Prev: X-21,  Up: X-00
+
+(X.22)  When using a Seagate / Future Domain TMC-88x, why does my system hang when syncing to disk?
+===================================================================================================
+
+   ANSWER: The Seagate boards are an incredibly brain dead piece of
+hardware.  They can only generate an interrupt when a target raises the
+SEL signal.  So, as long as a target is connected, the Seagate driver
+must spin its wheels waiting for the actual data transfer.  Some
+devices agravate the situation by connecting for long periods of time
+while not doing anything.
+
+
+File: linux-faq.info,  Node: X-23,  Next: XI-00,  Prev: X-22,  Up: X-00
+
+(X.23)  My system is dog slow (ie, 60k/sec)
+===========================================
+
+   ANSWER: SCSI commands have an incredible amount of overhead.  For
+every command, you need to arbitrate for the bus, select the target,
+establish an I_T_L nexus, and send the command.  Processing of that
+command may take as much as 1ms on older devices.  Add this overhead to
+what you already have coming through the file system, buffer cache,
+etc, and you have a real problem.
+
+   To work around this, we needed to maximize the amount of data that
+could be transfered in a single command.  So, we implemented
+scatter-gather, which allows reads/writes from/to contiguous disk
+sectors to non-contiguous buffers.
+
+   This typically gets you a 3-5 fold improvement in performance.
+
+   The current kernel has scatter-gather support for the Adaptec,
+Western Digital, Ultrastor, Future Domain 16xx, Future Domain 8xx and
+Seagate boards.
+
+
+File: linux-faq.info,  Node: XI-00,  Next: XIA-00,  Prev: X-23,  Up: Top
+
+(XI.) EMACS for LINUX
+*********************
+
+     *** This section is maintained by Rick Sladkey (jrs@world.std.com)
+
+     *** Last Update March 1993.
+
+* Menu:
+
+* XIA-00:: GENERAL INFORMATION
+* XIB-00:: GNU EMACS for LINUX
+
+
+File: linux-faq.info,  Node: XIA-00,  Next: XIB-00,  Prev: XI-00,  Up: XI-00
+
+(XI.A.) GENERAL INFORMATION
+===========================
+
+   This is a short list of Frequently Asked Questions about GNU Emacs
+under Linux.  It does not address general questions about Emacs which
+are not Linux specific.  For general help about Emacs, 1) learn to use
+and read the online documentation, 2) read the real Emacs FAQ found in
+emacs/etc/FAQ, and 3) read the newsgroup gnu.emacs.help.
+
+                                        Rick Sladkey <jrs@world.std.com>
+
+
+File: linux-faq.info,  Node: XIB-00,  Next: XI-01,  Prev: XIA-00,  Up: XI-00
+
+(XI.B.) GNU EMACS for LINUX
+===========================
+
+* Menu:
+
+*  XI-01::  What version of the compiler was used?  Which shared libaries?
+*  XI-02::  Which files do I need?
+*  XI-03::  How do I install them?
+*  XI-04::  What if I want to compile Emacs myself?
+*  XI-05::  What about Epoch or Lucid Emacs?  Are these available for Linux?
+*  XI-06::  Does Linux Emacs support eight-bit input/output?
+*  XI-07::  How much disk space is required?
+*  XI-08::  Why can't Emacs find its support files anymore?
+*  XI-09::  How do I get Emacs to recognize my cursor keys?
+*  XI-10::  What packages are particularly useful under Linux?
+*  XI-11::  Does Linux Emacs use the shared libraries?
+*  XI-12::  Does Linux Emacs support the X Window System?
+*  XI-13::  Do I need both Emacs if I don't always use X?
+*  XI-14::  Why doesn't Emacs use the settings in my
+     .Xdefaults/.Xresources file?
+*  XI-15::  I read about some menu that is supposed to pop up when I
+     press some mouse button.  Does this work with Linux Emacs?
+*  XI-16::  Sometimes Emacs crashes with a SIGALRM message.  What's
+     wrong?
+
+
+File: linux-faq.info,  Node: XI-01,  Next: XI-02,  Prev: XIB-00,  Up: XIB-00
+
+(XI.01)  What version of the compiler was used?  Which shared libaries?
+=======================================================================
+
+   ANSWER: This describes version of GNU Emacs 18.59 for Linux 0.99.5
+and above compiled with GCC 2.2.3 using the libc.so.4.3 and
+libX11.so.3.0 shared libraries.
+
+
+File: linux-faq.info,  Node: XI-02,  Next: XI-03,  Prev: XI-01,  Up: XIB-00
+
+(XI.02)  Which files do I need?
+===============================
+
+   ANSWER:
+
+emacs-18.59b.tar.Z              this file, sample default.el and diffs
+                                for this version, the eight-bit patch,
+                                iso-latin-1.el and eight-bit.el
+emacs-etc-18.59b.tar.Z          emacs support programs and misc info
+emacs-bin-18.59b.tar.Z          shared emacs binary and its doc file
+x11emacs-bin-18.59b.tar.Z       shared x11emacs binary and its doc file
+
+
+File: linux-faq.info,  Node: XI-03,  Next: XI-04,  Prev: XI-02,  Up: XIB-00
+
+(XI.03)  How do I install them?
+===============================
+
+   ANSWER: For the latter three files, just cd to /usr and untar them.
+
+
+File: linux-faq.info,  Node: XI-04,  Next: XI-05,  Prev: XI-03,  Up: XIB-00
+
+(XI.04)  What if I want to compile Emacs myself?
+================================================
+
+   ANSWER: It is fairly easy (and highly recommended) to compile Emacs
+yourself if you have the the disk space.  In this case you only need
+the standard Emacs distribution (emacs-18.59.tar.Z from any GNU archive)
+and the Linux diffs and support files (emacs-18.59b.tar.Z from a Linux
+archive).  The diffs are quite small and mostly amount to a
+configuration file.
+
+
+File: linux-faq.info,  Node: XI-05,  Next: XI-06,  Prev: XI-04,  Up: XIB-00
+
+(XI.05)  What about Epoch or Lucid Emacs?  Are these available for Linux?
+=========================================================================
+
+   ANSWER: Yes.  Thomas Dunbar has been maintaining Epoch for Linux and
+Chipsy Sperber has compiled Lucid Emacs.  Both of these work well under
+Linux.  Look in a Linux archive index for where to find them.
+
+
+File: linux-faq.info,  Node: XI-06,  Next: XI-07,  Prev: XI-05,  Up: XIB-00
+
+(XI.06)  Does Linux Emacs support eight-bit input/output?
+=========================================================
+
+   ANSWER: Yes.  It is new with this version.  It uses the so-called
+"ctl-arrow" patch.  See the file README.8bit for more information.
+
+
+File: linux-faq.info,  Node: XI-07,  Next: XI-08,  Prev: XI-06,  Up: XIB-00
+
+(XI.07)  How much disk space is required?
+=========================================
+
+   ANSWER: Anywhere from 1 to 15 Meg.  Emacs works reasonably well with
+no support files at all.  With a judicious selection from lisp/*.elc and
+etc/*, quite a lot can be done using only 2 Meg.  If you want all of
+lisp/*.elc, info/*, and etc/* this will require 4 to 6 Meg.  If you
+unpack the whole source you need 8 Meg.  If you collect info files like
+rare coins and install a lot of big lisp packages then Emacs may need
+its own partition. :-)
+
+
+File: linux-faq.info,  Node: XI-08,  Next: XI-09,  Prev: XI-07,  Up: XIB-00
+
+(XI.08)  Why can't Emacs find its support files anymore?
+========================================================
+
+   ANSWER: This is because older versions of Emacs were compiled with
+"/usr/local/emacs" based paths.  The current version is compiled with
+"/usr/emacs" paths.  If you have a previous installation, just "mv
+/usr/local/emacs /usr" and you're done.  If you can't bear to part with
+the "/usr/local" pathnames because of inertia then do "ln -s
+/usr/local/emacs /usr" and you can have them both.
+
+
+File: linux-faq.info,  Node: XI-09,  Next: XI-10,  Prev: XI-08,  Up: XIB-00
+
+(XI.09)  How do I get Emacs to recognize my cursor keys?
+========================================================
+
+   ANSWER: Simple.  Don't use them. :-)  Seriously, there are as many
+ways to do this are there are elisp hackers but the preferred way is to
+follow the pattern set by the other terminal definition files in
+emacs/lisp/term/*.el.  For just arrow keys you can just copy vt220.el
+to console.el and that's it.  For function keys and the others see the
+sample default.el included with emacs-18.59b.tar.Z.
+
+
+File: linux-faq.info,  Node: XI-10,  Next: XI-11,  Prev: XI-09,  Up: XIB-00
+
+(XI.10)  What packages are particularly useful under Linux?
+===========================================================
+
+   ANSWER: Because info format is the documentation standard of the GNU
+project and just about everything except the kernel comes from FSF, you
+will find that Dave Gillespie's enhanced info package is very useful.
+It allows multiple info directories, space bar paging, and supports
+compressed info files. Please learn to use info.  Imagine Unix life
+without man.
+
+   Others that I highly recommend are Sebastian Kremer's enhanced dired
+directory editor, Dave Gillespie's calc calculator, Masanobu UMEDA's
+gnus for usenet news, and Kyle Jone's vm for mail.
+
+   All can be found in the OSU Emacs archive, ftp.cis.ohio-state.edu,
+/pub/gnu/emacs/elisp-archive.  See the real FAQ for more details.
+
+
+File: linux-faq.info,  Node: XI-11,  Next: XI-12,  Prev: XI-10,  Up: XIB-00
+
+(XI.11)  Does Linux Emacs use the shared libraries?
+===================================================
+
+   ANSWER: Yes.  It works fine with the DLL libraries and should not
+require a new binary when the C or X libraries are updated.
+
+
+File: linux-faq.info,  Node: XI-12,  Next: XI-13,  Prev: XI-11,  Up: XIB-00
+
+(XI.12)  Does Linux Emacs support the X Window System?
+======================================================
+
+   ANSWER: Yes.  However, there are two binaries.  One without X support
+(about 485k) and one with X support (about 515k).
+
+
+File: linux-faq.info,  Node: XI-13,  Next: XI-14,  Prev: XI-12,  Up: XIB-00
+
+(XI.13)  Do I need both Emacs if I don't always use X?
+======================================================
+
+   ANSWER: No. The X11 version works equally well inside or outside of
+X.  If you get the message "Check your DISPLAY variable" it means that
+you have defined DISPLAY in your ~/.profile (or whatever).  You can fix
+this by starting Emacs with 'emacs -nw' or by removing the DISPLAY
+variable from your ~/.profile and putting it in you ~/.xinitrc.
+
+
+File: linux-faq.info,  Node: XI-14,  Next: XI-15,  Prev: XI-13,  Up: XIB-00
+
+(XI.14)  Why doesn't Emacs use the settings in my .Xdefaults/.Xresources file?
+==============================================================================
+
+   ANSWER: You are probably using the word "emacs" and your X version of
+emacs is called x11emacs.  Either use the word "Emacs" in your resource
+file or rename x11emacs to emacs.  See above question on why this is
+reasonable.
+
+
+File: linux-faq.info,  Node: XI-15,  Next: XI-16,  Prev: XI-14,  Up: XIB-00
+
+(XI.15)  I read about some menu that is supposed to pop up when I press some mouse button.  Does this work with Linux Emacs?
+============================================================================================================================
+
+   ANSWER: Yes.  This requires XMenu support to be compiled in.  Former
+versions did not support it because it did not work correctly.
+
+
+File: linux-faq.info,  Node: XI-16,  Next: XII-00,  Prev: XI-15,  Up: XIB-00
+
+(XI.16)  Sometimes Emacs crashes with a SIGALRM message.  What's wrong?
+=======================================================================
+
+   ANSWER: The old answer about upgrading to a newer version of bash
+was incorrect.  The problem was in the implementation of sleep(3) in
+the old C library.  It is fixed as of libc-4.3.
+
+
+File: linux-faq.info,  Node: XII-00,  Next: XIIA-00,  Prev: XI-16,  Up: Top
+
+(XII.) X11 THE MAXIMUM and MORE
+*******************************
+
+     *** This section is maintained by Krishna Balasubramanian
+     <balasub@cis.ohio-state.edu>. Mail him if you have corrections,
+     additions, etc.
+
+     *** Last update:  Thu, 13 May 93 00:35:45 -0400
+
+* Menu:
+
+* XIIA-00:: X386 GENERAL INFORMATION
+* XIIB-00:: HARDWARE REQUIREMENTS: Supported Video cards, mice.
+
+* XIIC-00:: LINUX DISTRIBUTION: Files required, Current version.
+* XIID-00:: LEARNING/USING X: Pointers to X documentation.
+
+* XIIE-00:: DEBUGGING STARTUP PROBLEMS: Checklist, Screen restoration, Hanging.
+* XIIF-00:: XCONFIG: Video mode settings and common errors in Xconfig.
+
+* XIIG-00:: X-APPLICATIONS: Compiling X programs.
+* XIIH-00:: ATI: SVGA server for ATI boards.
+
+* XII-I-00:: BUGS
+
+   The X11 directories on linux systems are:
+
+     XLIB = /usr/X386/lib/X11/       (or /usr/lib/X11/)
+     XBIN = /usr/X386/bin/           (or /usr/bin/X11/)
+     XDOC = XLIB/etc/
+     
+     cwxi = the comp.windows.x.i386unix newsgroup
+
+   Subscribe to this group if you are an xfree86 user. Post general
+questions on xfree86 to cwxi instead of c.o.l. Very few problems with
+using xfree86 are Linux specific.
+
+
+File: linux-faq.info,  Node: XIIA-00,  Next: XII-01,  Prev: XII-00,  Up: XII-00
+
+(XII.A.) X386 GENERAL INFORMATION
+=================================
+
+* Menu:
+
+*  XII-01::  What is the X11 release supported by Linux?
+*  XII-02::  What is X386/xfree86?
+*  XII-03::  Where can I get X386 1.2 (X11R5)?
+*  XII-04::  Any tips on compiling X11R5?
+
+
+File: linux-faq.info,  Node: XII-01,  Next: XII-02,  Prev: XIIA-00,  Up: XIIA-00
+
+(XII.01)  What is the X11 release supported by Linux?
+=====================================================
+
+   ANSWER: It's the X11R5 (xfree86-1.2).
+
+   There are (currently separate) servers for 8514 and S3 chips.
+
+   xfree86-1.3 should be available in a few weeks. Major changes are
+Improvement of video restoration, expanded support for WD chips and the
+inclusion of PEX. You should get newer versions of any applications
+that are older than the xfree86-1.2 release.
+
+
+File: linux-faq.info,  Node: XII-02,  Next: XII-03,  Prev: XII-01,  Up: XIIA-00
+
+(XII.02)  What is X386/xfree86?
+===============================
+
+   ANSWER: X386 is the port of the X11 server to System V/386 that was
+done by Thomas Roell (roell@informatik.tu-muenchen.de).  It supports a
+wide variety of VGA boards.  X386 1.2 is included in MIT's X11R5
+distribution.
+
+   The Linux X386 port was based on the stock distribution from X11R5,
+from MIT and was done by Orest Zborowski (obz@sisd.kodak.com).
+
+   It has since moved to becoming part of the standard xfree86
+distribution.  See the FAQ on cwxi for more information on xfree86.
+
+
+File: linux-faq.info,  Node: XII-03,  Next: XII-04,  Prev: XII-02,  Up: XIIA-00
+
+(XII.03)  Where can I get X386 1.2 (X11R5)?
+===========================================
+
+   ANSWER: The X386 1.2 and xfree86 sources are available at any site
+that distributes the X11R5 source (too numerous to list here, but
+includes export.lcs.mit.edu)
+
+
+File: linux-faq.info,  Node: XII-04,  Next: XIIB-00,  Prev: XII-03,  Up: XIIA-00
+
+(XII.04)  Any tips on compiling X11R5?
+======================================
+
+   ANSWER:
+
+-  Dont do it.
+-  XFree86 is distributed with a link kit so you can optionally
+        include what you like in the server.
+-  Join the xfree86 beta team (how to? see cwxi FAQ)
+-  Instructions are in the README file in XDOC/ and the cwxi FAQ.
+
+
+File: linux-faq.info,  Node: XIIB-00,  Next: XII-05,  Prev: XII-04,  Up: XII-00
+
+(XII.B)  HARDWARE REQUIREMENTS:
+===============================
+
+   Approx: at least 4 megs of ram + swap ...slooooww. 10 Meg disk for X.
+
+   Another 6-10 meg of disk for GCC if you want to compile X11 programs.
+
+* Menu:
+
+* XII-05:: What VGA boards are supported?
+* XII-06:: What Mouses are supported?
+* XII-07:: Does anyone have a working PS/2 mouse? Has anyone gotten the
+     "Mini-DIN" mouse on an HP Vectra 486/33T to work? The slight info I've
+     been able to find says it's PS/2 compatible. Does anyone have a
+     working MouseMan on a PS/2 port ?
+* XII-08:: I have trouble with my logitech Pilot mouse and X under
+     Linux, any clue ?
+
+
+File: linux-faq.info,  Node: XII-05,  Next: XII-06,  Prev: XIIB-00,  Up: XIIB-00
+
+( XII.05)  What VGA boards are supported?
+=========================================
+
+   ANSWER:
+
+   et3000, et4000, gvga, pvga1a, wd890c00, tvga8900, ati ver. 5 or 6,
+8514/A. (X386mono supports generic vga's and hercules).
+
+   Diamond cards are not supported and will not be supported. If you
+are the unfortunate owner of such a card, you can probably get the
+server up by booting in specific modes or using dos to set your modes
+before warm booting into linux or using an external clock setting
+program. You will have to bear with these irks until you can convince
+diamond to alter their policy.
+
+   Standard x11v1.1 or xfree86 server:
+
+     ET3000          (for ex. GENOA 5300/5400)
+     ET4000          (Tricom, STB PWR Graph, Sigma Legend, etc.)
+     GVGA            (Genoa 6400)
+     PVGA1A          (Paradise VGA Professional)
+     WD90C00         (Paradise VGA 1024)
+
+   supported by xfree86:
+
+     TVGA            TRIDENT 8900c, 9000, support is in xfree86
+     
+     ATI             See the ATI section below.
+     
+                     Those with 8514 compatible cards may want to get
+                     the X8514 server for speed (~2x xstones?).
+     
+     MONO    Any vga card should be able to use X386mono server. (At least
+             640x480 with 800x600 virtual). Use the vga2 section of Xconfig.
+             Support for hercules monochrome card (usable as 2nd display).
+
+   The following servers will usually not handle all the options
+supported by xfree86. Read the documentation that comes with them
+carefully. They will be merged with the xfree86 distribution in some
+time.
+
+     8514    ATI graphics ULTRA, ATI graphics Vantage
+             Should work with any VESA standard 8514/A register compatible
+             card? Courtesy Kevin Martin (martin@cs.unc.edu).
+     
+             Scott Laird (lair@midway.uchicago.edu) writes:
+             I uploaded a new version of the X8514 X Server to sunsite and
+             tsx-11. It is in /pub/Linux/X11/X-servers/X8514/X8514scale.tar.Z
+             on sunsite. It's linked with version 4.2 of the jumptable
+             libraries, includes TCP/IP support, support for compressed
+             bitmap fonts, Type 1 and Speedo scalable fonts.  There's a
+             README file in the same directory that will answer more
+             questions.
+     
+     XS3     S3 chipset server (Jon Tombs jon@robots.ox.ac.uk)
+             Get the FAQ on ftp.robots.ox.ac.uk (pub/linux/S3 check sunsite).
+     
+     Xega    Generic 640x480x16 compatible server (originally for laptops).
+             This requires a microsoft mouse at /dev/mouse for now
+             and it does not use Xconfig so use environment variables
+             to define the font path etc. in .xinitrc:
+             export FONT_PATH=/usr/lib/X11/fonts/misc:/usr/lib/X11/fonts75dpi
+             Works better with courier fonts so add to .Xresources:
+             *Font: -*-courier-medium-r-*--10* ..or whatever..
+             A link kit is available at tsx-11 (you need gcc2.2.2).
+             in pub/linux/ALPHA/Xega/X386.ega.T.Z
+             (Obselete? Unusable? Anyone?)
+
+WARNING: Do not try to bring up an Xserver that does not support your
+hardware. There have been cases where damage has resulted from pushing
+the monitor (specially fixed frequency monitors) beyond its specs.
+
+
+File: linux-faq.info,  Node: XII-06,  Next: XII-07,  Prev: XII-05,  Up: XIIB-00
+
+(XII.06)  What Mouses are supported?
+====================================
+
+   ANSWER:
+
+   Serial : Logitech, Microsoft, MouseSystems .... compatibles ...
+
+   Busmouses : Logitech, microsoft, ATI_XL, PS/2 (aux).
+
+
+File: linux-faq.info,  Node: XII-07,  Next: XII-08,  Prev: XII-06,  Up: XIIB-00
+
+(XII.07)  Does anyone have a working PS/2 mouse? Has anyone gotten the "Mini-DIN" mouse on an HP Vectra 486/33T to work? The slight info I've been able to find says it's PS/2 compatible. Does anyone have a working MouseMan on a PS/2 port ?
+===============================================================================================================================================================================================================================================
+
+   ANSWER: (heeb@watson.ibm.com)
+
+   First you need to create an entry in /dev for it:
+
+     mknod /dev/psaux c 10 1
+
+   The other steps depend on the version of XFree: for XFree86-1.2 add
+the following line to your Xconfig (and you are done):
+
+     PS/2 "/dev/psaux"
+
+   This works even for 3 button mice (e.g. the MouseMan)!  There is no
+direct PS/2 mouse support in XFree86-1.1, so to use the mouse with X
+you'll have either to upgrade or use the mconv mouse protocol
+conversion utility, which can be found on nic.funet.fi, in
+/pub/OS/Linux/utils/tools/mconv.c. This program converts the packets
+sent by the PS/2 mouse into the corresponding ones from a Microsoft
+mouse, so you can fool X telling it you have a Microsoft serial mouse
+instead. Instructions for use are included in the source file.  (Johan
+Myreen jem@cs.hut.fi)
+

@@ -1,0 +1,551 @@
+Subject: Linux-Development Digest #569
+From: Digestifier <Linux-Development-Request@senator-bedfellow.MIT.EDU>
+To: Linux-Development@senator-bedfellow.MIT.EDU
+Reply-To: Linux-Development@senator-bedfellow.MIT.EDU
+Date:     Mon, 21 Mar 94 07:13:05 EST
+
+Linux-Development Digest #569, Volume #1         Mon, 21 Mar 94 07:13:05 EST
+
+Contents:
+  TTY Overrun During Disk Access (Mustafa Kocaturk)
+  Re: Problem with V1.0 Ne*000 probe (J.S. van Oosten)
+  Re: A truely non-debugging Kernel? (Paul Sitz)
+  VT font-loading on Hercules? (Joern Jensen)
+  Re: tcpdump and SLIP (Mark Rosenstein)
+  Re: VM performance tuning via program restructuring (John F. Haugh II)
+  1.0 bug report ( maybe ) (Larry Butler)
+  Re: Linux for Sun4 (Gunnar Rxnning)
+  Bug in kernel make -k build (Frank Lofaro)
+  Re: Ext2fs secure rm bug (?) plus ideas for improvement (Colin Plumb)
+  Re: Libc 4.5.24 & catclose() in nl_types.h (Mitchum DSouza)
+  MCC UPGRADE, WHAT SHOULD I DO? (The Last Gunslinger)
+  Re: blank_screen patch for Laptops (Questions) (James H. Cloos Jr.)
+  <stddef.h> in libc-4.5.21? (Joseph Toman)
+
+----------------------------------------------------------------------------
+
+From: mustafa@seas.smu.edu (Mustafa Kocaturk)
+Subject: TTY Overrun During Disk Access
+Date: Sun, 20 Mar 1994 21:41:54 GMT
+
+In article <wpp.763640586@marie>,
+Kai Petzke <wpp@marie.physik.tu-berlin.de>
+wrote about tty overruns occurring under ``heavy load''.
+
+I noticed a similar problem even under ``normal load'', i.e.
+when transferring files at 19200 bit/s.  I am using ``tupload''
+with a window size of 10 and delay 200/50 (=4) seconds.
+Whenever ``tupload'' flushes its receive buffer to the disk
+(an IDE device on my 486DX2/66), apparently a packet loss
+occurs (examinable in a log file), and file transfer is interrupted
+for at least 4 seconds.  I am using /dev/cua3.  Setserial reports
+the following three serial ports, whose IRQ's I have adjusted
+not to conflict hardwarewise with any other device:
+
+/dev/cua0, UART: 16450, Port: 0x03f8, IRQ: 4
+/dev/cua1, UART: 16450, Port: 0x02f8, IRQ: 3
+/dev/cua3, UART: 16450, Port: 0x02e8, IRQ: 5
+
+I am quite sure that these port settings have been recognized correctly.
+These settings have also been checked in DOS, and they cause no problems
+for other programs such as kermit (both dos and linux versions),
+bitfax, windows terminal, etc.  Ports /dev/cua0 and /dev/cua3 are
+on a 1P/2S/1G card, whereas /dev/cua1 is a fax/modem card.
+(An Impression Model 300 mouse is connected to /dev/cua0 and its
+middle button is not working, which is another (hardware) topic.)
+
+Are disk accesses supposed to inhibit ``received data ready'' interrupts
+from the 16450? I thought disk accesses in modern PC's would make use of DMA
+(direct memory access) and would not take up processor cycles, although
+they would take up bus cycles while the data is being written to disk.
+
+When one compares the processor's speed and the bit rate of the
+received data stream, the receiving communication program
+(``term'' in my case) should ``very well'' be able
+to copy the received byte from the 16450's receiver buffer register
+to the disk transfer area before it services the next received data
+ready (RDR) interrupt, which does not occur before
+1000000/19200*(1+8+1) =~ 520.833 microseconds elapse.
+66*520.833 =~ 34375 clock cycles are available for copying the
+newly received character!  Approximately 10000 instructions
+would fit into that many clock cycles in a program optimized
+well enough, given 256 kilobytes of cache.
+
+What is going on?  Is it not possible to interrupt the transfer of a
+received block to disk when a character arrives?  Otherwise, this
+sets a lower limit on the granularity of processes on a Linux system,
+a serious obstacle for simple hardware operations requiring frequent
+but short periods of service from the CPU.
+
+Note that it is not my concern to be able to write high-performance
+real-time routines, but efficiency in a simple serial link (, which,
+for me as a Linux user, might be considered a network backbone,) is.
+I know Linux is not a real-time OS, and I do not think I am 
+asking for too much.
+
+If it helps to explain my problem better, I am using a Maxtor 7245A
+245 Mbyte Integrated AT Controller Hard Disk Drive on a 486DX2/66
+system with turbo mode on.
+
+Would a similar problem be observed, for example, on a SLIP link
+used for mounting a NFS (, which I have never attempted to do) ?
+Is the problem due to the ``term'' program or its clients?
+
+Would replacing the 16450-based SIO by a 16550-based one correct the
+TTY overrun problem?  If so, to what extent?  Would switching off
+the turbo mode of the motherboard alleviate it?
+
+Why does Linux kernel pl15a print out the ``TTY Overrun'' message
+on the active virtual consoles, whereas pl15f does not,
+although they essentially behave much in the same manner
+with regard to the above file transfer problem using ``term'' ? 
+
+Thanks in advance for your explanations to any of the above questions.
+I apologize if some of my questions have been asked before, and would
+appreciate pointers to answers to those.  I only wanted to share some
+of my experiences with you.
+
+Mustafa Kocaturk
+mustafa@seas.smu.edu     Dept. of EE, SMU, Dallas TX 75275-3190
+
+------------------------------
+
+From: jvoosten@compiler.tdcnet.nl (J.S. van Oosten)
+Subject: Re: Problem with V1.0 Ne*000 probe
+Date: Mon, 21 Mar 1994 01:14:02 GMT
+
+Ray Bellis (rpb@psy.ox.ac.uk) wrote:
+: As someone else has already mentioned, there seems to be a
+: problem of some sort with the NE*000 probe.  My system worked
+: fine with 0.99pl15j but it won't work with the new v1.0 :-(
+
+Hmm, we have problems with the detection of our NE2000 card as well (on all
+version we've had so far). It will always report the right IO-address & IRQ,
+but the probe for the hardware address sometimes fails with something like
+this:
+
+   NE2000 probe failed: 00 40 40 e9 e9 00.
+
+While the actual address is 00 40 e9 29 cc 67. Seems like somehow the bytes
+get doubled. I suspect a timing problem here (reading the bytes too fast),
+although the machine is just a 386SX16. Only a hard reset brings it back
+again (sometimes). It's particularely irritating because when the probe
+fails, ifconfig also fails and all the utilities that require an interface
+with the local address don't work anymore (telnet, talk, named, etc.).
+
+: It just hangs immediately after the `Net2 debugged' messages.
+
+Doesn't hang here, fortunately.
+
+: [I have the umsdos patches installed as well, if that makes any
+: difference].
+
+We don't have them.
+
+: Anyone have any idea how to fix this?
+
+As I said, I suspect a timing problem. I'll try and insert a few very short
+delay loops, see if that helps, and report on that.
+
+J. v. O.
+
+--
+Don't utter the word 'vi' while I'm near. I might just die of a heartattack.
+-- 
+My PGP public key [version 2.3] (you know when, why and how...) :
+mQCNAi1lYqsAAAEEAMCgUKS7DxyGF8D7QIGYXxRuh2n9Q2+5gIrrb1n9iOl4Xlgo
+cO8Y3DE71J5K6WhlpEGDqXZIwY/Xx8mxq80ZHJ3n0pHOUxOQGdxxMT1mrKotjE4Y
+wmGqnQhMhpcCKgT/5+5xhuMEluyGQqjyud3PCDogJCC/Sia7eO9+56e/13btAAUR
+tC1KLlMuIHZhbiBPb3N0ZW4gPGp2b29zdGVuQGNvbXBpbGVyLnRkY25ldC5ubD4=
+=3brb
+
+------------------------------
+
+From: psitz@empros.com (Paul Sitz)
+Subject: Re: A truely non-debugging Kernel?
+Date: Sun, 20 Mar 1994 23:45:41 GMT
+
+Linus Torvalds (torvalds@klaava.Helsinki.FI) wrote:
+: In article <1994Mar19.153548.25480@rpp386>,
+: John F. Haugh II <jfh@rpp386.cactus.org> wrote:
+: >
+: >Yes, but none of this argues against using #ifdef to compile out the code.
+: >If a kernel runs fine for a month, isn't it time to assume that the same
+: >kernel will run fine for ANOTHER monther and even faster if you remove all
+: >the checks?
+: >
+: >You are looking at this wrong -- if you assume the kernel is going to crash
+: >all the time, you pay the penalties when it doesn't.  AND, the user has no
+: >choice in the matter.
+: 
+: I can only talk for myself:
+
+  Au contraire!!  In this matter you are speaking for the
+  clear thinkers of the world. :-)
+
+: 
+:  - I dislike #ifdef code.  Avoid it whenever possible.  #ifdefs become
+:    ugly, and destroy the linearity of the code (== hard to read).
+:  - I *do* assume the kernel is going to crash, and no, I don't
+:    presonally like the idea of letting the user easily shut down some of
+:    the sanity checks I write.  Admittedly, they happen very seldom, and
+:    they have a tendency to stay in even after I trust the code, but
+:    you'd be surprised how many *hardware* bugs they've found. 
+: 
+: Note that especially the latter one doesn't matter in user-level code,
+: but the kernel is rather special when it comes to debugging.  If
+: somebody feels safe about it, let him edit out the stuff by hand.. 
+: 
+:               Linus
+
+  It should also be kept in mind that most kernel failures will
+  be in an end case code of some sort.  The fact that I have been 
+  running for a month or two without crashing may indicate my
+  lack of imagination in seeking out new ways to exercise the
+  code.  When I do stumble into the unchecked and broken end case
+  I like to have a chance at having the error detected before
+  true havoc strikes.
+
+--
+Paul Sitz                                                          
+Empros                             Facility Code:  PLY067
+2300 Berkshire Lane North          email:          psitz@empros.com
+Plymouth, MN  55441-3694           screammail:     (612) 553-4516
+
+
+------------------------------
+
+From: jornj@colargol.edb.tih.no (Joern Jensen)
+Subject: VT font-loading on Hercules?
+Date: 21 Mar 1994 05:04:54 GMT
+
+I have a dumb machine with a monochrome Hercules card. And, suprise, setfont
+does not work (illegal ioctl). Does anyone know if it is possible to load
+fonts with this setup?
+(I've used kbd-0.85 with Linux 1.0.2)
+
+Any help appreciated.
+
+//jornj
+
+------------------------------
+
+From: mar@actwin.com (Mark Rosenstein)
+Crossposted-To: comp.os.linux.misc,comp.os.linux.help
+Subject: Re: tcpdump and SLIP
+Date: 19 Mar 1994 19:15:40 -0500
+
+Yes, I've used tcpdump on both ethernet and slip interfaces.  I had to
+modify it a little to get it to display the packets correctly from the
+slip interface.  I'll try to package up the diffs and post them.
+                                        -Mark
+
+------------------------------
+
+From: jfh@rpp386 (John F. Haugh II)
+Subject: Re: VM performance tuning via program restructuring
+Reply-To: jfh@rpp386.cactus.org (John F. Haugh II)
+Date: Sun, 20 Mar 1994 16:10:46 GMT
+
+In article <2mgfut$eq2@senator-bedfellow.MIT.EDU> gkm@tmn.com (Greg McGary) writes:
+>You're right, call counters are simplistic and crude.  PC profiling
+>offers a more accurate model of program behavior.  There are even
+>better models of program behavior in a paging environment: bounded
+>locality intervals and critical working sets are two such models
+>you'll find in the research literature.  Interestingly enough,
+>Breecher found that all of these approaches yield similar results on
+>real systems.  The real problem is that the more accurate the model,
+>the greater the cost of gathering and analyzing profiling data.  For
+>*practical* purposes of program restructuring, I think that profiling
+>strategy should be evaluated on the basis of *profiling cost*.
+>Profiling overhead should be as low and the methodology as convenient
+>and non-intrusive as possible, allowing the profiling to be done under
+>real conditions.  I'm not wedded to the idea of call-counters--if PC
+>profiling can be done at lower cost than call-counting, then it wins.
+
+PC profiling is traditionally done at clock interrupt time.  If the kernel
+has direct addressibility to the user's address space, the cost is a few
+dozen instructions at best at each clock tick.  Unless function calls are
+less frequent that clock ticks (not likely on fast systems), the cost of
+call counters begins to dominate as soon as the average function call
+last less than the clock interrupt frequency.
+-- 
+John F. Haugh II  [ NRA-ILA ] [ Kill Barney ] !'s: ...!cs.utexas.edu!rpp386!jfh
+Ma Bell: (512) 251-2151 [GOP][DoF #17][PADI][ENTJ]   @'s: jfh@rpp386.cactus.org
+ There are three documents that run my life: The King James Bible, the United
+ States Constitution, and the UNIX System V Release 4 Programmer's Reference.
+
+------------------------------
+
+From: butler@cs.tulane.edu (Larry Butler)
+Subject: 1.0 bug report ( maybe )
+Date: 21 Mar 1994 05:42:17 GMT
+
+Mar 20 17:08:38 zebra linux: Internal error: bad swap-device
+Mar 20 17:08:38 zebra linux: Trying to free nonexistent swap-page
+
+There were no apparent bad effects. My system was still running a half hour
+later when I noticed the message. I don't think this could have caused the
+problem, but the cord on my mouse was chewed almost in half by my pet rabbit.
+When I fixed the cord I plugged it back in and it worked ( that's when I
+noticed the message).
+
+I'm using Linux 1.0 and my swap partition is on an extended partition on an
+IDE drive.
+
+Larry
+
+------------------------------
+
+From: gunnarr@ifi.uio.no (Gunnar Rxnning)
+Subject: Re: Linux for Sun4
+Date: 21 Mar 1994 08:27:59 GMT
+
+>>>>> "Dominik" == Dominik Kubla <kubla@goofy.zdv.Uni-Mainz.DE> writes:
+In article <2mi7sg$oe1@bambi.zdv.Uni-Mainz.DE> kubla@goofy.zdv.Uni-Mainz.DE (Dominik Kubla) writes:
+
+    Dominik> But given the difficulties the various m68k ports have, i doubt that you
+
+What difficulties ?
+
+        Gunnar
+--
+Gunnar Rxnning (gunnarr@ifi.uio.no)
+#include <std.disclaimer>          
+
+------------------------------
+
+From: ftlofaro@unlv.edu (Frank Lofaro)
+Subject: Bug in kernel make -k build
+Date: Mon, 21 Mar 94 08:14:09 GMT
+
+I had started a kernel compile with make -k. I am working on many
+source files, and I had to leave the machine unattended and have it do
+as much as it could. To my dismay, it did not compile most of the
+kernel, even though a lot of what it missed it could. I screwed up 2
+files in drivers/char, and it as a result didn't even compile stuff in
+mm! (no dependency there, I think :) ).  I noticed this when after I
+fixed the bad files in drivers/char and remade it sttarted to build
+stuff all over the place (instead of just those files and those
+depending on them.) I got this when look in mm: whitney:/# ls
+/usr/src/linux/mm/*.o ls: /usr/src/linux/mm/*.o: No such file or
+directory
+
+OOPS! BIG OOPS! :)
+
+Luckily, I have a 486DX/33 and 8MB of RAM (plus I ripped out all those 
+pesky REALLY_SLOW_IO defines) so it went pretty quickly. :) It would still be
+nice to have make -k work though.
+
+P.S. I once tried make -j 2 to parallel compile, and the make failed on 
+unix.c or somesuch (things got built in the wrong order, so the make had to 
+be done twice). I wonder if that one is still around.
+
+------------------------------
+
+From: colin@nyx10.cs.du.edu (Colin Plumb)
+Subject: Re: Ext2fs secure rm bug (?) plus ideas for improvement
+Date: Mon, 21 Mar 94 08:16:08 GMT
+
+In article <1994Mar21.011539.9506@unlv.edu>,
+Frank Lofaro <ftlofaro@unlv.edu> wrote:
+>       I was looking at the ext2fs code and found something weird.
+>The secure rm attribute on ext2fs files is only referenced in
+>fs/ext2/truncate.c and not in fs/ext2/namei.c (which contains unlink).
+>The ext2_unlink does not seem to call any trucation functions (as far
+>as I can tell).
+
+It does.  I haven't got the code handy, but essentially every file
+system ever implements delete as truncate to zero length followed by
+freeing the inode.
+
+>       Also, I am thinking of an enhancement for secure rm. Overwrite
+>with all ones, then all zeros, then random junk, then default info
+>(i.e. what would be there if that part of the fs was never used).
+>This would make it hard for data to be recovered by those that have
+>the hardware to read data that was been written over once. Allowing
+>multiple passes would be nice too. Like the wipedisk program of Norton
+>Utilities (TM) does (although it does not ever write random data, if I
+>remember correctly :| )
+
+One pass is sufficient for many purposes.  If anyone wants to really
+get into secure software wipes, please mail me; I did some research and
+can tell you about it.  For general use, use cryptographically strong
+random numbers.
+
+Really, if it matters that much, encrypt the data.  Contact myself or
+Peter Gutmann (pgut1@cs.aukuni.ac.nz) for information on that.  He and
+I designed the algorithms in his Secure FileSystem, SFS, for MS-DOS
+(sfs100.zip on garbo.uwasa.fi:pc/crypt), and I don't know of any better
+ones for speed or cryptographic strength.
+
+In general, if anyone wants to work on encryption-related issues,
+I'd be interested in talking to them.  I'm sorry I don't have the time
+to really hack on things right now, but I can probably help if you
+aren't positive you know what you're doing.
+-- 
+        -Colin
+
+------------------------------
+
+From: Mitchum DSouza <m.dsouza@mrc-apu.cam.ac.uk>
+Subject: Re: Libc 4.5.24 & catclose() in nl_types.h
+Date: 21 Mar 1994 06:41:07 -0500
+Reply-To: m.dsouza@mrc-apu.cam.ac.uk
+
+
+Byron Faber:
+| I'm compiling tcl/tk & tclX
+| 
+| In one of the files I get the following contradictory information:
+| 
+| tclX (some file) does
+| if((catclose(variable) < 0)  . . . . .
+| 
+| yet catclose is defined as extern void in /usr/include/nl_typles.
+| 
+| Could somebody tell me what the 0 does?  I assume its an error,
+| but how is the error handled now? (variable = void?)
+
+Thanx for your report.
+
+In the current implementation catclose() just returns silently if the file
+descriptor (or the mmap()'ed region in our case) is invalid. I didn't see the
+point in returning a value here as the application should be clever enuff to
+determine whether it should need a catclose(). For example one doesn't close a
+normal file descriptor if it failed in the first place ??
+
+I will probably change the header and catclose() routine so it is more
+compatable though.
+
+Thanx
+Mitch
+
+------------------------------
+
+From: roland@cac.washington.edu (The Last Gunslinger)
+Crossposted-To: comp.os.linux.admin,comp.os.linux.help
+Subject: MCC UPGRADE, WHAT SHOULD I DO?
+Date: 21 Mar 1994 09:40:02 GMT
+
+SUMMARY:
+CAN I RELEASE MY "UNOFFICIAL MCC UPGRADE PACKAGE" WITH MCC-PROPRIETARY 
+INSTALL SCRIPTS, OR MUST I WAIT FOR PERMISSION FROM THEM TO DO SO?
+
+discussion:
+
+Well, I've pretty much completed the 'Unofficial MCC Upgrade Package' (as 
+I call it). This package upgrades MCC's original 0.99.p10+ release to 
+linux Kernel version 1.0, gcc-2.5.8, libc4.5.21 and new, updated bins.
+
+I'm ready to release this, but I need to know the sticklers with 
+releasing an upgrade to someone else's distribution without their 
+consent!
+
+I _cannot_ contact the original author, Owen LeBlanc (LeBlanc@mcc.ac.uk)
+as all email correspondences to him bounce. I rally don't know if I 
+should go ahead and release this. 
+
+I feel confident that I can release the *.tgz (gcca.tgz, tcpip.tgz, 
+etc) disks without consent as they use no 'proprietary' scripts/code. 
+But they would be incomplete without an updated bootdisk to install them 
+on virgin systems. The bootdisk retains all of the MCC Interim 
+Release's original install scripts/procedures. 
+
+So what I guess I'm asking is for a discussing on what I should do from 
+the public, since MCC seems to be out of communication. 
+
+CAN I RELEASE MY "UNOFFICIAL MCC UPGRADE PACKAGE" WITH MCC-PROPRIETARY 
+INSTALL SCRIPTS, OR MUST I WAIT FOR PERMISSION FROM THEM TO DO SO?
+
+email and/or public discussion is welcome on this topic. 
+
+thanks, 
+
+Liem Bahneman
+roland@cac.washington.edu
+-- 
+=======[roland@cac.washington.edu]=====[The Last Gunslinger]==================
+Outside of a dog, computers are a man's best  | UCS Consulting
+friend, inside a dog it's too dark to type.   | UW Ice Hockey 
+http://topquark.cecer.army.mil/~roland/       | Linux/WWW/tcl/tk/LOTRmush
+
+------------------------------
+
+From: James.Cloos@Rahul.NET (James H. Cloos Jr.)
+Subject: Re: blank_screen patch for Laptops (Questions)
+Date: Mon, 21 Mar 1994 11:31:39 GMT
+
+>>>>> "Orest" == Orest Zborowski <orestz@eskimo.com> writes:
+
+Orest> In the VT code there is a similar arrangement for handling VT
+Orest> switches.  You may want to use something like that for
+Orest> registering a system-wide blank server. This server can then
+Orest> accept requests from other processes that want to hang on to
+Orest> the blanking code. This makes for a cleaner interface between
+Orest> the kernel and the server - only a single process can gain
+Orest> control (and it can be written to be robust). Hardware-specific
+Orest> blankers can coexist with fun blankers, if there is some
+Orest> registration of blanking "type".
+
+Yes, that was the idea.  
+
+I expect to code it so that, rather than passing the pid as an
+argument of the ioctl call, current->pid will be used.  
+
+Now, if user_blank_pid is not 0 when the ioclt is called, there are
+two options: the ioclt will be denied if the effective uid is not 0,
+so we can just assume that the admin wants to start a new daemon, and
+signal the old one with SIGHUP or SIGTERM, or we can block--unless the
+old pid is no longer running.
+
+I do like the idea of a daemon that is designed to be a buffer between
+the kernel and the screen blankers, rather than a screen blanker
+itself.  I hadn't thought of that, but the kernel mods as I
+envision(ed) them certainly support such a model.  
+
+I'll finish a first take at the ioctl this week, and put it up for
+comments.  I'd still like to see some feedback on which signals to
+use, &c.
+
+-JimC
+
+--
+James H. Cloos, Jr.     include <std/qotd>
+James.Cloos@Rahul.NET   include <std/disclaimers.h>
+(cloos@io.com)          Snail:  POBox 1111, Amherst, NY 14226-1111
+Finger for pgp pub key. Phone:  +1 716 673-1250 (machine now; fax eventually)
+
+------------------------------
+
+From: toman@darkwing.uoregon.edu (Joseph Toman)
+Subject: <stddef.h> in libc-4.5.21?
+Date: 20 Mar 94 16:56:05 GMT
+
+Hi, I am trying to compile various source code packages for "Lee-noocks" :)
+and I don't seem to have the ANSI C standard include file <stddef.h>.  It is
+neither in Slackware 1.1.2 nor in libc-4.5.21 on tsx-11.  Where can I find it?
+
+Thanks, Johannes
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

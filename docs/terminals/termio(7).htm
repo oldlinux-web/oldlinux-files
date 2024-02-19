@@ -1,0 +1,1263 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN">
+<!-- saved from url=(0050)http://docsrv.caldera.com/cgi-bin/man/man?termio+7 -->
+<HTML><HEAD><TITLE>termio(7)</TITLE>
+<META content=text/html;charset=iso-8859-1 http-equiv=Content-Type>
+<SCRIPT language=JavaScript>
+<!-- comment for old browsers
+var Contents = "/man/html.7/CONTENTS.html"
+var PrintSequence = "/man/html.7/CONTENTS.html"
+if ( parent.RightHistory != null ) parent.RightHistory(document.URL)
+// end of comment -->
+</SCRIPT>
+
+<META content="MSHTML 5.00.3502.5390" name=GENERATOR></HEAD>
+<BODY>
+<H1>termio(7)</H1>
+<HR>
+<B>termio -- <!--Meta NM "termio"-->general terminal interface </B><!--Meta DN "general terminal interface"-->
+<P>
+<H2>Synopsis</H2><PRE>#include &lt;termio.h&gt;
+<P>
+ioctl(int <B><I>fildes</I></B>, int <B><I>request</I></B>, struct termio *<B><I>arg</I></B>);
+ioctl(int <B><I>fildes</I></B>, int <B><I>request</I></B>, int <B><I>arg</I></B>);
+<P>
+#include &lt;termios.h&gt;
+<P>
+ioctl(int <B><I>fildes</I></B>, int <B><I>request</I></B>, struct termios *<B><I>arg</I></B>);
+</P></PRE>
+<H2>Description</H2>System V supports a general interface for asynchronous 
+communications ports that is hardware-independent. The user interface to this 
+functionality is via function calls (the preferred interface) described in <A 
+href="http://docsrv.caldera.com/cgi-bin/man/man?termios+3C"><B>termios</B>(3C)</A> 
+or <B>ioctl</B> commands described in this section. This section also discusses 
+the common features of the terminal subsystem which are relevant with both user 
+interfaces. 
+<P>When a terminal file is opened, it normally causes the process to wait until 
+a connection is established. In practice, users' programs seldom open terminal 
+files; they are opened by the system and become a user's standard input, output, 
+and error files. The very first terminal file opened by the session leader, 
+which is not already associated with a session, becomes the controlling terminal 
+for that session. The controlling terminal plays a special role in handling quit 
+and interrupt signals, as discussed below. The controlling terminal is inherited 
+by a child process during a <A 
+href="http://docsrv.caldera.com/cgi-bin/man/man?fork+2"><B>fork</B>(2)</A>. A 
+process can break this association by changing its session using <A 
+href="http://docsrv.caldera.com/cgi-bin/man/man?setsid+2"><B>setsid</B>(2)</A>. 
+<P>A terminal associated with one of these files ordinarily operates in 
+full-duplex mode. Characters may be typed at any time, even while output is 
+occurring, and are only lost when the character input buffers of the system 
+become completely full, which is rare (for example, if the number of characters 
+in the line discipline buffer exceeds <B>MAX_CANON</B> and <B>IMAXBEL</B> (see 
+below) is not set), or when the user has accumulated <B>MAX_INPUT</B> number of 
+input characters that have not yet been read by some program. When the input 
+limit is reached, all the characters saved in the buffer up to that point are 
+thrown away without notice. 
+<H3>Session management (Job control)</H3>A control terminal will distinguish one 
+of the process groups in the session associated with it to be the foreground 
+process group. All other process groups in the session are designated as 
+background process groups. This foreground process group plays a special role in 
+handling signal-generating input characters, as discussed below. By default, 
+when a controlling terminal is allocated, the controlling process's process 
+group is assigned as foreground process group. 
+<P>Background process groups in the controlling process's session are subject to 
+a job control line discipline when they attempt to access their controlling 
+terminal. Process groups can be sent signals that will cause them to stop, 
+unless they have made other arrangements. An exception is made for members of 
+orphaned process groups. These are process groups which do not have a member 
+with a parent in another process group that is in the same session and therefore 
+shares the same controlling terminal. When a member's orphaned process group 
+attempts to access its controlling terminal, errors will be returned, since 
+there is no process to continue it if it should stop. 
+<P>If a member of a background process group attempts to read its controlling 
+terminal, its process group will be sent a <B>SIGTTIN</B> signal, which will 
+normally cause the members of that process group to stop. If, however, the 
+process is ignoring or holding <B>SIGTTIN</B>, or is a member of an orphaned 
+process group, the read will fail with <B>errno</B> set to <B>EIO</B>, and no 
+signal will be sent. 
+<P>If a member of a background process group attempts to write its controlling 
+terminal and the <B>TOSTOP</B> bit is set in the <B><I>c_lflag</I></B> field, 
+its process group will be sent a <B>SIGTTOU</B> signal, which will normally 
+cause the members of that process group to stop. If, however, the process is 
+ignoring or holding <B>SIGTTOU</B>, the write will succeed. If the process is 
+not ignoring or holding <B>SIGTTOU</B> and is a member of an orphaned process 
+group, the write will fail with <B>errno</B> set to <B>EIO</B>, and no signal 
+will be sent. 
+<P>If <B>TOSTOP</B> is set and a member of a background process group attempts 
+to <B>ioctl</B> its controlling terminal, and that <B>ioctl</B> will modify 
+terminal parameters (for example, <B>TCSETA</B>, <B>TCSETAW</B>, <B>TCSETAF</B>, 
+or <B>TIOCSPGRP</B>), its process group will be sent a <B>SIGTTOU</B> signal, 
+which will normally cause the members of that process group to stop. If, 
+however, the process is ignoring or holding <B>SIGTTOU</B>, the ioctl will 
+succeed. If the process is not ignoring or holding <B>SIGTTOU</B> and is a 
+member of an orphaned process group, the write will fail with <B>errno</B> set 
+to <B>EIO</B>, and no signal will be sent. 
+<H3>Canonical mode input processing</H3>Normally, terminal input is processed in 
+units of lines. A line is delimited by a newline (ASCII <B>LF</B>) character, an 
+end-of-file (ASCII) <B>EOT</B> character, or an end-of-line character. This 
+means that a program attempting to read will be suspended until an entire line 
+has been typed. Also, no matter how many characters are requested in the read 
+call, at most one line will be returned. It is not necessary, however, to read a 
+whole line at once; any number of characters may be requested in a read, even 
+one, without losing information. 
+<P>During input, erase and kill processing is normally done. The <B>ERASE</B> 
+character (by default, the character <B>BS</B>) erases the last character typed. 
+The <B>WERASE</B> character (&lt;Ctrl&gt;<B>W</B>) erases the last ``word'' 
+typed in the current input line (but not any preceding spaces or tabs). A 
+``word'' is defined as a sequence of non-blank characters, with tabs counted as 
+blanks. Neither <B>ERASE</B> nor <B>WERASE</B> will erase beyond the beginning 
+of the line. The <B>KILL</B> character (by default, the character <B>NAK</B>) 
+kills (deletes) the entire input line, and optionally outputs a newline 
+character. All these characters operate on a key stroke basis, independent of 
+any backspacing or tabbing that may have been done. The <B>REPRINT</B> character 
+(&lt;Ctrl&gt;<B>R</B>) prints a newline followed by all characters that have not 
+been read. Reprinting also occurs automatically if characters that would 
+normally be erased from the screen are fouled by program output. The characters 
+are reprinted as if they were being echoed; consequencely, if <B>ECHO</B> is not 
+set, they are not printed. 
+<P>The <B>ERASE</B> and <B>KILL</B> characters may be entered literally by 
+preceding them with the escape character (``\''). In this case, the escape 
+character is not read. The erase and kill characters may be changed. 
+<H3>Non-canonical mode input processing</H3>In non-canonical mode input 
+processing, input characters are not assembled into lines, and erase and kill 
+processing does not occur. The <B>MIN</B> and <B>TIME</B> values are used to 
+determine how to process the characters received. 
+<P><B>MIN</B> represents the minimum number of characters that should be 
+received when the read is satisfied (that is, when the characters are returned 
+to the user). <B>TIME</B> is a timer of 0.10-second granularity that is used to 
+timeout bursty and short-term data transmissions. The values for <B>MIN</B> and 
+<B>TIME</B> should be set by the programmer in the <B>termios</B> or 
+<B>termio</B> structure. The four possible values for <B>MIN</B> and <B>TIME</B> 
+and their interactions are described below. 
+<DL compact>
+  <P>
+  <DT>Case A: <B>MIN</B> &gt; 0, <B>TIME</B> &gt; 0
+  <DD>In this case, <B>TIME</B> serves as an intercharacter timer and is 
+  activated after the first character is received. Since it is an intercharacter 
+  timer, it is reset after a character is received. The interaction between 
+  <B>MIN</B> and <B>TIME</B> is as follows: as soon as one character is 
+  received, the intercharacter timer is started. If <B>MIN</B> characters are 
+  received before the intercharacter timer expires (note that the timer is reset 
+  upon receipt of each character), the read is satisfied. If the timer expires 
+  before <B>MIN</B> characters are received, the characters received to that 
+  point are returned to the user. Note that if <B>TIME</B> expires, at least one 
+  character will be returned because the timer would not have been enabled 
+  unless a character was received. In this case (<B>MIN</B> &gt; 0, <B>TIME</B> 
+  &gt; 0), the read sleeps until the <B>MIN</B> and <B>TIME</B> mechanisms are 
+  activated by the receipt of the first character. If the number of characters 
+  read is less than the number of characters available, the timer is not 
+  reactivated and the subsequent read is satisfied immediately. 
+  <P></P>
+  <DT>Case B: <B>MIN</B> &gt; 0, <B>TIME</B> = 0
+  <DD>In this case, since the value of <B>TIME</B> is zero, the timer plays no 
+  role and only <B>MIN</B> is significant. A pending read is not satisfied until 
+  <B>MIN</B> characters are received (the pending read sleeps until <B>MIN</B> 
+  characters are received). A program that uses this case to read record based 
+  terminal <B>I/O</B> may block indefinitely in the read operation. 
+  <P></P>
+  <DT>Case C: <B>MIN</B> = 0, <B>TIME</B> &gt; 0
+  <DD>In this case, since <B>MIN</B> = 0, <B>TIME</B> no longer represents an 
+  intercharacter timer: it now serves as a read timer that is activated as soon 
+  as a <B>read</B> is done. A read is satisfied as soon as a single character is 
+  received or the read timer expires. Note that, in this case, if the timer 
+  expires, no character is returned. If the timer does not expire, the only way 
+  the read can be satisfied is if a character is received. In this case, the 
+  read will not block indefinitely waiting for a character; if no character is 
+  received within <B>TIME</B>*.10 seconds after the read is initiated, the read 
+  returns with zero characters. 
+  <P></P>
+  <DT>Case D: <B>MIN</B> = 0, <B>TIME</B> = 0
+  <DD>In this case, return is immediate. The minimum of either the number of 
+  characters requested or the number of characters currently available is 
+  returned without waiting for more characters to be input. </DD></DL>
+<H3>Comparison of the different cases of MIN, TIME interaction</H3>Some points 
+to note about <B>MIN</B> and <B>TIME</B>: 
+<UL>
+  <P>
+  <LI>In the following explanations, note that the interactions of <B>MIN</B> 
+  and <B>TIME</B> are not symmetric. For example, when <B>MIN</B> &gt; 0 and 
+  <B>TIME</B> = 0, <B>TIME</B> has no effect. However, in the opposite case, 
+  where <B>MIN</B> = 0 and <B>TIME</B> &gt; 0, both <B>MIN</B> and <B>TIME</B> 
+  play a role in that <B>MIN</B> is satisfied with the receipt of a single 
+  character. 
+  <P></P>
+  <LI>Also note that in case A (<B>MIN</B> &gt; 0, <B>TIME</B> &gt; 0), 
+  <B>TIME</B> represents an intercharacter timer, whereas in case C (<B>TIME</B> 
+  = 0, <B>TIME</B> &gt; 0), <B>TIME</B> represents a read timer. </LI></UL>These 
+two points highlight the dual purpose of the <B>MIN/TIME</B> feature. Cases A 
+and B, where <B>MIN</B> &gt; 0, exist to handle burst mode activity (for 
+example, file transfer programs), where a program would like to process at least 
+<B>MIN</B> characters at a time. In case A, the intercharacter timer is 
+activated by a user as a safety measure; in case B, the timer is turned off. 
+<P>Cases C and D exist to handle single character, timed transfers. These cases 
+are readily adaptable to screen-based applications that need to know if a 
+character is present in the input queue before refreshing the screen. In case C, 
+the read is timed, whereas in case D, it is not. 
+<P>Another important note is that <B>MIN</B> is always just a minimum. It does 
+not denote a record length. For example, if a program does a read of 20 bytes, 
+<B>MIN</B> is 10, and 25 characters are present, then 20 characters will be 
+returned to the user. 
+<H3>Writing characters</H3>When one or more characters are written, they are 
+transmitted to the terminal as soon as previously written characters have 
+finished typing. Input characters are echoed as they are typed if echoing has 
+been enabled. If a process produces characters more rapidly than they can be 
+typed, it will be suspended when its output queue exceeds some limit. When the 
+queue is drained down to some threshold, the program is resumed. 
+<H3>Special characters</H3>Certain characters have special functions on input. 
+These functions and their default character values are summarized as follows: 
+<DL compact>
+  <P>
+  <DT><B>INTR</B>
+  <DD>(Rubout or ASCII &lt;Del&gt;) generates a <B>SIGINT</B> signal. 
+  <B>SIGINT</B> is sent to all frequent processes associated with the 
+  controlling terminal. Normally, each such process is forced to terminate, but 
+  arrangements may be made either to ignore the signal or to receive a trap to 
+  an agreed upon location. (See <A 
+  href="http://docsrv.caldera.com/cgi-bin/man/man?signal+2"><B>signal</B>(2)</A>). 
+
+  <P></P>
+  <DT><B>QUIT</B>
+  <DD>(<B>CTRL</B>-| or ASCII <B>FS</B>) generates a <B>SIGQUIT</B> signal. Its 
+  treatment is identical to the interrupt signal except that, unless a receiving 
+  process has made other arrangements, it will not only be terminated but a core 
+  image file (called <I>core</I>) will be created in the current working 
+  directory. 
+  <P></P>
+  <DT><B>ERASE</B>
+  <DD>(&lt;Ctrl&gt;<B>H</B>) erases the preceding character. It does not erase 
+  beyond the start of a line, as delimited by a <B>NL</B>, <B>EOF</B>, 
+  <B>EOL</B>, or <B>EOL2</B> character. 
+  <P></P>
+  <DT><B>WERASE</B>
+  <DD>(&lt;Ctrl&gt;<B>W</B> or ASCII <B>ETX</B>) erases the preceding ``word''. 
+  It does not erase beyond the start of a line, as delimited by a <B>NL</B>, 
+  <B>EOF</B>, <B>EOL</B>, or <B>EOL2</B> character. 
+  <P></P>
+  <DT><B>KILL</B>
+  <DD>(&lt;Ctrl&gt;<B>U</B>) deletes the entire line, as delimited by a 
+  <B>NL</B>, <B>EOF</B>, <B>EOL</B>, or <B>EOL2</B> character. 
+  <P></P>
+  <DT><B>REPRINT</B>
+  <DD>(&lt;Ctrl&gt;<B>R</B> or ASCII <B>DC2</B>) reprints all characters, 
+  preceded by a newline, that have not been read. 
+  <P></P>
+  <DT><B>EOF</B>
+  <DD>(&lt;Ctrl&gt;<B>D</B> or ASCII <B>EOT</B>) may be used to generate an 
+  end-of-file from a terminal. When received, all the characters waiting to be 
+  read are immediately passed to the program, without waiting for a newline, and 
+  the <B>EOF</B> is discarded. Thus, if no characters are waiting (that is, the 
+  <B>EOF</B> occurred at the beginning of a line) zero characters are passed 
+  back, which is the standard end-of-file indication. The <B>EOF</B> character 
+  is not echoed unless it is escaped or <B>ECHOCTL</B> is set. Because 
+  <B>EOT</B> is the default <B>EOF</B> character, this prevents terminals that 
+  respond to <B>EOT</B> from hanging up. 
+  <P></P>
+  <DT><B>NL</B>
+  <DD>(ASCII <B>LF</B>) is the normal line delimiter. It cannot be changed or 
+  escaped. 
+  <P></P>
+  <DT><B>EOL</B>
+  <DD>is an additional line delimiter, like <B>NL</B>. It is not normally used. 
+  <P></P>
+  <DT><B>EOL2</B>
+  <DD>is another line delimiter. 
+  <P></P>
+  <DT><B>SWTCH</B>
+  <DD>is used only when <B>shl</B> layers is invoked. 
+  <P></P>
+  <DT><B>SUSP</B>
+  <DD>(&lt;Ctrl&gt;<B>Z</B> or ASCII <B>SUB</B>) generates a <B>SIGTSTP</B> 
+  signal. <B>SIGTSTP</B> stops all processes in the foreground process group for 
+  that terminal. 
+  <P></P>
+  <DT><B>DSUSP</B>
+  <DD>(&lt;Ctrl&gt;<B>Y</B> or ASCII <B>EM</B> It generates a <B>SIGTSTP</B> 
+  signal as <B>SUSP</B> does, but the signal is sent when a process in the 
+  foreground process group attempts to read the <B>DSUSP</B> character, rather 
+  than when it is typed. 
+  <P></P>
+  <DT><B>STOP</B>
+  <DD>(&lt;Ctrl&gt;<B>S</B> or ASCII <B>DC3</B>) can be used to suspend output 
+  temporarily. It is useful with CRT terminals to prevent output from 
+  disappearing before it can be read. While output is suspended, <B>STOP</B> 
+  characters are ignored and not read. 
+  <P></P>
+  <DT><B>START</B>
+  <DD>(&lt;Ctrl&gt;<B>Q</B> or ASCII <B>DC1</B>) is used to resume output. 
+  Output has been suspended by a <B>STOP</B> character. While output is not 
+  suspended, <B>START</B> characters are ignored and not read. 
+  <P></P>
+  <DT><B>DISCARD</B>
+  <DD>(&lt;Ctrl&gt;<B>O</B> or ASCII <B>SI</B>) causes subsequent output to be 
+  discarded. Output is discarded until another <B>DISCARD</B> character is 
+  typed, more input arrives, or the condition is cleared by a program. 
+  <P></P>
+  <DT><B>LNEXT</B>
+  <DD>(&lt;Ctrl&gt;<B>V</B> or ASCII <B>SYN</B>) causes the special meaning of 
+  the next character to be ignored. This works for all the special characters 
+  mentioned above. It allows characters to be input that would otherwise be 
+  interpreted by the system (for example, <B>KILL</B>, <B>QUIT</B>). </DD></DL>
+<P>The character values for <B>INTR</B>, <B>QUIT</B>, <B>ERASE</B>, 
+<B>WERASE</B>, <B>KILL</B>, <B>REPRINT</B>, <B>EOF</B>, <B>EOL</B>, <B>EOL2</B>, 
+<B>SWTCH</B>, <B>SUSP</B>, <B>DSUSP</B>, <B>STOP</B>, <B>START</B>, 
+<B>DISCARD</B>, and <B>LNEXT</B> may be changed to suit individual tastes. If 
+the value of a special control character is <B>_POSIX_VDISABLE</B>, the function 
+of that special control character is disabled. The <B>ERASE</B>, <B>KILL</B>, 
+and <B>EOF</B> characters may be escaped by a preceding ``\'' character, in 
+which case no special function is done. Any of the special characters may be 
+preceded by the <B>LNEXT</B> character, in which case no special function is 
+done. 
+<H3>Modem disconnect</H3>When a modem disconnect is detected, a <B>SIGHUP</B> 
+signal is sent to the terminal's controlling process. Unless other arrangements 
+have been made, these signals cause the process to terminate. If <B>SIGHUP</B> 
+is ignored or caught, any subsequent read returns with an end-of-file indication 
+until the terminal is closed. 
+<P>Processes in background process groups that attempt to access the controlling 
+terminal after modem disconnect while the terminal is still allocated to the 
+session will receive appropriate <B>SIGTTOU</B> and <B>SIGTTIN</B> signals. 
+Unless other arrangements have been made, this signal causes the processes to 
+stop. 
+<P>The controlling terminal will remain in this state until it is reinitialized 
+with a successful open by the controlling process, or deallocated by the 
+controlling process. 
+<H3>Terminal parameters</H3>The parameters that control the behavior of devices 
+and modules providing the <B>termios</B> interface are specified by the 
+<B>termios</B> structure defined by <I>termios.h</I>. Several <A 
+href="http://docsrv.caldera.com/cgi-bin/man/man?ioctl+2"><B>ioctl</B>(2)</A> 
+system calls that fetch or change these parameters use this structure that 
+contains the following members: <PRE>tcflag_t	c_iflag;           /* input modes */
+tcflag_t	c_oflag;           /* output modes */
+tcflag_t	c_cflag;           /* control modes */
+tcflag_t	c_lflag;           /* local modes */
+cc_t		c_cc[NCCS];        /* control chars */
+</PRE>The special control characters are defined by the array <CODE>c_cc</CODE>. 
+The symbolic name <B>NCCS</B> is the size of the control character array and is 
+also defined by <I>termios.h</I>. The relative positions, subscript names, and 
+typical default values for each function are as follows: <NOSCRIPT><BR>[If this 
+table is unreadable, a preformatted table follows]<BR></NOSCRIPT>
+<P>
+<TABLE border=1>
+  <TBODY>
+  <TR vAlign=top>
+    <TH align=left>Position </TH>
+    <TH align=left>Name </TH>
+    <TH align=left>Default value </TH></TR>
+  <TR vAlign=top>
+    <TD>0 </TD>
+    <TD><B>VINTR</B> </TD>
+    <TD><B>DEL</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>1 </TD>
+    <TD><B>VQUIT</B> </TD>
+    <TD><B>FS</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>2 </TD>
+    <TD><B>VERASE</B> </TD>
+    <TD><B>BS</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>3 </TD>
+    <TD><B>VKILL</B> </TD>
+    <TD><B>NAK</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>4 </TD>
+    <TD><B>VEOF</B> </TD>
+    <TD><B>EOT</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>5 </TD>
+    <TD><B>VEOL</B> </TD>
+    <TD><B>NUL</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>6 </TD>
+    <TD><B>VEOL2</B> </TD>
+    <TD><B>NUL</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>7 </TD>
+    <TD><B>VSWTCH</B> </TD>
+    <TD><B>NUL</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>8 </TD>
+    <TD><B>VSTRT</B> </TD>
+    <TD><B>DC1</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>9 </TD>
+    <TD><B>VSTOP</B> </TD>
+    <TD><B>DC3</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>10 </TD>
+    <TD><B>VSUSP</B> </TD>
+    <TD><B>SUB</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>11 </TD>
+    <TD><B>VDSUSP</B> </TD>
+    <TD><B>EM</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>12 </TD>
+    <TD><B>VREPRINT</B> </TD>
+    <TD><B>DC2</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>13 </TD>
+    <TD><B>VDISCRD</B> </TD>
+    <TD><B>SI</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>14 </TD>
+    <TD><B>VWERASE</B> </TD>
+    <TD><B>ETB</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>15 </TD>
+    <TD><B>VLNEXT</B> </TD>
+    <TD><B>SYN</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>16-19 </TD>
+    <TD>reserved </TD>
+    <TD>&nbsp; </TD></TR></TBODY></TABLE><NOSCRIPT><PRE> -----------------------------------------
+| Position |   Name     |   Default value|
+|----------|------------|----------------|
+| 0        |   <B>VINTR</B>    |   <B>DEL</B>          |
+|----------|------------|----------------|
+| 1        |   <B>VQUIT</B>    |   <B>FS</B>           |
+|----------|------------|----------------|
+| 2        |   <B>VERASE</B>   |   <B>BS</B>           |
+|----------|------------|----------------|
+| 3        |   <B>VKILL</B>    |   <B>NAK</B>          |
+|----------|------------|----------------|
+| 4        |   <B>VEOF</B>     |   <B>EOT</B>          |
+|----------|------------|----------------|
+| 5        |   <B>VEOL</B>     |   <B>NUL</B>          |
+|----------|------------|----------------|
+| 6        |   <B>VEOL2</B>    |   <B>NUL</B>          |
+|----------|------------|----------------|
+| 7        |   <B>VSWTCH</B>   |   <B>NUL</B>          |
+|----------|------------|----------------|
+| 8        |   <B>VSTRT</B>    |   <B>DC1</B>          |
+|----------|------------|----------------|
+| 9        |   <B>VSTOP</B>    |   <B>DC3</B>          |
+|----------|------------|----------------|
+| 10       |   <B>VSUSP</B>    |   <B>SUB</B>          |
+|----------|------------|----------------|
+| 11       |   <B>VDSUSP</B>   |   <B>EM</B>           |
+|----------|------------|----------------|
+| 12       |   <B>VREPRINT</B> |   <B>DC2</B>          |
+|----------|------------|----------------|
+| 13       |   <B>VDISCRD</B>  |   <B>SI</B>           |
+|----------|------------|----------------|
+| 14       |   <B>VWERASE</B>  |   <B>ETB</B>          |
+|----------|------------|----------------|
+| 15       |   <B>VLNEXT</B>   |   <B>SYN</B>          |
+|----------|------------|----------------|
+| 16-19    |   reserved |                |
+|----------|------------|----------------|
+</PRE></NOSCRIPT>
+<P>For the non-canonical mode the positions of <B>VEOF</B> and <B>VEOL</B> are 
+shared by <B>VMIN</B> and <B>VTIME</B>: <NOSCRIPT><BR>[If this table is 
+unreadable, a preformatted table follows]<BR></NOSCRIPT>
+<P>
+<TABLE border=1>
+  <TBODY>
+  <TR vAlign=top>
+    <TH align=left>Position </TH>
+    <TH align=left>Name </TH>
+    <TH align=left>Default value </TH></TR>
+  <TR vAlign=top>
+    <TD>4 </TD>
+    <TD><B>VMIN</B> </TD>
+    <TD>used to set the value of <B>MIN</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>5 </TD>
+    <TD><B>VTIME</B> </TD>
+    <TD>used to set the value of <B>TIME</B> </TD></TR></TBODY></TABLE><NOSCRIPT><PRE> ------------------------------------------------------
+| Position |   Name  |   Default value                |
+|----------|---------|--------------------------------|
+| 4        |   <B>VMIN</B>  |   used to set the value of <B>MIN</B> |
+|----------|---------|--------------------------------|
+| 5        |   <B>VTIME</B> |   used to set the value of <B>TIME</B>|
+|----------|---------|--------------------------------|
+</PRE></NOSCRIPT>
+<H3>Input modes</H3>The <B><I>c_iflag</I></B> field describes the basic terminal 
+input control: 
+<DL compact>
+  <P>
+  <DT><B>IGNBRK</B>
+  <DD>Ignore break condition. 
+  <P></P>
+  <DT><B>BRKINT</B>
+  <DD>Signal interrupt on break. 
+  <P></P>
+  <DT><B>IGNPAR</B>
+  <DD>Ignore characters with parity errors. 
+  <P></P>
+  <DT><B>PARMRK</B>
+  <DD>Mark parity errors. 
+  <P></P>
+  <DT><B>INPCK</B>
+  <DD>Enable input parity check. 
+  <P></P>
+  <DT><B>ISTRIP</B>
+  <DD>Strip character. 
+  <P></P>
+  <DT><B>INLCR</B>
+  <DD>Map <B>NL</B> to <B>CR</B> on input. 
+  <P></P>
+  <DT><B>IGNCR</B>
+  <DD>Ignore <B>CR</B>. 
+  <P></P>
+  <DT><B>ICRNL</B>
+  <DD>Map <B>CR</B> to <B>NL</B> on input. 
+  <P></P>
+  <DT><B>IUCLC</B>
+  <DD>Map upper-case to lower-case on input. 
+  <P></P>
+  <DT><B>IXON</B>
+  <DD>Enable start/stop output control. 
+  <P></P>
+  <DT><B>IXANY</B>
+  <DD>Enable any character to restart output. 
+  <P></P>
+  <DT><B>IXOFF</B>
+  <DD>Enable start/stop input control. 
+  <P></P>
+  <DT><B>IMAXBEL</B>
+  <DD>Echo <B>BEL</B> on input line too long. </DD></DL>If <B>IGNBRK</B> is set, a 
+break condition (a character framing error with data all zeros) detected on 
+input is ignored, that is, not put on the input queue and therefore not read by 
+any process. If <B>IGNBRK</B> is not set and <B>BRKINT</B> is set, the break 
+condition shall flush the input and output queues and if the terminal is the 
+controlling terminal of a foreground process group, the break condition 
+generates a single <B>SIGINT</B> signal to that foreground process group. If 
+neither <B>IGNBRK</B> nor <B>BRKINT</B> is set, a break condition is read as a 
+single ASCII <B>NULL</B> character (``\0''), or if <B>PARMRK</B> is set, as 
+``\377'', ``\0'', ``\0''. 
+<P>If <B>IGNPAR</B> is set, a byte with framing or parity errors (other than 
+break) is ignored. 
+<P>If <B>PARMRK</B> is set, and <B>IGNPAR</B> is not set, a byte with a framing 
+or parity error (other than break) is given to the application as the 
+three-character sequence: ``\377'', ``\0'', <B><I>X</I></B>, where 
+<B><I>X</I></B> is the data of the byte received in error. To avoid ambiguity in 
+this case, if <B>ISTRIP</B> is not set, a valid character of ``\377'' is given 
+to the application as ``\377'', ``\377''. If neither <B>IGNPAR</B> nor 
+<B>PARMRK</B> is set, a framing or parity error (other than break) is given to 
+the application as a single ASCII <B>NULL</B> character (``\0''). 
+<P>If <B>INPCK</B> is set, input parity checking is enabled. If <B>INPCK</B> is 
+not set, input parity checking is disabled. This allows output parity generation 
+without input parity errors. Note that whether input parity checking is enabled 
+or disabled is independent of whether parity detection is enabled or disabled. 
+If parity detection is enabled but input parity checking is disabled, the 
+hardware to which the terminal is connected will recognize the parity bit, but 
+the terminal special file will not check whether this is set correctly or not. 
+<P>If <B>ISTRIP</B> is set, valid input characters are first stripped to seven 
+bits, otherwise all eight bits are processed. 
+<P>If <B>INLCR</B> is set, a received <B>NL</B> character is translated into a 
+<B>CR</B> character. If <B>IGNCR</B> is set, a received <B>CR</B> character is 
+ignored (not read). Otherwise, if <B>ICRNL</B> is set, a received <B>CR</B> 
+character is translated into a <B>NL</B> character. 
+<P>If <B>IUCLC</B> is set, a received upper case, alphabetic character is 
+translated into the corresponding lower case character. 
+<P>If <B>IXON</B> is set, start/stop output control is enabled. A received 
+<B>STOP</B> character suspends output and a received <B>START</B> character 
+restarts output. The <B>STOP</B> and <B>START</B> characters will not be read, 
+but will merely perform flow control functions. If <B>IXANY</B> is set, any 
+input character restarts output that has been suspended. 
+<P>If <B>IXOFF</B> is set, the system transmits a <B>STOP</B> character when the 
+input queue is nearly full, and a <B>START</B> character when enough input has 
+been read so that the input queue is nearly empty again. 
+<P>If <B>IMAXBEL</B> is set, the ASCII <B>BEL</B> character is echoed if the 
+input stream overflows. Further input is not stored, but any input already 
+present in the input stream is not disturbed. If <B>IMAXBEL</B> is not set, no 
+<B>BEL</B> character is echoed, and all input present in the input queue is 
+discarded if the input stream overflows. 
+<P>The initial input control value is <B>BRKINT</B>, <B>ICRNL</B>, <B>IXON</B>, 
+<B>ISTRIP</B>. 
+<H3>Output modes</H3>The <B><I>c_oflag</I></B> field specifies the system 
+treatment of output: 
+<DL compact>
+  <P>
+  <DT><B>OPOST</B>
+  <DD>Post-process output. 
+  <P></P>
+  <DT><B>OLCUC</B>
+  <DD>Map lower case to upper on output. 
+  <P></P>
+  <DT><B>ONLCR</B>
+  <DD>Map <B>NL</B> to <B>CR-NL</B> on output. 
+  <P></P>
+  <DT><B>OCRNL</B>
+  <DD>Map <B>CR</B> to <B>NL</B> on output. 
+  <P></P>
+  <DT><B>ONOCR</B>
+  <DD>No <B>CR</B> output at column 0. 
+  <P></P>
+  <DT><B>ONLRET</B>
+  <DD><B>NL</B> performs <B>CR</B> function. 
+  <P></P>
+  <DT><B>OFILL</B>
+  <DD>Use fill characters for delay. 
+  <P></P>
+  <DT><B>OFDEL</B>
+  <DD>Fill is <B>DEL</B>, else <B>NULL</B>. 
+  <P></P>
+  <DT><B>NLDLY</B>
+  <DD>Select newline delays: 
+  <UL>
+    <P>
+    <LI><B>NL0</B> 
+    <P></P>
+    <LI><B>NL1</B> </LI></UL>
+  <P></P>
+  <DT><B>CRDLY</B>
+  <DD>Select carriage-return delays: 
+  <UL>
+    <P>
+    <LI><B>CR0</B> 
+    <P></P>
+    <LI><B>CR1</B> 
+    <P></P>
+    <LI><B>CR2</B> 
+    <P></P>
+    <LI><B>CR3</B> </LI></UL>
+  <P></P>
+  <DT><B>TABDLY</B>
+  <DD>Select horizontal tab delays: 
+  <UL>
+    <P>
+    <LI><B>TAB0</B> </LI></UL>or tab expansion: 
+  <UL>
+    <P>
+    <LI><B>TAB1</B> 
+    <P></P>
+    <LI><B>TAB2</B> 
+    <P></P>
+    <LI><B>TAB3</B> Expand tabs to spaces. </LI></UL>
+  <P></P>
+  <DT><B>XTABS</B>
+  <DD>Expand tabs to spaces. 
+  <P></P>
+  <DT><B>BSDLY</B>
+  <DD>Select backspace delays: 
+  <UL>
+    <P>
+    <LI><B>BS0</B> 
+    <P></P>
+    <LI><B>BS1</B> </LI></UL>
+  <P></P>
+  <DT><B>VTDLY</B>
+  <DD>Select vertical tab delays: 
+  <UL>
+    <P>
+    <LI><B>VT0</B> 
+    <P></P>
+    <LI><B>VT1</B> </LI></UL>
+  <P></P>
+  <DT><B>FFDLY</B>
+  <DD>Select form feed delays: 
+  <UL>
+    <P>
+    <LI><B>FF0</B> 
+    <P></P>
+    <LI><B>FF1</B> </LI></UL></DD></DL>If <B>OPOST</B> is set, output characters are 
+post-processed as indicated by the remaining flags; otherwise, characters are 
+transmitted without change. 
+<P>If <B>OLCUC</B> is set, a lower case alphabetic character is transmitted as 
+the corresponding upper case character. This function is often used in 
+conjunction with <B>IUCLC</B>. 
+<P>If <B>ONLCR</B> is set, the <B>NL</B> character is transmitted as the 
+<B>CR-NL</B> character pair. If <B>OCRNL</B> is set, the <B>CR</B> character is 
+transmitted as the <B>NL</B> character. If <B>ONOCR</B> is set, no <B>CR</B> 
+character is transmitted when at column 0 (first position). If <B>ONRET</B> is 
+set, the <B>NL</B> character is assumed to do the carriage-return function; the 
+column pointer is set to 0 and the delays specified for <B>CR</B> are used. 
+Otherwise, the <B>NL</B> character is assumed to do just the line-feed function; 
+the column pointer remains unchanged. The column pointer is also set to 0 if the 
+<B>CR</B> character is actually transmitted. 
+<P>The delay bits specify how long transmission stops to allow for mechanical or 
+other movement when certain characters are sent to the terminal. In all cases, a 
+value of 0 indicates no delay. If <B>OFILL</B> is set, fill characters are 
+transmitted for delay instead of a timed delay. This is useful for high baud 
+rate terminals that need only a minimal delay. If <B>OFDEL</B> is set, the fill 
+character is <B>DEL</B>; otherwise it is <B>NULL</B>. 
+<P>If a form-feed or vertical-tab delay is specified, it lasts for about 2 
+seconds. 
+<P>Newline delay lasts about 0.10 seconds. If <B>ONLRET</B> is set, the 
+carriage-return delays are used instead of the newline delays. If <B>OFILL</B> 
+is set, two fill characters are transmitted. 
+<P>Carriage-return delay type 1 is dependent on the current column position, 
+type 2 is about 0.10 seconds, and type 3 is about 0.15 seconds. If <B>OFILL</B> 
+is set, delay type 1 transmits two fill characters, and type 2 transmits four 
+fill characters. 
+<P>Horizontal-tab delay type 1 is dependent on the current column position. Type 
+2 is about 0.10 seconds. Type 3 specifies that tabs are to be expanded into 
+spaces. If <B>OFILL</B> is set, two fill characters are transmitted for any 
+delay. 
+<P>Backspace delay lasts about 0.05 seconds. If <B>OFILL</B> is set, one fill 
+character is transmitted. 
+<P>The actual delays depend on line speed and system load. 
+<P>The initial output control value is <B>OPOST</B>, <B>ONLCR</B>, <B>TAB3</B>. 
+<H3>Control modes</H3>The <B><I>c_cflag</I></B> field describes the hardware 
+control of the terminal: 
+<DL compact>
+  <P>
+  <DT><B>CBAUD</B>
+  <DD>Baud rate: 
+  <DL compact>
+    <P>
+    <DT><B>B0</B>
+    <DD>Hang up 
+    <P></P>
+    <DT><B>B50</B>
+    <DD>50 baud 
+    <P></P>
+    <DT><B>B75</B>
+    <DD>75 baud 
+    <P></P>
+    <DT><B>B110</B>
+    <DD>110 baud 
+    <P></P>
+    <DT><B>B134</B>
+    <DD>134 baud 
+    <P></P>
+    <DT><B>B150</B>
+    <DD>150 baud 
+    <P></P>
+    <DT><B>B200</B>
+    <DD>200 baud 
+    <P></P>
+    <DT><B>B300</B>
+    <DD>300 baud 
+    <P></P>
+    <DT><B>B600</B>
+    <DD>600 baud 
+    <P></P>
+    <DT><B>B1200</B>
+    <DD>1200 baud 
+    <P></P>
+    <DT><B>B1800</B>
+    <DD>1800 baud 
+    <P></P>
+    <DT><B>B2400</B>
+    <DD>2400 baud 
+    <P></P>
+    <DT><B>B4800</B>
+    <DD>4800 baud 
+    <P></P>
+    <DT><B>B9600</B>
+    <DD>9600 baud 
+    <P></P>
+    <DT><B>B19200</B>
+    <DD>19200 baud 
+    <P></P>
+    <DT><B>EXTA</B>
+    <DD>External A 
+    <P></P>
+    <DT><B>B38400</B>
+    <DD>38400 baud 
+    <P></P>
+    <DT><B>EXTB</B>
+    <DD>External B </DD></DL>
+  <P></P>
+  <DT><B>E</B>
+  <DD>Character size: 
+  <DL compact>
+    <P>
+    <DT><B>CS5</B>
+    <DD>5 bits 
+    <P></P>
+    <DT><B>CS6</B>
+    <DD>6 bits 
+    <P></P>
+    <DT><B>CS7</B>
+    <DD>7 bits 
+    <P></P>
+    <DT><B>CS8</B>
+    <DD>8 bits </DD></DL>
+  <P></P>
+  <DT><B>PB</B>
+  <DD>Send two stop bits, else one 
+  <P></P>
+  <DT><B>CREAD</B>
+  <DD>Enable receiver 
+  <P></P>
+  <DT><B>PARENB</B>
+  <DD>Parity enable 
+  <P></P>
+  <DT><B>PARODD</B>
+  <DD>Odd parity, else even 
+  <P></P>
+  <DT><B>HUPCL</B>
+  <DD>Hang up on last close 
+  <P></P>
+  <DT><B>CLOCAL</B>
+  <DD>Local line, else dial-up 
+  <P></P>
+  <DT><B>CIBAUD</B>
+  <DD>Input baud rate, if different from output rate 
+  <P></P>
+  <DT><B>PAREXT</B>
+  <DD>Extended parity for mark and space parity </DD></DL>The <B>CBAUD</B> bits 
+specify the baud rate. The zero baud rate, B0, is used to hang up the 
+connection. If B0 is specified, the data-terminal-ready signal is not asserted. 
+Normally, this disconnects the line. If the <B>CIBAUD</B> bits are not zero, 
+they specify the input baud rate, with the <B>NBAUD</B> bits specifying the 
+output baud rate; otherwise, the output and input baud rates are both specified 
+by the <B>CBAUD</B> bits. The values for the <B>CIBAUD</B> bits are the same as 
+the values for the <B>CBAUD</B> bits, shifted left <B>IBSHIFT</B> bits. For any 
+particular hardware, impossible speed changes are ignored. 
+<P>The <B>CSIZE</B> bits specify the character size in bits for both 
+transmission and reception. This size does not include the parity bit, if any. 
+If <B>CSTOPB</B> is set, two stop bits are used; otherwise, one stop bit is 
+used. For example, at 110 baud, two stops bits are required. 
+<P>If <B>PARENB</B> is set, parity generation and detection is enabled, and a 
+parity bit is added to each character. If parity is enabled, the <B>PARODD</B> 
+flag specifies odd parity if set; otherwise, even parity is used. 
+<P>If <B>CREAD</B> is set, the receiver is enabled. Otherwise, no characters are 
+received. 
+<P>If <B>HUPCL</B> is set, the line is disconnected when the last process with 
+the line open closes it or terminates. That is, the data-terminal-ready signal 
+is not asserted. 
+<P>If <B>CLOCAL</B> is set, the line is assumed to be a local, direct connection 
+with no modem control; otherwise, modem control is assumed. 
+<P>The initial hardware control value after open is <B>B300, CS8, CREAD, 
+HUPCL</B>. 
+<H3>Local modes</H3>The <B><I>c_lflag</I></B> field of the argument structure is 
+used by the line discipline to control terminal functions. The basic line 
+discipline provides the following: 
+<DL compact>
+  <P>
+  <DT><B>ISIG</B>
+  <DD>Enable signals. 
+  <P></P>
+  <DT><B>ICANON</B>
+  <DD>Canonical input (erase and kill processing). 
+  <P></P>
+  <DT><B>XCASE</B>
+  <DD>Canonical upper/lower presentation. 
+  <P></P>
+  <DT><B>ECHO</B>
+  <DD>Enable echo. 
+  <P></P>
+  <DT><B>ECHOE</B>
+  <DD>Echo erase character as <B>BS-SP-BS</B>. 
+  <P></P>
+  <DT><B>ECHOK</B>
+  <DD>Echo <B>NL</B> after kill character. 
+  <P></P>
+  <DT><B>ECHONL</B>
+  <DD>Echo <B>NL</B>. 
+  <P></P>
+  <DT><B>NOFLSH</B>
+  <DD>Disable flush after interrupt or quit. 
+  <P></P>
+  <DT><B>TOSTOP</B>
+  <DD>Send <B>SIGTTOU</B> for background output. 
+  <P></P>
+  <DT><B>ECHOCTL</B>
+  <DD>Echo control characters as ^<B><I>char</I></B>, delete as ^?. 
+  <P></P>
+  <DT><B>ECHOPRT</B>
+  <DD>Echo erase character as character erased. 
+  <P></P>
+  <DT><B>ECHOKE</B>
+  <DD><B>BS-SP-BS</B> erase entire line on line kill. 
+  <P></P>
+  <DT><B>FLUSHO</B>
+  <DD>Output is being flushed. 
+  <P></P>
+  <DT><B>PENDIN</B>
+  <DD>Retype pending input at next read or input character. 
+  <P></P>
+  <DT><B>IEXTEN</B>
+  <DD>Enable extended (implementation-defined) functions. </DD></DL>
+<P>If <B>ISIG</B> is set, each input character is checked against the special 
+control characters <B>INTR</B>, <B>QUIT</B>, <B>SWTCH</B>, <B>SUSP</B>, 
+<B>STATUS</B>, and <B>DSUSP</B>. If an input character matches one of these 
+control characters, the function associated with that character is performed. If 
+<B>ISIG</B> is not set, no checking is done. Thus, these special input functions 
+are possible only if <B>ISIG</B> is set. 
+<P>If <B>ICANON</B> is set, canonical processing is enabled. This enables the 
+erase and kill edit functions, and the assembly of input characters into lines 
+delimited by <B>NL</B>, <B>EOF</B>, <B>EOL</B>, and <B>EOL2</B>. If 
+<B>ICANON</B> is not set, read requests are satisfied directly from the input 
+queue. A read is not satisfied until at least <B>MIN</B> characters have been 
+received or the timeout value <B>TIME</B> has expired between characters. This 
+allows fast bursts of input to be read efficiently while still allowing single 
+character input. The time value represents tenths of seconds. 
+<P>If <B>XCASE</B> is set, and if <B>ICANON</B> is set, an upper case letter is 
+accepted on input by preceding it with a ``e'' character, and is output preceded 
+by a ``e'' character. In this mode, the following escape sequences are generated 
+on output and accepted on input: <NOSCRIPT><BR>[If this table is unreadable, a 
+preformatted table follows]<BR></NOSCRIPT>
+<P>
+<TABLE border=1>
+  <TBODY>
+  <TR vAlign=top>
+    <TH align=left>For: </TH>
+    <TH align=left>Use: </TH></TR>
+  <TR vAlign=top>
+    <TD>` </TD>
+    <TD>\´ </TD></TR>
+  <TR vAlign=top>
+    <TD>| </TD>
+    <TD>\! </TD></TR>
+  <TR vAlign=top>
+    <TD>~ </TD>
+    <TD>\^ </TD></TR>
+  <TR vAlign=top>
+    <TD>{ </TD>
+    <TD>\( </TD></TR>
+  <TR vAlign=top>
+    <TD>} </TD>
+    <TD>\) </TD></TR>
+  <TR vAlign=top>
+    <TD>\ </TD>
+    <TD>\\ </TD></TR></TBODY></TABLE><NOSCRIPT><PRE> For:       Use:
+ `          \´
+ |          \!
+ ~          \^
+ {          \(
+ }          \)
+ \          \\
+</PRE></NOSCRIPT>
+<P>For example, ``A'' is input as ``\a'', ``\n'' as ``\\n'', and ``\N'' as 
+``\\\n''. 
+<P>If <B>ECHO</B> is set, characters are echoed as received. 
+<P>When <B>ICANON</B> is set, the following echo functions are possible: 
+<UL>
+  <P>
+  <LI>If <B>ECHO</B> and <B>ECHOE</B> are set, and <B>ECHOPRT</B> is not set, 
+  the <B>ERASE</B> and <B>WERASE</B> characters are echoed as one or more ASCII 
+  <B>BS SP BS</B>, which clears the last character(s) from a <B>CRT</B> screen. 
+  <P></P>
+  <LI>If <B>ECHO</B> and <B>ECHOPRT</B> are set, the first <B>ERASE</B> and 
+  <B>WERASE</B> character in a sequence echoes as a backslash (``\''), followed 
+  by the characters being erased. Subsequent <B>ERASE</B> and <B>WERASE</B> 
+  characters echo the characters being erased, in reverse order. The next 
+  non-erase character causes a slash (``/'') to be typed before it is echoed. 
+  <B>ECHOPRT</B> should be used for hard copy terminals. 
+  <P></P>
+  <LI>If <B>ECHOKE</B> is set, the kill character is echoed by erasing each 
+  character on the line from the screen (using the mechanism selected by 
+  <B>ECHOE</B> and <B>ECHOPRT</B>). 
+  <P></P>
+  <LI>If <B>ECHOK</B> is set, and <B>ECHOKE</B> is not set, the <B>NL</B> 
+  character is echoed after the kill character to emphasize that the line is 
+  deleted. Note that an escape character (``\'') or an <B>LNEXT</B> character 
+  preceding the erase or kill character removes any special function. 
+  <P></P>
+  <LI>If <B>ECHONL</B> is set, the <B>NL</B> character is echoed even if 
+  <B>ECHO</B> is not set. This is useful for terminals set to local echo (so 
+  called half-duplex). </LI></UL>If <B>ECHOCTL</B> is set, all control characters 
+(characters with codes between 0 and 37 octal) other than ASCII <B>TAB</B>, 
+ASCII <B>NL</B>, the <B>START</B> character, and the <B>STOP</B> character, 
+ASCII <B>CR</B>, and ASCII <B>BS</B> are echoed as ^<B><I>X</I></B>, where 
+<B><I>X</I></B> is the character given by adding 100 octal to the code of the 
+control character (so that the character with octal code 1 is echoed as ``^A''), 
+and the ASCII &lt;Del&gt; character, with octal code 177, is echoed as ``^?''. 
+<P>If <B>NOFLSH</B> is set, the normal flush of the input and output queues 
+associated with the <B>INTR</B>, <B>QUIT</B>, and <B>SUSP</B> characters is not 
+done. This bit should be set when restarting system calls that read from or 
+write to a terminal (see <A 
+href="http://docsrv.caldera.com/cgi-bin/man/man?sigaction+2"><B>sigaction</B>(2)</A>). 
+
+<P>If <B>TOSTOP</B> is set, the signal <B>SIGTTOU</B> is sent to a process that 
+tries to write to its controlling terminal if it is not in the foreground 
+process group for that terminal. This signal normally stops the process. 
+Otherwise, the output generated by that process is output to the current output 
+stream. Processes that are blocking or ignoring <B>SIGTTOU</B> signals are 
+excepted and allowed to produce output, if any. 
+<P>If <B>FLUSHO</B> is set, data written to the terminal is discarded. This bit 
+is set when the <B>FLUSH</B> character is typed. A program can cancel the effect 
+of typing the <B>FLUSH</B> character by clearing <B>FLUSHO</B>. 
+<P>If <B>PENDIN</B> is set, any input that has not yet been read is reprinted 
+when the next character arrives as input. 
+<P>If <B>IEXTEN</B> is set, the following implementation-defined functions are 
+enabled: special characters (<B>WERASE</B>, <B>REPRINT</B>, <B>DISCARD</B>, and 
+<B>LNEXT</B>) and local flags (<B>TOSTOP</B>, <B>ECHOCTL</B>, <B>ECHOPRT</B>, 
+<B>ECHOKE</B>, <B>FLUSHO</B>, and <B>PENDIN</B>). 
+<P>The initial line-discipline control value is <B>ISIG</B>, <B>ICANON</B>, 
+<B>ECHO</B>, <B>ECHOK</B>. 
+<H3>Terminal size</H3>The number of lines and columns on the terminal's display 
+is specified in the <B>winsize</B> structure defined by <I>sys/termios.h</I> and 
+includes the following members: <PRE>unsigned  short   ws_row;   /* rows, in characters */
+unsigned  short   ws_col;   /* columns, in characters */
+unsigned  short   ws_xpixel;/* horizontal size, in pixels */
+unsigned  short   ws_ypixel;/* vertical size, in pixels */
+</PRE>
+<H3>termio structure</H3>The System V <B>termio</B> structure is used by some 
+<B>ioctl</B>s; it is defined by <I>sys/termio.h</I> and includes the following 
+members: <PRE>unsigned short	c_iflag;	/* input modes */
+unsigned short	c_oflag;	/* output modes */
+unsigned short	c_cflag;	/* control modes */
+unsigned short	c_lflag;	/* local modes */
+char		c_line;		/* line discipline */
+unsigned char	c_cc[NCC];	/* control chars */
+</PRE>The special control characters are defined by the array <CODE>c_cc</CODE>. 
+The symbolic name <B>NCC</B> is the size of the control character array and is 
+also defined by <I>termio.h</I>. The relative positions, subscript names, and 
+typical default values for each function are as follows: <NOSCRIPT><BR>[If this 
+table is unreadable, a preformatted table follows]<BR></NOSCRIPT>
+<P>
+<TABLE border=1>
+  <TBODY>
+  <TR vAlign=top>
+    <TH align=left>Position </TH>
+    <TH align=left>Name </TH>
+    <TH align=left>Default value </TH></TR>
+  <TR vAlign=top>
+    <TD>0 </TD>
+    <TD><B>VINTR</B> </TD>
+    <TD><B>DEL</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>1 </TD>
+    <TD><B>VQUIT</B> </TD>
+    <TD><B>FS</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>2 </TD>
+    <TD><B>VERASE</B> </TD>
+    <TD><B>BS</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>3 </TD>
+    <TD><B>VKILL</B> </TD>
+    <TD><B>NAK</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>4 </TD>
+    <TD><B>VEOF</B> </TD>
+    <TD><B>EOT</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>5 </TD>
+    <TD><B>VEOL</B> </TD>
+    <TD><B>NUL</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>6 </TD>
+    <TD><B>VEOL2</B> </TD>
+    <TD><B>NUL</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>7 </TD>
+    <TD>reserved </TD>
+    <TD>&nbsp; </TD></TR></TBODY></TABLE><NOSCRIPT><PRE> -----------------------------------------
+| Position |   Name     |   Default value|
+|----------|------------|----------------|
+| 0        |   <B>VINTR</B>    |   <B>DEL</B>          |
+|----------|------------|----------------|
+| 1        |   <B>VQUIT</B>    |   <B>FS</B>           |
+|----------|------------|----------------|
+| 2        |   <B>VERASE</B>   |   <B>BS</B>           |
+|----------|------------|----------------|
+| 3        |   <B>VKILL</B>    |   <B>NAK</B>          |
+|----------|------------|----------------|
+| 4        |   <B>VEOF</B>     |   <B>EOT</B>          |
+|----------|------------|----------------|
+| 5        |   <B>VEOL</B>     |   <B>NUL</B>          |
+|----------|------------|----------------|
+| 6        |   <B>VEOL2</B>    |   <B>NUL</B>          |
+|----------|------------|----------------|
+| 7        |   reserved |                |
+|----------|------------|----------------|
+</PRE></NOSCRIPT>For the non-canonical mode the positions of <B>VEOF</B> and 
+<B>NEOL</B> are shared by <B>VMIN</B> and <B>VTIME</B>: <NOSCRIPT><BR>[If this 
+table is unreadable, a preformatted table follows]<BR></NOSCRIPT>
+<P>
+<TABLE border=1>
+  <TBODY>
+  <TR vAlign=top>
+    <TH align=left>Position </TH>
+    <TH align=left>Name </TH>
+    <TH align=left>Default value </TH></TR>
+  <TR vAlign=top>
+    <TD>4 </TD>
+    <TD><B>VMIN</B> </TD>
+    <TD>used to set the value of <B>MIN</B> </TD></TR>
+  <TR vAlign=top>
+    <TD>5 </TD>
+    <TD><B>VTIME</B> </TD>
+    <TD>used to set the value of <B>TIME</B> </TD></TR></TBODY></TABLE><NOSCRIPT><PRE> ------------------------------------------------------
+| Position |   Name  |   Default value                |
+|----------|---------|--------------------------------|
+| 4        |   <B>VMIN</B>  |   used to set the value of <B>MIN</B> |
+|----------|---------|--------------------------------|
+| 5        |   <B>VTIME</B> |   used to set the value of <B>TIME</B>|
+|----------|---------|--------------------------------|
+</PRE></NOSCRIPT>The calls that use the <B>termio</B> structure only affect the 
+flags and control characters that can be stored in the <B>termio</B> structure; 
+all other flags and control characters are unaffected. 
+<H3>Modem lines</H3>On special files representing serial ports, the modem 
+control lines supported by the hardware can be read, and the modem status lines 
+supported by the hardware can be changed. The following modem control and status 
+lines may be supported by a device; they are defined by <I>sys/termios.h</I>: 
+<DL compact>
+  <P>
+  <DT><B>TIOCM_LE</B>
+  <DD>line enable 
+  <P></P>
+  <DT><B>TIOCMGET</B>/<B>TIOCMSET</B>
+  <DD>get/set line status, see <A 
+  href="http://docsrv.caldera.com/cgi-bin/man/man?termio+7#termio7.ioctl_comms">``ioctl 
+  commands''</A> 
+  <P></P>
+  <DT><B>TIOCMBIC</B>/<B>TIOCMBIS</B>
+  <DD>clear/set lines, see <A 
+  href="http://docsrv.caldera.com/cgi-bin/man/man?termio+7#termio7.ioctl_comms">``ioctl 
+  commands''</A> 
+  <P></P>
+  <DT><B>TIOCM_DTR</B>
+  <DD>data terminal ready 
+  <P></P>
+  <DT><B>TIOCM_RTS</B>
+  <DD>request to send 
+  <P></P>
+  <DT><B>TIOCM_ST</B>
+  <DD>secondary transmit 
+  <P></P>
+  <DT><B>TIOCM_SR</B>
+  <DD>secondary receive 
+  <P></P>
+  <DT><B>TIOCM_CTS</B>
+  <DD>clear to send 
+  <P></P>
+  <DT><B>TIOCM_CAR</B>
+  <DD>carrier detect 
+  <P></P>
+  <DT><B>TIOCM_RNG</B>
+  <DD>ring 
+  <P></P>
+  <DT><B>TIOCM_DSR</B>
+  <DD>data set ready </DD></DL><B>TIOCM_CD</B> is a synonym for <B>TIOCM_CAR</B>, 
+and <B>TIOCM_RI</B> is a synonym for <B>TIOCM_RNG</B>. These are used by the 
+<B>TIOCMSET</B>, <B>TIOCMBIS</B>, <B>TIOCMGET</B> and <B>TIOCMBIC</B> 
+<B>ioctl</B>s. Not all of these are necessarily supported by any particular 
+device; check the manual page for the device in question. <A 
+name=termio7.ioctl_comms></A>
+<H3>ioctl commands</H3>The <B>ioctl</B>s supported by devices and STREAMS 
+modules providing the <B>termios</B> interface are listed below. Some calls may 
+not be supported by all devices or modules. The functionality provided by these 
+calls is also available through the preferred function call interface specified 
+on <A 
+href="http://docsrv.caldera.com/cgi-bin/man/man?termios+3C"><B>termios</B>(3C)</A>. 
+
+<DL compact>
+  <P>
+  <DT><B>TCGETS</B>
+  <DD>The argument is a pointer to a <B>termios</B> structure. The current 
+  terminal parameters are fetched and stored into that structure. 
+  <P></P>
+  <DT><B>TCSETS</B>
+  <DD>The argument is a pointer to a <B>termios</B> structure. The current 
+  terminal parameters are set from the values stored in that structure. The 
+  change is immediate. 
+  <P></P>
+  <DT><B>TCSETSW</B>
+  <DD>The argument is a pointer to a <B>termios</B> structure. The current 
+  terminal parameters are set from the values stored in that structure. The 
+  change occurs after all characters queued for output have been transmitted. 
+  This form should be used when changing parameters that affect output. 
+  <P></P>
+  <DT><B>TCSETSF</B>
+  <DD>The argument is a pointer to a <B>termios</B> structure. The current 
+  terminal parameters are set from the values stored in that structure. The 
+  change occurs after all characters queued for output have been transmitted; 
+  all characters queued for input are discarded and then the change occurs. 
+  <P></P>
+  <DT><B>TCGETA</B>
+  <DD>The argument is a pointer to a <B>termio</B> structure. The current 
+  terminal parameters are fetched, and those parameters that can be stored in a 
+  <B>termio</B> structure are stored into that structure. 
+  <P></P>
+  <DT><B>TCSETA</B>
+  <DD>The argument is a pointer to a <B>termio</B> structure. Those terminal 
+  parameters that can be stored in a <B>termio</B> structure are set from the 
+  values stored in that structure. The change is immediate. 
+  <P></P>
+  <DT><B>TCSETAW</B>
+  <DD>The argument is a pointer to a <B>termio</B> structure. Those terminal 
+  parameters that can be stored in a <B>termio</B> structure are set from the 
+  values stored in that structure. The change occurs after all characters queued 
+  for output have been transmitted. This form should be used when changing 
+  parameters that affect output. 
+  <P></P>
+  <DT><B>TCSETAF</B>
+  <DD>The argument is a pointer to a <B>termio</B> structure. Those terminal 
+  parameters that can be stored in a <B>termio</B> structure are set from the 
+  values stored in that structure. The change occurs after all characters queued 
+  for output have been transmitted; all characters queued for input are 
+  discarded and then the change occurs. 
+  <P></P>
+  <DT><B>TCSBRK</B>
+  <DD>The argument is an <B>int</B> value. Wait for the output to drain. If the 
+  argument is 0, then send a break (zero valued bits for 0.25 seconds). 
+  <P></P>
+  <DT><B>TCXONC</B>
+  <DD>Start/stop control. The argument is an <B>int</B> value. If the argument 
+  is 0, suspend output; if 1, restart suspended output; if 2, suspend input; if 
+  3, restart suspended input. 
+  <P></P>
+  <DT><B>TCFLSH</B>
+  <DD>The argument is an <B>int</B> value. If the argument is 0, flush the input 
+  queue; if 1, flush the output queue; if 2, flush both the input and output 
+  queues. On some controllers, if the argument is 0, input flow control 
+  characters will be flushed, causing the unflushed output queue to overflow a 
+  busy output device. 
+  <P></P>
+  <DT><B>TIOCGPGRP</B>
+  <DD>The argument is a pointer to a <B>pid_t</B>. Set the value of that 
+  <B>pid_t</B> to the process group ID of the foreground process group 
+  associated with the terminal. See <A 
+  href="http://docsrv.caldera.com/cgi-bin/man/man?termios+3C"><B>termios</B>(3C)</A> 
+  for a description of <B>TCGETPGRP</B>. 
+  <P></P>
+  <DT><B>TIOCSPGRP</B>
+  <DD>The argument is a pointer to a <B>pid_t</B>. Associate the process group 
+  whose process group ID is specified by the value of that <B>pid_t</B> with the 
+  terminal. The new process group value must be in the range of valid process 
+  group ID values. Otherwise, the error <B>EPERM</B> is returned. See <A 
+  href="http://docsrv.caldera.com/cgi-bin/man/man?termios+3C"><B>termios</B>(3C)</A> 
+  for a description of <B>TCSETPGRP</B>. 
+  <P></P>
+  <DT><B>TIOCGSID</B>
+  <DD>The argument is a pointer to a <B>pid_t</B>. The session ID of the 
+  terminal is fetched and stored in the <B>pid_t</B>. 
+  <P></P>
+  <DT><B>TIOCGWINSZ</B>
+  <DD>The argument is a pointer to a <B>winsize</B> structure. The terminal 
+  driver's notion of the terminal size is stored into that structure. 
+  <P></P>
+  <DT><B>TIOCSWINSZ</B>
+  <DD>The argument is a pointer to a <B>winsize</B> structure. The terminal 
+  driver's notion of the terminal size is set from the values specified in that 
+  structure. If the new sizes are different from the old sizes, a 
+  <B>SIGWINCH</B> signal is set to the process group of the terminal. 
+  <P></P>
+  <DT><B>TIOCMBIS</B>/<B>TIOCMBIC</B>
+  <DD>Set/clear modem control lines (set to <B>TRUE</B>/<B>FALSE</B> state). 
+  This is a pointer to an <B>int</B> which contains the modem line identifier 
+  for the modem lines to be set to <B>TRUE</B>/<B>FALSE</B> (from the 
+  <B>TIOCM_<IMG alt=* src="termio(7).files/lowast.gif"></B> definitions. 
+  <P></P>
+  <DT><B>TIOCMGET</B>
+  <DD>Get the state of all the modem control lines in the <B>int</B> pointed to 
+  be the argument (in the <B>TIOCM_<IMG alt=* 
+  src="termio(7).files/lowast.gif"></B> definitions). If the bit is 0, then the 
+  line is disasserted; if 1, the line is asserted. 
+  <P></P>
+  <DT><B>TIOCMSET</B>
+  <DD>Set modem control line status. This is a pointer to an <B>int</B>. All 
+  modem control lines are set to the value held in the <B>int</B>'s bit which 
+  represents the line (in the <B>TIOCM_<IMG alt=* 
+  src="termio(7).files/lowast.gif"></B> definitions. For example, to set the DTR 
+  line to <B>FALSE</B>, set the <B>TIOCM_DTR</B> bit to 0; set the bit to 1 for 
+  <B>TRUE</B>. </DD></DL>
+<H2>Files</H2>
+<DL compact>
+  <P>
+  <DT><I>/dev/*</I>
+  <DD></DD></DL>
+<H2>References</H2><A 
+href="http://docsrv.caldera.com/cgi-bin/man/man?fork+2"><B>fork</B>(2)</A>, <A 
+href="http://docsrv.caldera.com/cgi-bin/man/man?ioctl+2"><B>ioctl</B>(2)</A>, <A 
+href="http://docsrv.caldera.com/cgi-bin/man/man?setsid+2"><B>setsid</B>(2)</A>, 
+<A 
+href="http://docsrv.caldera.com/cgi-bin/man/man?signal+2"><B>signal</B>(2)</A>, 
+<A 
+href="http://docsrv.caldera.com/cgi-bin/man/man?streamio+7"><B>streamio</B>(7)</A>, 
+<A 
+href="http://docsrv.caldera.com/cgi-bin/man/man?termios+3C"><B>termios</B>(3C)</A> 
+<!-- NAVBEGIN -->
+<HR>
+<I><SMALL>5 November 1999 <BR><A 
+href="http://docsrv.caldera.com/man/html.7/COPYRIGHT.html">© 1999 The Santa Cruz 
+Operation, Inc. All rights reserved.</A> <BR>UnixWare 7 Release 7.1.1 - 5 
+November 1999 <BR></SMALL></I><!-- NAVEND --></BODY></HTML>

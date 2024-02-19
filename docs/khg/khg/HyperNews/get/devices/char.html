@@ -1,0 +1,237 @@
+
+<HTML>
+<HEAD>
+<TITLE>Character Device Drivers</TITLE>
+<LINK rel="owner" href="mailto:">
+<SCRIPT LANGUAGE="JavaScript">
+<!-- hide this
+
+function help(message) {
+  self.status = message;
+  return true;
+}
+// stop hiding -->
+</SCRIPT>
+
+</HEAD>
+<BODY>
+<strong>The
+HyperNews <a href="../khg.html">Linux KHG</a>
+Discussion Pages</strong>
+<hr>
+<h3>Character Device Drivers</h3>
+
+<A name="init">
+<h4>Initialization</h4></a>
+
+<p>Besides functions defined by the <tt>file_operations</tt>
+structure, there is at least one other function that you will
+have to write, the <tt>foo_init()</tt> function.  You will have
+to change <tt>chr_dev_init()</tt> in drivers/char/mem.c to call
+your <tt>foo_init()</tt> function.
+
+<p><tt>foo_init()</tt> should first call <tt>register_chrdev()</tt> to
+register itself and avoid device number contention.
+<tt>register_chrdev()</tt> takes three arguments:
+<dl>
+<dt><tt>int major</tt>
+<dd>This is the major number which the driver wishes to allocate.
+<dt><tt>char *name</tt>
+<dd>This is the symbolic name of the driver.  This is used, among
+other things, to report the driver's name in the /proc filesystem.
+<dt><tt>struct file_operations *f_ops</tt>
+<dd>This is the address of
+your <tt>file_operations</tt> structure.
+<dt><b>Returns:</b>
+<dd>0 if no other character device has registered
+with the same major number.<br>
+non-0 if the call fails, presumably because another character device
+has already allocated that major number.
+</dl>
+
+<p>Generally, the <tt>foo_init()</tt> routine will then attempt
+to detect the hardware that it is supposed to be driving.  It
+should make sure that all necessary data structures are filled
+out for all present hardware, and have some way of ensuring
+that non-present hardware does not get accessed.  <b>[Detail
+different ways of doing this. In particular, document the
+<tt>request_*</tt> and related functions.]</b>
+
+<h4>Interrupts vs. Polling</h4>
+
+<p>In a polling driver, the <tt>foo_read()</tt> and
+<tt>foo_write()</tt> functions are pretty easy to write.  Here
+is an example of <tt>foo_write()</tt>:
+<pre>
+static int foo_write(struct inode * inode, struct file * file, char * buf, int count)
+{
+    unsigned int minor = MINOR(inode-&gt;i_rdev);
+    char ret;
+
+    while (count &gt; 0) {
+        ret = foo_write_byte(minor);
+	if (ret &lt; 0) {
+            foo_handle_error(WRITE, ret, minor);
+            continue;
+        }
+        buf++ = ret; count--
+    }
+    return count;
+}
+</pre>
+<tt>foo_write_byte()</tt> and <tt>foo_handle_error()</tt> are either
+functions defined elsewhere in foo.c or pseudocode.  <tt>WRITE</tt> would
+be a constant or <tt>#define</tt>.
+
+<p>It should be clear from this example how to code the
+<tt>foo_read()</tt> function as well.
+
+<p>Interrupt-driven drivers are a little more difficult.  Here
+is an example of a <tt>foo_write()</tt> that is
+interrupt-driven:
+<pre>
+static int foo_write(struct inode * inode, struct file * file, char * buf, int count)
+{
+    unsigned int minor = MINOR(inode-&gt;i_rdev);
+    unsigned long copy_size;
+    unsigned long total_bytes_written = 0;
+    unsigned long bytes_written;
+    struct foo_struct *foo = &amp;foo_table[minor];
+
+    do {
+        copy_size = (count &lt;= FOO_BUFFER_SIZE ? count : FOO_BUFFER_SIZE);
+        memcpy_fromfs(foo-&gt;foo_buffer, buf, copy_size);
+
+        while (copy_size) {
+            /* initiate interrupts */
+
+            if (some_error_has_occured)  {
+                /* handle error condition */
+            }
+
+            current-&gt;timeout = jiffies + FOO_INTERRUPT_TIMEOUT;
+                /* set timeout in case an interrupt has been missed */
+            interruptible_sleep_on(&amp;foo-&gt;foo_wait_queue);
+            bytes_written = foo-&gt;bytes_xfered;
+            foo-&gt;bytes_written = 0;
+            if (current-&gt;signal & ~current-&gt;blocked) {
+                if (total_bytes_written + bytes_written)
+                    return total_bytes_written + bytes_written;
+                else
+                    return -EINTR; /* nothing was written, system
+                                      call was interrupted, try again */
+            }
+        }
+
+        total_bytes_written += bytes_written;
+        buf += bytes_written;
+        count -= bytes_written;
+
+    } while (count &gt; 0);
+
+    return total_bytes_written;
+}
+
+static void foo_interrupt(int irq)
+{
+    struct foo_struct *foo = &amp;foo_table[foo_irq[irq]];
+
+    /* Here, do whatever actions ought to be taken on an interrupt.
+       Look at a flag in foo_table to know whether you ought to be
+       reading or writing. */
+
+    /* Increment foo-&gt;bytes_xfered by however many characters were
+       read or written */
+
+    if (buffer too full/empty)
+        wake_up_interruptible(&amp;foo-&gt;foo_wait_queue);
+}
+</pre>
+
+<p>Again, a <tt>foo_read()</tt> function is written
+analagously. <tt>foo_table[]</tt> is an array of structures,
+each of which has several members, some of which are
+<tt>foo_wait_queue</tt> and <tt>bytes_xfered</tt>, which can be
+used for both reading and writing. <tt>foo_irq[]</tt> is an
+array of 16 integers, and is used for looking up which entry in
+<tt>foo_table[]</tt> is associated with the <tt>irq</tt>
+generated and reported to the <tt>foo_interrupt()</tt>
+function.
+
+<p>To tell the interrupt-handling code to call
+<tt>foo_interrupt()</tt>, you need to use either
+<tt>request_irq()</tt> or <tt>irqaction()</tt>. This is either
+done when <tt>foo_open()</tt> is called, or if you want to keep
+things simple, when <tt>foo_init()</tt> is called.
+<tt>request_irq()</tt> is the simpler of the two, and works
+rather like an old-style signal handler.  It takes two
+arguments: the first is the number of the <tt>irq</tt> you are
+requesting, and the second is a pointer to your interrupt
+handler, which must take an integer argument (the irq that was
+generated) and have a return type of <tt>void</tt>.
+<tt>request_irq()</tt> returns <tt>-EINVAL</tt> if <tt>irq</tt>
+&gt; 15 or if the pointer to the interrupt handler is
+<tt>NULL</tt>, <tt>-EBUSY</tt> if that interrupt has already
+been taken, or 0 on success.
+
+<p><tt>irqaction()</tt> works rather like the user-level
+<tt>sigaction()</tt>, and in fact reuses the <tt>sigaction</tt>
+structure.  The <tt>sa_restorer()</tt> field of the sigaction
+structure is not used, but everything else is the same.  See
+the entry for <tt>irqaction()</tt> in <A
+HREF="reference.html">Supporting Functions</a>, for further
+information about <tt>irqaction()</tt>.
+
+<p>Copyright (C) 1992, 1993, 1994, 1996 Michael K. Johnson,
+johnsonm@redhat.com.<br>
+<P>
+<P><HR SIZE=3>
+<P><B><A NAME="Messages">Messages</A></B>
+<NOBR>
+<font size=-1>
+
+
+
+
+
+
+
+</font>
+</NOBR>
+ <P>
+<NOBR>
+<DL COMPACT>
+<DT> 3. <IMG src="../../../Icons/feedback.gif" ALT="Feedback:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="char/3.html">
+release() method called when close is called</A><i></i> </DT>
+<DT> 2. <IMG src="../../../Icons/question.gif" ALT="Question:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="char/2.html">
+return value of foo_write(...)</A> <i> by My name here</i> </DT>
+<DT> 1. <IMG src="../../../Icons/idea.gif" ALT="Idea:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="char/1.html">
+TTY drivers</A> <i> by Daniel Taylor</i> </DT>
+<DD>
+<DL COMPACT>
+<DT> 1. <IMG src="../../../Icons/question.gif" ALT="Question:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="char/1/1.html">
+Is anything in the works? If not ...</A> <i> by Andrew Manison</i> </DT>
+</DL>
+</DD>
+</DL>
+</NOBR>
+
+<P>
+<P>
+
+
+
+  
+
+
+
+
+
+<BR> 
+ 
+<BR></BODY>
+</HTML>

@@ -1,0 +1,306 @@
+<html>
+<head>
+<title>Memory Savers</title>
+<h1>Memory Savers</h1>
+</head>
+
+<body>
+
+<h3>Updated 30/08/95</h3><P>
+Paul Gortmaker<br>
+<a href="mailto:Paul.Gortmaker@anu.edu.au">Paul.Gortmaker@anu.edu.au</a>
+<P>
+
+<p><hr><h3>Linux Memory Savers
+<p></p>
+This page has various Linux memory saver patches that I have put together. 
+</h3><hr></p>
+
+There are still lots of people out there running Linux on 386 boxes with
+4MB ram and older/smaller hard disks. These patches implement options
+that will allow these users to trim some excess (unused) functionality
+from their kernels and reclaim some of that valuable memory for running
+applications. Note that memory taken up by the kernel is hardwired to
+RAM and can't be swapped to disk, thus reducing the amount of real
+memory available to run user programs and the like. 
+
+<P>
+Most of these patches are against the current 1.2.x kernel, as it is
+a bit smaller than the 1.3.x kernels to begin with. If you are tight 
+on memory, you are best to run the latest 1.2.x kernel as opposed to
+the latest 1.3.x development series.
+
+<hr>
+
+Here are some of the areas where you can "trim the fat".
+<P>
+<a href="#ram">The RAM Disk</a><br>
+<a href="#hd">The "old" Disk Driver</a><br>
+<a href="#mod">The Modules Code</a><br>
+<a href="#ini">The Old init Code</a><br>
+<a href="#ser">The Serial Driver</a><br>
+<a href="#flo">The Floppy Driver</a><br>
+<a href="#ne">The ne2000 Driver</a><br>
+<a href="#3c">The 3c503 Driver</a><br>
+<a href="#scsi">The SCSI Blacklist</a><br>
+<a href="#pri">The printk() Ring Buffer</a><br>
+<a href="#ksw">The Kswap Patches</a><br>
+<a href="#thi">Removing IBM ThinkPad Support</a><br>
+<a href="#m386">The `-m386' GCC option</a><br>
+
+<P>
+As a more drastic alternative, you can `downgrade' to a 1.0.9 kernel.
+For those that can't recall, this was the last (i.e. stable) release
+of the 1.0 series before starting the 1.1 development series. As a quick
+test, I compiled a 1.0.9 kernel `out of the box' to see how it compared
+memorywise against my trimmed 1.2.13 kernel. It beat it hands down!
+For my config, the trimmed 1.2.13 kernel weighed in at 512k code and
+148kB data. The stock 1.0.9 kernel with the same config weighed in
+at a mere 388kB code and 168kB data. I then quickly applied by hand
+some of the above list (ram / modules / init / serial / ne2k / printk)
+and had it down to a lean-n-mean 384kB code and 152kB data!! That is
+a 104kB saving over the <em>trimmed</em> 1.2.13 kernel. This is an
+excellent kernel to run on 4MB machines. Here is a
+<a href="109.diff">patch</a>
+against the 1.0.9 tree that incorporates the above five from the list.
+Note that some (such as the Thinkpad hack or the reduced hd driver) don't 
+apply to the 1.0.9 kernels, as they weren't in there yet to begin with,
+so there is nothing to `fix' so to speak.
+
+<hr>
+
+<p><h4><a name="ram">The RAM disk</h4></p>
+
+Patch to make the <em>ramdisk</em> a config option. Face it, you never
+use it except for boot/recovery disks and the like. Available for
+<a href="ramdisk.1212">v1.2.12</a>.
+With this in place, the file <code>ramdisk.c</code> is not even
+compiled unless you select ramdisk support.
+This should be another small memory saving that will help low memory 
+machines.
+
+
+<p><h4><a name="hd">The "old" disk driver</h4></p>
+
+A patch to remove all IDE support from the "old" hard disk
+driver. Seeing as <code>ide.c</code> now uses
+all the IDE specific features in addition to the standard ST-506 hard
+disk specification, the old
+disk driver may as well return to its original featureless ST-506 form.
+This will be a good choice for users with MFM/RLL or ESDI drives that
+can use the memory savings a lot more than the IDE features. Users that
+don't wish to use the extended features of their IDE drive(s) can also 
+use this patch as well. There should be no risk in using this patch,
+as all it mainly does is remove code that is IDE specific. I have
+tested it in a two drive IDE system and a one drive MFM system.
+Just compare the compiled sizes of hd.c with my patch, hd.c without my
+patch, and ide.c as seen below, for 1.3.14. (This also doesn't account
+for the extra 1/2kB per IDE drive that was dynamically allocated to
+to store the IDE drive information.)
+
+<P>
+<code>
+# size drivers/block/hd.o.patched<br>
+text    data    bss     dec     hex<br>
+5440    2228    4       7672    1df8<br>
+# size drivers/block/hd.o.orig<br>
+text    data    bss     dec     hex<br>
+8992    2324    48      11364   2c64<br>
+# size drivers/block/ide.o<br>
+text    data    bss     dec     hex<br>
+17992   4488    96      22576   5830<br>
+</code>
+
+<P>
+The "low-fat-diet" hard disk driver is available for
+<a href="hd_diff-1212">v1.2.12</a> kernels.
+
+
+<p><h4><a name="mod">The Modules Code</h4></p>
+
+A patch to 
+<a href="no_modules_patch">remove all module support</a> for those that are on
+low memory machines, or those that never use modules. 
+This is done
+by using <code>``#ifdef CONFIG_MODULES''</code> and adding it as
+a <em>make config</em> option. Note that this patch is for 1.2.x kernels.
+I will eventually update it for the 1.3.x kernels.
+
+<P>
+For those who were complaining about the modules stuff adding bloat,
+it can be pulled out quite easily.
+A big win is dumping modules.c, ksyms.c and a good chunk of scsi.c 
+for loading and unloading host adaptors.
+Also gone are (un)register_netdev, unregister_filesystem and
+(un)register_binfmt. Note that you *can't* dump register_fiesystem,
+(un)register_blkdev and (un)register_chrdev because these are also 
+used by non-modules. (However, this could be easily changed...)
+Of course /proc/ksyms and /proc/modules disappear as well.
+
+<P>
+The only files that didn't include <code>&lt;linux/config.h&gt;</code>
+already were scsi.c
+and modules.c (ironic huh?) Of course the module syscalls are still
+listed in unistd.h and entry.S, but they are just dummies that 
+return -ENOSYS like those in kernel/sys.c, so that running insmod on 
+a non-module kernel doesn't do anything silly. Hopefully this can
+go into 1.3.x someday.
+
+<p><h4><a name="ini">The Old init Code</h4></p>
+
+Many moons ago, when more people had heard of <em>Minix</em> than
+<em>Linux</em>,  Linux did not have Poe's or MvS's init packages.
+The kernel would look for "/etc/rc" and/or "/bin/sh" to start as
+process number one. Even now that "/etc/init" and lately "/sbin/init"
+have been in widespread use for a long time, this old code still 
+remains in the kernel. This
+<a href="init.patch">patch</a> against 1.2.x kernels
+removes that old code, along with a 1kB static buffer that it used.
+Ideally this old code should be removed from distribution kernels
+as well. (Thanks to Michael A. Griffith for reminding me of this one.)
+
+<p><h4><a name="ser">The Serial driver</h4></p>
+
+Almost all people have only two (or four) serial ports. Yet in
+<code>drivers/char/serial.c</code> there is a large table of
+possible serial devices called <code>rs_table</code>. This table
+has 37 entries. You can safely delete all but the ones you are
+using, that being the top two, or four if you have four serial
+ports installed. (Thanks to Alan Cox for mentioning this one.)
+
+<p><h4><a name="flo">The Floppy driver</h4></p>
+
+The average person has at either a 1.44MB 3.5" drive, and/or a 1.2MB
+5.25" drive. And they usually never use any strange floppy formats.
+The usual formats are 360kB, 720kB, 1.2MB and 1.44MB, and <em>none</em>
+of the others are used. This
+<a href="floppy.diff">patch</a>
+removes the support for 2.88MB drives, and for all the 30 or so other
+formats that 99% of us never use.
+
+<p><h4><a name="ne">The ne2000 driver</h4></p>
+
+For ne2000 users, you can make a one line change to 
+<code>drivers/net/ne.c</code> that will get rid of a large table of
+non-conforming cards, and its associated code. If you don't have
+a "bad clone" you can just delete or comment out the line that says
+<P>
+<code>
+#define CONFIG_NE_BAD_CLONES
+</code>
+<P>
+
+<p><h4><a name="3c">The 3c503 driver</h4></p>
+
+As you may
+or may not know, the 3c503 has the ability to support PIO transfers
+to the card (akin to a ne2000) instead of the standard (read faster/better)
+shared memory implementation.
+However, since it is slower, you shouldn't use a 3c503 in PIO mode. 
+If you do, the linux driver will print a message like 
+"REJUMPER FOR SHARED MEMORY" at boot, and then still
+try and use it in the crippled PIO mode.
+
+<P>
+This 
+<a href="3c503.mem">patch</a> for the 1.2.x series kernels
+just #ifdef's out all the PIO code based on whether you have
+defined CONFIG_EL2_PIO, for a 20% reduction in the driver size, as
+seen below.
+
+<P>
+With PIO support:<br>
+<code>
+text    data    bss     dec     hex<br>
+3576    44      0       3620    e24<br>
+-rw-------   1 root     root         4964 Apr 13 19:50 3c503.o<br>
+</code>
+<P>
+Without PIO support:<br>
+<code>
+text    data    bss     dec     hex<br>
+2700    44      0       2744    ab8<br>
+-rw-------   1 root     root         4005 Apr 15 15:33 3c503.o<br>
+</code>
+
+<p><h4><a name="scsi">The SCSI blacklist</h4></p>
+
+Some old (and even some new!) SCSI devices are poorly designed so that
+if they are "asked" by the SCSI host adapter as to whether they contain
+multiple devices such as a multiple disk CD-ROM, they will lock-up.
+The kernel keeps a <em>huge</em> list of (at present 34) devices that 
+have this problem in <code>drivers/scsi/scsi.c</code>.
+You can cut this <code>device_list</code> down to just the
+NULL entry at the end if you don't have any of these devices, or if you
+configured your kernel to only ask about LUN #1.
+
+<p><h4><a name="pri">The printk() Ring Buffer</h4></p>
+
+The <code>printk()</code> routine uses a 4kB static ring buffer to store
+kernel messages in while waiting for <code>klogd()</code> to read them.
+The only time this many unread messages pile up is at boot before 
+<code>klogd()</code> is started. But you can read those by using the
+Shift+Page_Up key sequence. You can go into <code>kernel/printk.c</code>
+and change the <code>#define LOG_BUF_LEN 4096</code> to a smaller value
+like 512, for a saving of 3.5kB. This will still leave room for over 
+six full (80 character) lines of kernel messages to be buffered.
+
+<P>
+There is also a 1kB buffer ("buf") allocated to deal with the incoming
+data passed in with  a printk() call. No single printk() calls in the kernel 
+are so huge (or broken) as to dump a whole kB in a single call, and so you 
+can cut this back to 256 bytes, which is still the equivalent of more
+than three full lines of text. (You could allocate this buffer
+dynamically with kmalloc(), but things will get ugly if you run out of
+memory, and then try to do allocate a buffer so you can do a
+<code>printk("Out of memory\n");</code>!!!) 
+
+<p><h4><a name="ksw">The Kswap Patches</h4></p>
+
+These are patches by
+<a href="mailto:sct@dcs.ed.ac.uk">Stephen C. Tweedie</a> who has also
+done a lot of work on the ext2 filesystem. These patches don't actually
+save you any memory, but instead they improve the swapping performance
+on low memory machines. For more details on the gains/implementations
+and such, here are some of Stephen's mails that I saved. (The dates
+are encoded in the URLs)
+
+<P>
+Stephen's latest version of his kswap patches can be found
+<a href="ftp://ftp.presence.co.uk/pub/linux/kswap">here</a>.
+
+<p><h4><a name="thi">Removing IBM ThinkPad Support</h4></p>
+
+Once again IBM has made an incompatibility. They seem to have done
+something funny with the last 4kB of RAM at the end of the 640kB
+region. The Linux kernel won't touch this 4kB by default for fear
+of upsetting the IBM ThinkPad. If you don't have an IBM ThinkPad,
+you can re-claim this 4kB by simply changing the value <tt>0x9f000</tt> 
+to an <tt>0xA0000</tt> in <tt>linux/arch/i386/mm/init.c</tt>. 
+If you are real lazy, here is a <a href="thinkpad">patch</a> 
+for the 1.2.x kernels to do that for you. (Thanks to Thomas Graichen
+for pointing this one out.)
+
+<p><h4><a name="m386">The `-m386' GCC option</h4></p>
+
+When you compile a kernel with the `-m486' option, GCC then alignes
+internal data structures on data boundaries that will be favourable
+for the cache structure on an i486 CPU. This can leave small `holes'
+between the end of one data structure, and the start of another, which
+accounts for the slightly larger output. So if you compile linux with
+`-m386' instead, then you will end up with a slightly smaller (actually
+more tightly packed) kernel. You won't be able to notice any significant
+performace decrease in everyday usage either.
+
+<P>
+<hr>
+
+If you have any other memory saver tips/patches,
+<a href="mailto:Paul.Gortmaker@anu.edu.au">e-mail</a>
+me, and I will add them to the list.
+
+<P>
+<a href="index.html">Back to the top...</a>
+
+</body>
+</html>

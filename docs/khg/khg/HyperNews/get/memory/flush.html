@@ -1,0 +1,586 @@
+
+<HTML>
+<HEAD>
+<TITLE>The Linux Cache Flush Architecture</TITLE>
+<LINK rel="owner" href="mailto:">
+<SCRIPT LANGUAGE="JavaScript">
+<!-- hide this
+
+function help(message) {
+  self.status = message;
+  return true;
+}
+// stop hiding -->
+</SCRIPT>
+
+</HEAD>
+<BODY>
+<strong>The
+HyperNews <a href="../khg.html">Linux KHG</a>
+Discussion Pages</strong>
+<hr>
+<h3>1. The Players</h3>
+
+<dl>
+<dt>The TLB.
+<dd>This is more of a virtual entity than a strict
+	model as far as the Linux flush architecture is concerned.
+	The only characteristics it has is:
+<ol>
+<li>It keeps track of process/kernel mappings in
+		   some way, whether in software or hardware.
+
+<li>Architecture specific code may need to be
+		   notified when the kernel has changed a
+		   process/kernel mapping.
+</ol>
+<dt>The cache.
+<dd>This entity is essentially "memory state" as
+	the flush architecture views it.  In general it has the
+	following properties:
+<ol>
+<li>It will always hold copies of data which will
+		   be viewed as uptodate by the local processor.
+
+<li>Its proper functioning may be related to the
+		   TLB and process/kernel page mappings in some
+		   way, that is to say they may depend upon each
+		   other.
+
+<li>It may, in a virtually cached configuration, cause
+		   aliasing problems if one physical page is mapped
+		   at the same time to two virtual pages, and due to
+		   to the bits of an address used to index the cache
+		   line, the same piece of data can end up residing
+		   in the cache twice, allowing inconsistancies to
+		   result.
+
+<li>Devices and DMA may or may not be able to see the
+		   most up to date copy of a piece of data which
+		   resides in the cache of the local processor.
+
+<li>Currently, it is assumed that coherence in a
+		   multiprocessor environment is maintained by the
+		   cache/memory subsystem.  That is to say, when
+		   one processor requests a datum on the memory bus
+		   and another processor has a more uptodate copy,
+		   by whatever means the requestor will get the
+		   uptodate copy owned by the other processor.
+</ol>
+</dl>
+	(NOTE: SMP architectures without hardware cache coherence
+	       mechanisms are indeed possible, the current flush
+	       architecture does not handle this currently.  If at
+	       at some point a Linux port to some system where this
+	       is an issue occurrs, I will add the necessary hooks.
+	       But it will not be pretty.)
+
+<h3>2. What the flush architecture cares about</h3>
+<ol>
+<li>At all times the memory management hardware's view of
+	   a set of process/kernel mappings will be consistant
+	   with that of the kernel page tables.
+
+<li>If the memory management kernel code makes a modification
+	   to a user process page, by modifying the data via the
+	   kernel-space alias of the underlying physical page, the
+	   user thread of control will see the right data before it is
+	   allowed to continue execution, regardless of the cache
+	   architecture and/or semantics.
+
+<li>In general, when address space state is changed (on the
+	   generic kernel memory management code's behalf <b>only</b>) the
+	   appropriate flush architecture hook will be called
+	   describing that state change in full.
+</ol>
+<h3>3. What the flush architecture does not care about</h3>
+<ol>
+<li>DMA/Driver coherency.  This includes DMA mappings
+	   (in the sense of MMU mappings) and cache/DMA datum
+	   consistency.  These sorts of issues have no buisness
+	   in the flush architecture, see below how they should
+	   be handled.
+
+<li>Split Instruction/Data cache consistancy with respect
+	   to modifications made to the process instruction space
+	   performed by the signal dispatch code.  Again see below
+	   on how this should be handled in another way.
+</ol>
+<h3>4. The interfaces for the flush architecture and how to implement them</h3>
+
+	In general all of the routines described below will be
+	called with the following sequence:
+<pre>
+	flush_cache_foo(...);
+	modify_address_space();
+	flush_tlb_foo(...);
+</pre>
+	The logic here is:
+<ol>
+<li>It may be illegal in a given architecture for
+		   a piece of cache data to exist when no mapping
+		   for that data exists, therefore the flush must
+		   occur before the change is made.
+
+<li>It is possible for a given MMU/TLB architecture
+		   to perform a hardware table walk of the kernel
+		   page tables.  Therefore the TLB flush is done
+		   after the page tables have been changed so that
+		   afterwards the hardware can only load in the new
+		   copy of the page table information to the TLB.
+</ol>
+<pre><b>
+void flush_cache_all(void);
+void flush_tlb_all(void);
+</b></pre>
+
+	These routines are to notify the architecture specific code
+	that a change has been made to the kernel address space
+	mappings, which means that the mappings of every process has
+	effectively changed.
+<p>
+	An implementation shall:
+<ol>
+<li>Eliminate all cache entries which are valid
+		   at this point in time when <tt>flush_cache_all</tt>
+		   is invoked.  This applies to virtual cache
+		   architectures.  If the cache is write-back
+		   in nature, this routine shall commit the cache
+		   data to memory before invalidating each entry.
+		   For physical caches, no action need be performed
+		   since physical mappings have no bearing on
+		   address space translations.
+
+<li>For <tt>flush_tlb_all</tt>, all TLB mappings for the kernel
+		   address space should be made consistant with the
+		   OS page tables by whatever means necessary.  Note
+		   that with an architecture that possesses the notion
+		   of "MMU/TLB contexts" it may be necessary to
+		   perform this synchronization in every "active"
+		   MMU/TLB context.
+</ol>
+<pre><b>
+void flush_cache_mm(struct mm_struct *mm);
+void flush_tlb_mm(struct mm_struct *mm);
+</b></pre>
+
+	These routines notify the system that the entire address
+	space described by the <tt>mm_struct</tt> passed is changing.  Please
+	take note of two things in particular:
+<ol>
+<li>The <tt>mm_struct</tt> is the unit of mmu/tlb real estate
+		   as far as the flush architecture is concerned.
+		   In particular, an <tt>mm_struct</tt> may map to one or
+		   many tasks or none!
+
+<li>This "address space" change is considered to be
+		   occurring in user space only.  It is therefore safe
+		   for code to avoid flushing kernel tlb/cache
+		   entries if that is possible for efficiency.
+</ol>
+	An implementation shall:
+<ol>
+<li>For <tt>flush_cache_mm</tt>, whatever entries could exist
+		   in a virtual cache for the address space described
+		   by <tt>mm_struct</tt> are to be invalidated.
+
+<li>For <tt>flush_tlb_mm</tt>, the tlb/mmu hardware is to be
+		   placed in a state where it will see the (now
+		   current) kernel page table entries for the address
+		   space described by the <tt>mm_struct</tt>.
+</ol>
+<pre><b>
+flush_cache_range(struct mm_struct *mm, unsigned long start,
+                  unsigned long end);
+flush_tlb_range(struct mm_struct *mm, unsigned long start,
+                unsigned long end);
+</pre></b>
+	A change to a particular range of user addresses in the
+	address space described by the <tt>mm_struct</tt> passed is occurring.
+	The two notes above for <tt>flush_*_mm()</tt> concerning the <tt>mm_struct</tt>
+	passed apply here as well.
+<p>
+	An implementation shall:
+<ol>
+<li>For <tt>flush_cache_range</tt>, on a virtually cached
+		   system, all cache entries which are valid
+		   for the range start to end in the address space
+		   described by the <tt>mm_struct</tt> are to be invalidated.
+
+<li>For <tt>flush_tlb_range</tt>, whatever actions necessary
+		   to cause the MMU/TLB hardware to not contain
+		   stale translations are to be performed.  This
+		   means that whatever translations are in the kernel
+		   page tables in the range start to end in the
+		   address space described by the <tt>mm_struct</tt> are to
+		   be what the memory mangement hardware will see from
+		   this point forward, by whatever means.
+</ol>
+<pre><b>
+void flush_cache_page(struct vm_area_struct *vma, unsigned long address);
+void flush_tlb_page(struct vm_area_struct *vma, unsigned long address);
+</b></pre>
+
+	A change to a single page at <tt>address</tt> within user space to
+	the address space described by the <tt>vm_area_struct</tt> passed is
+	occurring.  An implementation, if need be, can get at the
+	assosciated <tt>mm_struct</tt> for this address space via <tt>vma-&gt;vm_mm</tt>.
+	The VMA is passed for convenience so that an implementation
+	can inspect <tt>vma-&gt;vm_flags</tt>.  This way in an implementation
+	where the instruction and data spaces are not unified, one can
+	check to see if <tt>VM_EXEC</tt> is set in <tt>vma-&gt;vm_flags</tt> to possibly
+	avoid flushing the instruction space, for example.
+<p>
+	The two notes above for <tt>flush_*_mm()</tt> concerning the <tt>mm_struct</tt>
+	(passed indirectly via <tt>vma-&gt;vm_mm</tt>) apply here as well.
+<p>
+	An implementation shall:
+<ol>
+<li>For <tt>flush_cache_range</tt>, on a virtually cached
+		   system, all cache entries which are valid
+		   for the page at <tt>address</tt> in the address space
+		   described by the VMA are to be invalidated.
+
+<li>For <tt>flush_tlb_range</tt>, whatever actions necessary
+		   to cause the MMU/TLB hardware to not contain
+		   stale translations are to be performed.  This
+		   means that whatever translations are in the kernel
+		   page tables for the page at <tt>address</tt> in the
+		   address space described by the VMA passed are to
+		   be what the memory mangement hardware will see from
+		   this point forward, by whatever means.
+</ol>
+<pre><b>
+void flush_page_to_ram(unsigned long page);
+</b></pre>
+	This is the ugly duckling.  But its semantics are necessary
+	on so many architectures that I needed to add it to the flush
+	architecture for Linux.
+<p>
+	Briefly, when (as one example) the kernel services a COW
+	fault, it uses the aliased mappings of all physical memory
+	in kernel space to perform the copy of the page in question
+	to a new page.  This presents a problem for virtually indexed
+	caches which are write-back in nature.  In this case, the
+	kernel touches two physical pages in kernel space.  The code
+	sequence being described here essentially looks like:
+<pre>
+do_wp_page()
+{
+	[ ... ]
+		copy_cow_page(old_page,new_page);
+		flush_page_to_ram(old_page);
+		flush_page_to_ram(new_page);
+		flush_cache_page(vma, address);
+		modify_address_space();
+		free_page(old_page);
+		flush_tlb_page(vma, address);
+	[ ... ]
+}
+</pre>
+	(Some of the actual code has been simplified for example
+	purposes.)
+<p>
+	Consider a virtually indexed cache which is write-back.
+	At the point in time at which the copy of the page occurs
+	to the kernel space aliases, it is possible for the user
+	space view of the original page to be in the caches (at
+	the user's address, ie. where the fault is occurring).
+	The page copy can bring this data (for the old page)
+	into the caches.  It will also place the data (at the new
+	kernel aliased mapping of the page) being copied to into
+	the cache, and for write back caches this data will be dirty
+	or modified in the cache.
+<p>
+	In such a case main memory will not see the most recent copy
+	of the data.  The caches are stupid, so for the new page we
+	are giving to the user, without forcing the cached data at the
+	kernel alias to main memory the process will see the old
+	contents of the page (ie. whatever garbage was there before
+	the copy done by COW processing above).
+<p>
+	A concrete example of what was just described:
+<p>
+	Consider a process which shares a page, read-only with another
+	task (or many) at virtual address 0x2000 in user space.  And
+	for example purposes let us say that this virtual address maps
+	to physical page 0x14000.
+<pre>
+		Virtual Pages
+	task 1	--------------
+	        | 0x00000000 |
+		--------------
+	        | 0x00001000 |			Physical Pages
+		--------------			--------------
+		| 0x00002000 | --\		| 0x00000000 |
+		--------------    \		--------------
+                                   \		| ...        |
+	task 2  --------------      \		--------------
+		| 0x00000000 |      |----&gt;	| 0x00014000 |
+		--------------      /		--------------
+		| 0x00001000 |     /		| ...        |
+		--------------    /		--------------
+		| 0x00002000 | --/
+		--------------
+</pre>
+	If task 2 tries to write to the read-only page at address
+	0x2000 we will get a fault and eventually end up at the
+	code fragment shown above in <tt>do_wp_page()</tt>.
+<p>
+	The kernel will get a new page for task2, let us say this
+	is physical page 0x26000, and let us also say that the kernel
+	alias mappings for physical pages 0x14000 and 0x26000 can
+	reside in the two unique cache lines at the same time based
+	upon the line indexing scheme of this cache.
+<p>
+	The page contents get copied from the kernel mappings for
+	physical page 0x14000 to the ones for physical page 0x26000.
+<p>
+	At this point in time, on a write-back virtually indexed cache
+	architecture we have a potential inconsistancy.  The new data
+	copied into physical page 0x26000 is not necessary in main
+	memory at this point, in fact it could be all in the cache
+	only at the kernel alias of the physical address.  Also, the
+	(non-modified, ie. clean) data for the original (old) page
+	is in the cache at the kernel alias for physical page 0x14000,
+	this can produce an inconsistancy later on, so to be safe it
+	is best to be eliminate the cached copies of this data as
+	well.
+<p>
+	Let us say we did not write back the data for the page at
+	0x26000 and we let it just stay there.  We would return
+	to task 2 (who has this new page now mapped in at virtual
+	address 0x2000), he would complete his write, then he
+	would read some other piece of data in this new page (i.e.
+	expecting the contents that existed there beforehand).
+	At this point in time if the data is left in the cache
+	at the kernel alias for the new physical page, the user
+	will get whatever was in main memory before the copy
+	for his read.  This can lead to disasterous results.
+<p>
+	Therefore an architecture shall:
+<dl><dd>On virtually indexed cache architectures, do whatever
+		is necessary to make main memory consistant with the
+		cached copy of the kernel space page passed.
+</dl>
+<p>
+	NOTE: It is actually necessary for this routine to invalidate
+	      lines in a virtual cache which is not write-back in
+	      nature.  To see why this is really necessary, replay
+	      the above example with task 1 and 2, but this time
+	      <tt>fork()</tt> yet another task 3 before the COW faults occur,
+	      consider the contents of the caches in both kernel and
+	      user space if the following sequence occurrs in exact
+	      succession:
+<ol>
+<li>task 1 reads some the page at 0x2000
+<li>task 2 COW faults the page at 0x2000
+<li>task 2 performs his writes to the new page at 0x2000
+<li>task 3 COW faults the page at 0x2000
+</ol>
+	       Even on a non-writeback virtually indexed cache,
+	       task 3 can see inconsistant data after the COW
+	       fault if <tt>flush_page_to_ram</tt> does not invalidate the
+	       kernel aliased physical page from the cache.
+<pre><b>
+void update_mmu_cache(struct vm_area_struct *vma,
+                      unsigned long address, pte_t pte);
+</b></pre>
+
+	Although not strictly part of the flush architecture, on
+	certain architectures some critical operations and checks
+	need to be performed here for things to work out properly
+	and for the system to remain consistant.
+<p>
+	In particular, for virtually indexed caches this routine
+	must check to see that the new mapping being added by
+	the current page fault does not add an "bad alias" to user
+	space.
+<p>
+	A "bad alias" is defined as two or more mappings (at least one
+	of which is writable) to two or more virtual pages which all
+	translate to the same exact physical page, and due to the
+	indexing algorithm of the cache can also reside in unique
+	and mutually exclusive cache lines.
+<p>
+	If such a "bad alias" is detected an implementation needs to
+	resolve this inconsistancy some how, one solution is to
+	walk through all of the mappings and change the page tables
+	to make these pages as "non-cacheable" if the hardware allows
+	such a thing.
+<p>
+	The checks for this are very simple, all an implementation
+	needs to do essentially is:
+<pre>
+if((vma-&gt;vm_flags &amp; (VM_WRITE|VM_SHARED)) == (VM_WRITE|VM_SHARED))
+        check_for_potential_bad_aliases();
+</pre>
+	So for the common case (shared writable mappings are extremely
+	rare) only one comparison is needed for systems with virtually
+	indexed caches.
+
+<h3>5. Implications for SMP</h3>
+
+	Depending upon the architecture certain amends may be needed
+	to allow the flush architecture to work on an SMP system.
+<p>
+	The main concern is whether one of the above flush operations
+	cause the entire system to be globally see the flush, or the
+	flush is only guarenteed to be seen by the local processor.
+<p>
+	In the latter case a cross calling mechanism is needed.
+	The current two SMP systems supported under Linux (Intel
+	and Sparc) use inter-processor interrupts to "broadcast" the
+	flush operation and cause it to run locally on all processors
+	if necessary.
+<p>
+	As an example, on sun4m Sparc systems all processers in the
+	system must execute the flush request to guarentee consistancy
+	across the entire system.  However, on sun4d Sparc machines,
+	TLB flushes performed on the local processor are broadcast
+	over the system bus by the hardware and therefore a cross
+	call is not necessary.
+
+<h3>6. Implications for context based MMU/CACHE architectures</h3>
+
+	The entire idea behind the concept of MMU and cache context
+	facilities is to allow many address spaces to share the
+	cache/mmu resources on the cpu.
+<p>
+	To take full advantage of such a facility, and still maintain
+	coherency as described above, requires some extra
+	consideration from the implementor.
+<p>
+	The issues involved will vary greatly from one implementation
+	to another, at least this has been the experience of the
+	author.  But in particular some of the issues are likely
+	to be:
+<ol>
+<li>The relationship of kernel space mappings to
+		   user space ones, as far as contexts are concerned.
+		   On some systems kernel mappings have a "global"
+		   attribute, in that the hardware does not concern
+		   itself with context information when a translation
+		   is made which has this attribute.  Therefore one
+		   flush (in any context) of a kernel cache/mmu
+		   mapping could be sufficient.
+<br>
+		   However it is possible in other implementations
+		   for the kernel to share the context key assosciated
+		   with a particular address space.  It may be necessary
+		   in such a case to walk into all contexts which are
+		   currently valid and perform the complete flush in
+		   each one for a kernel address space flush.
+
+<li>The cost of per-context flushes can become a key
+		   issue, especially with respect to the TLB.  For
+		   example, if a tlb flush is needed on a large
+		   range of addresses (or an entire address space)
+		   it may be more prudent to allocate and assign a new
+		   mmu context to this process for the sake of
+		   efficiency.
+</ol>
+
+<h3>7. How to handle what the flush architecture does not do, with examples</h3>
+
+	The flush architecture just described make no amends for
+	device/DMA coherency with cached data.  It also has no
+	provisions for any mapping strategies necessary for DMA
+	and devices should that be necessary on a certain machine
+	Linux is ported to.  Such issues are none of the flush
+	architectures buisness.
+<p>
+	Such issues are most cleanly dealt with at the device driver
+	level.  The author is convinced of this after his experiance
+	with a common set of Sparc device drivers which needed to
+	all function correctly on more than a handfull of cache/mmu
+	and bus architecrures in the <b>same</b> kernel.
+<p>
+	In fact this implementation is more efficient because the
+	driver knows exactly when DMA needs to see consistant data
+	or when DMA is going to create an inconsistancy which must
+	be resolved.  Any attempt to reach this level of efficiency
+	via hooks added to the generic kernel memory management code
+	would be complex and if anything very unclean.
+<p>
+	As an example, consider on the Sparc how DMA buffers are
+	handled.  When a device driver must perform DMA to/from
+	either a single buffer or a scatter list of many buffers
+	it uses a set of abstract routines:
+<pre>
+ char *(*mmu_get_scsi_one)(char *, unsigned long, struct linux_sbus *sbus);
+ void  (*mmu_get_scsi_sgl)(struct mmu_sglist *, int, struct linux_sbus *sbus);
+ void  (*mmu_release_scsi_one)(char *, unsigned long, struct linux_sbus *sbus);
+ void  (*mmu_release_scsi_sgl)(struct mmu_sglist *, int, struct linux_sbus *sbus);
+ void  (*mmu_map_dma_area)(unsigned long addr, int len);
+</pre>
+	Essentially the <tt>mmu_get_*</tt> routines are passed a pointer or
+	a set pointers and size specifications to areas in kernel
+	space for which DMA will occur, they return a DMA capable
+	address (i.e. one which can be loaded into the DMA controller
+	for the transfer).  When the driver is done with the DMA and
+	the transfer has completed the <tt>mmu_release_*</tt> routines must
+	be called with the DMA'able address(es) so that the resources
+	can be freed (if necessary) and cache flushes can be performed
+	(if necessary).
+<p>
+	The final routine is there for drivers which need to have
+	a block of DMA memory for a long period of time, for example
+	a networking driver would use this for a pool transmit and
+	receive buffers.
+<p>
+	The final argument is a Sparc specific entity which allows the
+	machine level code to perform the mapping if DMA mappings
+	are setup on a per-BUS basis.
+
+<h2>8. Open issues</h2>
+
+	There seems to be some very stupid cache architectures out
+	there which want to cause trouble when an alias is placed
+	into the cache (even a safe one where none of the aliased
+	cache entries are writable!).  Of note is the MIPS R4000
+	which will give an exception when such a situation occurs,
+	these can occur when COW processing is happing in the
+	current implementation.  On most chips which do something
+	stupid like this, the exception handler can flush the
+	entries in the cache being complained about and all is well.
+	The author is mostly concerned about the cost of these
+	exceptions during COW processing and the effects this will
+	have for system performance.  Perhaps a new flush is
+	neccessary, which would be performed before the page
+	copy in COW fault processing, which essentially is to
+	flush a user space page if not doing so would cause the
+	trouble just described.
+<p>
+	There has been heated talk lately about adding page flipping
+	facilities for very intelligent networking hardware.  It
+	may be necessary to extend the flush architecture to provide
+	the interfaces and facilities necessary for these changes to
+	the networking code.
+<p>
+	And by all means, the flush architecture is always subject to
+	improvements and changes to handle new issues or new hardware
+	which presents a problem that was to this point unknown.
+<p>
+<pre>
+David S. Miller
+davem@caip.rutgers.edu
+</pre>
+<P>
+<P><HR SIZE=3>
+
+<P>
+<P>
+
+
+
+  
+
+
+
+
+
+<BR> 
+ 
+<BR></BODY>
+</HTML>

@@ -1,0 +1,184 @@
+
+<HTML>
+<HEAD>
+<TITLE>Interrupt sharing 101</TITLE>
+<LINK rel="owner" href="mailto:">
+<SCRIPT LANGUAGE="JavaScript">
+<!-- hide this
+
+function help(message) {
+  self.status = message;
+  return true;
+}
+// stop hiding -->
+</SCRIPT>
+
+</HEAD>
+<BODY>
+<strong>The
+HyperNews <a href="../../../../../khg.html">Linux KHG</a>
+Discussion Pages</strong>
+<hr>
+<NOBR>
+
+
+
+
+
+</NOBR><BR>
+<H2><IMG src="../../../../../../../Icons/feedback.gif" ALT="Feedback:"
+  WIDTH=15 HEIGHT=15
+  ALIGN="bottom">
+Interrupt sharing 101</H2>
+
+<DL> <DD>
+<NOBR>
+<font size=+1><I>Forum:</I> <A HREF="../../../../devices.html" >
+ Device Drivers</A> </font><BR>
+
+<I>Re</I>: 
+  <IMG SRC="../../../../../../../Icons/question.gif" 
+   WIDTH=15 HEIGHT=15
+   ALT="Question" ALIGN="absmiddle">
+  <A HREF="../../../5.html" >
+   Interrupt Sharing ?</A>  (<A HREF="http://www.mathematik.uni-stuttgart.de/~floeff" >Frieder L&ouml;ffler</A>)<BR>
+
+<I>Re</I>: 
+  <IMG SRC="../../../../../../../Icons/more.gif" 
+   WIDTH=15 HEIGHT=15
+   ALT="More" ALIGN="absmiddle">
+  <A HREF="../1.html" >
+   Interrupt sharing - How to do with Network Drivers?</A>  (<A HREF="http://www.mathematik.uni-stuttgart.de/~floeff" >Frieder L&ouml;ffler</A>)<BR>
+<I>Keywords:</I> Interrupt sharing, PCI, Plug%0Aamp;Play <BR>
+<I>Date:</I> Wed, 28 Aug 1996 16:48:01 GMT <BR>
+<I>From:</I> <A HREF="http://www.undergrad.math.uwaterloo.ca/~cpbeaure" >Christophe Beauregard</A> &lt;<A HREF="mailto:chrisb@truespectra.com" >chrisb@truespectra.com</A>&gt; <BR>
+
+</NOBR>
+</DD> </DL>
+
+<P>
+<table border cellpadding=5 cellspacing=0 
+ width="100%" BGCOLOR="#FFFFFF">
+ <tr><td>
+
+<P>I guess this would be a handy thing to have in the knowledge
+base...
+</P>
+
+<P>The key thing to sharing an interrupt is to make sure that
+you have separate context information for each instance of
+the driver.  That is, no static global variables.  For
+most network drivers you just use the ``struct device* dev''
+for the context.
+</P>
+
+<P>Pass this to request_irq() as the last argument:
+</P>
+
+<P>
+<PRE>request_irq( irq, interrupt_handler, SA_SHIRQ, "MyDevice",
+             dev );
+</PRE>
+</P>
+
+<P>Note that the SA_INTERRUPT flag is significant here, since you
+can't share an IRQ if one driver uses fast interrupts and
+the other uses slow interrupts.  This is a bug, IMHO, since
+long chains of interrupt handlers may alter
+the timing such that processing is no longer ``fast''.  A
+better behaviour would be to just implicitly change to slow
+interrupts when more than one device is on the IRQ (and change
+back when the device is released down to one fast handler,
+of course).
+</P>
+
+<P>Then your interrupt handler looks something like this:
+</P>
+
+<P>
+<PRE>static void interrupt_handler( int irq, void* dev_id, ...) {
+    struct device* dev = (struct device*) dev_id;
+</PRE>
+</P>
+
+<P>
+<PRE>    if( dev == NULL ) {
+        ASSERT( 0 ); /* stupid programmer error.  Either
+                     we passed a NULL dev to request_irq
+                     or someone screwed up irq.c */
+    }
+</PRE>
+</P>
+
+<P>
+<PRE>    /* query the device to see if it caused the interrupt */
+    if( !(inb(something)&amp;something_else) ) {
+        /* nope, not us - normally we'd call this a spurious
+        interrupt, but it might belong to another device. */
+        return;
+    }
+</PRE>
+</P>
+
+<P>
+<PRE>    /* now, using the dev structure, service the interrupt */
+    ...
+</PRE>
+</P>
+
+<P>
+<PRE>    /* tell the hardware device we're done (IMPORTANT)
+    If this isn't done, the device will continue to hold
+    the IRQ line high, and we go into a nasty interrupt
+    loop.  Some devices might do this implicitly in the
+    interrupt processing (i.e. by emptying a buffer) */
+    outb(something, something);
+}
+</PRE>
+</P>
+
+<P>Because you have a separate ``struct device*'' for each
+instance of the card, multiple cards can share the same IRQ.
+Of course, they can also share the IRQ with other card,
+assuming they all Do The Right Thing.
+</P>
+
+<P>You can usually modify an existing device to do shared IRQs
+by simply finding the part of the code where it spews out
+a spurious interrupt message and replacing that with a
+`return' statement, adding SA_SHIRQ to the request_irq
+call, and removing references to irq2dev_map[].  I've had
+no problems doing this for drivers including
+drivers/char/psaux.c, drivers/net/tulip.c,
+drivers/scsi/aicxxx7.c and most of the MCA drivers.
+</P>
+
+<P>c.
+</P>
+
+</td></tr>
+</table>
+<P><NOBR>
+
+
+
+
+
+</NOBR><BR>
+
+<P>
+<P>
+
+
+
+  
+
+
+
+
+
+
+<BR> 
+ 
+<BR></BODY>
+</HTML>

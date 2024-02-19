@@ -1,0 +1,953 @@
+
+<HTML>
+<HEAD>
+<TITLE>Supporting Functions</TITLE>
+<LINK rel="owner" href="mailto:">
+<SCRIPT LANGUAGE="JavaScript">
+<!-- hide this
+
+function help(message) {
+  self.status = message;
+  return true;
+}
+// stop hiding -->
+</SCRIPT>
+
+</HEAD>
+<BODY>
+<strong>The
+HyperNews <a href="../khg.html">Linux KHG</a>
+Discussion Pages</strong>
+<hr>
+<h3>Supporting Functions</h3>
+
+<p>Here is a list of many of the most common supporting
+functions available to the device driver writer.  If you find
+other supporting functions that are useful, please point them
+out to me.  I know this is not a complete list, but I hope it
+is a helpful one.
+
+<h4><tt>add_request()</tt></h4>
+<tt>static void add_request(struct blk_dev_struct *dev, struct request * req)</tt>
+
+<p>This is a static function in ll_rw_block.c, and cannot be
+called by other code.  However, an understanding of this
+function, as well as an understanding of
+<tt>ll_rw_block()</tt>, may help you understand the strategy
+routine.
+
+<p>If the device that the request is for has an empty request
+queue, the request is put on the queue and the strategy routine
+is called. Otherwise, the proper place in the queue is chosen
+and the request is inserted in the queue, maintaining proper
+order by insertion sort.
+
+<p>Proper order (the elevator algorithm) is defined as:
+<ol>
+<li>Reads come before writes.
+<li>Lower minor numbers come before higher minor numbers.
+<li>Lower block numbers come before higher block numbers.
+</ol>
+The elevator algorithm is implemented by the macro
+<tt>IN_ORDER()</tt>, which is defined in drivers/block/blk.h
+<b>[This may have changed somewhat recently, but it shouldn't
+matter to the driver writer anyway...]</b>
+
+<p><b>Defined in:</b> drivers/block/ll_rw_block.c<br>
+<b>See also:</b> <tt>make_request()</tt>, <tt>ll_rw_block()</tt>.
+
+
+<h4><tt>add_timer()</tt></h4>
+<tt>void add_timer(struct timer_list * timer)</tt><br>
+<tt>#include &lt;linux/timer.h&gt;</tt>
+
+<p>Installs the timer structures in the list <tt>timer</tt> in
+the timer list.
+
+<p>The <tt>timer_list</tt> structure is defined by:
+<pre>
+struct timer_list {
+        struct timer_list *next;
+        struct timer_list *prev;
+        unsigned long expires;
+        unsigned long data;
+        void (*function)(unsigned long);
+};
+</pre>
+
+<p>In order to call <tt>add_timer()</tt>, you need to allocate
+a <tt>timer_list</tt> structure, and then call
+<tt>init_timer()</tt>, passing it a pointer to your
+<tt>timer_list</tt>.  It will nullify the <tt>next</tt> and
+<tt>prev</tt> elements, which is the correct initialization.
+If necessary, you can allocate multiple <tt>timer_list</tt>
+structures, and link them into a list.  Do make sure that you
+properly initialize all the unused pointers to <tt>NULL</tt>,
+or the timer code may get very confused.
+
+<p>For each struct in your list, you set three variables:
+<dl>
+<dt><tt>expires</tt>
+<dd>The number of jiffies (100ths of a second in
+Linux/86; thousandths or so in Linux/Alpha) after which to time out.
+<dt><tt>function</tt>
+<dd>Kernel-space function to run after timeout has occured.
+<dt><tt>data</tt>
+<dd>Passed as the argument to <tt>function</tt> when
+<tt>function</tt> is called.
+</dl>
+
+<p>Having created this list, you give a pointer to the first
+(usually the only) element of the list as the argument to
+<tt>add_timer()</tt>. Having passed that pointer, keep a copy
+of the pointer handy, because you will need to use it to modify
+the elements of the list (to set a new timeout when you need a
+function called again, to change the function to be called, or
+to change the data that is passed to the function) and to
+delete the timer, if necessary.
+
+<p><b>Note:</b> This is <i>not</i> process-specific.
+Therefore, if you want to wake a certain process at a timeout,
+you will have to use the sleep and wake primitives.  The
+functions that you install through this mechanism will run in
+the same context that interrupt handlers run in.
+
+<p><b>Defined in:</b> kernel/sched.c<br>
+<b>See also:</b> <tt>timer_table</tt> in include/linux/timer.h,
+<tt>init_timer()</tt>, <tt>del_timer()</tt>.
+
+
+
+<h4><tt>cli()</tt></h4>
+<tt>#define cli() __asm__ __volatile__ ("cli"::)</tt><br>
+<tt>#include &lt;asm/system.h&gt;</tt>
+
+<p>Prevents interrupts from being acknowledged.  <tt>cli</tt>
+stands for ``CLear Interrupt enable''.
+
+<p><b>See also:</b> <tt>sti()</tt>
+
+
+
+<h4><tt>del_timer</tt></h4>
+<tt>void del_timer(struct timer_list * timer)</tt><br>
+<tt>#include &lt;linux/timer.h&gt</tt>
+
+<p>Deletes the timer structures in the list <tt>timer</tt> in
+the timer list.
+
+<p>The timer list that you delete must be the address of a
+timer list you have earlier installed with
+<tt>add_timer()</tt>.  Once you have called
+<tt>del_timer()</tt> to delete the timer from the kernel timer
+list, you may deallocate the memory used in the
+<tt>timer_list</tt> structures, as it is no longer referenced
+by the kernel timer list.
+
+<p><b>Defined in:</b> kernel/sched.c<br>
+<b>See also:</b> <tt>timer_table</tt> in include/linux/timer.h,
+<tt>init_timer()</tt>, <tt>add_timer()</tt>.
+
+
+
+<h4><tt>end_request()</tt></h4>
+<tt>static void end_request(int uptodate)</tt><br>
+<tt>#include "blk.h"</tt>
+
+<p>Called when a request has been satisfied or aborted.  Takes
+one argument:
+<dl>
+<dt><tt>uptodate</tt>
+<dd>If not equal to 0, means that the request has been satisfied.<br>
+If equal to 0, means that the request has not been satisfied.
+</dl>
+
+<p>If the request was satisfied (<tt>uptodate != 0</tt>),
+<tt>end_request()</tt> maintains the request list, unlocks the
+buffer, and may arrange for the scheduler to be run at the next
+convenient time (<tt>need_resched = 1</tt>; this is implicit in
+<tt>wake_up()</tt>, and is not explicitly part of
+<tt>end_request()</tt>), before waking up all processes
+sleeping on the <tt>wait_for_request</tt> event, which is slept
+on in <tt>make_request()</tt>, <tt>ll_rw_page()</tt>, and
+<tt>ll_rw_swap_file()</tt>.
+
+<p><b>Note:</b> This function is a static function, defined in
+drivers/block/blk.h for every non-SCSI device that includes
+blk.h. (SCSI devices do this differently; the high-level SCSI
+code itself provides this functionality to the low-level
+device-specific SCSI device drivers.) It includes several
+defines dependent on static device information, such as the
+device number.  This is marginally faster than a more generic
+normal C function.
+
+<p><b>Defined in:</b> kernel/blk_drv/blk.h<br>
+<b>See also:</b> <tt>ll_rw_block()</tt>, <tt>add_request()</tt>,
+<tt>make_request()</tt>.
+
+
+
+
+<h4><tt>free_irq()</tt></h4>
+<tt>void free_irq(unsigned int irq)</tt><br>
+<tt>#include &lt;linux/sched.h&gt</tt>
+
+<p>Frees an irq previously aquired with <tt>request_irq()</tt>
+or <tt>irqaction()</tt>.  Takes one argument:
+<dl>
+<dt><tt>irq</tt>
+<dd>interrupt level to free.
+</dl>
+
+<p><b>Defined in:</b> kernel/irq.c<br>
+<b>See also:</b> <tt>request_irq()</tt>, <tt>irqaction()</tt>.
+
+
+
+
+<h4><tt>get_user()</tt></h4>
+<tt>#define get_user(ptr) ((__typeof__(*(ptr)))__get_user((ptr),sizeof(*(ptr))))</tt><br>
+<tt>#include &lt;asm/segment.h&gt</tt>
+
+<p>Allows a driver to access data in user space, which is in a
+different segment than the kernel.  Derives the type of the
+argument and the return type automatically. <b>This means that
+you have to use types correctly.  Shoddy typing will simply
+fail to work.</b>
+
+<p><IMG src="../../../KHGicons/warning.gif" alt="[Caution!] "><b>Note:</b>
+these functions may cause implicit I/O, if the memory being
+accessed has been swapped out, and therefore pre-emption may
+occur at this point.  Do not include these functions in
+critical sections of your code even if the critical sections
+are protected by <tt>cli()</tt>/<tt>sti()</tt> pairs, because
+that implicit I/O will violate the integrity of your
+<tt>cli()</tt>/<tt>sti()</tt> pair.  If you need to get at
+user-space memory, copy it to kernel-space memory <i>before</i>
+you enter your critical section.
+
+<p>These functions take one argument:
+<dl>
+<dt><tt>addr</tt>
+<dd>Address to get data from.
+<dt><b>Returns:</b>
+<dd>Data at that offset in user space.
+</dl>
+
+<p><b>Defined in:</b> include/asm/segment.h<br>
+<b>See also:</b> <tt>memcpy_*fs()</tt>, <tt>put_user()</tt>, <tt>cli()</tt>,
+<tt>sti()</tt>.
+
+
+
+<h4><tt>inb(), inb_p()</tt></h4>
+<tt>inline unsigned int inb(unsigned short port)</tt><br>
+<tt>inline unsigned int inb_p(unsigned short port)</tt><br>
+<tt>#include &lt;asm/io.h&gt</tt>
+
+<p>Reads a byte from a port.  <tt>inb()</tt> goes as fast as it
+can, while <tt>inb_p()</tt> pauses before returning.  Some
+devices are happier if you don't read from them as fast as
+possible.  Both functions take one argument:
+<dl>
+<dt><tt>port</tt>
+<dd>Port to read byte from.
+<dt><b>Returns:</b>
+<dd>The byte is returned in the low byte of the
+32-bit integer, and the 3 high bytes are unused, and may be garbage.
+</dl>
+
+<p><b>Defined in:</b> include/asm/io.h<br>
+<b>See also:</b> <tt>outb()</tt>, <tt>outb_p()</tt>.
+
+
+<h4><tt>init_timer()</tt></h4>
+
+<p>Inline function for initializing <tt>timer_list</tt>
+structures for use with <tt>add_timer()</tt>.
+
+<p><b>Defined in:</b> include/linux/timer.h<br>
+<b>See also:</b> <tt>add_timer()</tt>.
+
+
+
+<h4><tt>irqaction()</tt></h4>
+<tt>int irqaction(unsigned int irq, struct sigaction *new)</tt><br>
+<tt>#include &lt;linux/sched.h&gt</tt>
+
+<p>Hardware interrupts are really a lot like signals.
+Therefore, it makes sense to be able to register an interrupt
+like a signal.  The <tt>sa_restorer()</tt> field of the
+<tt>struct sigaction</tt> is not used, but otherwise it is the
+same.  The int argument to the <tt>sa.handler()</tt> function
+may mean different things, depending on whether or not the IRQ
+is installed with the <tt>SA_INTERRUPT</tt> flag.  If it is not
+installed with the <tt>SA_INTERRUPT</tt> flag, then the
+argument passed to the handler is a pointer to a register
+structure, and if it is installed with the
+<tt>SA_INTERRUPT</tt> flag, then the argument passed is the
+number of the IRQ.  For an example of handler set to use the
+<tt>SA_INTERRUPT</tt> flag, look at how <tt>rs_interrupt()</tt>
+is installed in drivers/char/serial.c
+
+<p>The <tt>SA_INTERRUPT</tt> flag is used to determine whether
+or not the interrupt should be a ``fast'' interrupt.  Normally,
+upon return from the interrupt, <tt>need_resched</tt>, a global
+flag, is checked.  If it is set (!= 0), then
+<tt>schedule()</tt> is run, which may schedule another process
+to run.  They are also run with all other interrupts still
+enabled.  However, by setting the <tt>sigaction</tt> structure
+member <tt>sa_flags</tt> to <tt>SA_INTERRUPT</tt>, ``fast''
+interrupts are chosen, which leave out some processing, and
+very specifically do not call <tt>schedule()</tt>.
+
+<p><tt>irqaction()</tt> takes two arguments:
+<dl>
+<dt><tt>irq</tt>
+<dd>The number of the IRQ the driver wishes to acquire.
+<dt><tt>new</tt>
+<dd>A pointer to a sigaction struct.
+<dt><b>Returns:</b>
+<dd><tt>-EBUSY</tt> if the interrupt has already been acquired,<br>
+<tt>-EINVAL</tt> if <tt>sa.handler()</tt> is NULL,<br>
+0 on success.
+</dl>
+
+<p><b>Defined in:</b> kernel/irq.c<br>
+<b>See also:</b> <tt>request_irq(), free_irq()</tt>
+
+
+
+<h4><tt>IS_*(inode)</tt></h4>
+<tt>IS_RDONLY(inode) ((inode)->i_flags & MS_RDONLY)</tt><br>
+<tt>IS_NOSUID(inode) ((inode)->i_flags & MS_NOSUID)</tt><br>
+<tt>IS_NODEV(inode) ((inode)->i_flags & MS_NODEV)</tt><br>
+<tt>IS_NOEXEC(inode) ((inode)->i_flags & MS_NOEXEC)</tt><br>
+<tt>IS_SYNC(inode) ((inode)->i_flags & MS_SYNC)</tt><br>
+<tt>#include &lt;linux/fs.h&gt</tt>
+
+<p>These five test to see if the inode is on a filesystem
+mounted the corresponding flag.
+
+
+
+
+<h4><tt>kfree*()</tt></h4>
+<tt>#define kfree(x) kfree_s((x), 0)</tt><br>
+<tt>void kfree_s(void * obj, int size)</tt><br>
+<tt>#include &lt;linux/malloc.h&gt</tt>
+
+<p>Free memory previously allocated with <tt>kmalloc()</tt>.
+There are two possible arguments:
+<dl>
+<dt><tt>obj</tt>
+<dd>Pointer to kernel memory to free.
+<dt><tt>size</tt>
+<dd>To speed this up, if you know the size, use
+<tt>kfree_s()</tt> and provide the correct size.  This way, the kernel memory
+allocator knows which bucket cache the object belongs to, and doesn't
+have to search all of the buckets.  (For more details on this
+terminology, read mm/kmalloc.c.)
+</dl>
+
+<p><b>[<tt>kfree_s()</tt> may be obsolete now.]</b>
+
+<p><b>Defined in:</b> mm/kmalloc.c, include/linux/malloc.h<br>
+<b>See also:</b> <tt>kmalloc()</tt>.
+
+
+
+
+
+<h4><tt>kmalloc()</tt></h4>
+<tt>void * kmalloc(unsigned int len, int priority)</tt><br>
+<tt>#include &lt;linux/kernel.h&gt</tt>
+
+<p><tt>kmalloc()</tt> used to be limited to 4096 bytes.  It is
+now limited to 131056 bytes ((32*4096)-16) on Linux/Intel, and
+twice that on platforms such as Alpha with 8Kb pages.  Buckets,
+which used to be all exact powers of 2, are now a power of 2
+minus some small number, except for numbers less than or equal
+to 128.  For more details, see the implementation in
+mm/kmalloc.c.
+
+<p><tt>kmalloc()</tt> takes two arguments:
+<dl>
+<dt><tt>len</tt>
+<dd>Length of memory to allocate.  If the maximum is
+exceeded, kmalloc will log an error message of ``<tt>kmalloc of too large
+a block (%d bytes).</tt>'' and return <tt>NULL</tt>.
+<dt><tt>priority</tt>
+<dd><tt>GFP_KERNEL</tt> or <tt>GFP_ATOMIC</tt>.  If
+<tt>GFP_KERNEL</tt> is chosen, <tt>kmalloc()</tt> may sleep,
+allowing pre-emption to occur.  This is the normal way of
+calling <tt>kmalloc()</tt>.  However, there are cases where it
+is better to return immediately if no pages are available,
+without attempting to sleep to find one.  One of the places in
+which this is true is in the swapping code, because it could
+cause race conditions, and another in the networking code,
+where things can happen at much faster speed that things could
+be handled by swapping to disk to make space for giving the
+networking code more memory.  The most important reason for
+using <tt>GFP_ATOMIC</tt> is if it is being called from an
+interrupt, when you cannot sleep, and cannot receive other
+interrupts.
+
+<dt><b>Returns:</b>
+<dd><tt>NULL</tt> on failure.<br>
+Pointer to allocated memory on success.
+</dl>
+
+<b>Defined in:</b> mm/kmalloc.c<br>
+<b>See also:</b> <tt>kfree()</tt>
+
+
+
+<h4><tt>ll_rw_block()</tt></h4>
+<tt>void ll_rw_block(int rw, int nr, struct buffer_head *bh[])</tt><br>
+<tt>#include &lt;linux/fs.h&gt</tt>
+
+<p>No device driver will ever call this code: it is called only
+through the buffer cache.  However, an understanding of this
+function may help you understand the function of the strategy
+routine.
+
+<p>After sanity checking, if there are no pending requests on
+the device's request queue, <tt>ll_rw_block()</tt> ``plugs''
+the queue so that the requests don't go out until all the
+requests are in the queue, sorted by the elevator algorithm.
+<tt>make_request()</tt> is then called for each request.  If
+the queue had to be plugged, then the strategy routine for that
+device is not active, and it is called, <b>with interrupts
+disabled.  It is the responsibility of the strategy routine to
+re-enable interrupts.</b>
+
+<p><b>Defined in:</b> devices/block/ll_rw_block.c<br>
+<b>See also:</b> <tt>make_request()</tt>, <tt>add_request()</tt>.
+
+
+
+
+<h4><tt>MAJOR()</tt></h4>
+<tt>#define MAJOR(a) (((unsigned)(a))&gt;&gt;8)</tt><br>
+<tt>#include &lt;linux/fs.h&gt</tt>
+
+<p>This takes a 16 bit device number and gives the associated
+major number by shifting off the minor number.
+
+<p><b>See also:</b> <tt>MINOR()</tt>.
+
+
+
+
+<h4><tt>make_request()</tt></h4>
+<tt>static void make_request(int major, int rw, struct buffer_head *bh)</tt><br>
+
+<p>This is a static function in ll_rw_block.c, and cannot be
+called by other code.  However, an understanding of this
+function, as well as an understanding of
+<tt>ll_rw_block()</tt>, may help you understand the strategy
+routine.
+
+<p><tt>make_request()</tt> first checks to see if the request
+is readahead or writeahead and the buffer is locked.  If so, it
+simply ignores the request and returns.  Otherwise, it locks
+the buffer and, except for SCSI devices, checks to make sure
+that write requests don't fill the queue, as read requests
+should take precedence.
+
+<p>If no spaces are available in the queue, and the request is
+neither readahead nor writeahead, <tt>make_request()</tt>
+sleeps on the event <tt>wait_for_request</tt>, and tries again
+when woken.  When a space in the queue is found, the request
+information is filled in and <tt>add_request()</tt> is called
+to actually add the request to the queue.
+
+<b>Defined in:</b> devices/block/ll_rw_block.c<br>
+<b>See also:</b> <tt>add_request()</tt>, <tt>ll_rw_block()</tt>.
+
+
+
+
+<h4><tt>MINOR()</tt></h4>
+<tt>#define MINOR(a) ((a)&amp;0xff)</tt><br>
+<tt>#include &lt;linux/fs.h&gt</tt>
+
+<p>This takes a 16 bit device number and gives the associated
+minor number by masking off the major number.
+
+<p><b>See also:</b> <tt>MAJOR()</tt>.
+
+
+
+
+<h4><tt>memcpy_*fs()</tt></h4>
+<tt>inline void memcpy_tofs(void * to, const void * from, unsigned long n)</tt><br>
+<tt>inline void memcpy_fromfs(void * to, const void * from, unsigned long n)</tt><br>
+<tt>#include &lt;asm/segment.h&gt</tt>
+
+<p>Copies memory between user space and kernel space in chunks
+larger than one byte, word, or long.  Be very careful to get
+the order of the arguments right!
+
+<p><IMG src="../../../KHGicons/warning.gif" alt="[Caution!] "><b>Note:</b>
+these functions may cause implicit I/O, if the memory being
+accessed has been swapped out, and therefore pre-emption may
+occur at this point.  Do not include these functions in
+critical sections of your code, even if the critical sections
+are protected by <tt>cli()</tt>/<tt>sti()</tt> pairs, because
+implicit I/O will violate the <tt>cli()</tt> protection.  If
+you need to get at user-space memory, copy it to kernel-space
+memory <i>before</i> you enter your critical section.
+
+<p>These functions take three arguments:
+<dl>
+<dt><tt>to</tt>
+<dd>Address to copy data to.
+<dt><tt>from</tt>
+<dd>Address to copy data from.
+<dt><tt>n</tt>
+<dd>Number of bytes to copy.
+</dl>
+
+<p><b>Defined in:</b> include/asm/segment.h<br>
+<b>See also:</b> <tt>get_user()</tt>, <tt>put_user()</tt>, <tt>cli()</tt>,
+<tt>sti()</tt>.
+
+
+
+
+<h4><tt>outb(), outb_p()</tt></h4>
+<tt>inline void outb(char value, unsigned short port)</tt><br>
+<tt>inline void outb_p(char value, unsigned short port)</tt><br>
+<tt>#include &lt;asm/io.h&gt</tt>
+
+<p>Writes a byte to a port.  <tt>outb()</tt> goes as fast as it
+can, while <tt>outb_p()</tt> pauses before returning.  Some
+devices are happier if you don't write to them as fast as
+possible.  Both functions take two arguments:
+<dl>
+<dt><tt>value</tt>
+<dd>The byte to write.
+<dt><tt>port</tt>
+<dd>Port to write byte to.
+</dl>
+
+<p><b>Defined in:</b> include/asm/io.h<br>
+<b>See also:</b> <tt>inb()</tt>, <tt>inb_p()</tt>.
+
+
+
+<h4><tt>printk()</tt></h4>
+<tt>int printk(const char* fmt, ...)</tt><br>
+<tt>#include &lt;linux/kernel.h&gt</tt>
+
+<p><tt>printk()</tt> is a version of <tt>printf()</tt> for the
+kernel, with some restrictions.  It cannot handle floats, and
+has a few other limitations, which are documented in
+kernel/vsprintf.c.  It takes a variable number of arguments:
+<dl>
+<dt><tt>fmt</tt>
+<dd>Format string, <tt>printf()</tt> style.
+<dt><tt>...</tt>
+<dd>The rest of the arguments, <tt>printf()</tt> style.
+<dt><b>Returns:</b>
+<dd>Number of bytes written.
+</dl>
+
+<p><IMG src="../../../KHGicons/warning.gif" alt="[Caution!]"><b>Note:</b> 
+<tt>printk()</tt> may cause implicit I/O, if the memory being
+accessed has been swapped out, and therefore pre-emption may
+occur at this point.  Also, <tt>printk()</tt> will set the
+interrupt enable flag, so <b>never use it in code protected
+by <tt>cli()</tt>.</b> Because it causes I/O, it is not safe to
+use in protected code anyway, even it if didn't set the
+interrupt enable flag.
+
+<p><b>Defined in:</b> kernel/printk.c.
+
+
+
+<h4><tt>put_user()</tt></h4>
+<tt>#define put_user(x,ptr) __put_user((unsigned long)(x),(ptr),sizeof(*(ptr)))</tt><br>
+<tt>#include &lt;asm/segment.h&gt</tt>
+
+<p>Allows a driver to write data in user space, which is in a
+different segment than the kernel. Derives the type of the
+arguments and the storage size automatically. <b>This means that
+you have to use types correctly.  Shoddy typing will simply
+fail to work.</b>
+
+<p><IMG src="../../../KHGicons/warning.gif" alt="[Caution!] "><b>Note:</b>
+these functions may cause implicit I/O, if the memory being
+accessed has been swapped out, and therefore pre-emption may
+occur at this point.  Do not include these functions in
+critical sections of your code even if the critical sections
+are protected by <tt>cli()</tt>/<tt>sti()</tt> pairs, because
+that implicit I/O will violate the integrity of your
+<tt>cli()</tt>/<tt>sti()</tt> pair.  If you need to get at
+user-space memory, copy it to kernel-space memory <i>before</i>
+you enter your critical section.
+
+<p>These functions take two arguments:
+<dl>
+<dt><tt>val</tt>
+<dd>Value to write
+<dt><tt>addr</tt>
+<dd>Address to write data to.
+</dl>
+
+<p><b>Defined in:</b> asm/segment.h<br>
+<b>See also:</b> <tt>memcpy_*fs()</tt>, <tt>get_user()</tt>, <tt>cli()</tt>,
+<tt>sti()</tt>.
+
+
+
+
+<h4><tt>register_*dev()</tt></h4>
+<tt>int register_chrdev(unsigned int major, const char *name, struct file_operations *fops)</tt><br>
+<tt>int register_blkdev(unsigned int major, const char *name, struct file_operations *fops)</tt><br>
+<tt>#include &lt;linux/fs.h&gt</tt><br>
+<tt>#include &lt;linux/errno.h&gt</tt>
+
+<p>Registers a device with the kernel, letting the kernel check
+to make sure that no other driver has already grabbed the same
+major number. Takes three arguments:
+<dl>
+<dt><tt>major</tt>
+<dd>Major number of device being registered.
+<dt><tt>name</tt>
+<dd>Unique string identifying driver.  Used in the
+output for the /proc/devices file.
+<dt><tt>fops</tt>
+<dd>Pointer to a <tt>file_operations</tt> structure for
+that device.  This must <b>not</b> be <tt>NULL</tt>, or the kernel will
+panic later.
+<dt><b>Returns:</b>
+<dd><tt>-EINVAL</tt> if major is &gt;= <tt>MAX_CHRDEV</tt> or
+<tt>MAX_BLKDEV</tt> (defined in <tt><linux/fs.h></tt>), for character or
+block devices, respectively.<br>
+<tt>-EBUSY</tt> if major device number has already been allocated.<br>
+0 on success.
+</dl>
+
+<p><b>Defined in:</b> fs/devices.c<br>
+<b>See also:</b> <tt>unregister_*dev()</tt>
+
+
+
+
+<h4><tt>request_irq()</tt></h4>
+<tt>int request_irq(unsigned int irq, void (*handler)(int), unsigned long flags, const char *device)</tt><br>
+<tt>#include &lt;linux/sched.h&gt</tt><br>
+<tt>#include &lt;linux/errno.h&gt</tt>
+
+<p>Request an IRQ from the kernel, and install an IRQ interrupt
+handler if successful.  Takes four arguments:
+<dl>
+<dt><tt>irq</tt>
+<dd>The IRQ being requested.
+<dt><tt>handler</tt>
+<dd>The handler to be called when the IRQ occurs.
+The argument to the handler function will be the number of the IRQ
+that it was invoked to handle.
+<dt><tt>flags</tt>
+<dd>Set to <tt>SA_INTERRUPT</tt> to request a ``fast''
+interrupt or 0 to request a normal, ``slow'' one. 
+<dt><tt>device</tt>
+<dd>A string containing the name of the device
+driver, <i>device</i>.
+<dt><b>Returns:</b>
+<dd><tt>-EINVAL</tt> if <tt>irq</tt> &gt; 15 or
+<tt>handler</tt> = <tt>NULL</tt>.<br>
+<tt>-EBUSY</tt> if <tt>irq</tt> is already allocated.<br>
+0 on success.
+</dl
+
+<p>If you need more functionality in your interrupt handling,
+use the <tt>irqaction()</tt> function.  This uses most of the
+capabilities of the <tt>sigaction</tt> structure to provide
+interrupt services similar to to the signal services provided
+by <tt>sigaction()</tt> to user-level programs.
+
+<p><b>Defined in:</b> kernel/irq.c<br>
+<b>See also:</b> <tt>free_irq()</tt>, <tt>irqaction()</tt>.
+
+
+
+
+<h4><tt>select_wait()</tt></h4>
+<tt>inline void select_wait(struct wait_queue **wait_address, select_table *p)</tt><br>
+<tt>#include &lt;linux/sched.h&gt</tt>
+
+<p>Add a process to the proper <tt>select_wait</tt> queue.
+This function takes two arguments:
+<dl>
+<dt><tt>wait_address</tt>
+<dd>Address of a <tt>wait_queue</tt> pointer to add to the circular
+list of waits.
+<dt><tt>p</tt>
+<dd.If <tt>p</tt> is <tt>NULL</tt>, <tt>select_wait</tt> does
+nothing, otherwise the current process is put to sleep.  This should
+be the <tt>select_table *wait</tt> variable that was passed to your
+<tt>select()</tt> function.
+</dl>
+
+<p><b>Defined in:</b> linux/sched.h<br>
+<b>See also:</b> <tt>*sleep_on(), wake_up*()</tt>
+
+
+
+
+<h4><tt>*sleep_on()</tt></h4>
+<tt>void sleep_on(struct wait_queue ** p)</tt><br>
+<tt>void interruptible_sleep_on(struct wait_queue ** p)</tt><br>
+<tt>#include &lt;linux/sched.h&gt</tt>
+
+<p>Sleep on an event, putting a <tt>wait_queue</tt> entry in
+the list so that the process can be woken on that event.
+<tt>sleep_on()</tt> goes into an uninteruptible sleep: The only
+way the process can run is to be woken by <tt>wake_up()</tt>.
+<tt>interruptible_sleep_on()</tt> goes into an interruptible
+sleep that can be woken by signals and process timeouts will
+cause the process to wake up.  A call to
+<tt>wake_up_interruptible()</tt> is necessary to wake up the
+process and allow it to continue running where it left off.
+Both take one argument:
+<dl>
+<dt><tt>p</tt>
+<dd>Pointer to a proper <tt>wait_queue</tt> structure
+that records the information needed to wake the process.
+</dl>
+
+<p><b>Defined in:</b> kernel/sched.c<br>
+<b>See also:</b> <tt>select_wait()</tt>, <tt>wake_up*()</tt>.
+
+
+
+
+<h4><tt>sti()</tt></h4>
+<tt>#define sti() __asm__ __volatile__ ("sti"::)</tt><br>
+<tt>#include &lt;asm/system.h&gt</tt>
+
+<p>Allows interrupts to be acknowledged.  <tt>sti</tt> stands
+for ``SeT Interrupt enable''.
+
+<p><b>Defined in:</b> asm/system.h<br>
+<b>See also:</b> <tt>cli()</tt>.
+
+
+
+
+<h4><tt>sys_get*()</tt></h4>
+<tt>int sys_getpid(void)</tt><br>
+<tt>int sys_getuid(void)</tt><br>
+<tt>int sys_getgid(void)</tt><br>
+<tt>int sys_geteuid(void)</tt><br>
+<tt>int sys_getegid(void)</tt><br>
+<tt>int sys_getppid(void)</tt><br>
+<tt>int sys_getpgrp(void)</tt>
+
+<p>These system calls may be used to get the information
+described in the table below, or the information can be
+extracted directly from the process table, like this:<br>
+<tt><i>foo</i> = current-&gt;<i>pid</i>;</tt><br>
+<table border>
+<tr><td><tt>pid</tt></td><td>Process ID</td></tr>
+<tr><td><tt>uid</tt></td><td>User ID</td></tr>
+<tr><td><tt>gid</tt></td><td>Group ID</td></tr>
+<tr><td><tt>euid</tt></td><td>Effective user ID</td></tr>
+<tr><td><tt>egid</tt></td><td>Effective group ID</td></tr>
+<tr><td><tt>ppid</tt></td><td>Process ID of process' parent process</td></tr>
+<tr><td><tt>pgid</tt></td><td>Group ID of process' parent process</td></tr>
+</table>
+
+<p>The system calls should not be used because they are slower
+<i>and</i> take more space.  Because of this, they are no
+longer exported as symbols throughout the whole kernel.
+
+<p><b>Defined in:</b> kernel/sched.c
+
+
+
+
+<h4><tt>unregister_*dev()</tt></h4>
+<tt>int unregister_chrdev(unsigned int major, const char *name)</tt><br>
+<tt>int unregister_blkdev(unsigned int major, const char *name)</tt><br>
+<tt>#include &lt;linux/fs.h&gt</tt><br>
+<tt>#include &lt;linux/errno.h&gt</tt>
+
+<p>Removes the registration for a device device with the
+kernel, letting the kernel give the major number to some other
+device. Takes two arguments:
+<dl>
+<dt><tt>major</tt>
+<dd>Major number of device being registered.
+Must be the same number given to <tt>register_*dev()</tt>.
+<dt><tt>name</tt>
+<dd>Unique string identifying driver.
+Must be the same number given to <tt>register_*dev()</tt>.
+<dt><b>Returns:</b>
+<dd><tt>-EINVAL</tt> if major is &gt;= <tt>MAX_CHRDEV</tt> or
+<tt>MAX_BLKDEV</tt> (defined in <tt>&lt;linux/fs.h&gt;</tt>),
+for character or block devices, respectively, or if there have
+not been file operations registered for major device
+<tt>major</tt>, or if <tt>name</tt> is not the same name that
+the device was registered with.<br>
+0 on success.
+</dl>
+
+<p><b>Defined in:</b> fs/devices.c<br>
+<b>See also:</b> <tt>register_*dev()</tt>
+
+
+
+
+<h4><tt>wake_up*()</tt></h4>
+<tt>void wake_up(struct wait_queue ** p)</tt><br>
+<tt>void wake_up_interruptible(struct wait_queue ** p)</tt><br>
+<tt>#include &lt;linux/sched.h&gt</tt>
+
+<p>Wakes up a process that has been put to sleep by the
+matching <tt>*sleep_on()</tt> function.  <tt>wake_up()</tt> can
+be used to wake up tasks in a queue where the tasks may be in a
+<tt>TASK_INTERRUPTIBLE</tt> or <tt>TASK_UNINTERRUPTIBLE</tt>
+state, while <tt>wake_up_interruptible()</tt> will only wake up
+tasks in a <tt>TASK_INTERRUPTIBLE</tt> state, and will be
+insignificantly faster than <tt>wake_up()</tt> on queues that
+have only interruptible tasks.  These take one argument:
+<dl>
+<dt><tt>q</tt>
+<dd>Pointer to the <tt>wait_queue</tt> structure of the
+process to be woken.
+</dl>
+
+<p>Note that <tt>wake_up()</tt> does not switch tasks, it only
+makes processes that are woken up runnable, so that the next
+time <tt>schedule()</tt> is called, they will be candidates to
+run.
+
+<p><b>Defined in:</b> kernel/sched.c<br>
+<b>See also:</b> <tt>select_wait()</tt>, <tt>*sleep_on()</tt>
+
+<p>Copyright (C) 1992, 1993, 1994, 1996 Michael K. Johnson,
+johnsonm@redhat.com.<br>
+<P>
+<P><HR SIZE=3>
+<P><B><A NAME="Messages">Messages</A></B>
+<NOBR>
+<font size=-1>
+
+
+
+
+
+
+
+</font>
+</NOBR>
+ <P>
+<NOBR>
+<DL COMPACT>
+<DT> 14. <IMG src="../../../Icons/question.gif" ALT="Question:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="reference/14.html">
+down/up() - semaphores; set/clear/test_bit()</A> <i> by <A HREF="http://www.newplaces.com/">Erez Strauss</A></i> </DT>
+<DT> 13. <IMG src="../../../Icons/disagree.gif" ALT="Disagree:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="reference/13.html">
+Bug in printk description!</A> <i> by <A HREF="http://web.mit.edu/tytso/www/home.html">Theodore Ts'o</A></i> </DT>
+<DT> 12. <IMG src="../../../Icons/question.gif" ALT="Question:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="reference/12.html">
+File access within a device driver?</A> <i> by Paul Osborn</i> </DT>
+<DT> 11. <IMG src="../../../Icons/note.gif" ALT="None:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="reference/11.html">
+man pages for reguest_region() and release_region() (?)</A> <i> by mharrison@i-55.com</i> </DT>
+<DT> 10. <IMG src="../../../Icons/question.gif" ALT="Question:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="reference/10.html">
+Can register_*dev() assign an unused major number?</A> <i> by rgerharz@erols.com</i> </DT>
+<DD>
+<DL COMPACT>
+<DT> 1. <IMG src="../../../Icons/note.gif" ALT="Note:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="reference/10/1.html">
+Register_*dev() can assign an unused major number.</A> <i> by <A HREF="http://www.erols.com/rgerharz">Reinhold J. Gerharz</A></i> </DT>
+</DL>
+</DD>
+<DT> 9. <IMG src="../../../Icons/question.gif" ALT="Question:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="reference/9.html">
+memcpy_*fs(): which way is "fs"?</A> <i> by Reinhold J. Gerharz</i> </DT>
+<DD>
+<DL COMPACT>
+<DT> 1. <IMG src="../../../Icons/note.gif" ALT="Note:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="reference/9/1.html">
+memcpy_tofs() and memcpy_fromfs()</A> <i> by <A HREF="http://hyper.stanford.edu/~dhinds">David Hinds</A></i> </DT>
+</DL>
+</DD>
+<DT> 8. <IMG src="../../../Icons/note.gif" ALT="Note:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="reference/8.html">
+init_wait_queue()</A> <i> by <A HREF="../../../~johnsonm">Michael K. Johnson</A></i> </DT>
+<DT> 7. <IMG src="../../../Icons/question.gif" ALT="Question:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="reference/7.html">
+request_irq(...,void *dev_id)</A> <i> by Robert Wilhelm</i> </DT>
+<DD>
+<DL COMPACT>
+<DT> 1. <IMG src="../../../Icons/note.gif" ALT="None:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="reference/7/1.html">
+dev_id seems to be for IRQ sharing</A> <i> by Steven Hunyady</i> </DT>
+</DL>
+</DD>
+<DT> 6. <IMG src="../../../Icons/idea.gif" ALT="Idea:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="reference/6.html">
+udelay should be mentioned</A> <i> by <A HREF="http://www.nbi.dk/~lindeman">Klaus Lindemann</A></i> </DT>
+<DT> 5. <IMG src="../../../Icons/idea.gif" ALT="Idea:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="reference/5.html">
+vprintk would be nice...</A> <i> by Robert Baruch</i> </DT>
+<DD>
+<DL COMPACT>
+<DT> 1. <IMG src="../../../Icons/feedback.gif" ALT="Feedback:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="reference/5/1.html">
+RE: vprintk would be nice...</A><i></i> </DT>
+</DL>
+</DD>
+<DT> 4. <IMG src="../../../Icons/question.gif" ALT="Question:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="reference/4.html">
+add_timer function errata?</A> <i> by <A HREF="http://www.monash.edu.au/~timf">Tim Ferguson</A></i> </DT>
+<DD>
+<DL COMPACT>
+<DT> 1. <IMG src="../../../Icons/smile.gif" ALT="Ok:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="reference/4/1.html">
+add_timer function errata</A> <i> by Tom Bjorkholm</i> </DT>
+</DL>
+</DD>
+<DT> 3. <IMG src="../../../Icons/question.gif" ALT="Question:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="reference/3.html">
+Very short waits</A> <i> by Kenn Humborg</i> </DT>
+<DT> 2. <IMG src="../../../Icons/note.gif" ALT="None:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="reference/2.html">
+Add the kill_xxx() family to Supporting functions?</A> <i> by Burkhard  Kohl</i> </DT>
+<DT> 1. <IMG src="../../../Icons/news.gif" ALT="News:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="reference/1.html">
+Allocating large amount of memory</A> <i> by <A HREF="../../../~johnsonm">Michael K. Johnson</A></i> </DT>
+<DD>
+<DL COMPACT>
+<DT> 1. <IMG src="../../../Icons/question.gif" ALT="Question:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="reference/1/1.html">
+bigphysarea for Linux 2.0?</A> <i> by <A HREF="http://www.cs.yale.edu/users/hager.html">Greg Hager</A></i> </DT>
+</DL>
+</DD>
+</DL>
+</NOBR>
+
+<P>
+<P>
+
+
+
+  
+
+
+
+
+
+<BR> 
+ 
+<BR></BODY>
+</HTML>

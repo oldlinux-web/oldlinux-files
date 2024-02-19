@@ -1,0 +1,678 @@
+<html>
+<head><title>Using Assembly Language in Linux</title></head>
+<body>
+<center>
+<h1>Using Assembly Language in Linux.</h1>
+<h2>by Phillip</h2>
+<h3>phillip@ussrback.com</h3>
+</center>
+Last updated: Monday 8th January 2001<br>
+<h2>Contents:</h2>
+<ul>
+<li> <a href=#Intro>Introduction</a><br>
+<li> <a href=#Syntax>Intel and AT&T Syntax</a><br>
+	<ul>
+	<li><a href=#Prefixes>Prefixes</a><br>
+	<li><a href=#Direction>Direction of Operands</a><br>
+	<li><a href=#Memory>Memory Operands</a><br>
+	<li><a href=#Suffixes>Suffixes</a><br>
+	</ul>
+<li><a href=#Syscalls>Syscalls</a><br>
+	<ul>
+	<li><a href=#Syscall5>Syscalls with < 6 args</a><br>
+	<li><a href=#Syscall6>Syscalls with > 5 args</a><br>
+	<li><a href=#Sockets>Socket syscalls</a><br>
+	</ul>
+<li><a href=#Command>Command Line Arguments</a><br>
+<li><a href=#InlineASM>GCC Inline ASM</a><br>
+<li><a href=#Compiling>Compiling</a><br>
+<li><a href=#Links>Further reference/Links</a><br>
+<li><a href=#k0de>Example Code.</a><br>
+</ul>
+
+<hr>
+
+<a name=Intro><h2>Introduction.</h2></a>
+
+<p> This article will describe assembly language programming under Linux.
+Contained within the bounds of the article is a comparison between Intel
+and AT&T syntax asm, a guide to using syscalls and a introductory guide to
+using inline asm in gcc.</p> <p> This article was written due to the lack
+of (good) info on this field of programming (inline asm section in
+particular), in which case i should remind thee that this is not a
+shellcode writing tutorial because there is no lack of info in this field.
+</p> <p> Various parts of this text I have learnt about through
+experimentation and hence may be prone to error. Should you find any of
+these errors on my part, do not hesitate to notify me via email and
+enlighten me on the given issue.</p> <p> There is only one prerequisite
+for reading this article, and thats obviously a basic knowledge of x86
+assembly language and C. </p>
+
+<hr>
+
+<a name=Syntax><h2>Intel and AT&T Syntax.</h2></a>
+
+<p> Intel and AT&T syntax Assembly language are very different from each
+other in appearance, and this will lead to confusion when one first comes
+across AT&T syntax after having learnt Intel syntax first, or vice versa.
+So lets start with the basics. </p>
+
+<a name=Prefixes><h3>Prefixes.</h3></a>
+
+<p> In Intel syntax there are no register prefixes or immed prefixes. In
+AT&T however registers are prefixed with a '%' and immed's are prefixed
+with a '$'. Intel syntax hexadecimal or binary immed data are suffixed
+with 'h' and 'b' respectively. Also if the first hexadecimal digit is a
+letter then the value is prefixed by a '0'.</p>
+
+Example:<br>
+<table border=1>
+<tr><td>
+Intex Syntax<br>
+<pre>
+mov	eax,1
+mov	ebx,0ffh
+int	80h
+</pre></td><td>AT&T Syntax<br>
+<pre>
+movl	$1,%eax
+movl	$0xff,%ebx
+int 	$0x80
+</pre></td></tr>
+</table>
+
+<a name=Direction><h3>Direction of Operands.</h3></a>
+
+<p>The direction of the operands in Intel syntax is opposite from that
+of AT&T syntax. In Intel syntax the first operand is the destination, and
+the second operand is the source whereas in AT&T syntax the first operand is
+the source and the second operand is the destination. The advantage of 
+AT&T syntax in this situation is obvious. We read from left to right, we
+write from left to right, so this way is only natural.</p>
+
+Example:<br>
+<table border=1>
+<tr><td>Intex Syntax<br>
+<pre>
+instr	dest,source
+mov	eax,[ecx]
+</pre></td><td>AT&T Syntax<br>
+<pre>
+instr 	source,dest
+movl	(%ecx),%eax
+</pre></td></tr>
+</table>
+
+<a name=Memory><h3>Memory Operands.</h3></a>
+
+<p> Memory operands as seen above are different also. In Intel syntax
+the base register is enclosed in '[' and ']' whereas in AT&T syntax it is
+enclosed in '(' and ')'. </p>
+
+Example:<br>
+<table border=1>
+<tr><td>Intex Syntax<br>
+<pre>
+mov	eax,[ebx]
+mov	eax,[ebx+3]
+</pre></td><td>AT&T Syntax<br>
+<pre>
+movl	(%ebx),%eax
+movl	3(%ebx),%eax 
+</pre></td></tr>
+</table>
+
+<p> The AT&T form for instructions involving complex operations is very
+obscure compared to Intel syntax. The Intel syntax form of these is
+segreg:[base+index*scale+disp]. The AT&T syntax form is
+%segreg:disp(base,index,scale). </p> <p> Index/scale/disp/segreg are all
+optional and can simply be left out. Scale, if not specified and index is
+specified, defaults to 1. Segreg depends on the instruction and whether
+the app is being run in real mode or pmode. In real mode it depends on the
+instruction whereas in pmode its unnecessary. Immediate data used should
+not '$' prefixed in AT&T when used for scale/disp.</p>
+
+Example:<br>
+<table border=1>
+<tr><td>Intel Syntax<br>
+<pre>
+instr 	foo,segreg:[base+index*scale+disp]
+mov	eax,[ebx+20h]
+add	eax,[ebx+ecx*2h
+lea	eax,[ebx+ecx]
+sub	eax,[ebx+ecx*4h-20h]
+</pre></td><td>AT&T Syntax<br>
+<pre>
+instr	%segreg:disp(base,index,scale),foo
+movl	0x20(%ebx),%eax
+addl	(%ebx,%ecx,0x2),%eax
+leal	(%ebx,%ecx),%eax
+subl	-0x20(%ebx,%ecx,0x4),%eax
+</pre></td></tr>
+</table>
+
+<p> As you can see, AT&T is very obscure. [base+index*scale+disp] makes
+more sense at a glance than disp(base,index,scale).</p>
+
+<a name=Suffixes><h3>Suffixes.</h3></a>
+
+<p> As you may have noticed, the AT&T syntax mnemonics have a suffix. The
+significance of this suffix is that of operand size. 'l' is for long, 'w'
+is for word, and 'b' is for byte. Intel syntax has similar directives for
+use with memory operands, i.e. byte ptr, word ptr, dword ptr. "dword" of
+course corresponding to "long". This is similar to type casting in C but
+it doesnt seem to be necessary since the size of registers used is the
+assumed datatype.</p>
+
+Example:<br>
+<table border=1>
+<tr><td>Intel Syntax<br>
+<pre>
+mov	al,bl
+mov	ax,bx
+mov	eax,ebx
+mov	eax, dword ptr [ebx]
+</pre></td><td>AT&T Syntax<br>
+<pre>
+movb	%bl,%al
+movw	%bx,%ax
+movl	%ebx,%eax
+movl	(%ebx),%eax
+</pre></td></tr>
+</table>
+
+**NOTE: ALL EXAMPLES FROM HERE WILL BE IN AT&T SYNTAX**<br>
+
+<hr>
+
+<a name=Syscalls><h2>Syscalls.</h2></a>
+
+<p> This section will outline the use of linux syscalls in assembly
+language. Syscalls consist of all the functions in the second section of
+the manual pages located in /usr/man/man2.  They are also listed in:
+/usr/include/sys/syscall.h.  A great list is at 
+<a href=http://www.linuxassembly.org/syscall.html>http://www.linuxassembly.org/syscall.html.</a>
+These functions can be executed via the linux interrupt service: int
+$0x80. </p>
+
+<a name=Syscall5><h3>Syscalls with < 6 args.</h3></a>
+
+<p> For all syscalls, the syscall number goes in %eax. For syscalls that
+have less than six args, the args go in %ebx,%ecx,%edx,%esi,%edi in order.
+The return value of the syscall is stored in %eax.</p> <p> The syscall
+number can be found in /usr/include/sys/syscall.h. The macros are defined
+as SYS_&lt;syscall name&gt; i.e. SYS_exit, SYS_close, etc. </p>
+
+Example:<br>
+(Hello world program - it had to be done)
+
+<p> According to the write(2) man page, write is declared as: ssize_t
+write(int fd, const void *buf, size_t count); </p> <p> Hence fd goes in
+%ebx, buf goes in %ecx, count goes in %edx and SYS_write goes in %eax.
+This is followed by an int $0x80 which executes the syscall. The return
+value of the syscall is stored in %eax.</p>
+
+<pre>
+$ cat write.s
+.include "defines.h"
+.data
+hello:
+	.string "hello world\n"
+
+.globl	main
+main:
+	movl	$SYS_write,%eax
+	movl	$STDOUT,%ebx
+	movl	$hello,%ecx
+	movl	$12,%edx
+	int	$0x80
+
+	ret
+$ 
+</pre> 
+
+<p> The same process applies to syscalls which have less than five args.
+Just leave the un-used registers unchanged. Syscalls such as open or fcntl
+which have an optional extra arg will know what to use. </p>
+
+<a name=Syscall6><h3>Syscalls with > 5 args.</h3></a>
+
+<p> Syscalls whos number of args is greater than five still expect the
+syscall number to be in %eax, but the args are arranged in memory and the
+pointer to the first arg is stored in %ebx.</p> <p> If you are using the
+stack, args must be pushed onto it backwards, i.e. from the last arg to
+the first arg. Then the stack pointer should be copied to %ebx. Otherwise
+copy args to an allocated area of memory and store the address of the
+first arg in %ebx.</p>
+
+Example: <br>
+(mmap being the example syscall).
+
+Using mmap() in C:<br>
+<pre>
+#include &lt;sys/types.h&gt;
+#include &lt;sys/stat.h&gt;
+#include &lt;sys/mman.h&gt;
+#include &lt;fcntl.h&gt;
+#include &lt;unistd.h&gt;
+
+#define STDOUT	1
+
+void main(void) {
+	char file[]="mmap.s";
+	char *mappedptr;
+	int fd,filelen;
+
+	fd=fopen(file, O_RDONLY);
+	filelen=lseek(fd,0,SEEK_END);
+	mappedptr=mmap(NULL,filelen,PROT_READ,MAP_SHARED,fd,0);
+	write(STDOUT, mappedptr, filelen);
+	munmap(mappedptr, filelen);
+	close(fd);
+}
+</pre>
+	Arrangement of mmap() args in memory:
+<table border=1>
+<tr><td>%esp</td><td>%esp+4</td><td>%esp+8</td><td>%esp+12</td>
+<td>%esp+16</td><td>%esp+20</td></tr>
+<tr><td>00000000</td><td>filelen</td><td>00000001</td>
+<td>00000001</td><td>fd</td><td>00000000</td></tr>
+</table>
+
+
+ASM Equivalent:<br>
+<pre>
+$ cat mmap.s
+.include "defines.h"
+
+.data
+file:
+	.string "mmap.s"
+fd:
+	.long 	0
+filelen:
+	.long 	0
+mappedptr:
+	.long 	0
+
+.globl main
+main:
+	push	%ebp
+	movl	%esp,%ebp
+	subl	$24,%esp
+
+//	open($file, $O_RDONLY);
+
+	movl	$fd,%ebx	// save fd
+	movl	%eax,(%ebx)
+
+//	lseek($fd,0,$SEEK_END);
+
+	movl	$filelen,%ebx	// save file length
+	movl	%eax,(%ebx)
+
+	xorl	%edx,%edx
+
+//	mmap(NULL,$filelen,PROT_READ,MAP_SHARED,$fd,0);
+	movl	%edx,(%esp)
+	movl	%eax,4(%esp)	// file length still in %eax
+	movl	$PROT_READ,8(%esp)
+	movl	$MAP_SHARED,12(%esp)
+	movl	$fd,%ebx	// load file descriptor
+	movl	(%ebx),%eax
+	movl	%eax,16(%esp)
+	movl	%edx,20(%esp)
+	movl	$SYS_mmap,%eax
+	movl	%esp,%ebx
+	int	$0x80
+
+	movl	$mappedptr,%ebx	// save ptr
+	movl	%eax,(%ebx)
+		
+// 	write($stdout, $mappedptr, $filelen);
+//	munmap($mappedptr, $filelen);
+//	close($fd);
+	
+	movl	%ebp,%esp
+	popl	%ebp
+
+	ret
+$
+</pre>
+
+**NOTE: The above source listing differs from the example source code
+found at the end of the article. The code listed above does not show the other
+syscalls, as they are not the focus of this section. The source above also
+only opens mmap.s, whereas the example source reads the command line
+arguments. The mmap example also uses lseek to get the filesize.**
+
+<a name=Sockets><h3>Socket Syscalls.</h3></a>
+
+<p> Socket syscalls make use of only one syscall number: SYS_socketcall
+which goes in %eax. The socket functions are identified via a subfunction
+numbers located in /usr/include/linux/net.h and are stored in %ebx. A
+pointer to the syscall args is stored in %ecx. Socket syscalls are also
+executed with int $0x80.</p>
+
+<pre>
+$ cat socket.s
+.include "defines.h"
+
+.globl	_start
+_start:
+	pushl	%ebp
+	movl	%esp,%ebp
+	sub	$12,%esp
+
+//	socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
+	movl	$AF_INET,(%esp)
+	movl	$SOCK_STREAM,4(%esp)
+	movl	$IPPROTO_TCP,8(%esp)
+
+	movl	$SYS_socketcall,%eax
+	movl	$SYS_socketcall_socket,%ebx
+	movl	%esp,%ecx
+	int	$0x80
+
+	movl 	$SYS_exit,%eax
+	xorl 	%ebx,%ebx
+	int 	$0x80
+
+	movl	%ebp,%esp
+	popl	%ebp
+	ret
+$
+</pre>
+
+<hr>
+
+<a name=Command><h2>Command Line Arguments.</h2></a>
+
+<p> Command line arguments in linux executables are arranged on the stack.
+argc comes first, followed by an array of pointers (**argv) to the strings
+on the command line followed by a NULL pointer. Next comes an array of
+pointers to the environment (**envp).  These are very simply obtained in
+asm, and this is demonstrated in the example code (args.s).</p>
+
+<hr>
+
+<a name=InlineASM><h2>GCC Inline ASM.</h2></a>
+
+<p> This section on GCC inline asm will only cover the x86 applications.
+Operand constraints will differ on other processors. The location of the
+listing will be at the <a href=#Links>end</a> of this article.</p> <p>
+Basic inline assembly in gcc is very straightforward. In its basic form it
+looks like this:</p>
+
+<pre>
+	__asm__("movl	%esp,%eax");	// look familiar ?
+</pre>
+or
+<pre>
+	__asm__("
+			movl	$1,%eax		// SYS_exit
+			xor	%ebx,%ebx
+			int	$0x80
+	");
+</pre>
+
+<p> It is possible to use it more effectively by specifying the data that
+will be used as input, output for the asm as well as which registers will
+be modified. No particular input/output/modify field is compulsory. It is
+of the format:</p>
+
+<pre>
+	__asm__("&lt;asm routine&gt;" : output : input : modify);
+</pre>
+
+<p> The output and input fields must consist of an operand constraint
+string followed by a C expression enclosed in parentheses. The output
+operand constraints must be preceded by an '=' which indicates that it is
+an output. There may be multiple outputs, inputs, and modified registers.
+Each "entry" should be separated by commas (',') and there should be no
+more than 10 entries total. The operand constraint string may either
+contain the full register name, or an abbreviation.</p>
+
+<table border=1>
+<tr><td>Abbrev Table</td></tr>
+<tr><td>Abbrev</td><td>Register</td></tr>
+<tr><td>a</td><td>%eax/%ax/%al</td></tr>
+<tr><td>b</td><td>%ebx/%bx/%bl</td></tr>
+<tr><td>c</td><td>%ecx/%cx/%cl</td></tr>
+<tr><td>d</td><td>%edx/%dx/%dl</td></tr>
+<tr><td>S</td><td>%esi/%si</td></tr>
+<tr><td>D</td><td>%edi/%di</td></tr>
+<tr><td>m</td><td>memory</td></tr>
+</table>
+
+Example:<br>
+<pre>
+	__asm__("test	%%eax,%%eax", : /* no output */ : "a"(foo));
+</pre>
+OR<br>
+<pre>
+	__asm__("test	%%eax,%%eax", : /* no output */ : "eax"(foo));
+</pre>
+
+<p> You can also use the keyword __volatile__ after __asm__: "You can
+prevent an `asm' instruction from being deleted, moved significantly, or
+combined, by writing the keyword `volatile' after the `asm'."</p>
+
+(Quoted from the "Assembler Instructions with C Expression Operands" section
+in the gcc info files.)
+
+<pre>
+$ cat inline1.c
+#include &lt;stdio.h&gt;
+
+int main(void) {
+	int foo=10,bar=15;
+	
+	__asm__ __volatile__ ("addl 	%%ebxx,%%eax" 
+		: "=eax"(foo) 		// ouput
+		: "eax"(foo), "ebx"(bar)// input
+		: "eax"			// modify
+	);
+	printf("foo+bar=%d\n", foo);
+	return 0;
+}
+$
+</pre>
+
+<p>You may have noticed that registers are now prefixed with "%%" rather
+than '%'. This is necessary when using the output/input/modify fields
+because register aliases based on the extra fields can also be used. I
+will discuss these shortly.</p> <p>Instead of writing "eax" and forcing
+the use of a particular register such as "eax" or "ax" or "al", you can
+simply specify "a". The same goes for the other general purpose registers
+(as shown in the Abbrev table). This seems useless when within the actual
+code you are using specific registers and hence gcc provides you with
+register aliases. There is a max of 10 (%0-%9) which is also the reason
+why only 10 inputs/outputs are allowed.</p>
+
+<pre>
+$ cat inline2.c
+int main(void) {
+	long eax;
+	short bx;
+	char cl;
+
+	__asm__("nop;nop;nop"); // to separate inline asm from the rest of
+				// the code
+	__volatile__ __asm__("
+		test	%0,%0
+		test	%1,%1
+		test	%2,%2"
+		: /* no outputs */
+		: "a"((long)eax), "b"((short)bx), "c"((char)cl)
+	);
+	__asm__("nop;nop;nop");
+	return 0; 
+}
+$ gcc -o inline2 inline2.c 
+$ gdb ./inline2
+GNU gdb 4.18
+Copyright 1998 Free Software Foundation, Inc.
+GDB is free software, covered by the GNU General Public License, and you are
+welcome to change it and/or distribute copies of it under certain conditions.
+Type "show copying" to see the conditions.
+There is absolutely no warranty for GDB.  Type "show warranty" for details.
+This GDB was configured as "i686-pc-linux-gnulibc1"...
+(no debugging symbols found)...
+(gdb) disassemble main
+Dump of assembler code for function main: 
+... start: inline asm ... 
+0x8048427 <main+7>: nop
+0x8048428 <main+8>: nop 
+0x8048429 <main+9>: nop 
+0x804842a <main+10>: mov 0xfffffffc(%ebp),%eax 
+0x804842d <main+13>: mov 0xfffffffa(%ebp),%bx
+0x8048431 <main+17>: mov 0xfffffff9(%ebp),%cl 
+0x8048434 <main+20>: test %eax,%eax 
+0x8048436 <main+22>: test %bx,%bx
+0x8048439 <main+25>: test %cl,%cl 
+0x804843b <main+27>: nop 
+0x804843c <main+28>: nop 
+0x804843d <main+29>: nop 
+... end: inline asm ... 
+End of assembler dump. 
+$ 
+</pre>
+
+<p>As you can see, the code that was generated from the inline asm loads
+the values of the variables into the registers they were assigned to in
+the input field and then proceeds to carry out the actual code. The
+compiler auto detects operand size from the size of the variables and so
+the corresponding registers are represented by the aliases %0, %1 and %2.
+(Specifying the operand size in the mnemonic when using the register
+aliases may cause errors while compiling). </p> <p> The aliases may also
+be used in the operand constraints. This does not allow you to specify
+more than 10 entries in the input/output fields. The only use for this i
+can think of is when you specify the operand constraint as "q" which
+allows the compiler to choose between a,b,c,d registers. When this
+register is modified we will not know which register has been chosen and
+consequently cannot specify it in the modify field. In which case you can
+simply specify "&lt;number&gt;".</p>
+
+Example:<br>
+<pre>
+$ cat inline3.c
+#include &lt;stdio.h&gt;
+
+int main(void) {
+	long eax=1,ebx=2;
+
+	__asm__ __volatile__ ("add %0,%2"
+		: "=b"((long)ebx)
+		: "a"((long)eax), "q"(ebx)
+		: "2"
+	);
+	printf("ebx=%x\n", ebx);
+	return 0;
+}
+$
+</pre>
+
+<hr>
+
+<a name=#Compiling><h2>Compiling</h2></a>
+
+<p>Compiling assembly language programs is much like compiling normal C
+programs. If your program looks like Listing 1, then you would compile it
+like you would a C app. If you use _start instead of main, like in Listing
+2 you would compile the app slightly differently:</p>
+
+<table border=1>
+<tr><td valign=top>
+<ul><li>Listing 1<br></ul>
+<pre>
+$ cat write.s
+.data
+hw:
+	.string "hello world\n"
+.text
+.globl main
+main:
+	movl	$SYS_write,%eax
+	movl	$1,%ebx
+	movl	$hw,%ecx
+	movl	$12,%edx
+	int	$0x80
+	movl	$SYS_exit,%eax
+	xorl	%ebx,%ebx
+	int	$0x80
+	ret
+$ gcc -o write write.s
+$ wc -c ./write
+   4790 ./write
+$ strip ./write
+$ wc -c ./write
+   2556 ./write
+</pre></td><td valign=top>
+<ul><li>Listing 2<br></ul>
+<pre>
+$ cat write.s
+.data
+hw:
+	.string "hello world\n"
+.text
+.globl _start
+_start:
+	movl	$SYS_write,%eax
+	movl	$1,%ebx
+	movl	$hw,%ecx
+	movl	$12,%edx
+	int	$0x80
+	movl	$SYS_exit,%eax
+	xorl	%ebx,%ebx
+	int	$0x80
+
+$ gcc -c write.s
+$ ld -s -o write write.o
+$ wc -c ./write
+    408 ./write
+</pre></td></tr>
+</table>
+
+<p>The -s switch is optional, it just creates a stripped ELF executable
+which is smaller than a non-stripped one. This method (Listing 2) also
+creates smaller executables, since the compiler isnt adding extra entry
+and exit routines as would normally be the case. </p>
+
+<hr>
+
+<a name=Links><h2>Links.</h2></a>
+
+<h3>Further reference.</h3>
+<a href=http://www.linuxassembly.org>
+http://www.linuxassembly.org</a><br>
+<a href=http://www.gnu.org/manual/gas/>
+GNU Assembler Manual</a><br>
+<a href=http://gcc.gnu.org/onlinedocs/gcc_toc.html>
+GNU C Compiler Manual</a><br>
+<a href=http://www.gnu.org/manual/gdb-4.17/gdb.html>
+GNU Debugger Manual</a><br>
+<a href=http://gcc.gnu.org/onlinedocs/gcc_16.html#SEC181>
+Operand Constraint Reference</a><br>
+<a href=http://www.gnu.org/manual/gas/html_chapter/as_16.html#SEC196>
+AT&T Syntax Reference</a><br>
+
+<a name=k0de><h3>Example Code</h3></a>
+
+<table>
+<tr><td><a href=linasm-src.html#args>args.s</a></td>
+<td>Reads command line arguments passed to the prog</td></tr>
+<tr><td><a href=linasm-src.html#daemon>daemon.s</a></td>
+<td>Binds a shell to a port (backdoor style)</a></td></tr>
+<tr><td><a href=linasm-src.html#mmap>mmap.s</a></td>
+<td>Maps a file to memory, and dumps its contents</td></tr>
+<tr><td><a href=linasm-src.html#socket>socket.s</a></td>
+<td>Creates a socket</td></tr>
+<tr><td><a href=linasm-src.html#write>write.s</a></td>
+<td>Hello world !</td></tr>
+<tr><td><a href=linasm-src.tgz>linasm-src.tgz</a></td>
+<td>Makefile defines.h args.s daemon.s socket.s write.s</td></tr>
+</table>
+
+</body>
+</html>

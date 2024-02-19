@@ -1,0 +1,568 @@
+From:     Digestifier <Linux-Activists-Request@news-digests.mit.edu>
+To:       Linux-Activists@news-digests.mit.edu
+Reply-To: Linux-Activists@news-digests.mit.edu
+Date:     Wed, 29 Jan 92 08:30:18 EST
+Subject:  Linux-Activists Digest #24
+
+Linux-Activists Digest #24, Volume #1            Wed, 29 Jan 92 08:30:18 EST
+
+Contents:
+  compress/freeze (was: Re: Comments to Directory Standard (banjo.concert.net)) (Ken Raeburn)
+  Re: Linux & DOS 5.0 (Charles Hedrick)
+  Screen swapper patch and misc questions... (Doug Fields)
+  Re: banjo.concert ! (-= WAD =-)
+  cursor! vc patch killed it... (Mika Matti Jalava)
+  GCC and 2MB (apr%dec001.ziap.wtza-berlin.de@noc.belwue.de)
+  Re: ps? (bill)
+  Re: Comments to Directory Standard (banjo.concert.net) (Michael Almond)
+  Re: booting from HD with Shoelace (Juergen Henke)
+  Mail / News (Murray Nesbitt)
+  swapon bug (pretty sure) (Bevan Anderson)
+  Re: Downloading binaries....is this wrong? (Dr. Eberhard W. Lisse)
+  Linux, Port for Motorola 68000, Atari ST (Thomas Schulze [TfS])
+  Re: Lets make it easier on the new folks (Jeffrey Comstock)
+  CRON available (Thomas David Rivers)
+  Re: Linux & DOS 5.0 (Kellom{ki Pertti)
+
+----------------------------------------------------------------------------
+
+From: raeburn@athena.mit.edu (Ken Raeburn)
+Subject: compress/freeze (was: Re: Comments to Directory Standard (banjo.concert.net))
+Date: Tue, 28 Jan 1992 23:52:11 GMT
+
+In article <1992Jan28.145329.20011@daimi.aau.dk> tthorn@daimi.aau.dk (Tommy Thorn) writes:
+
+   Everything should be contained in a [compressed] tar file with a:
+   ...
+   Kernel patches should also be a [compressed] tar file containing:
+
+A suggestion: There's a utility called "freeze" (which is probably
+available from ftp.uu.net and other sites) which is slower but more
+efficient than the standard UNIX "compress".  I was able to build it
+fairly easily under linux.
+
+For people who have to do file transfer by slow modem or floppy disk,
+using freeze rather than compress is likely to be a big help.  Even
+for people with relatively fast connections (I'm using 9600 now), it
+helps for large files.
+
+------------------------------
+
+From: hedrick@dumas.rutgers.edu (Charles Hedrick)
+Subject: Re: Linux & DOS 5.0
+Date: 28 Jan 92 20:41:45 GMT
+
+What I did was first partition the disk under DOS 5.0 using the DOS
+fdisk, and then use edpart to delete and recreate the partition for
+Linux.  This lets you have a big partition for DOS, but still have the
+old-style partition for Linux.
+
+------------------------------
+
+From: Doug Fields <fields-doug@CS.YALE.EDU>
+Subject: Screen swapper patch and misc questions...
+Reply-To: fields-doug@CS.YALE.EDU
+Date: Wed, 29 Jan 1992 05:26:18 GMT
+
+
+Hi. I've hacked together a little nifty routine that will allow you to
+switch between your last two virtual consoles by hitting RIGHT-ALT-N.
+It requires mods to keyboard.S and to tty_io.c. The diffs are at the
+end of this message. Let me know what you think.
+
+I now have a few observations and questions:
+
+C library: the system has no strdup() or ttyname() function calls.
+
+Standard input/output: Are the keyboard input routines (getchar,
+gets, etc.) not supposed to flush the output device before they
+read? I.e. If I do printf("Your name: "); gets(name); it should
+print your name and then read in your name.
+
+I have a program which I wrote that turns off all character canonization
+and sets VMIN=1 and VTIME=0 (or whatever it is to get unbuffered character
+input). Prompts (i.e. non newline terminated strings) are not echoed. Nor
+are characters "putchar'd". No echoing at all occurs until a newline is
+sent to the output.
+
+This is not the case with SunOS nor SCO Unix/Xenix. The program worked
+AOK for those two environments. Do I have to set the output to unbuffered
+for linux to get it to work?
+
+Kernel keyboard handling: Are there not different scan codes for the two ALT
+keys? I don't quite understand how the code to detect the left from the 
+right alt key in the kernel works. There is one comparison with e0 and
+only one "alt" routine in the key_table. So, please let me know what's up
+with the two alt keys.
+
+Cheers,
+
+Doug
+--
+Doug Fields -POB 1789 Yale Station, New Haven, CT 06520- (FAX) +1 203 661-2996
+Email: fields-doug@cs.yale.edu or uunet!areyes!admiral!doug -- Voice: 436-3065
+========= Public Magpie and Waffle BBSes and shell accounts available ========
+BBS: (T2500) +1 203 661-2873, (HST/V.32) -1279, (V.32) -0450, (v29/MNP6) -2967
+--
+
+PATCH FOLLOWS---APPLY TO KERNEL SOURCE ROOT DIRECTORY--------------------
+*** kernel/chr_drv/tty_io.c.orig        Tue Jan 28 22:31:14 1992
+--- kernel/chr_drv/tty_io.c     Tue Jan 28 23:58:43 1992
+***************
+*** 84,97 ****
+--- 84,112 ----
+        rs_queues + 3, rs_queues + 4
+        };
+  
++ static int prev_console = 0; /* DPF */
++ 
+  void change_console(unsigned int new_console)
+  {
+        if (new_console == fg_console || new_console >= NR_CONSOLES)
+                return;
++       prev_console = fg_console; /* DPF */
+        fg_console = new_console;
+        table_list[0] = con_queues + 0 + fg_console*3;
+        table_list[1] = con_queues + 1 + fg_console*3;
+        update_screen();
++ }
++ 
++ void swap_screens(void)
++ /* Switches to previous screen - DPF */
++ {
++ int temp;
++ 
++   if (prev_console == fg_console)
++     return;
++   temp = fg_console;
++   change_console(prev_console);
++   prev_console = temp;
+  }
+  
+  static void sleep_if_empty(struct tty_queue * queue)
+*** kernel/chr_drv/keyboard.S.ori       Mon Jan 27 21:52:37 1992
+--- kernel/chr_drv/keyboard.S   Tue Jan 28 23:56:24 1992
+***************
+*** 462,468 ****
+   * and which have just one character returns.
+   */
+  do_self:
+!       lea alt_map,%ebx
+        testb $0x20,mode                /* alt-gr */
+        jne 1f
+        lea shift_map,%ebx
+--- 462,484 ----
+   * and which have just one character returns.
+   */
+  do_self:
+!       /* Routine first checks to see if alt-n screenswap is        DPF */
+!       /* desired. I could have also changed the key_table, but     DPF */
+!       /* that would not allow the 'n' key to be remapped. We find  DPF */
+!       /* out if it's the 'n' key from the regular mapping.         DPF */
+!       testb $0x20,mode                /* Check alt                 DPF */
+!       je 9f                           /* Alt not pressed           DPF */
+!       push %eax                       /* Save this for now         DPF */
+!       lea key_map,%ebx                /* Find out which key it is  DPF */
+!       movb (%ebx,%eax),%al            /* Load the key; ignore shft DPF */
+!       cmpb $'n,%al                    /* Is it alt-n?              DPF */
+!       jne 8f                          /* It isn't                  DPF */
+!       pop %eax                        /* We don't need it anymore  DPF */
+!       call _swap_screens              /* do swap (tty_io.c)        DPF */
+!       xor %al,%al                     /* clear al just in case     DPF */
+!       ret                             /* we're outta here          DPF */
+! 8:      pop %eax                      /* Get back orig scan code   DPF */
+! 9:    lea alt_map,%ebx                /* old do_self here          DPF */
+        testb $0x20,mode                /* alt-gr */
+        jne 1f
+        lea shift_map,%ebx
+PATCH ENDS-----------------------------------------------------------------
+
+
+------------------------------
+
+From: csh060@cch.coventry.ac.uk (-= WAD =-)
+Subject: Re: banjo.concert !
+Date: 28 Jan 92 21:50:16 GMT
+
+In article <tncdbyhx@cck.coventry.ac.uk> csh060@cch.coventry.ac.uk (-= WAD =-) writes:
+>
+>Well well well .... I seem to be having problems accessing the :
+>
+>       banjo.concert.net
+>
+>ftp site from the nsf.sun relay in London, England. Has anyone else
+>had problems such as this or is it all in my head ?... The name ain't
+>in the database !! .......
+>
+
+
+Oh yes .... and another thing ... does is site close at around 21:00 GMT
+Because hhcp requests are not getting a responce !
+
+Cheers
+
+
+
+-- 
+=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=
+|  Fleshy : -= WAD =-       E-mail : csh060%uk.ac.cov.cch@uk.ac.earn-relay |
+|  Voice  : (0203) 449274    Quote : Oh i do like to be beside the seaside |
+=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=
+
+------------------------------
+
+From: r36110m@kaira.hut.fi (Mika Matti Jalava)
+Subject: cursor! vc patch killed it...
+Date: 28 Jan 92 23:26:22 GMT
+
+Thanks, I got ps working. Sorry I hadn't checked that all the files
+that were patched were also recompiled. Stupid me.
+
+But now that the files ARE compiled, ps works but when I start virtual
+consoles, I have no cursor after the shell prompt in them! Everything
+works as it should, and the cursor appears after I have run some
+programs in the shell (not the same ones every time, sometimes ls,
+sometimes ps etc.). Sometimes the cursor even appears in the middle of
+the line while I am writing some command, and then again disappears.
+Weird, I say.
+
+This patching thing is a bit new for me, and it sure seems that if
+there are multiple patches from different people, you can really blow
+things up. Now I just have no idea which patches go first, which ones
+are needed and even where to get all of them. Some come up on the
+mailing list, some here and only a few of them go all the way to the
+ftp sites. It's easy to miss something you might need later, when the
+patches come and go unorganized like this.
+
+Of course I am not blaming anyone but myself for my problems here (and
+they really seem to be minor ones), I am just saying that it would be
+nice to be able to get all the patches at same place (ftp preferably,
+you can't miss that so easily) and that there should be clear
+information about what needs to be done to be able to use a certain
+patch. 
+
+        Mika
+
+------------------------------
+
+From: apr%dec001.ziap.wtza-berlin.de@noc.belwue.de
+Subject: GCC and 2MB
+Reply-To: apr%dec001.ziap.wtza-berlin.de@noc.belwue.de
+Date: Wed, 29 Jan 1992 06:47:52 GMT
+
+Hi, Linuxers
+
+Earlier it was stated that gcc will not work on a 2MB machine, but
+in the announcement of the features of 0.12 Linus wrote (Dec 19th):
+
+| I got VM working today (not bad in two days if I may say so :-), but
+| haven't really tested extensively.  I tried some compilations (I remade
+| uemacs) on a 2M machine (or rather a 8M machine, of which Linux sees
+| only 2M), and it worked (gcc, make, bash etc in memory ar the same
+| time), albeit slowly.  There are probably still problems, but it seems
+| VM will definitely be in 0.12. 
+
+I tried to recompile the kernel on my 2MB, 16MHz 386SX yesterday.
+In none of the subdirectories this completed successfull.
+Some modules compile well, on others gcc compiles a lot (HD ist
+acting a lot), but after a while (5 .. 15min) there seems no more
+traffic on the disk (only the 30s-updates).
+With ^C I come back to sh and everything is o.k. (except that I didn't
+get what I want - a new kernel).
+
+Question:
+
+Is anybody out there who successfully made a new kernel on
+a small machine like mine? Maybe I simply did not wait long enough?
+
+What would be better: To buy more RAM or a bigger Harddisk
+(for a Swappartition and another Linux Partition).
+Please send any answers, suggestions, ... per mail. I have no
+access to the news.
+
+Andreas Priebe
+
+**************************************************************
+* Andreas Priebe                   * Phone: +37 33 762 321   *
+* Astrophysical Institute Potsdam  * Fax  : +37 33 762 309   *
+* Germany                          * Telex: 361231 adwrzb d  *
+**************************************************************
+* EMAIL:    apr%dec001.ziap.wtza-berlin.de@noc.belwue.de     *
+**************************************************************
+
+------------------------------
+
+From: bill@franklin.com (bill)
+Subject: Re: ps?
+Date: 29 Jan 92 02:54:07 GMT
+
+In article <1992Jan26.012512.12321@uniwa.uwa.oz.au> comrade@uniwa.uwa.oz.au (Peter Cooper) writes:
+:       As an aside, is the argv[] structure supposed to be write
+: protected ? On the UNIX box I am on (not linux) writing to argv[1][0]
+: produced a SEGV. Does POSIX say anything about this ? (YES, argv[1] is
+: NOT a null pointer. ;)
+
+ANSI C says you can write to argv[1][0], provided that there is
+one in the first place.
+
+------------------------------
+
+From: mra@searchtech.com (Michael Almond)
+Subject: Re: Comments to Directory Standard (banjo.concert.net)
+Date: 29 Jan 92 07:14:50 GMT
+
+In article <PAULI.RAMO.92Jan28200035@vipunen.hut.fi> Pauli.Ramo@hut.fi writes:
+>In this scheme at least hard links between /bin and /usr/bin are straight
+>out, of course. I'd also propose putting each binary only to one place to
+>conserve disk space.
+
+I wonder how hard compressing the file system on the fly or maybe using
+compressed executable would be?
+
+Anyone have any thoughts?
+-- 
+Michael R. Almond (Georgia Tech Alumnus)          mra@srchtec.uucp (registered)
+digital presence associates                                mra@searchtech.com
+1017J oak chase drive                                       uupsi!srchtec!mra
+tucker, georgia 30084                              (404) 491-0036 (office/home)
+
+------------------------------
+
+From: juh@qt.IPA.FhG.de (Juergen Henke)
+Subject: Re: booting from HD with Shoelace
+Date: 29 Jan 92 07:15:18 GMT
+
+In article <JUH.92Jan28225608@lazy.qt.IPA.FhG.de> juh@qt.IPA.FhG.de (Juergen Henke) writes:
+
+
+
+   My main problem is that the VGA-mode selection rushes away - if i happen to get the Return
+   in the right moment, i can select my normal 100x40 (booting directly from the HD).
+
+   I've tried some mods to keyboard.S, but my knowledge of this Intel-thingy is VERY limited,
+                           ^^^^^^^^^^
+
+That should read as setup.S, sorry for the typo...
+
+Juergen
+
+--
+_________________________________________________________________________
+Juergen Henke, e-mail juh@IPA.FhG.de, PSI-mail PSI%4505016002::JUH_IPA
+Fraunhofer-Institut f. Produktionstechnik u. Automatisierung
+Nobelstrasse 12, D-7000 Stuttgart 80
+
+------------------------------
+
+From: nesbitt@jester.usask.sask.ca (Murray Nesbitt)
+Subject: Mail / News
+Date: 29 Jan 92 05:45:09 GMT
+
+
+I have cnews and uucp compiled and ready for action, but I can't find
+the sources to a mail/sendmail package for UUCP that will compile under Linux.
+
+Any hints?
+--
+--
+"Just say no to drug hysteria." - William S. Burroughs
+
+------------------------------
+
+From: bevan@ee.mu.OZ.AU (Bevan Anderson)
+Subject: swapon bug (pretty sure)
+Date: 29 Jan 92 10:49:32 GMT
+
+Gday..
+
+I have just installed the swapon patches.. all went well except for
+one thing.. the com ports (tty64, tty65) are dead. they dont respond too
+any of my attemps. kaput.
+
+I havent had time tonight to dive into the sources and investigatefurther.
+
+Has anyone else noticed this problem?
+
+Bevan..
+
+Bevan Anderson.           | Phone: +61 3 521 0825 | The two halves of my brain 
+bevan@munagin.ee.mu.oz.au | Fax..: +61 3 270 6143 | had an argument , and both  
+bevan@lionet.wesley.oz.au | Work.: +61 3 270 6213 | sides lost... 
+
+------------------------------
+
+From: spel@hippo.ru.ac.za (Dr. Eberhard W. Lisse)
+Subject: Re: Downloading binaries....is this wrong?
+Date: 29 Jan 92 10:49:41 GMT
+
+In <af8rnkf@rpi.edu> mcintyre@cs.rpi.edu (David McIntyre) writes:
+
+>I have linux properly installed on my 483/33 with 4mb.  As a matter of fact,
+>I'm connected to my news server through kermit running on linux!
+
+>I want to download the patch binary.  I downloaded patch.Z from tsx-11
+>to the rpi Sun unix machine.  I kermitted it back to linux, and
+>uncompress barfs on it.  OK, I figure that compress might be funny.
+
+>So I uncompress patch.Z on my Sun, then download patch from the sun to
+>linux with kermit.  When I run it on linux it says:
+
+>./patch: cannot execute binary file  (or something close to that).
+
+>Doing an ls -l on the patch binary on the sun I get 54276 bytes, on my
+>linux machine it's 54512.  
+
+>Can someone clue me in here?  I'm usually not this hopeless, but I'm not quite
+>up to speed on linux yet.
+
+It looks to me as if you forgot to SET FILE TYPE BIN in either or both
+kermits and it inserted did something to the CR/LFs.
+
+try again with setting the file types on both kermit.
+
+el 
+--
+Dr. Eberhard W. Lisse    \          /                  (spel@hippo.ru.ac.ZA)
+Katatura State Hospital   \        |     (el@lisse.NA works for small files)
+Private Bag 13215          \ *    / 
+Windhoek, Namibia           ;____/                    (Finally we got FTP !)
+
+------------------------------
+
+From: ts@uni-paderborn.de (Thomas Schulze [TfS])
+Subject: Linux, Port for Motorola 68000, Atari ST
+Date: 29 Jan 92 10:46:33 GMT
+
+Hello,
+is anyone working on a port of linux to the Atari ST??
+
+Thanx in advance, Thomas.
+-- 
+___________________________________________________
+Thomas Schulze, [TfS]
+ts@uni-paderborn.de
+
+------------------------------
+
+From: jrc@brainiac.mn.org (Jeffrey Comstock)
+Subject: Re: Lets make it easier on the new folks
+Date: 28 Jan 92 23:37:21 GMT
+
+>Yes, there is an absolutely right place.  We just have to create it.
+>Obvisously, cat, dd, and related programs belong in /bin.  mtools, less,
+>and relatives belong in /usr/local/bin.  Now, do we cross-link /usr/bin and
+>/bin like SunOS has done?  Do we put all "required-to-run-single-user" binaries
+>in /sbin?  I would like to form a mailing list of people that are interested
+>in helping out in setting some standards for directory locations.  The current
+>state of affairs *MUST NOT CONTINUE*
+>
+
+I just wanted to mention that the owner/permissions have to be tweaked in 
+some places.  For instance, df must be suid root.  I have made the serial
+devices owned by uucp, and kermit suid to uucp.  I had problems if I logged
+in as someone other than root.
+
+-- 
+Jeffrey R. Comstock 
+CW   -. .-. ----- -..
+EMAIL CURRENTLY BROKEN - PLEASE TRY jrc@edgar%kksys.com
+
+------------------------------
+
+From: rivers@ponds.uucp (Thomas David Rivers)
+Subject: CRON available
+Date: 29 Jan 92 11:42:15 GMT
+
+
+  I have ported Paul Vixie's SysV compatible cron to Linux.
+
+  The beta version is now available (sources, and exectubles, man pages,
+  etc...) in vixie-cron.tar.Z on tsx-11.mit.edu (in /incoming for the
+  moment.)
+  
+
+  This is a beta version for several reasons:
+
+     1) sleep() is incorrect in the version 0.12 libc.a; I have
+        a replacement sleep.c in the sources.  You should replace
+        your sleep.o in libc.a with this one.
+
+     2) pause() isn't correct in version 0.12; but I have a work around
+        in the cron sources (use -DLINUX_V0_12_PAUSE_BUG in the Makefile)
+        (Linus has written a fix if you want it, but it's no big deal
+        to cron if you don't have it.)
+
+     3) file locking is not yet available in Linux; the cron daemon uses
+        file locking to make sure only one cron daemon is running.
+        So; be careful not to run two daemons, or your commands will
+        execute twice.
+
+  Most of the fixes for vixie-cron were related to these problems, but
+  there was also a tendency in Paul Vixie's original source to reference
+  free() memory; which I corrected as well.
+
+  The two executables (crond and crontab) in the tar file should be 
+  installed as follows:
+
+          cp crond /etc/crond
+          chmod 111 /etc/crond
+          cp crontab /bin/crontab
+          chmod 4111 /bin/crontab
+
+  or, simply run make install.
+
+          - Dave Rivers -
+          (rivers@ponds.uucp)
+
+p.s. I have only uploaded this (as well as my uuencode/uudecode port) to
+     tsx-11.mit.edu; could some kind soul (who has decent internet
+     access) please take a moment to propagate this to the other
+     archives.  I actually have to kermit the images to my wife's
+     account to ftp them.
+
+p.p.s. Now with a decent cron() I may get started porting Taylor UUCP, or
+       UUCP V1.2 from minix (I don't think minix's UUCP is under the
+       same copyright constraints as the other minix sources...)
+
+------------------------------
+
+From: pk@cs.tut.fi (Kellom{ki Pertti)
+Subject: Re: Linux & DOS 5.0
+Date: 29 Jan 92 08:11:15 GMT
+
+In article <1992Jan28.230815.27592@jvnc.net> johnson@jvnc.net (Steven L. Johnson) writes:
+   Have you tried creating the 80M partition with DOS fdisk, and then
+   adding the 20M partition with edpart?  If edpart doesn't mess with
+   the existing entry created by DOS, this should work.
+
+It worked for me. I have a ~40M DOS partition, and three smaller
+partitions (~32M, ~32M, ~10M) for linux. So far no problems... (knock,
+knock).
+--
+Pertti Kellom\"aki (TeX format)  #       These opinions are mine, 
+  Tampere Univ. of TeXnology     #              ALL MINE !
+      Software Systems Lab       #  (but go ahead and use them, if you like)
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Activists-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and alt.os.linux) via:
+
+    Internet: Linux-Activsts@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    tupac-amaru.informatik.rwth-aachen.de	pub/msdos/replace
+
+The current version of Linux is 0.12, released on Jan 14, 1992
+
+End of Linux-Activsts Digest
+******************************

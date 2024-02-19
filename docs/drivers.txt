@@ -1,0 +1,947 @@
+************************************************************
+*                                                          *
+*    Guide To Linux Driver Writing -- Character Devices    *
+*                                                          *
+*                            or,                           *
+*                                                          *
+*         The Wacky World of Driver Development (I)        *
+*                                                          *
+*                 Last Revision: Apr 11, 1993              *
+*                                                          *
+************************************************************
+
+This document (C) 1993 Robert Baruch.  This document may be freely 
+copied as long as the entire title, copyright, this notice, and all of
+the introduction are included along with it.  Suggestions, criticisms,
+and comments to baruch@nynexst.com.  This document, nor the work
+performed by Robert Baruch using Linux, nor the results of said work
+are connected in any way to any of the Nynex companies.  Information
+may settle during transportation.  This product should not be used
+in conjunction with a dietary regime except under supervision by your
+doctor.
+
+Right, now that that's over with, let's get into the fun stuff!
+
+========================
+     Introduction
+========================
+
+There is a companion guide to this Guide, the Linux Character Device
+Tutorial.  This tutorial contains working examples of driver code.  It
+introduces the reader gently into each aspect of character device driver
+writing through experiments which are carried out by the programmer.
+
+This Guide should serve as a reference to both beginning and advanced
+driver writers.
+
+-=-=-=-=-=-=-
+
+Some words of thanks:
+
+Many thanks to:
+
+ Donald J. Becker (becker@metropolis.super.org)
+ Don Holzworth (donh@gcx1.ssd.csd.harris.com)
+ Michael Johnson (johnsonm@stolaf.edu)
+ Karl Heinz Kremer (khk@raster.kodak.com)
+ All the driver writers!
+
+...and of course, Linus "Linux" Torvalds and all the guys who helped
+ develop Linux into a BLOODY KICKIN' O/S!
+
+-=-=-=-=-=-=-
+
+...and now a word of warning:
+
+Messing about with drivers is messing with the kernel.  Drivers are run
+at the kernel level, and as such are not subject to scheduling.  Further,
+drivers have access to various kernel structures.  Before you actually
+write a driver, be *damned* sure of what you are doing, lest you end
+up having to re-format your harddrive and re-install Linux!
+
+The information in this Guide is as up-to-date as I could make it.  It also
+has no stamp of approval whatsoever by any of the designers of the kernel.
+I am not responsible for damage caused to anything as a result of using this
+Guide.
+
+========================
+  End of Introduction
+========================
+
+Kernal-callable functions:
+--------------------------
+
+Note:  There is no close for a character device.  There is only release.
+See the file data structure below to find out how to determine the number
+of processes which have the device open.
+
+-=-=-=-=-=-=-=-
+
+init : Initializes the driver on bootup.
+
+  unsigned long driver_init(unsigned long kmem_start, unsigned long kmem_end)
+
+Arguments: kmem_start -- the start of kernel memory
+           kmem_end   -- the end of kernel memory
+
+Returns: The new start of kernel memory.  This will be different from the
+  kmem_start argument if you want to allocate memory for the driver.
+
+The arguments you use depends on what you want to do.  Remember that since
+you are going to add your init function to kernel/chr_dev/mem.c, you can
+make your call anything you like, but you have access to the kernel memory
+start and end.
+
+Generally, the init function initializes the driver and hardware, and
+displays some message telling of the availability of the driver and
+hardware.  In addition, the register_chrdev function is usually called here.
+
+
+**************
+open : Open a device
+
+  static int driver_open(struct inode * inode, struct file * file)
+
+Arguments: inode    -- pointer to the inode structure for this device
+           file     -- pointer to the file structure for this device
+
+Returns: 0 on success,
+         -errno on error.
+
+This function is called whenever a process performs open (or fopen) on
+the device special file.  If there is no open function for the driver,
+nothing spectacular happens.  As long as the /dev file exists, the
+open will succeed.
+
+
+**************
+read : Read from a device
+
+  static int driver_read(struct inode * inode, struct file * file, 
+                         char * buffer, int count)
+
+Arguments: inode    -- pointer to the inode structure for this device
+           file     -- pointer to the file structure for this device
+           buffer   -- pointer to the buffer in user space to read into
+           count    -- the number of bytes to read
+
+Returns: -errno on error
+         >=0 : the number of bytes actually read
+
+If there is no read function for the driver, read calls will return EINVAL.
+
+
+**************
+write : Write to a device
+
+  static int driver_write(struct inode * inode, struct file * file, 
+                          char * buffer, int count)
+
+Arguments: inode    -- pointer to the inode structure for this device
+           file     -- pointer to the file structure for this device
+           buffer   -- pointer to the buffer in user space to write from
+           count    -- the number of bytes to write
+
+Returns: -errno on error
+         >=0 : the number of bytes actually written
+
+If there is no write function for the driver, write calls will return
+EINVAL.
+
+
+**************
+lseek : Change the position offset of the device
+
+  static int driver_lseek(struct inode * inode, struct file * file,
+                          off_t offset, int origin)
+
+Arguments: inode    -- pointer to the inode structure for this device
+           file     -- pointer to the file structure for this device
+           offset   -- offset from origin to move to (bytes)
+           origin   -- origin to move from :
+                       0 = from origin 0 (beginning)
+                       1 = from current position
+                       2 = from end
+
+Returns: -errno on error
+         >=0 : the position after the move
+
+See Also: Data Structure 'file'
+
+If there is no lseek function for the driver, the kernel will take the default
+seek action, which is to alter the file->f_pos element.  For origins of 2,
+the default action results in -EINVAL if file->f_inode is NULL, or it
+sets file->f_pos to file->f_inode->i_size + offset otherwise.
+
+
+**************
+ioctl : Various device-dependent services
+
+  static int driver_ioctl(struct inode *inode, struct file *file,
+                          unsigned int cmd, unsigned long arg)
+
+Arguments: inode    -- pointer to the inode structure for this device
+           file     -- pointer to the file structure for this device
+           cmd      -- the user-defined command to perform
+           arg      -- the user-defined argument.  You may use this
+                       as a pointer to user space, since sizeof(long)==
+                       sizeof(void *).
+
+Returns: -errno on error
+         >=0 : whatever you like! (user-defined)
+
+For cmd, FIOCLEX, FIONCLEX, FIONBIO, and FIOASYNC are already defined.
+See the file linux/fs/ioctl.c, sys_ioctl to find out what they do.
+If there is no ioctl call for the driver, and the ioctl command performed
+is not one of the four types listed here, ioctl will return -EINVAL.
+
+
+**************
+select : Performs the select call on the device:
+
+  static int driver_select(struct inode *inode, struct file *file, 
+                           int sel_type, select_table * wait)
+
+Arguments: inode    -- pointer to the inode structure for this device
+           file     -- pointer to the file structure for this device
+           sel_type -- the select type to perform :
+                        SEL_IN (read)
+                        SEL_OUT (write)
+                        SEL_EX (exception)
+           wait     -- see the section "Some Notes" for select.
+
+Returns: 0 if the device is not ready to perform the sel_type operation
+         !=0 if it is.
+
+See the "Some Notes" section 'way below on information on how to use
+the select call in drivers.  If there is no select call for the driver,
+select will act as if the driver is ready for the operation.
+
+
+**************
+release : Release device (no process holds it open)
+
+  static void driver_release(struct inode * inode, struct file * file)
+
+Arguments: inode    -- pointer to the inode structure for this device
+           file     -- pointer to the file structure for this device
+
+The release call is activated only when the process closes the device as
+many times as it has opened it.  That is, if the process has opened the
+device five times, then only when close is called for the fifth time
+will release be called (that is, provided there were no more calls to open!).  
+If there is no release call for the driver, nothing spectacular happens.
+
+
+**************
+readdir : Get the next directory entry
+
+  static int driver_readdir(struct inode *inode, struct file *file, 
+                            struct dirent *dirent, int count)
+
+Arguments: inode    -- pointer to the inode structure for this device
+           file     -- pointer to the file structure for this device
+           dirent   -- pointer to a dirent ("directory entry") structure
+           count    -- number of entries to read (currently always 1)
+
+Returns: 0 on success
+         -errno on failure.
+
+If there is no readdir function for the driver, readdir will return 
+-ENOTDIR.  This is really for file systems, but you can probably use
+it for whatever you like in a non-fs device, as long as you return
+a dirent structure.
+
+See Also: dirent (data structure)
+
+
+**************
+mmap : Forget this.  According to the source (src/linux/mm/mmap.c),
+       for character devices only /dev/[k]mem may be mapped.
+       Besides, I'm not too clear on what it will do.
+
+
+----------------------------------------------------------------------
+
+Data structures:
+----------------
+
+dirent : Information about files in a directory.
+
+#include <linux/dirent.h>
+
+struct dirent {
+        long            d_ino;                /* Inode of file */
+        off_t           d_off;
+        unsigned short  d_reclen;
+        char            d_name[NAME_MAX+1];   /* Name of file */
+};
+
+
+**************
+file : Information about open files
+
+According to the Hacker's Guide to Linux, this structure is mainly used
+for writing filesystems, not drivers.  However, there is no reason it
+cannot be used by drivers.
+
+#include <linux/fs.h>
+
+struct file {
+        mode_t f_mode;
+        dev_t f_rdev;                   /* needed for /dev/tty */
+        off_t f_pos;                    /* Curr. posn in file */
+        unsigned short f_flags;         /* The flags arg passed to open */
+        unsigned short f_count;         /* Number of opens on this file */
+        unsigned short f_reada;
+        struct inode * f_inode;         /* pointer to the inode struct */
+        struct file_operations * f_op;  /* pointer to the fops struct */
+};
+
+
+**************
+file_operations : Tells the kernel which function to call for
+                  which kernel function.
+
+#include <linux/fs.h>
+
+struct file_operations {
+        int (*lseek) (struct inode *, struct file *, off_t, int);
+        int (*read) (struct inode *, struct file *, char *, int);
+        int (*write) (struct inode *, struct file *, char *, int);
+        int (*readdir) (struct inode *, struct file *, struct dirent *, int);
+        int (*select) (struct inode *, struct file *, int, select_table *);
+        int (*ioctl) (struct inode *, struct file *, unsigned int, 
+                      unsigned int);
+        int (*mmap) (void);
+        int (*open) (struct inode *, struct file *);
+        void (*release) (struct inode *, struct file *);
+        int (*fsync) (struct inode *, struct file *);
+};
+
+
+**************
+inode : Information about the /dev/xxx file (or inode)
+
+#include <linux/fs.h>
+
+struct inode {
+        dev_t           i_dev;  
+        unsigned long   i_ino;  /* Inode number */
+        umode_t         i_mode; /* Mode of the file */
+        nlink_t         i_nlink;
+        uid_t           i_uid;
+        gid_t           i_gid;
+        dev_t           i_rdev;  /* Device major and minor numbers */
+        off_t           i_size;
+        time_t          i_atime;
+        time_t          i_mtime;
+        time_t          i_ctime;
+        unsigned long   i_blksize;
+        unsigned long   i_blocks;
+        struct inode_operations * i_op;
+        struct super_block * i_sb;
+        struct wait_queue * i_wait;
+        struct file_lock * i_flock;
+        struct vm_area_struct * i_mmap;
+        struct inode * i_next, * i_prev;
+        struct inode * i_hash_next, * i_hash_prev;
+        struct inode * i_bound_to, * i_bound_by;
+        unsigned short i_count;
+        unsigned short i_flags;  /* Mount flags (see fs.h) */
+        unsigned char i_lock;
+        unsigned char i_dirt;
+        unsigned char i_pipe;
+        unsigned char i_mount;
+        unsigned char i_seek;
+        unsigned char i_update;
+        union {
+                struct pipe_inode_info pipe_i;
+                struct minix_inode_info minix_i;
+                struct ext_inode_info ext_i;
+                struct msdos_inode_info msdos_i;
+                struct iso_inode_info isofs_i;
+                struct nfs_inode_info nfs_i;
+        } u;
+};
+
+See Also: Driver Calls: MAJOR, MINOR, IS_RDONLY, IS_NOSUID, IS_NODEV,
+                        IS_NOEXEC, IS_SYNC
+
+-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+Driver calls:
+
+
+**************
+add_timer : Cause a function to be executed when a given amount of time
+            has passed.
+
+#include <linux/sched.h>
+
+void add_timer(long jiffies, void (*fn)(void))
+
+Arguments: jiffies -- The number of jiffies to time out after.
+           fn      -- The function in kernel space to run after timeout.
+
+Note!  This is NOT process-specific!  If you are looking for a way
+to have a process go to sleep and timeout, look for ?
+Excessive use of this function will cause the kernel to panic if there are
+too many timeouts active at once.
+
+
+**************
+cli : Macro, Prevent interrupts from occuring
+
+#include <asm/system.h>
+
+#define cli() __asm__ __volatile__ ("cli"::)
+
+See Also: sti
+
+
+**************
+free_irq : Free a registered interrupt
+
+#include <linux/sched.h>
+
+void free_irq(unsigned int irq)
+
+Arguments: irq -- the interrupt level to free up
+
+See Also: request_irq
+
+
+**************
+get_fs_byte, get_fs_word, get_fs_long : Get data from user space
+
+Purpose: Allows a driver to access data in user space (which is in
+         a different segment than the kernel!)
+
+#include <asm/segment.h>
+
+inline unsigned char get_fs_byte(const char * addr)
+inline unsigned short get_fs_word(const unsigned short *addr)
+inline unsigned long get_fs_long(const unsigned long *addr)
+
+Arguments: addr -- the address in user space to get data from
+
+Returns: the value in user space.
+
+See Also: memcpy_fromfs, memcpy_tofs, put_fs_byte, put_fs_word, put_fs_long
+
+
+**************
+inb, inb_p : Inputs a byte from a port
+
+#include <asm/io.h>
+
+inline unsigned int inb(unsigned short port)
+inline unsigned int inb_p(unsigned short port)
+
+Arguments: port -- the port to input a byte from
+
+Returns:  Byte received in the low byte.  High byte unused.
+
+See Also: outb, outb_p
+
+
+**************
+IS_RDONLY, IS_NOSUID, IS_NODEV, IS_NOEXEC, IS_SYNC: Macros, check the status
+    of the device on the filesystem
+
+#include <linux/fs.h>
+
+#define IS_RDONLY(inode) (((inode)->i_sb) && ((inode)->i_sb->s_flags &
+                           MS_RDONLY))
+#define IS_NOSUID(inode) ((inode)->i_flags & MS_NOSUID)
+#define IS_NODEV(inode) ((inode)->i_flags & MS_NODEV)
+#define IS_NOEXEC(inode) ((inode)->i_flags & MS_NOEXEC)
+#define IS_SYNC(inode) ((inode)->i_flags & MS_SYNC)
+
+
+**************
+kfree, kfree_s : Free memory which has been kmalloced.
+
+#include <linux/kernel.h>
+
+#define kfree(x) kfree_s((x), 0)
+void kfree_s(void * obj, int size)
+
+Arguments : obj  -- pointer to kernel memory you want to free
+            size -- size of block you want to free (0 if you don't know
+                    or are lazy -- slows things down)
+
+
+**************
+kmalloc : Allocate memory in kernel space
+
+#include <linux/kernel.h>
+
+void * kmalloc(unsigned int len, int priority)
+
+Arguments: len      -- the length of the memory to allocate.  Must not be bigger
+                       than 4096.
+           priority -- GFP_KERNEL or GFP_ATOMIC.  GFP_ATOMIC causes kmalloc
+                       to return NULL if the memory could not be found
+                       immediately.  GFP_KERNEL is the usual priority.
+
+Returns: NULL on failure, a pointer to kernel space on success.
+
+
+**************
+memcpy_fromfs, memcpy_tofs : Copies memory from user(fromfs)/kernel(tofs) 
+                             space to kernel/user space
+
+#include <asm/segment.h>
+
+inline void memcpy_fromfs(void * to, const void * from, unsigned long n)
+inline void memcpy_tofs(void * to, const void * from, unsigned long n)
+
+Arguments: to   -- Address to copy data to
+           from -- Address to copy data from
+           n    -- number of bytes to copy
+
+See Also: get_fs_byte, get_fs_word, get_fs_long,
+          put_fs_byte, put_fs_word, put_fs_long
+
+Warning!  Get the order of arguments right!
+
+
+**************
+MAJOR, MINOR : Macros, get major/minor device number from inode i_dev entry.
+
+#include <linux/fs.h>
+
+#define MAJOR(a) (((unsigned)(a))>>8)
+#define MINOR(a) ((a)&0xff)
+
+
+**************
+outb, outb_p : Outputs a byte to a port
+
+#include <asm/io.h>
+
+inline void outb(char value, unsigned short port)
+inline void outb_p(char value, unsigned short port)
+
+Arguments: value -- the byte to write out
+           port  -- the port to write it out on
+
+See Also: inb, inb_p
+
+
+**************
+printk : Kernel printf
+
+#include <linux/kernel.h>
+
+int printk(const char *fmt, ...)
+
+Arguments: fmt -- printf-style format
+           ... -- var-arguments, printf-style
+
+Returns: Number of characters printed.
+
+
+**************
+put_fs_byte, put_fs_word, put_fs_long : Put data into user space
+
+Purpose: Allows a driver to put a byte, word, or long into user space,
+         which is at a different segment than the kernel.
+
+#include <asm/segment.h>
+
+inline void put_fs_byte(char val,char *addr)
+inline void put_fs_word(short val,short * addr)
+inline void put_fs_long(unsigned long val,unsigned long * addr)
+
+Arguments: addr -- the address in user space to get data from
+
+Returns: the value in user space.
+
+See Also: memcpy_fromfs, memcpy_tofs, get_fs_byte, get_fs_word, get_fs_long
+
+Warning!  Get the order of arguments right!
+
+
+**************
+register_chrdev : Register a character device with the kernel
+
+#include <linux/fs.h>
+#include <linux/errno.h>
+
+int register_chrdev(unsigned int major, const char *name, 
+                           struct file_operations *fops)
+
+Arguments: major -- the major device number to register as
+           name  -- the name of the device (currently unused)
+           fops  -- a file_operations structure for the device.
+
+Returns: -EINVAL if major is >= MAX_CHRDEV (defined in fs.h as 32)
+         -EBUSY if major device has already been allocated
+         0 on success.
+
+
+**************
+request_irq : Request to perform a function on an interrupt
+
+#include <linux/sched.h>
+#include <linux/errno.h>
+
+int request_irq(unsigned int irq, void (*handler)(int))
+
+Arguments: irq     -- the interrupt to request.
+           handler -- the function to handle the interrupt.  The interrupt
+                      handler should be of the form void handler(int).
+                      Unless you really know what you are doing, don't
+                      use the int argument.
+
+Returns: -EINVAL if irq>15 or handler==NULL
+         -EBUSY if irq is already allocated.
+         0 on success.
+
+See Also: free_irq
+
+
+**************
+select_wait : Add a process to the select-wait queue
+
+#include <linux/sched.h>
+
+inline void select_wait(struct wait_queue ** wait_address, select_table * p)
+
+Arguments: wait_address -- Address of a wait_queue pointer
+           p            -- Address of a select_table
+
+Devices which use select should define a struct wait_queue pointer and
+initialize it to NULL.  select_wait adds the current process to a circular
+list of waits.  The pointer to the circular list is wait_address.  If
+p is NULL, select_wait does nothing, otherwise the current process is
+put to sleep.
+
+See Also: sleep_on, interruptible_sleep_on, wake_up, wake_up_interruptible
+
+
+**************
+sleep_on, interruptible_sleep_on : Put the current process to sleep.
+
+#include <linux/sched.h>
+
+void sleep_on(struct wait_queue ** p)
+void interruptible_sleep_on(struct wait_queue ** p)
+
+Arguments: q -- Pointer to the driver's wait_queue (see select_wait)
+
+sleep_on puts the current process to sleep in an uninterruptible state.
+That is, signals will not wake the process up.  The only thing which
+will wake a process up in this state is a hardware interrupt (which
+would call the interrupt handler of the driver) -- and even then the 
+interrupt routine needs to call wake_up to put the process in a running 
+state.
+
+interruptible_sleep_on puts the current process to sleep in an interruptible
+state, which means that not only will hardware interrupts get through, but
+also signals and process timeouts ("alarms") will cause the process to
+wake up (and execute interrupt or signal handlers).  A call to 
+wake_up_interruptible is necessary to wake up the process and allow it
+to continue running where it left off.
+
+See Also: select_wait, wake_up, wake_up_interruptible
+
+
+**************
+sti : Macro, Allow interrupts to occur
+
+#include <asm/system.h>
+
+#define sti() __asm__ __volatile__ ("sti"::)
+
+See Also: cli
+
+
+**************
+sys_getegid, sys_getgid, sys_getpid, sys_getppid, sys_getuid, sys_geteuid :
+  Funky functions which get various information about the current process,
+
+#include <linux/sys.h>
+
+int sys_getegid(void)
+int sys_getgid(void)
+int sys_getpid(void)
+int sys_getppid(void)
+int sys_getuid(void)
+int sys_geteuid(void)
+
+sys_getegid gets the effective gid of the process.
+sys_getgid gets the group ID of the process.
+sys_getpid gets the process ID of the process.
+sys_getppid gets the process ID of the process' parent.
+sys_geteuid gets the effective uid of the process.
+sys_getuid gets the user ID of the process.
+
+
+**************
+wake_up, wake_up_interruptible : Wake up _all_ processes waiting on
+                                 the wait queue.
+
+#include <linux/sched.h>
+
+void wake_up(struct wait_queue **q)
+void wake_up_interruptible(struct wait_queue **q)
+
+Arguments: q -- Pointer to the driver's wait_queue (see select_wait)
+
+See Also: select_wait, sleep_on, interruptible_sleep_on
+
+
+--------------------------------------------------------
+
+==========
+Some notes
+==========
+
+Interrupts, Drivers, and You!
+-----------------------------
+
+First, a brief exposition on the Meaning of Interrupts.  There are three
+ways by which a program running in the CPU may be interrupted.  The first is
+the external interrupt.  This is caused by an external device (that is,
+external to the CPU) signalling for attention.  These are referred to as
+"interrupt requests" or "IRQs".
+
+The second method is the exception, which is caused by something internal to
+the CPU, usually in response to a condition generated by execution of an
+instruction.
+
+The third method is the software interrupt, which is a deliberately executed
+interrupt -- the INT instruction in assembly.  System calls are implemented
+using software interrupts; when a system call is desired, Linux places the
+system call number in EAX, and performs an INT 0x80 instruction.
+
+Since drivers usually deal with hardware devices, it is logical that driver
+interrupts should refer to external interrupts.  There are 16 available IRQs
+-- IRQ0 through IRQ15.  The following table lists the official uses of the
+various IRQs:
+
+IRQ0   -- timer 0
+IRQ1   -- keyboard
+IRQ2   -- AT slave 8259 ("cascade")
+IRQ3   -- COM2
+IRQ4   -- COM1
+IRQ5   -- LPT2
+IRQ6   -- floppy
+IRQ7   -- LPT1
+IRQ8-12   ??????
+IRQ13  -- coprocessor error
+IRQ14,15  ??????
+
+Writing drivers which can be interrupted requires care.  Be aware that
+every line you write can be interrupted, and thus cause variable
+changes to occur.  If you really want to protect critical sections from
+being interrupted, use the cli() and sti() driver calls.
+
+Suppose you wanted to test some kind of funky condition, where success of
+the condition leads to going to sleep, and being woken up by an interrupt.
+Consider this code:
+
+void driver_interrupt(int unused)
+{
+  if (!driver_stuff.int_flag) return;  /* Spurious interrupts 
+                                          are not unheard of */
+  driver_stuff.int_flag=0;
+  weird_wacky(); /* Do some weird and wacky stuff 
+                    here to handle the interrupt */
+  disable_ints(); /* Disable the device from issuing interrupts */
+  wake_up(&driver_stuff.wait_queue); /* Sets process to TASK_RUNNING */
+}
+
+if (conditions_are_ripe())
+{
+  driver_stuff.int_flag = 1;
+  enable_ints(); /* Enable device to interrupt us */
+  sleep_on(&driver_stuff.wait_queue); /* Sets process to TASK_UNINTERRUPTIBLE */
+}
+
+Assume we just leave the conditions_are_ripe code, determining that the
+conditions are ripe!  We have just enabled the device to interrupt the
+machine.  So we are now about to enter the sleep_on code, and
+what should happen but the pesky device issues an interrupt.  Ka-chunk! and
+we enter the driver_interrupt routine, which does some weird and wacky
+stuff to handle the interrupt, and then we disable the device's interrupts.
+Ka-ching! we enter the wake_up function which sets the process up to run again.
+Boink! we exit the interrupt handler and commence where we left off 
+(just about to enter the sleep_on code). Vooosh! we're now sleeping the 
+process, awaiting an interrupt which will never occur, since the interrupt
+handler disabled the device from interrupts!  What to do?
+
+Use cli() and sti() to protect the critical sections of code:
+
+cli();
+if (conditions_are_ripe())
+{
+  driver_stuff.int_flag = 1;
+  enable_ints(); /* Enable device to interrupt us */
+  sleep_on(&driver_stuff.wait_queue); /* Sets process to TASK_UNINTERRUPTIBLE */
+}
+else sti();
+
+First we clear interrupts.  This is not the same as disabling device
+interrupts!  This actually prevents a hardware interrupt from causing the
+CPU to execute interrupt code.  In effect, the interrupt is deferred.
+
+Now we can do our check and perform sleep_on, secure in the knowledge that
+the interrupt handler cannot be called.  The sleep_on (and interruptible_
+sleep_on) call has a sti() in it in the right place, so you don't have to
+worry about calling sti() before sleep_on, and running into a race condition
+again.
+
+Of course, with any interruptible device driver, you must be careful never
+to spend too much time in the interrupt routine if you are expecting more
+than one interrupt, because you may miss your second interrupt.
+
+-=-=-=-=-=-=-
+
+Drivers and signals:
+--------------------
+
+When a process is sleeping in an interruptible state, any signal can wake it
+up.  This is the sequence of events which occurs when a sleeping process
+receives a signal:
+
+(1) Set current->signal.
+(2) Set the process to a runnable state.
+(3) Execute the rest of the driver call.
+(4) Run the signal handler.
+(5) If the driver call in step 3 returned -ERESTARTNOHAND or -ERESTARTNOINTR,
+    then return from the driver call with EINTR.  If the driver call in step
+    3 returned -ERESTARTSYS, then restart the driver call.  Otherwise, just
+    return with whatever was returned from the driver call.
+
+In the driver, you can tell if a sleep has been interrupted by a signal
+with the following code:
+
+  if (current->signal & ~current->blocked)
+  {
+    /* Do things based on sleep interrupted by signal */
+  }
+
+-=-=-=-=-=-=-
+
+Drivers and timeouts:
+---------------------
+
+Suppose you wanted to sleep on an interrupt, but also time out after
+a period of time.  You could always use the add_timer, but that's 
+frowned upon because there are only a limited number of timers
+available -- currently there are 64.
+
+The usual solution is to manually alter the current process's timeout:
+
+current->timeout = jiffies + X;
+interruptible_sleep_on(&driver_stuff.wait_queue);
+
+(Interruptible sleep_on must be used here to allow a timeout to interrupt
+the sleep).  This will cause the scheduler to set the task running again when 
+X jiffies has gone by.  Even if the timeout goes off and the process is
+allowed to continue running, it is probably a good idea to call
+wake_up_interruptible in case the process needs to be rescheduled.
+
+To find out if it was a timeout which caused the process to wake up,
+check current->timeout.  If it is 0, a timeout occurred.  Otherwise it
+should remain what you set it at.  If a timeout did not occur, and something
+else woke the process up, you should set current->timeout to 0 to prevent
+the timeout from continuing.
+
+The disadvantage of this method is that the process can only have one
+timeout at a time.  Over *all* drivers.
+
+
+-=-=-=-=-=-=-
+
+The driver_select call:
+-----------------------
+
+When a process issues a select call, it is checking to see if the given 
+devices are ready to perform the given operations.  For example, suppose
+you want a driver to have a command written to it, and to disallow further
+commands until the current command is complete.  Well, in the write call
+you would block commands if there is already a command operating (for example,
+waiting for a board to do something).  But that would require the process to
+write over and over again until it succeeds.  That just burns cycles.
+
+The select call allows a process to determine the availability of read and
+write.  In the above example, one merely has to select for write on that
+device's file descriptor (as returned by open), and the process would be
+put to sleep until the device is ready to be written to.
+
+The kernel will call the driver's driver_select call when the process issues a
+select call.  The arguments to the driver_select call are detailed above.
+If the wait argument is non-NULL, and there is no error condition caused
+by the select, driver_select should put the process to sleep, and arrange
+to be woken up when the device becomes ready (usually through an interrupt).
+
+If, however, the wait argument is NULL, then the driver should quickly
+see if the device is ready, and return even if it is not.  The select_wait
+function does this already for you (see further).
+
+Putting the process to sleep does not require calling a sleep_on function.
+It is the select_wait function which is called, with the p argument being
+equal to the wait argument passed to driver_select.
+
+select_wait is pretty much equivalent to interruptible_sleep_on in that it
+adds the current process to the wait queue and sleeps the process in
+an interruptible state.  The internals of the differences between
+select_wait and interruptible_sleep_on are relatively irrelevant here.
+Suffice it to say that to wake the process up from the select, one needs
+to perform the wake_up_interruptible call.  When that happens, the
+process is free to run.  
+
+However, in the case of interruptible_sleep_on, the process will continue
+running after the call to interruptible_sleep_on.  In the case of select_wait,
+the process does not.  driver_select is called as a "side effect" of the
+select call, and so completes even when it calls select_wait.  It is
+not select_wait which sleeps the process, but the select call.  Nevertheless,
+it is required to call select_wait to add the process to the wait-queue,
+since select will not do that.
+
+All one needs to remember for driver_select is:
+
+(1) Call select_wait if the device is not ready, and return 0.
+(2) Return 1 if the device is ready.
+
+
+Calling select with a timeout is really no different to the driver than
+calling it without select.  But there is one crucial difference.  Remember
+timing out on interrupts above?  Well, interrupt timeouts and select timeouts
+cannot co-exist.  They both use current->timeout to wake the process up
+after a period of time.  Remember that!
+
+
+-=-=-=-=-=-=-
+
+Installation notes:
+-------------------
+
+Before you sit down and write your first driver, first make sure you
+understand how to recompile the kernel.  Then go ahead and recompile it!
+Recompilation of the kernel is described in the FAQ.  If you can't
+recompile the kernel, you can't install your driver into the kernel.
+[Although I hear tell of a package on sunsite which can load and unload
+drivers while the kernel is running.  Until I test out this package,
+I won't include instructions for it here.]
+
+For character devices, you need to go into the mem.c file in the
+(source)/linux/kernel/chr_dev directory, to the chr_dev_init function,
+and add your init function to it.  Recompile the kernel, and away you go!
+
+(BTW, would you manually have to do a mknod to make the /dev/xxx entry
+for your driver?  Can you do it in the init function?)
+
+In general, one installs a device special file in /dev manually, by using
+mknod:
+
+  mknod /dev/xxx c major minor
+
+If you registered your character driver as major device X, then all accesses
+to /dev/xxx where major==X will call your driver functions.

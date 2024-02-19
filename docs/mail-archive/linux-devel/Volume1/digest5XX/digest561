@@ -1,0 +1,545 @@
+Subject: Linux-Development Digest #561
+From: Digestifier <Linux-Development-Request@senator-bedfellow.MIT.EDU>
+To: Linux-Development@senator-bedfellow.MIT.EDU
+Reply-To: Linux-Development@senator-bedfellow.MIT.EDU
+Date:     Fri, 18 Mar 94 06:13:07 EST
+
+Linux-Development Digest #561, Volume #1         Fri, 18 Mar 94 06:13:07 EST
+
+Contents:
+  Re: select (Chris Anderson)
+  Andrew 6.1 for Linux: who did it? (Marko Schuetz)
+  Re: select (Alan Cox)
+  Re: 127.x.x.x (was Re: UDP report card) (Nick Hilliard)
+  486DLC support anyone? (Chris Thomas)
+  Re: 127.x.x.x (was Re: UDP report card) (Mark Evans)
+  Re: Real-Time Linux and a/d device drivers (Greg McGary)
+  PRINTK from device driver not working?? (Robert Weir2)
+  Re: kernel problem in 1.0 (Scott D. Heavner)
+  Re: Real-Time Linux and a/d device drivers (Kwun Han)
+  Re: 127.x.x.x (was Re: UDP report card) (Paul J. Gans)
+  Re: 486DLC support anyone? (Superuser)
+  Re: Little problem: ftp-data eth-ernal CLOSEing with pre-1.0 (Steve Kann)
+  doesitwork w/ Conner CP-30540? (Ivan Soleimanipour)
+  Printer Problems (Ken Kopilevich)
+
+----------------------------------------------------------------------------
+
+From: christop@access2.digex.net (Chris Anderson)
+Subject: Re: select
+Date: 16 Mar 1994 11:24:29 -0500
+
+In article <fgm.763726050@lipo>, Frank McCabe <fgm@doc.ic.ac.uk> wrote:
+>A while ago I posted a request/comment about the select system call -- that
+>it doesnt properly timeout.
+>
+>The behaviour that is exhibited is that the select returns immediately, with a
+>value of 1 (i.e., one FD ready).
+>A subsequent recvfrom system call on the `ready' FD returns the error 
+>ECONNREFUSED (which is a TCP -level error message on a UDP system call).
+>
+
+I noticed this too and posted it a while back.
+
+me>2. A sentto destination of my local address when there isn't a process bound
+me>   to it, returns a ECONNREFUSED.  I've never encountered this behavior before.
+
+Here is Alan's response:
+
+Alan>BSD only does this for 'fatal' errors. The internet RFC's are fairly specific
+Alan>that _all_ ICMP errors ought to be reported to the end user process. I'm still
+Alan>open to comments on this one, but security considerations certain favour
+Alan>following the RFC not BSD code.
+
+Alan>If you want BSD behaviour then change inet/udp.c:udp_err() so the line
+
+Alan>sk->err = icmp_error_convert[err & 0xff].errno;
+Alan>  has
+Alan>if(icmp_error_convert[err&0xff].fatal)
+
+Alan>before it.
+
+I'm not sure of the utility of errors reported like this, since a common use
+of datagrams is programs with a lot of peers and determining which destination
+is invalid doesn't seem to be possible with the socket interface.
+
+Anyway, I just ignored them and did something like you are doing with EINTR.
+i.e.:
+
+switch(select(...))
+{
+   case -1:
+     if (errno == EINTR || errno == ECONNREFUSED)
+        goto again;
+}
+
+>Frank McCabe
+>-------------------
+>My opinions are mine - no-one else is allowed to have them
+>
+
+Chris
+
+
+------------------------------
+
+From: marko@hisplace.rhein-main.de (Marko Schuetz)
+Subject: Andrew 6.1 for Linux: who did it?
+Date: Tue, 15 Mar 1994 19:59:14 GMT
+
+I grabbed a copy of the Andrew Toolkit for Linux version 6.1 and I must say
+that this port definitely causes more problems than it solves.
+Most of all it seems incomplete.
+For example the .overview files are missing, templates are missing and 
+much much more.
+Yet it's amazing to see what already does run, so I was wondering 
+if anyone has solved all these problems and tailored a running Andrew >= 6.1.
+
+If so, I'd surely like to know where I can grab a copy.
+
+Marko
+
+-- 
+---
+       Marko Sch"utz / Koselstr. 7 / D 60318 Frankfurt / Germany
+           marko@hisplace.rhein-main.de / Tel: +49 69 5971621
+
+------------------------------
+
+From: iiitac@uk.ac.swan.pyr (Alan Cox)
+Subject: Re: select
+Date: Thu, 17 Mar 1994 10:41:13 GMT
+
+In article <CHM.94Mar15142201@lanai.vlsivie.tuwien.ac.at> chm@vlsivie.tuwien.ac.at (Christian Mautner) writes:
+>
+>: The behaviour that is exhibited is that the select returns immediately, with a
+>: value of 1 (i.e., one FD ready).
+>: A subsequent recvfrom system call on the `ready' FD returns the error 
+>: ECONNREFUSED (which is a TCP -level error message on a UDP system call).
+>
+>I had the same problem once, I tried to select(2) a SOCK_DGRAM-Socket,
+>and, well, it showed exactly the same behavior: select returns 'yes' ;), 
+>and when I recvfrom(2)ed, I got 'connection refused.' 
+>
+>This was with Slackware 1.1.1 (99.14) and I didn't try it again with a
+>newer kernel. The same program worked on a sun without any problems and
+>as expected. It was surely not a problem of writing to the timeout-variable.
+>
+It work you up to receive the error report. You had previousely done a sendto()
+that had been rejectd and an ICMP_PORT_UNREACH message had been returned. 
+
+Alan
+iiitac@pyr.swan.ac.uk
+
+
+------------------------------
+
+Crossposted-To: comp.protocols.tcp-ip
+From: nick@quay.ie (Nick Hilliard)
+Subject: Re: 127.x.x.x (was Re: UDP report card)
+Date: Thu, 17 Mar 1994 15:24:45 GMT
+
+Warner Losh (imp@boulder.parcplace.com) spoke thus:
+[...]
+: No.  127.* is a special network.  It was born special.  IP
+: implementations should ***ALWAYS*** ignore everything they get from
+: this address if it comes in over the wire and should ***NEVER*** send
+: packets to this address out over the wire.  And it should do this be
+: default.  Robust implementations should enforce this compeletely and
+: leave no room for the user to configure this.  127.* ARP requests as
+: well should never be on the wire, and completely ignored if they are
+: seen by a host on the wire.  ICMP messages should likewise be treated.
+
+I've actually seen a network whose admin (in his infinite wisdom) uses the
+127.* network for normal IP numbers.  I.e. his machines are 127.0.0.2,
+127.0.0.3, etc.  Strangely enough, it actually works.  Can't see why,
+though.
+
+Suffice it to say that there are only IBM implementations of TCP/IP on this
+network.
+
+Nick
+-- 
+| Nick Hilliard              | e-mail:   nick@quay.ie                    |
+| Quay Financial Software,   | Phone:    [+353] 1 6612377                |
+| 48-53, Lower Mount St,     |    The opinions expressed above do not    |
+| Dublin 2, Ireland          | necessarily reflect those of my employers |
+
+------------------------------
+
+From: cjthomas@metronet.com (Chris Thomas)
+Subject: 486DLC support anyone?
+Date: Thu, 17 Mar 1994 03:26:39 GMT
+
+Hi,
+
+I just popped a TI486DLC cpu into my system only to discover that there is a
+DOS program that enables the internal cache on the chip.  It works great 
+for DOS, but linux is still kind of slow.  
+
+Has anyone tried to add DLC support to the kernel?  For that matter, does
+anyone know how to enable the internal cache of the CPU?
+
+
+------------------------------
+
+Crossposted-To: comp.protocols.tcp-ip
+From: evansmp@mb48026.aston.ac.uk (Mark Evans)
+Subject: Re: 127.x.x.x (was Re: UDP report card)
+Date: Thu, 17 Mar 1994 18:36:00 GMT
+
+Alan Cox (iiitac@uk.ac.swan.pyr) wrote:
+: In article <CMo1yH.A82@boulder.parcplace.com> imp@boulder.parcplace.com (Warner Losh) writes:
+: >I know of at least two commercial versions of IP that have had bug
+: >fixes applied to them that stop them from spitting out 127.* to the
+: >wire.  I'm not aware of anything that supplants this requirement in
+: >RFC 1122.
+: >
+: >Any system that does spits 127.* to the wire is broken.
+
+: Any system which when supposedly 'correctly configured' spits 127.* to the
+: wire is broken. On that basis Linux is ok. On the other basis nothign is OK
+: because as route I can force the issue anyway.
+
+The problem with 'idiot proofing' a system is that 'idiots' can be highly
+resorceful :-)
+
+------------------------------
+
+From: gkm@tmn.com (Greg McGary)
+Subject: Re: Real-Time Linux and a/d device drivers
+Date: 17 Mar 1994 18:17:25 -0500
+Reply-To: gkm@tmn.com (Greg McGary)
+
+| OK, so, when do we get started? :-)  Seriously, thought, how hard would
+| a RT scheduling class be to implement?  (Actually, I guess SVR4 has 3
+| classes: RT, system, and TS.  ...
+| How difficult would it be to write a bounded latency 
+| real time scheduler, like Solaris 2 has?  There are probably a lot of
+| problems that I haven't even considered, but I assume many parts of the
+| kernel would need to be rewritten.(?)  Would every I/O call need to be
+| asynchronous for this to work?
+
+I haven't been following the UN*X industry for a few years now, so I
+can't answer any questions about what SVR4 or Solaris or any other
+random system XYZ do...  But, I have mucked around the innards of
+realtime UN*Xes before, so I can offer some spiritual guidance.
+
+There are two important pieces of a realtime scheduler, one is easy to
+implement, and the other is hard.
+
+The easy part is having fixed scheduling priorities.  So-called
+"timesharing" schedulers have mutable priorities--the OS raises the
+prority of sleeping procs so they have a better chance of getting the
+CPU when they awaken.  This helps interactive jobs get better response
+time, and keeps them from getting swamped by CPU-bound jobs.  By
+contrast, a realtime OS has no business mucking with the priorities of
+critical realtime jobs, they stay fixed at what the application
+programmers/administrators set them to.  If more than one process has
+the same fixed priority, they are scheduled round-robin within their
+priority level.  The scheduler I worked on had the priority space
+divided into two, with priorities from 0-127 being fixed realtime
+priorities, and 128-255 being lowly UN*X timesharing priorities.
+
+Ok, now that you have a scheduling algorithm that allows fixed
+priorities, how are you going to guarantee a small lower-bound on
+scheduling latency?  Linux and traditional UN*Xes have single-threaded
+kernels, meaning that once a process is executing in kernel-mode, it
+keeps the CPU until it finishes the system-call, or explicitly gives
+up the CPU by sleeping.  When a realtime OS gets an interrupt on a
+device of interest to a realtime process, it doesn't want to wait
+until some lower priority process finishes its system call or decides
+to sleep--IT WANTS THE CPU NOW!  That means the kernel must be
+preemtable, and that's the hard part.  A preemptable kernel needs
+fine-grain locking of individual data-structures (e.g., file-table,
+inode-table, mount-table, individual inodes, device-descriptors,
+etc.).  By contrast, a non-preemptable kernel essentially has the
+ultimate coarse-grained locking policy; there's only one lock and it's
+system-wide: if a process has the CPU in kernel mode, it keeps it 'til
+it's done.
+
+My opinion is that it's too much work for too little benefit to make
+Linux preemptable.  99% of Linux users don't care about realtime, and
+those that do probably don't consider most PC I/O architectures up to
+the task (I'm not speaking with authority here, but I suspect this
+might be the case).  It should be noted that preemptability is also a
+prerequisite for symmetric multiprocessing, which is potentially more
+interesting to Linux users, but not that much more interesting, since
+commodity Intel computer systems are uni-processors.  If it ever
+happens that multiprocessors become cheap and widely available, then I
+think you'll see Linux evolve in this direction, but not otherwise.
+
+--
+Greg McGary          (703) 729-6217          gkm@tmn.com
+525K East Market Street, #110, Leesburg, Virginia, 22075
+
+------------------------------
+
+From: rob@pct2.farnborough.tt.slb.com (Robert Weir2)
+Subject: PRINTK from device driver not working??
+Date: 16 Mar 1994 09:11:36 GMT
+
+I have developed a character device driver and to debug it I was 
+using printk() function calls. This worked fine on Linux V0.99.13 
+& 0.99.14. I am currently using V0.19.15 with X-Windows being 
+run at startup, by xadm in rc.local.
+
+When the PC boots up the prink's that show the dd has been installed 
+work ok. But once the system has gone muli-user I looks like no 
+printk's come out on any consoles. Can anyone help me??????
+
+    Thanks in advance.
+
+Robert Weir
+e-mail : weir@sif.sinet.slb.com
+
+------------------------------
+
+From: sdh@fishmonger.nouucp (Scott D. Heavner)
+Subject: Re: kernel problem in 1.0
+Date: Wed, 16 Mar 1994 19:07:02 GMT
+Reply-To: sdh@po.cwru.edu
+
+matthew 'beautiful hair' mead (mmead@csugrad.cs.vt.edu) wrote:
+
+>       I'm using the netstat from net 0.32, and I've experienced this with
+> a program that tried to select() a file descriptor that should have been
+> treated as a connection refused, but didn't for some reason.  Here's what I get
+> dumped by the kernel upon the segmentation fault the program(s) receive:
+
+        I've seen this problem too, under what might be similar circumstances.
+The kernel's finger is pointing at crond, but the last command crond tried to
+exec was to check if term was still connected, so I think it dumped from trsh
+which was trying to access an un-established unix socket.  I've only seen it
+once and that was within two minutes of installing Linux 1.0 :(
+        I can't reproduce it anywhere?  crond spawns term_check every 15 mins
+and it hasn't died since, trsh on its own just reports "Connect: Invalid argument"
+which is normal behavior.
+
+Mar 16 01:15:00 fishmonger /ETC/CROND[104]: (root) CMD (/term/lib/term_check)
+Mar 16 01:15:00 fishmonger kernel: <6>Unable to handle kernel NULL pointer dereference at address 00000080
+Mar 16 01:15:00 fishmonger kernel: <6>Oops: 0000
+Mar 16 01:15:00 fishmonger kernel: <6>EIP:    0010:0012a720
+Mar 16 01:15:00 fishmonger kernel: <6>EFLAGS: 00010246
+Mar 16 01:15:00 fishmonger kernel: <6>eax: 0019e0e8   ebx: 00000000   ecx: 00193280   edx: 00187df0
+Mar 16 01:15:00 fishmonger kernel: <6>esi: 00193280   edi: 00ef5380   ebp: 00000000   esp: 007d9f64
+Mar 16 01:15:00 fishmonger kernel: <6>ds: 0018   es: 0018   fs: 002b   gs: 002b   ss: 0018
+Mar 16 01:15:00 fishmonger kernel: <6>Pid: 105, process nr: 25 (crond)
+Mar 16 01:15:00 fishmonger kernel: <6>Stack: 00ff4840 bffff200 00ef5380 bffff200 007da000
+Mar 16 01:15:00 fishmonger kernel: <6>Code: 8b 85 80 00 00 00 2b 85 84 00 00 00 25 ff 0f 00 00 ba ff 0f
+
+zSystem.map: 0012a648 t _unix_proto_write
+
+Scott
+
+------------------------------
+
+From: kwh@cs.brown.edu (Kwun Han)
+Subject: Re: Real-Time Linux and a/d device drivers
+Date: Thu, 17 Mar 1994 19:16:45 GMT
+
+In article <2ma2rj$22a@genesis.ait.psu.edu> donadio@mxd120.rh.psu.edu (Matthew Donadio) writes:
+
+   Seriously, what I would like to see is kernel level threads.  Pthreads
+   exists right now, but only on the user level.  Does anybody out there
+   know anythings about how hard this would be to implement?  I don't
+   know much about kernel stuff (just a little about drivers), so I'm not
+   one to begin work on it...
+
+Is pthreads available in Linux? If so, where?
+
+thanks!
+
+Kwun
+--
+*********************************************************************
+kwh@cs.brown.edu                Box #2392, Brown University,
+ST002255@brownvm.brown.edu      Providence, RI 02912
+GE/CS d? p c++(+++) l(++)+++ u e+ m++@ s+/- n+@ h* f(+) g+ w+ t r- y?
+*********************************************************************
+
+------------------------------
+
+From: gans@scholar.chem.nyu.edu (Paul J. Gans)
+Subject: Re: 127.x.x.x (was Re: UDP report card)
+Date: 17 Mar 1994 19:02:04 GMT
+Reply-To: gans@scholar.chem.nyu.edu
+
+Matthias Urlichs (urlichs@smurf.noris.de) wrote:
+
+  [included stuff deleted]
+
+: Given that I've not heard of anybody who gets hurt by seeing spurious
+: 127.anything_but_0_0_1 IP or ARP packets on the wire, I don't think special
+: code in the kernel to catch that case is all that necessary. Not if it can
+: be caught by a simple routint table entry.
+
+Not so.  There can be hurt.  This behavior couples with the known 
+bug that allows network connections to hang around for a while.  The
+result is that *your* machine becomes unreachable until the bogus
+connections (eventually) time out.
+
+If we didn't have the "hanging around" bug, 127.0.0.1 on a network
+wouldn't be much of a problem, but since we do have the bug, it *is*
+a problem.  Luckily it only shows up on crowded nets with misbehaving
+machines that do put 127.0.0.1 out on the net.
+
+To my sorrow, we have that problem here...
+
+
+To change the subject slightly, we seem to have reached some agreement
+in this thread.  (1) 127.0.0.1 should never be put out on the network
+(although how that is to be done is still being argued about) and 
+(2) no machine should respond to an external address of 127.0.0.1.
+
+At the moment (1) is taken care of in a properly configured linux
+machine, but (2) is still broken...
+
+    ----- Paul J. Gans  [gans@scholar.chem.nyu.edu]
+
+
+
+------------------------------
+
+From: root@fusion.cuc.ab.ca (Superuser)
+Subject: Re: 486DLC support anyone?
+Date: Fri, 18 Mar 1994 02:54:19 GMT
+
+cjthomas@metronet.com (Chris Thomas) writes:
+> Hi,
+> 
+> I just popped a TI486DLC cpu into my system only to discover that there is a
+> DOS program that enables the internal cache on the chip.  It works great 
+> for DOS, but linux is still kind of slow.  
+> 
+> Has anyone tried to add DLC support to the kernel?  For that matter, does
+> anyone know how to enable the internal cache of the CPU?
+> 
+
+Grab CxPatch.tar.gz from sunsite.unc.edu in /pub/Linux/kernel/misc-patches
+(or thereabouts). 
+
+c4
+-- 
+Christopher Lau- "Mr. Unix"    |     /       Fusion: Playing With Fire!
+StarBright Research            |    / /      H + H -> He + 24 MeV
+            --                 |   /_/_/_    "Bring back Trudeau!"
+root,lauc@fusion.cuc.ab.ca     |____________ "This space for rent"
+
+------------------------------
+
+From: stevek@panix.com (Steve Kann)
+Subject: Re: Little problem: ftp-data eth-ernal CLOSEing with pre-1.0
+Date: 17 Mar 1994 02:21:12 -0500
+
+Romano Giannetti (romano@sensores2.fis.ucm.es) wrote:
+: Hi all,
+
+:    I have a little problem that showed up in the long upgrading run 
+: from pl15 to pre1-0 (sorry I don't remember when). The problem shows up 
+: with ftp (I know, I know, this is not the right group for a ftp bug report,
+: but wait...). While transferring, frequently pop-up the message "cannot open
+: data connection" and I have to retry it. The problem is that, after, 
+: netstat -t  shows:
+
+: Proto Recv-Q Send-Q Local Address          Foreign Address        (State)
+: ...
+: tcp        1      0 sensores2.fis.ucm:1074 phoenix.doc.i:ftp-data CLOSE  
+: tcp        1      0 sensores2.fis.ucm:1309 arcfos1.arclc:ftp-data CLOSE  
+: ...
+
+I have had the same problems, and they are NOT ftp related.
+
+I don't even have a real ethernet - I only use loopback and term hacks,
+but when a process opens up a port, and then dies with something in the
+recv queue, the port never gets closed..
+
+But I get CLOSE_WAIT and not Close in the state.
+
+I am pretty sure this is an old bug - but I am using pre-1.0 kernel now
+(and loopback only networking).
+
+- Steve
+
+
+: --
+: *******************************************************************************
+: Romano Giannetti        * DII-EIT, University of Pisa(E stands for Electronics)
+: romano@iet.unipi.it     * Dpto Electr. y Electronica, Facultad de Fisica
+:                         * Universidad Complutense de Madrid
+: *******************************************************************************
+
+--
+- Steve
+
+stevek@panix.com
+stevek@magnum.cooper.edu
+
+
+
+------------------------------
+
+From: ivan@djomolungma.Eng.Sun.COM (Ivan Soleimanipour)
+Subject: doesitwork w/ Conner CP-30540?
+Date: 17 Mar 1994 22:20:24 GMT
+Reply-To: ivan@djomolungma.Eng.Sun.COM
+
+I"m starting to get started with Linux, and was just about to
+by an extra hard disk (I already have another Conner that
+I"m happy with), when I saw the hardware FAQ and this hard drive
+wasn't on it.
+
+I'll be driving the disk through an Ultrastor SCSI Off off
+AMD bios.
+
+The question is, has anybody worked with this disk before, or
+should I be safe and get something off the recommended list?
+
+------------------------------
+
+From: kirill@crl.com (Ken Kopilevich)
+Subject: Printer Problems
+Date: 17 Mar 1994 23:42:08 -0800
+
+Hi, everybody.  I have linux installed on my computer very
+recently and now I have a proble with printing.  
+
+My printer is HP DeskJet 500.  
+And here is the problem :
+        When I am trying to print file linux doesn't send CR to the 
+printer.  So All I get are linefeeds at the end of lines.  Hence all
+I can print out are the first three lines on any file
+and they would look like this:
+
+Line one
+       Line two
+              Line three 
+
+And so on.  
+
+If someone has a solution please answer by mail to kirill@crl.com
+I will post the solution.
+Thank you,  Ken.
+
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

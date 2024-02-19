@@ -1,0 +1,663 @@
+From:     Digestifier <Linux-Activists-Request@news-digests.mit.edu>
+To:       Linux-Activists@news-digests.mit.edu
+Reply-To: Linux-Activists@news-digests.mit.edu
+Date:     Tue, 25 Feb 92 07:45:06 EST
+Subject:  Linux-Activists Digest #70
+
+Linux-Activists Digest #70, Volume #1            Tue, 25 Feb 92 07:45:06 EST
+
+Contents:
+  Hackers' technotes to  Nondestructive Repartitioning (Drew Eckhardt)
+  keyboard.S patch for control-space (gentzel@nova.enet.dec.com)
+  Re: A couple of problems... (sweh)
+  Re: floating point (Robert Blum)
+  lists... (Michael K. Johnson)
+  Re: Hackers' technotes to  Nondestructive Repartitioning (Greg Lee)
+
+----------------------------------------------------------------------------
+
+From: drew@cs.colorado.edu (Drew Eckhardt)
+Subject: Hackers' technotes to  Nondestructive Repartitioning
+Date: 25 Feb 92 06:39:53 GMT
+
+Reformatting your hard disk, and reinstalling all your DOS programs from
+scratch can be a real nuissance, and is unecessary.
+
+Breathe a sigh of relief : it is possible to non-destructively repartition
+        hard disks.
+
+Notes : Before continuing, make sure you have a RECENT BACKUP.
+
+        I assume that you understand hex arithmatic, and are not
+        afraid of a little assembler or DEBUG.
+
+        Actually, a decent partition and disk editor will get you around
+        this - NU works gret.
+
+        Of course,  the modern programmer doesn't use anything but a
+        source level debugger - so I've included some helpful hints
+        and the command syntaxes.  However, there is no room for
+        handholding here : if you screw up, you might have to use
+        that backup.  Don't do it unless you are confident in your
+        abilities.
+
+        Also, this procedure only works with NON-EXTENDED DOS partitions,
+        < 64K logical sectors,  (DOS 4 large partitions add additional BPB
+        fields that I am unsure of - roughly the same procedure applies there
+        though.  According to Townsend' Advanced MS DOS : Expert Techniques
+        for programmers
+
+        offset 26h will have the signature byte 29h if this is
+        the case, 20h a dword containing the number of sectors if
+        volume size > 64K sectors
+
+        I still use MS-Loss 3.3, with an ~82M partition under disk mangler
+        and fall into the tested category)
+
+        Large partitions, handled by a third party partition manager
+        and handled so that there are < 64K logical sectors
+        work - this was the case with my SCSI disk.
+
+        I will lay down what general procedures you need to know (
+        required to read / write the raw disk), as well as the
+        data structures we are dealing with.  Then I will proceed
+        with the entire procedure, which applies the general procedures
+        in reading and modifying the data structures.  If it looks like
+        a tech manual - it is.  If you don't grok non-destructive
+        repartitioning, you shouldn't be doing it.
+
+        DEBUG has a Hexaritmatic command, h which will add and
+        subtract the two operands.  You may find this useful.
+
+        IE : I have loaded sector 0 into memory at 0200, and wish to know
+        the address of the partition table at 1be.
+
+        -h 200 1be
+        03BE  0042
+
+        Where 03BE is the sum, and 042 the difference.
+
+        DEBUG prints a segment before the offset : note that your segments
+        will probably not match.  The offset is what's important.
+
+        The 80x86 family is LITTLE ENDIAN.  This means least significant
+        byte first - ie the internal representation of 0x12345678 would be
+        78 56 34 12.  When dealing with multi-byte quantities, keep this
+        in mind.
+
+        When I say word, I mean word as in the Intel documentation :
+        16 bits.  dword is 32 bits.
+
+        DISK BIOS addresses cylinder, head as zero based, sector
+        as 1 based.  Same thing for the partition table.
+
+        DOS addresses sectors as 0 based, from the start of the
+        logical partition, and as logical sectors which may
+        consist of multiple physical sectors.
+
+        Unless otherwise noted, all numbers are hex.
+
+        You're better off using Norton Utilities - but Debug works fine
+        too.
+
+        This document is sort of a quick hack 8^)
+
+Tools :
+
+Required : DEBUG, and a disk defragmenter
+
+Optional : partition editors (NOTE!!!! Make sure these DO NOT perform
+           any formatting, and allow you to edit partitions in the
+           REAL order they appear on the disk.), the Linux FDISK program,
+           utilities that save an image of the boot sector FATs, and
+           directory (IE Norton's Format Recover), a raw disk editor
+           (Norton Utilities NU)..
+
+Procedures :
+Editing memory with debug :
+
+d ADDRESS l LENGTH
+
+will dump memory
+
+f ADDRESS l LENGTH values
+
+will fill memory.
+
+
+Reading and writing DOS logical sectors (using debug):
+
+Reading is accomplished using the debug l command.
+
+l ADDRESS DRIVE SECTOR COUNT
+
+Where ADDRESS is the hex address of where to put the data,
+
+DRIVE is a 0 based drive number (IE A:=0, B:=1, C:=2, etc.  If there
+is only one floppy drive, it is considered both A: and B: as it is
+in DOS)
+
+SECTOR is a zero based sector number.  Of interest to us are
+sector 0, the boot sector, and the sectors immediately following it -
+the FAT's.
+
+
+COUNT is the number of sectors to read.
+
+
+So, to read in the first 10 sectors of the FAT on my E: partition (the
+FAT starts at sector 1), storing them at 0200, I would enter
+
+l 0200 4 0 A
+
+Writing is done with the W command, which takes the same
+parameters.  Assuming I had edited the boot sector of E: at 0200 in memory,
+and wanted to write it back to disk, I would type in
+
+w 0200 4 0 1
+
+
+Using Norton Utilities NU:
+
+<E>xplore disk, <C>hoose Item, <S>ector, <E>dit/display
+
+Unfortunately, absolute sector 0 falls outside of all partitions (this
+is where the partition table is), and we need to use a different
+procedure for it.
+
+Reading / Writing absolute sector 0:
+The following debug / assembler interaction shows how to read absolute disk
+sector 0 , replace xx with 80 for hard disk 0, 81 for hard disk 1:
+
+-a 0100
+1984:0100 mov ax, 0201
+1984:0103 mov bx, 0200
+1984:0106 mov cx, 0001
+1984:0109 mov dx, 00xx
+1984:010C int 13
+1984:010E int 20
+1984:0110 ^C
+
+-
+
+
+-g = 0100
+
+This will read sector 0 into DS:0200.  To write it back,
+
+-a 0100
+1984:0100 mov ax, 0301 <RETURN>
+1984:0103 ^C
+
+
+-g = 0100.
+
+
+Using Norton Utilities NU :
+Under <E>xplore disk, choose <C>hoose item, <A>bsolute sector, <E>dit / display
+
+
+
+Structures :
+
+1.  The Partition table
+
+The partition table resides at absolute sector 0 (ie
+cylinder 0, head 0, sector 1) on all  harddisks.  It is accessed
+by a short bootstrap loader on that sector,  which reads the partition
+table and then picks a partition from which to load the boot sector for
+the operating system.
+
+
+The partition table itself resides at offset 1be.  It is 64 bytes (decimal)
+in length, plus the two byte signature 55 AA.  When dealing with the
+partition table, make sure byte 40 (offset 1fe of the sector) is 55 and
+byte 41 (offset 1ff of the sector) is
+of the sector
+
+
+
+
+The partition table is subdivided into FOUR 16 byte entries, fielded
+as follows :
+offset  length  field
+0       byte    bootable 80h = bootable, 0 = not
+1       byte    starting head number
+2       word    starting cylinder (and sector - sector is 1 based
+                high byte is low byte of cylinder, low byte low 6 bits is
+                sector, high 2 bits of low byte high 2 bits of cylinder)
+
+
+                typically, sector = 0.
+
+4       byte    system  1 = primary DOS, 12 bit, 4 = primary DOS 16 bit,
+                        5 = extended DOS, 8 = NON-DOS (might be usable)
+5       byte    ending head number
+
+
+6       word    ending cylinder / sector
+
+8       dword   starting sector (relative to begining of disk - THIS IS ZERO
+                based)
+
+C       dword   number of sectors
+
+
+
+My partition table on drive 0 looks like :
+
+-d 3be
+1984:03BE  80 01                                             ..
+1984:03C0  01 00 01 05 22 08 22 00-00 00 0A 07 00 00 00 00   ....".".........
+1984:03D0  01 09 51 05 E2 2B 2C 07-00 00 E4 7F 02 00 00 00   ..Q.b+,...d.....
+1984:03E0  00 00 00 00 00 00 00 00-00 00 00 00 00 00 00 00   ................
+1984:03F0  00 00 00 00 00 00 00 00-00 00 00 00 00 00 55 AA   ..............U*
+
+Interpreting this, we can see that I have two partitions in use -
+partition 1 and 2, the rest being blank.
+
+
+My first partition is bootable (80)
+        FAT size is 12 bits (type = 01)
+        It starts at head 1, cylinder 0, sector 1, which is sector 22
+        (34 decimal) relative to the start of the disk.
+        It is 0000070a sectors in length (1802 decimal), and ends on
+        head 5, cylinder 8, sector 22 (34 decimal).
+
+
+My second partition is non-bootable (00).
+        It is type 51 (Disk Mangler) meaning I need to
+        find out fat size some other way.
+
+        It starts at Head 0, cylinder 9, sector 1, which is sector 72c
+        (1836 decimal) relative to the start of the disk.
+        It is 27FE4 (163812 decimal) sectors in length, and ends on
+        head 5, cylinder 32b (811 decimal), sector 22 (34 decimal)..
+
+See how I got ending cylinder?  In Hex, each digit is a nibble.  You can
+easily convert to binary a nibble at a time.  IE E2 becomes 1110 0010
+
+
+The low 6 bits (sector) are 10 0010 = 22
+The high 2 bits are 11 = 3
+
+So high byte cylinder is 03, low byte is 2B so cylinder = 032b
+
+Got it?
+
+
+
+2.  The Boot sector
+
+The second important piece of data is the bootsector.  There are a number
+of fields we are interested in.  I have ommitted the DOS 5 extended fields
+(Can't give you an answer I'm 100% sure on), as well as fields unecessary
+to our procedure.
+
+Fields we are interested in :
+Offset  Size    Field
+b       word    bytes per LOGICAL sector - divide by 512 to get physical
+                to logical mapping
+
+d       byte    sectors per cluster.  Multiply by logical sector size and
+                divide by 1024 (decimal) to get K / cluster
+
+13      word    total number of LOGICAL sectors.  This is one field
+                extended by DOS5.
+
+18      word    sectors per track
+
+1a      word    heads
+
+Clusters = sectors / sectors per cluster.
+
+Since my first partition on drive 1 is fairly boring, we'll look at
+partition 2 - E:
+
+-l 0200 4 0 1
+-d 0200
+1984:0200  EB FE 90 4E 4F 53 59 53-54 45 4D 00 08 04 01 00   k~.NOSYSTEM.....
+1984:0210  02 00 02 F9 9F F8 0A 00-22 00 06 00 2C 07 80 00   ...y.x.."...,...
+
+The first three bytes are either a near jump over the actual BPB or
+a short jump and a NOP.  There follows an eight byte system ID, and then
+the Good Stuff.
+
+I have 800 (2048 decimal) bytes per logical sector, meaning 4 physical
+        sectors = 1 logical sector.
+        .
+There are 4 logical sectors per cluster, meaning there is 8K in
+        each cluster, 16 logical sectors per cluster.
+
+There are 9ff9 (40953 decimal) logical sectors in my partition, meaning
+        163812 decimal physical sectors (Notice how this number matches the
+        number in the partition table.)
+
+There are 22 (34 decimal) sectors per track, and 6 heads.
+
+3.  The FAT
+
+The final interesting data structure is the FAT.  If you have some other
+reliable means of insuring all data is at the begining of the partition
+you can ignore this.
+
+If there are > 4096 clusters, you definately have a 16 bit FAT.
+
+The FAT will begin with an FFF8 signature - 16 bit or (FF8) 12 bit.
+What follows
+is one entry for each cluster of the disk - with FFFF (FFF) marking
+end of file, FFF7 (FF7) marking a bad sector, 0000 (000) empty, basically
+anything else a next cluster pointer.
+
+Basically, all that were interested in is that there are roughly enough
+0 entries all together, with only BAD marks and no end of file or next
+cluster pointers.
+
+12 bit entries are packed two per three bytes - low byte = low byte
+first cluster, middle byte low nibble is high nibble for the first cluster,
+middle byte high nibble is low nibble for the second cluster, high byte
+is high byte for the second cluster.
+
+
+Step 1:
+        Make a FULL backup.
+
+1a:
+        If you have a program to save off an image of the boot sector,
+        do it now.  Dumping the boot sector / partition sectors to
+        floppy disk (do an rcx:200 in debug, then a w FILENAME to
+        save to a file) would also accomplish the same thing.
+
+        This will save you the trouble of having to restore an entire
+        backup if you screw up either of these sectors.
+
+Step 2:
+
+Defragment.  All data must be contiguous.
+
+
+Step 3:
+        Decide where the partition goes, and how big it is.
+
+        The new partition must fullfil these requirements :
+
+1.  It resides at the end of the original partition.
+2.  It is situated such that the original partition has a boundary
+    that ends on a FULL logical sector (In my example, this is four
+    physical sectors).
+
+In my case, I am simply starting testing on my already packed SCSI
+disk, and want a ~1 megabyte partition, or 2048 sectors.
+
+This partition ends at :
+
+cylinder 32b (812 decimal), head 5, sector 22 (34 decimal)
+
+If I divide by 34 sectors per track (available in the boot record),
+I get 60 tracks.  If I divide by 6 heads, I get 10 cylinders.
+
+So, I will start my partition at
+
+cylinder 802 decimal (322 hex)
+sector     0
+head       0
+relative sector 802 * 34 * 6 decimal= 163608
+
+
+I will adjust the size of my E: drive down by 510 logical (2040) (decimal)
+physical sectors, and make this my new partition.
+
+Note that this falls on the required logical sector boundary.
+
+Likewise, I will reduce the size of my second partition by 2040 (decimal)
+sectors, to 161772 (decimal) sectors and reduce the ending cylinder to
+801 (decimal).
+
+Step 4:
+
+Verify that all data is contiguous, and we have enough free space
+for the partition we are about to create.
+
+Use a reliable disk space map utility, if none is available you will
+have to do so manually.  Again, NU can fill this role.
+
+
+To do this manually, first determine FAT size
+
+check - partition table
+      - number of clusters (roughly - (sectors - 1) / sectors per cluster)
+        if > 4096, definately 16 bit
+
+After you've decided on 12 bits or 16 bits,
+
+Find the first 0 cluster (The disk has been defragmented?)
+
+Count consecutive 0 or BAD FAT entries (1 per 2 bytes on 16 bits,
+3 per 2 bytes on 12 bits), multiply by K per cluster (as determined
+from the boot sector - see data structures above), and be happy.
+
+If there are intervening NEXT CLUSTER pointers, or END OF FILE (FFFF),
+try a different defragmenter.
+
+Also, not that some defragmenters will not move hidden files.  You will
+have to unhide these, defragment,  and rehide these.
+
+
+
+5.  Adjust boot record of old DOS partition.  Change # sectors field,
+        offset 13 hex (word), be sure to adjust in number of
+        LOGICAL SECTORS, not physical sectors (consult sector
+        size field to determine physical / logical sector mapping)
+
+After image for my example :
+-l 0200 4 0 1
+-d 0200
+1563:0200  EB FE 90 4E 4F 53 59 53-54 45 4D 00 08 04 01 00   k~.NOSYSTEM.....
+1563:0210  02 00 02 FB 9D F8 0A 00-22 00 06 00 2C 07 80 00   ...{.x.."...,...
+
+6.  Adjust partition table.  Change ending head, cylinder, sector
+        field of old partition, total sectors of old partition,
+        add new partition.
+
+        Avoid overlap.  Note that new partition table becomes active
+        on reboot.
+
+After image for our example:
+-d 03be
+1563:03BE  80 01                                             ..
+1563:03C0  01 00 01 05 22 08 22 00-00 00 0A 07 00 00 00 00   ....".".........
+1563:03D0  01 09 51 05 E2 21 2C 07-00 00 EC 77 02 00 00 00   ..Q.b!,...lw....
+1563:03E0  C1 22 FF 05 E2 2B 18 7F-02 00 F8 07 00 00 00 00   A"..b+....x.....
+1563:03F0  00 00 00 00 00 00 00 00-00 00 00 00 00 00 55 AA   ..............U*
+
+Yes, I know 0xff is a bizarre identifier for the linux partition.  That's
+how I did my first one, that's how I did this one.
+
+References :
+        Norton, Peter Norton's Programmer's Guide to the IBM PC
+        Townsend, Advanced MS-DOS Expert Techniques for Programmers
+
+Hopefully this has been enlightening, and possibly even useful to some.
+
+Mail comments to drew@colorado.edu.
+
+------------------------------
+
+From: gentzel@nova.enet.dec.com
+Subject: keyboard.S patch for control-space
+Reply-To: gentzel@nova.enet.dec.com
+Date: Tue, 25 Feb 1992 07:11:51 GMT
+
+Well, I'm hooked!  My time spent in DOS is decreasing rapidly.  The port of
+GNU Emacs was the final straw.  I can't live without my Emacs!
+
+But... to make using Emacs easier for those of us used to DEC keyboards,
+here is a patch to keyboard.S which maps control-space to control-@.  This is
+far easier to type and almost second nature to many Emacs users with DEC
+keyboards.
+
+Line numbers may vary depending on which other patches you & I have applied.
+Patch is to version 0.12, of course.
+
+*** keyboard.S~ Tue Feb 25 02:02:05 1992
+--- keyboard.S  Mon Feb 24 23:18:13 1992
+***************
+*** 525,531 ****
+        subb $32,%al
+  2:    testb $0x0c,_kmode              /* ctrl */
+        je 3f
+!       cmpb $64,%al
+        jb 3f
+        cmpb $64+32,%al
+        jae 3f
+--- 525,535 ----
+        subb $32,%al
+  2:    testb $0x0c,_kmode              /* ctrl */
+        je 3f
+!       cmpb $32,%al                    /* ctrl-space -> ctrl-@ */
+!       jne 5f
+!       movw $0,%al
+!       jmp 4f
+! 5:    cmpb $64,%al
+        jb 3f
+        cmpb $64+32,%al
+        jae 3f
+
+----
+    Dave Gentzel
+    gentzel@nova.enet.dec.com
+    Proud member of the "League for Programming Freedom"
+    Keep Your Lawyers Off My Computer!
+
+------------------------------
+
+From: sweh@spuddy.uucp (sweh)
+Subject: Re: A couple of problems...
+Date: 24 Feb 92 20:08:45 GMT
+
+In article <Feb.23.12.44.54.1992.28119@dumas.rutgers.edu> hedrick@dumas.rutgers.edu (Charles Hedrick) writes:
+:>2-  How do people backup their systems?  Trying to create
+:> large tar file either on floppies or to a disk file
+:>almost inevitably locks up my system.  A known 
+:>problem?  Maybe fixed in 0.13? :-) 
+
+I get this when tar'ing to floppy, but not to a large disk file.
+
+:Linus has been hoping that these hangs (which occur to several people)
+:are due to running out of memory, or possibly to coming close to
+:running out (a situation which causes special code in the kernel to
+:run to free up memory).  I saw a great 
+
+------------------------------
+
+From: blum@kaa.informatik.rwth-aachen.de (Robert Blum)
+Subject: Re: floating point
+Date: 25 Feb 92 08:17:40 GMT
+
+
+Hi Linuxers!
+ijw11@cl.cam.ac.uk (I.J. Wells) writes:
+
+>One thing I would like, if it's easy(ish) to do, is to be able to remove
+>the FP from a kernel.  My machine has an FPU, so I'd like to be able to
+>reclaim the memory FP emulation takes
+I am working on a loadable FPU emulator, but even then, you can't reclaim
+the memory for further use. Everything below 512 K is kernel space,
+no matter if it contains code or not. This will probably become useful,
+if we start to have dynamic memory management in the kernel
+
+C U l8r,
+  Robert Blum
+
+
+-- 
+UNIX should not be able to be crashed from user space.
+Crashes belong in the kernel! (paul@actrix.gen.nz)
+
+------------------------------
+
+From: johnsonm@amcl11.math.stolaf.edu (Michael K. Johnson)
+Subject: lists...
+Date: 25 Feb 92 01:38:36 GMT
+
+
+
+vaz@eagle.TC.cornell.edu (Craig Metz) writes:
+(in linux-activists)
+
+           RE: patches
+
+           Well, we could do this. mjohnson, could you handle both the bug list
+   and patch list and get them going, and when summer nears, I'll handle them for
+   you? When fall comes, who knows. But it wouldn't be a bad idea to keep the
+   two lists together, since they have many things in common.
+
+                                                           -Craig
+
+Well, I havn't been keeping up _at_all_ on the patches, but I could
+keep a list of what they mean.  I am not an ftp admin, so if I am
+being asked to keep a patches directory on an ftp site, some ftp admin
+would have to let me on their site with extra privs, which many
+(reasonably) wouldn't like.  However, I am _NOT_ going through 2 Megs
+of stuff _again_ to pull out patches, so if you want your patches in
+my list, _mail_me_.  I take no responsibility for remembering other
+people's patches or finding them.
+
+As far as the buglist goes, I am ready to post the 40K file.
+=====REPEAT=====
+40K file.   If anyone has strenuous objections to such a file being
+posted, please mail me soon.  I intend to send it both to
+linux-activists@niksula.hut.fi and alt.os.linux.
+
+michaelkjohnson
+johnsonm@stolaf.edu
+I don't do .sig's.
+
+------------------------------
+
+From: lee@uhunix.uhcc.Hawaii.Edu (Greg Lee)
+Subject: Re: Hackers' technotes to  Nondestructive Repartitioning
+Date: 25 Feb 92 12:13:38 GMT
+
+In article <1992Feb25.063953.3392@colorado.edu> drew@cs.colorado.edu (Drew Eckhardt) writes:
+}Reformatting your hard disk, and reinstalling all your DOS programs from
+}scratch can be a real nuissance, and is unecessary.
+}...
+}Hopefully this has been enlightening, and possibly even useful to some.
+
+It was very helpful -- thanks a lot.  I just went through the process of
+making a new partition using Norton Utilities (5.0), and it turned out
+to be pretty easy.  The procedure I followed was to:
+(1) delete "image.idx", the hidden file left by the Norton Image program
+(2) ask Speed Disk to do a full optimization to collect files at the
+    beginning of the disk
+(3) use the partition editor of Disk Editor to add the new partition to
+    the partition table (I used type XENIX)
+(4) reboot and use Disk Doctor to check all was ok
+
+--
+Greg Lee <lee@uhunix.uhcc.hawaii.edu>
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Activists-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and alt.os.linux) via:
+
+    Internet: Linux-Activists@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    tupac-amaru.informatik.rwth-aachen.de	pub/msdos/replace
+
+The current version of Linux is 0.12, released on Jan 14, 1992
+
+End of Linux-Activists Digest
+******************************

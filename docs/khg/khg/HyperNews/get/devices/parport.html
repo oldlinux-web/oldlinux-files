@@ -1,0 +1,302 @@
+
+<HTML>
+<HEAD>
+<TITLE>Writing a parport Device Driver</TITLE>
+<LINK rel="owner" href="mailto:">
+<SCRIPT LANGUAGE="JavaScript">
+<!-- hide this
+
+function help(message) {
+  self.status = message;
+  return true;
+}
+// stop hiding -->
+</SCRIPT>
+
+</HEAD>
+<BODY>
+<strong>The
+<a href="http://www.hypernews.org/HyperNews/get/hypernews.html">
+HyperNews <a href="../khg.html">Linux KHG</a>
+Discussion Pages</strong>
+<hr>
+<H2>Writing a parport Device Driver</H2>
+
+<H3>What parport does</H3>
+
+<P>One purpose of parport is to allow multiple device drivers to use the
+same parallel port. It does this by sitting in-between the port hardware
+and the parallel port device drivers. When a driver wants to talk to its
+parallel port device, it calls a function to &quot;claim&quot; the port,
+and &quot;releases&quot; the port when it is done.</P>
+
+<P>Another thing that <TT>parport</TT> does is provide a layer of
+abstraction from the hardware, so that device drivers can be
+architecture-independent in that they don't need to know which style
+of parallel port they are using (those currently supported are
+PC-style, Archimedes, and Sun Ultra/AX architecture).</P>
+
+<H3>Interface to parport</H3>
+
+<H4>Finding a port</H4>
+
+<P>To obtain a pointer to a linked list of parport structures, use the
+<TT>parport_enumerate</TT> function. This returns a pointer to a <TT>struct
+parport</TT>, in which the member <TT>next</TT> points to the next one
+in the list, or is <TT>NULL</TT> at the end of the list.</P>
+
+<P>This structure looks like (from linux/include/linux/parport.h):</P>
+<PRE>
+/* A parallel port */
+struct parport {
+        unsigned long base;     /* base address */
+        unsigned int size;      /* IO extent */
+        char *name;
+        int irq;                /* interrupt (or -1 for none) */
+        int dma;
+        unsigned int modes;
+
+        struct pardevice *devices;
+        struct pardevice *cad;  /* port owner */
+        struct pardevice *lurker;
+        
+        struct parport *next;
+        unsigned int flags; 
+
+        struct parport_dir pdir;
+        struct parport_device_info probe_info; 
+
+        struct parport_operations *ops;
+        void *private_data;     /* for lowlevel driver */
+};
+</PRE>
+
+<H4>Device registration</H4>
+
+<P>The next thing to do is to register a device on each port that you want
+to use. This is done with the <TT>parport_register_device</TT> function,
+which returns a pointer to a <TT>struct pardevice</TT>, which you will
+need in order to use the port.</P>
+
+<P>This structure looks like (again, from
+linux/include/linux/parport.h):</P>
+<PRE>
+/* A parallel port device */
+struct pardevice {
+        char *name;
+        struct parport *port;
+        int (*preempt)(void *);
+        void (*wakeup)(void *);
+        void *private;
+        void (*irq_func)(int, void *, struct pt_regs *);
+        int flags;
+        struct pardevice *next;
+        struct pardevice *prev;
+        struct parport_state *state;     /* saved status over preemption */
+};
+</PRE>
+
+<P>There are two types of driver that can be registered:
+&quot;transient&quot and &quot;lurking&quot.  A lurking driver is one
+that wants to have the port whenever no-one else has it.  PLIP is an
+example of this.  A transient driver is one that only needs to use the
+parallel port occasionally, and for short periods of time (the printer
+driver and Zip driver are good examples).
+
+<H4>Claiming the port</H4>
+
+<P>To claim the port, use <TT>parport_claim</TT>, passing it a pointer
+to the <TT>struct pardevice</TT> obtained at device registration. If
+<TT>parport_claim</TT> returns zero, the port is yours, otherwise you
+will have to try again later.</P>
+
+<P>A good way of doing this is to register a &quot;wakeup&quot; function:
+when a device driver releases the port, other device drivers that are registered
+on that port have their &quot;wakeup&quot; functions called, and the first
+one to claim the port gets it. If the parport claim fails, you can go to
+sleep; when the parport is free again, your wakeup function can wake you
+up again. For example, declare a global wait queue for each possible port
+that a device could be on:</P>
+
+<PRE>static struct wait_queue * wait_q[MAX_MY_DEVICES];
+</PRE>
+
+<P>The wakeup function looks like:</P>
+
+<PRE>void my_wakeup (void * my_stuff)
+{
+	/* this is our chance to grab the parport */
+
+        struct wait_queue ** wait_q_pointer = (struct wait_queue **) my_stuff;
+
+        if (!waitqueue_active (wait_q_pointer))
+                return; /* parport has messed up if we get here */
+
+        /* claim the parport */
+        if (parport_claim (wait_q_pointer)))
+                return; /* Shouldn't happen */
+
+        wake_up(wait_q_pointer);
+}
+</PRE>
+
+<P>Then, in the initialisation code, do something like:</P>
+
+<PRE>
+struct pardevice * pd[MAX_MY_DEVICES];
+
+int my_driver_init (void)
+{
+  struct parport * pp = parport_enumerate ();
+
+  int count = 0;
+
+  while (pp) { /* for each port */
+
+    /* set up the wait queue */
+    init_waitqueue (&amp;wait_q[count]);
+
+    /* register a device */
+    pd[count] = parport_register_device (pp, &quot;Me&quot;,
+	/* preemption function */	 my_preempt,
+	/* wakeup function */		 my_wakeup,
+	/* interrupt function */	 my_interrupt,
+	/* this driver is transient */	 PARPORT_DEV_TRAN,
+	/* private data */		 &amp;wait_q[count]);
+
+    /* try initialising the device */
+    if (init_my_device (count) == ERROR)
+      /* failed, so unregister */
+      parport_unregister_device (pd[count]);
+    else if (++count == MAX_MY_DEVICES)
+      /* can't handle any more devices */
+      break;
+  }
+</PRE>
+
+<P>Then a typical thing to do to obtain access to the port would be:</P>
+
+<PRE>
+	if (parport_claim (pd[n]))
+		/* someone else had it */
+		sleep_on (&wait_q[n]);	/* will wake up when wakeup */
+					/* function called */
+
+	/* (do stuff with the port here) */
+
+	/* finished with the port now */
+	parport_release (pd[n]);
+</PRE>
+
+<H4>Using the port</H4>
+
+<P>Operations on the parallel port can be carried out using functions provided
+by the parport interface:</P>
+
+<PRE>
+struct parport_operations {
+        void (*write_data)(struct parport *, unsigned int);
+        unsigned int (*read_data)(struct parport *);
+        void (*write_control)(struct parport *, unsigned int);
+        unsigned int (*read_control)(struct parport *);
+        unsigned int (*frob_control)(struct parport *, unsigned int mask, unsigned int val);
+        void (*write_econtrol)(struct parport *, unsigned int);
+        unsigned int (*read_econtrol)(struct parport *);
+        unsigned int (*frob_econtrol)(struct parport *, unsigned int mask, unsigned int val);
+        void (*write_status)(struct parport *, unsigned int);
+        unsigned int (*read_status)(struct parport *);
+        void (*write_fifo)(struct parport *, unsigned int);
+        unsigned int (*read_fifo)(struct parport *);
+
+        void (*change_mode)(struct parport *, int);
+
+        void (*release_resources)(struct parport *);
+        int (*claim_resources)(struct parport *);
+
+        unsigned int (*epp_write_block)(struct parport *, void *, unsigned int);
+        unsigned int (*epp_read_block)(struct parport *, void *, unsigned int);
+
+        unsigned int (*ecp_write_block)(struct parport *, void *, unsigned int, void (*fn)(struct parport *, void *, unsigned int), void *);
+        unsigned int (*ecp_read_block)(struct parport *, void *, unsigned int, void (*fn)(struct parport *, void *, unsigned int), void *);
+
+        void (*save_state)(struct parport *, struct parport_state *);
+        void (*restore_state)(struct parport *, struct parport_state *);
+
+        void (*enable_irq)(struct parport *);
+        void (*disable_irq)(struct parport *);
+        int (*examine_irq)(struct parport *);
+
+        void (*inc_use_count)(void);
+        void (*dec_use_count)(void);
+};
+</PRE>
+
+<P>However, for generic operations, the following macros should be
+used (architecture-specific parport implementations may redefine them
+to avoid function call overheads):</P>
+
+<PRE>
+/* Generic operations vector through the dispatch table. */
+#define parport_write_data(p,x)            (p)->ops->write_data(p,x)
+#define parport_read_data(p)               (p)->ops->read_data(p)
+#define parport_write_control(p,x)         (p)->ops->write_control(p,x)
+#define parport_read_control(p)            (p)->ops->read_control(p)
+#define parport_frob_control(p,m,v)        (p)->ops->frob_control(p,m,v)
+#define parport_write_econtrol(p,x)        (p)->ops->write_econtrol(p,x)
+#define parport_read_econtrol(p)           (p)->ops->read_econtrol(p)
+#define parport_frob_econtrol(p,m,v)       (p)->ops->frob_econtrol(p,m,v)
+#define parport_write_status(p,v)          (p)->ops->write_status(p,v)
+#define parport_read_status(p)             (p)->ops->read_status(p)
+#define parport_write_fifo(p,v)            (p)->ops->write_fifo(p,v)
+#define parport_read_fifo(p)               (p)->ops->read_fifo(p)
+#define parport_change_mode(p,m)           (p)->ops->change_mode(p,m)
+#define parport_release_resources(p)       (p)->ops->release_resources(p)
+#define parport_claim_resources(p)         (p)->ops->claim_resources(p)
+</PRE>
+
+<H4>Releasing the port</H4>
+
+<P>When you have finished the sequence of operations on the port that you
+wanted to do, use <TT>release_parport</TT> to let any other devices that
+there may be have a go.</P>
+
+<H4>Unregistering the device</H4>
+
+<P>If you decide that you don't want to use the port after all
+(perhaps the device that you wanted to talk to isn't there), use
+<TT>parport_unregister_device</TT>.</P>
+
+<H4>Something to bear in mind: interrupts</H4>
+
+<P>
+Parallel port devices cannot share interrupts.
+
+The parport code shares a parallel port among different devices by
+means of scheduling - only one device has access to the port at any
+one time.  If a device (a printer, say) is going to generate an
+interrupt, it could do it when some other driver (like the Zip driver)
+has the port rather than the printer driver.  That would lead to the
+interrupt being missed altogether.
+
+For this reason, drivers should poll their devices unless there are no
+other drivers using that port.  To see how to do this, you might like
+to take a look at the printer driver.
+</P>
+<P>
+<P><HR SIZE=3>
+
+<P>
+<P>
+
+
+
+  
+
+
+
+
+
+<BR> 
+ 
+<BR></BODY>
+</HTML>

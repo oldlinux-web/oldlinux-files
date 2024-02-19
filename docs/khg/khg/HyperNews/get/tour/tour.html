@@ -1,0 +1,863 @@
+
+<HTML>
+<HEAD>
+<TITLE>Tour of the Linux kernel source</TITLE>
+<LINK rel="owner" href="mailto:">
+<SCRIPT LANGUAGE="JavaScript">
+<!-- hide this
+
+function help(message) {
+  self.status = message;
+  return true;
+}
+// stop hiding -->
+</SCRIPT>
+
+</HEAD>
+<BODY>
+<strong>The
+HyperNews <a href="../khg.html">Linux KHG</a>
+Discussion Pages</strong>
+<hr>
+
+<h3>Tour of the Linux kernel source</h3>
+
+<p>By Alessandro Rubini, rubini@pop.systemy.it
+
+<p>This chapter tries to explain the Linux source code in an
+orderly manner, trying to help the reader to achieve a good
+understanding of how the source code is laid out and how the
+most relevant unix features are implemented. The target is to
+help the experienced C programmer who is not accustomed to
+Linux in getting familiar with the overall Linux design. That's
+why the chosen entry point for the kernel tour is the kernel
+own entry point: system boot.
+
+<p>A good understanding of C language is required to understand
+this material, as well as some familiarity with both Unix
+concepts and the PC architecture. However, no C code will
+appear in this chapter, but rather pointers to the actual code.
+The finest issues of kernel design are explained in other
+chapters of this guide, while this chapter tends to remain an
+informal overview.
+
+<p>Any pathname for files referenced in this chapter is
+referred to the main source-tree directory, usually
+/usr/src/linux.
+
+<p><IMG src="../../../KHGicons/new.gif" alt="[NEW]">Most of the information
+reported here is taken from the source code of Linux release
+1.0. Nonetheless, references to later versions are provided at
+times. Any paragraph within the tour with the <IMG
+src="../../../KHGicons/new.gif" alt="[NEW]"> image in front of it is meant to
+underline changes the kernel has undergone after the 1.0
+release. If no such paragraph is present, then no changes
+occurred up to release 1.0.9-1.1.76.
+
+<p><IMG src="../../../KHGicons/more.gif" alt="[MORE]">Sometimes a paragraph like
+this occurs in the text. It is a pointer to the right sources
+to get more information on the subject just covered. Needless
+to say, <i>the source</i> is the primary source.
+
+<h4>Booting the system</h4>
+
+<p>When the PC is powered up, the 80x86 processor finds itself
+in real mode and executes the code at address 0xFFFF0, which
+corresponds to a ROM-BIOS address. The PC BIOS performs some
+tests on the system and initializes the interrupt vector at
+physical address 0. After that it loads the first sector of a
+bootable device to 0x7C00, and jumps to it. The device is
+usually the floppy or the hard drive. The preceding description
+is quite a simplified one, but it's all that's needed to
+understand the kernel initial workings.
+
+<p>The very first part of the Linux kernel is written in 8086
+assembly language (boot/bootsect.S). When run, it moves itself
+to absolute address 0x90000, loads the next 2 kBytes of code
+from the boot device to address 0x90200, and the rest of the
+kernel to address 0x10000. The message ``<tt>Loading...</tt>''
+is displayed during system load. Control is then passed to the
+code in boot/Setup.S, another real-mode assembly source.
+
+<p>The setup portion identifies some features of the host
+system and the type of vga board. If requested to, it asks the
+user to choose the video mode for the console. It then moves
+the whole system from address 0x10000 to address 0x1000, enters
+protected mode and jumps to the rest of the system (at 0x1000).
+
+<p>The next step is kernel decompression. The code at 0x1000
+comes from zBoot/head.S which initializes registers and invokes
+<tt>decompress_kernel()</tt>, which in turn is made up of
+zBoot/inflate.c, zBoot/unzip.c and zBoot/misc.c. The
+decompressed data goes to address 0x100000 (1 Meg), and this is
+the main reason why Linux can't run with less than 2 megs ram.
+[It's been done in 1 MB with uncompressed kernels; see
+<A href="http://rsphy1.anu.edu.au/~gpg109/mem.html">Memory Savers</a>--ED]
+
+<p><IMG src="../../../KHGicons/more.gif" alt="[MORE]">Encapsulation of the kernel
+in a gzip file is accomplished by Makefile and utilities in the
+zBoot directory. They are interesting files to look at.
+
+<p><IMG src="../../../KHGicons/new.gif" alt="[NEW]">Kernel release 1.1.75 moved
+the boot and zBoot directories down to arch/i386/boot. This
+change is meant to allow true kernel builds for different
+architectures. Nonetheless, I'll stick to i386-specific
+information.
+
+<p>Decompressed code is executed at address 0x1010000 <b>[Maybe
+I've lost track of physical addresses, here, as I don't know
+very well gas source code]</b>, where all the 32-bit setup is
+accomplished: IDT, GDT and LDT are loaded, the processor and
+coprocessor are identified, and paging is setup; eventually,
+the routine <tt>start_kernel</tt> is invoked. The source for
+the above operations is in boot/head.S. It is probably the
+trickiest code in the whole kernel.
+
+<p>Note that if an error occurs during any of the preceding
+steps, the computer will lockup. The OS can't deal with errors
+when it isn't yet fully operative.
+
+<p><tt>start_kernel()</tt> resides in init/main.c, and never
+returns. Anything from now on is coded in C language, left
+aside interrupt management and system call enter/leave (well,
+most of the macros embed assembly code, too).
+
+<h4>Spinning the wheel</h4>
+
+<p>After dealing with all the tricky questions,
+<tt>start_kernel()</tt> initializes all the parts of the
+kernel, specifically:
+<ul>
+<li>Sets the memory bounds and calls <tt>paging_init()</tt>.
+<li>Initializes the traps, IRQ channels and scheduling.
+<li>Parses the command line.
+<li>If requested to, allocates a profiling buffer.
+<li>Initializes all the device drivers and disk buffering,
+as well as other minor parts.
+<li>Calibrates the delay loop (computes the ``BogoMips'' number).
+<li>Checks if interrupt 16 works with the coprocessor.
+</ul>
+
+<p>Finally, the kernel is ready to
+<tt>move_to_user_mode()</tt>, in order to fork the
+<tt>init</tt> process, whose code is in the same source file.
+Process number 0 then, the so-called idle task, keeps running
+in an infinite idle loop.
+
+<p>The <tt>init</tt> process tries to execute /etc/init, or
+/bin/init, or /sbin/init.
+
+<p>If none of them succeeds, code is provided to execute
+``/bin/sh /etc/rc'' and fork a root shell on the first
+terminal.  This code dates back to Linux 0.01, when the OS was
+made by the kernel alone, and no <tt>login</tt> process was
+available.
+
+<p>After <tt>exec()</tt>ing the init program from one of the
+standard places (let's assume we have one of them), the kernel
+has no direct control on the program flow. Its role, from now
+on is to provide processes with system calls, as well as
+servicing asynchronous events (such as hardware interrupts).
+Multitasking has been setup, and it is now init which manages
+multiuser access by <tt>fork()</tt>ing system daemons and login
+processes.
+
+<p>Being the kernel in charge of providing services, the tour
+will proceed by looking at those services (the ``system
+calls''), as well as by providing general ideas about the
+underlying data structures and code organization.
+
+<h4>How the kernel sees a process</h4>
+
+<p>From the kernel point of view, a process is an entry in the
+process table. Nothing more.
+
+<p>The process table, then, is one of the most important data
+structures within the system, together with the
+memory-management tables and the buffer cache. The individual
+item in the process table is the <tt>task_struct</tt>
+structure, quite a huge one, defined in include/linux/sched.h.
+Within the <tt>task_struct</tt> both low-level and high-level
+information is kept--ranging from the copy of some hardware
+registers to the inode of the working directory for the
+process.
+
+<p>The process table is both an array and a double-linked list,
+as well as a tree. The physical implementation is a static
+array of pointers, whose length is <tt>NR_TASKS</tt>, a
+constant defined in include/linux/tasks.h, and each structure
+resides in a reserved memory page. The list structure is
+achieved through the pointers <tt>next_task</tt> and
+<tt>prev_task</tt>, while the tree structure is quite complex
+and will not be described here. You may wish to change
+<tt>NR_TASKS</tt> from the default vaue of 128, but be sure to
+have proper dependency files to force recompilation of all the
+source files involved.
+
+<p>After booting is over, the kernel is always working on
+behalf of one of the processes, and the global variable
+<tt>current</tt>, a pointer to a <tt>task_struct</tt> item, is
+used to record the running one. <tt>current</tt> is only
+changed by the scheduler, in kernel/sched.c. When, however, all
+procecces must be looked at, the macro <tt>for_each_task</tt>
+is used. It is conderably faster than a sequential scan of the
+array, when the system is lightly loaded.
+
+<p>A process is always running in either ``user mode'' or
+``kernel mode''. The main body of a user program is executed in
+user mode and system calls are executed in kernel mode. The
+stack used by the process in the two execution modes is
+different--a conventional stack segment is used for user mode,
+while a fixed-size stack (one page, owned by the process) is
+used in kernel mode.  The kernel stack page is never swapped
+out, because it must be available whenever a system call is
+entered.
+
+<p>System calls, within the kernel, exist as C language
+functions, their `official' name being prefixed by
+`<tt>sys_</tt>'. A system call named, for example,
+<tt><i>burnout</i></tt> invokes the kernel function
+<tt>sys_<i>burnout</i>()</tt>.
+
+<p><IMG src="../../../KHGicons/more.gif" alt="[MORE]">The system call mechanism is
+described in chapter 3 of this guide. Looking at
+<tt>for_each_task</tt> and <tt>SET_LINKS</tt>, in
+include/linux/sched.h can help understanding the list and tree
+structures in the process table.
+
+<h4>Creating and destroying processes</h4>
+
+<p>A unix system creates a process though the <tt>fork()</tt>
+system call, and process termination is performed either by
+<tt>exit()</tt> or by receiving a signal. The Linux
+implementation for them resides in kernel/fork.c and
+kernel/exit.c.
+
+<p>Forking is easy, and fork.c is short and ready
+understandable. Its main task is filling the data structure for
+the new process. Relevant steps, apart from filling fields, are:
+<ul>
+<li>getting a free page to hold the <tt>task_struct</tt>
+<li>finding an empty process slot (<tt>find_empty_process()</tt>)
+<li>getting another free page for the <tt>kernel_stack_page</tt>
+<li>copying the father's LDT to the child
+<li>duplicating <tt>mmap</tt> information of the father
+</ul>
+<tt>sys_fork()</tt> also manages file descriptors and inodes.
+
+<p><IMG src="../../../KHGicons/new.gif" alt="[NEW]">The 1.0 kernel offers some
+vestigial support to threading, and the <tt>fork()</tt> system
+call shows some hints to that. Kernel threads is
+work-in-progress outside the mainstream kernel.
+
+<p>Exiting from a process is trickier, because the parent
+process must be notified about any child who exits. Moreover, a
+process can exit by being <tt>kill()</tt>ed by another process
+(these are Unix features). The file exit.c is therefore the
+home of <tt>sys_kill()</tt> and the vairious flavours of
+<tt>sys_wait()</tt>, in addition to <tt>sys_exit()</tt>.
+
+<p>The code belonging to exit.c is not described here--it is
+not that interesting. It deals with a lot of details in order
+to leave the system in a consistent state. The POSIX standard,
+then, is quite demanding about signals, and it must be dealt
+with.
+
+<h4>Executing programs</h4>
+
+<p>After <tt>fork()</tt>ing, two copies of the same program are
+running. One of them usually <tt>exec()</tt>s another program.
+The <tt>exec()</tt> system call must locate the binary image of
+the executable file, load and run it. The word `load' doesn't
+necessarily mean ``copy in memory the binary image'', as Linux
+supports demand loading.
+
+<p>The Linux implementation of <tt>exec()</tt> supports
+different binary formats. This is accomplished through the
+<tt>linux_binfmt</tt> structure, which embeds two pointers to
+functions--one to load the executable and the other to load the
+library, each binary format representing both the executable
+and the library. Loading of shared libraries is implemented in
+the same source file as <tt>exec()</tt> is, but let's stick to
+<tt>exec()</tt> itself.
+
+<p>The Unix systems provide the programmer with six flavours of
+the <tt>exec()</tt> function. All but one of them can be
+implemented as library functions, and theLinux kernel
+implements <tt>sys_execve()</tt> alone. It performs quite a
+simple task: loading the head of the executable, and trying to
+execute it. If the first two bytes are ``<tt>#!</tt>'', then
+the first line is parsed and an interpreter is invoked,
+otherwise the registered binary formats are sequentially tried.
+
+<p>The native Linux format is supported directly within
+fs/exec.c, and the relevant functions are
+<tt>load_aout_binary</tt> and <tt>load_aout_library</tt>.  As
+for the binaries, the function loading an ``a.out'' executable
+ends up either in <tt>mmap()</tt>ing the disk file, or in
+calling <tt>read_exec()</tt>.  The former way uses the Linux
+demand loading mechanism to fault-in program pages when they're
+accessed, while the latter way is used when memory mapping is
+not supported by the host filesystem (for example the ``msdos''
+filesystem).
+
+<p><IMG src="../../../KHGicons/new.gif" alt="[NEW]">Late 1.1 kernels embed a
+revised msdos filesystem, which supports <tt>mmap()</tt>.
+Moreover, the <tt>struct linux_binfmt</tt> is a linked list
+rather than an array, to allow loading a new binary format as a
+kernel module. Finally, the structure itself has been extended
+to access format-related core-dump routines.
+
+<h4>Accessing filesystems</h4>
+
+<p>It is well known that the filesystem is the most basic
+resource in a Unix system, so basic and ubiquitous that it
+needs a more handy name--I'll stick to the standard practice of
+calling it simply ``fs''.
+
+<p>I'll assume the reader already knows the basic Unix fs
+ideas--access permissions, inodes, the superblock,
+<b>mount</b>ing and <b>umount</b>ing. Those concepts are well
+explained by smarter authors than me within the standard Unix
+literature, so I won't duplicate their efforts and I'll stick
+to Linux specific issues.
+
+<!--
+% Fs code takes from 20 to 25\% of the kernel source tree.
+% Actually, a Unix OS can't live without a filesystem,
+% because any hardware access occurrs through a device driver, which in turn
+% is identified by a filename within the filesystem. 
+-->
+
+<p>While the first Unices used to support a single fs type,
+whose structure was widespread in the whole kernel, today's
+practice is to use a standardized interface between the kernel
+and the fs, in order to ease data interchange across
+architectures. Linux itself provides a standardized layer to
+pass information between the kernel and each fs module. This
+interface layer is called VFS, for ``virtual filesystem''.
+
+<p>Filesystem code is therefore split into two layers: the
+upper layer is concerned with the management of kernel tables
+and data structures, while the lower layer is made up of the
+set of fs-dependent functions, and is invoked through the VFS
+data structures.
+
+All the fs-independent material resides in the fs/*.c files.
+They address the following issues:
+<ul>
+<li>Managing the buffer chache (buffer.c);
+<li>Responding to the <tt>fcntl()</tt> and <tt>ioctl()</tt> system calls (fcntl.c and ioctl.c);
+<li>Mapping pipes and fifos on inodes and buffers (fifo.c, pipe.c);
+<li>Managing file- and inode-tables (file_table.c, inode.c);
+<li>Locking and unlocking files and records (locks.c);
+<li>Mapping names to inodes (namei.c, open.c);
+<li>Implementing the tricky <tt>select()</tt> function (select.c);
+<li>Providing information (stat.c);
+<li>mounting and umounting filesystems (super.c);
+<li><tt>exec()</tt>ing executables and dumping cores (exec.c);
+<li>Loading the various binary formats (bin_fmt*.c, as outlined above).
+</ul>
+
+<p>The VFS interface, then, consists of a set of relatively
+high-level operations which are invoked from the fs-independent
+code and are actually performed by each filesystem type. The
+most relevant structures are <tt>inode_operations</tt> and
+<tt>file_operations</tt>, though they're not alone: other
+structures exist as well. All of them are defined within
+include/linux/fs.h.
+
+<p>The kernel entry point to the actual file system is the
+structure <tt>file_system_type</tt>. An array of
+<tt>file_system_type</tt>s is embodied within fs/filesystems.c
+and it is referenced whenever a mount is issued. The function
+<tt>read_super</tt> for the relevant fs type is then in charge
+of filling a <tt>struct super_block</tt> item, which in turn
+embeds a <tt>struct super_operations</tt> and a <tt>struct
+<i>type</i>_sb_info</tt>. The former provides pointers to generic
+fs operations for the current fs-type, the latter embeds
+specific information for the fs-type.
+
+<p><IMG src="../../../KHGicons/new.gif" alt="[NEW]">The array of filesystem types
+has been turned in a linked list, to allow loading new fs types
+as kernel modules. The function
+(<tt>un</tt>-)<tt>register_filesystem</tt> is coded within
+fs/super.c.
+
+<h4>Quick Anatomy of a Filesystem Type</h4>
+
+<p>The role of a filesystem type is to perform the low-level
+tasks used to map the relatively high level VFS operations on
+the physical media (disks, network or whatever). The VFS
+interface is flexible enough to allow support for both
+conventional Unix filesystems and exotic situations such as the
+msdos and umsdos types.
+
+<p>Each fs-type is made up of the following items, in addition
+to its own directory:
+<ul>
+<li>An entry in the <tt>file_systems[]</tt> array (fs/filesystems.c);
+<li>The superblock include file (include/linux/<i>type</i>_fs_sb.h);
+<li>The inode include file (include/linux/<i>type</i>_fs_i.h);
+<li>The generic own include file (include/linux/<i>type</i>_fs.h});
+<li>Two <tt>#include</tt> lines within include/linux/fs.h, as well
+as the entries in <tt>struct super_block</tt> and <tt>struct inode</tt>.
+</ul>
+
+<p>The own directory for the fs type contains all the real
+code, responsible of inode and data management.
+
+<p><IMG src="../../../KHGicons/more.gif" alt="[MORE]">The chapter about procfs
+in this guide uncovers all the details about low-level code and
+VFS interface for that fs type. Source code in fs/procfs is
+quite understandable after reading the chapter.
+
+<p>We'll now look at the internal workings of the VFS
+mechanism, and the minix filesystem source is used as a working
+example. I chose the minix type because it is small but
+complete; moreover, any other fs type in Linux derives from the
+minix one. The ext2 type, the de-facto standard in recent Linux
+installations, is much more complex than that and its
+exploration is left as an exercise for the smart reader.
+
+<p>When a minix-fs is mounted, <tt>minix_read_super</tt> fills
+the <tt>super_block</tt> structure with data read from the
+mounted device. The <tt>s_op</tt> field of the structure will
+then hold a pointer to <tt>minix_sops</tt>, which is used by
+the generic filesystem code to dispatch superblock operations.
+
+<p>Chaining the newly mounted fs in the global system tree
+relies on the following data items (assuming <tt>sb</tt> is the
+<tt>super_block</tt> structure and <tt>dir_i</tt> points to the
+inode for the mount point):
+<ul>
+<li><tt>sb->s_mounted</tt> points to the root-dir inode
+of the mounted filesystem (<tt>MINIX_ROOT_INO</tt>);
+<li><tt>dir_i->i_mount</tt> holds <tt>sb->s_mounted</tt>;
+<li><tt>sb->s_covered</tt> holds <tt>dir_i</tt>
+</ul>
+
+<p>Umounting will eventually be performed by
+<tt>do_umount</tt>, which in turn invokes
+<tt>minix_put_super</tt>.
+
+<p>Whenever a file is accessed, <tt>minix_read_inode</tt> comes
+into play; it fills the system-wide <tt>inode</tt> structure
+with fields coming form <tt>minix_inode</tt>. The
+<tt>inode->i_op</tt> field is filled according to
+<tt>inode->i_mode</tt> and it is responsible for any further
+operation on the file. The source for the minix functions just
+described are to be found in fs/minix/inode.c.
+
+<p>The <tt>inode_operations</tt> structure is used to dispatch
+inode operations (you guessed it) to the fs-type specific
+kernel functions; the first entry in the structure is a pointer
+to a <tt>file_operations</tt> item, which is the
+data-management equivalent of <tt>i_op</tt>. The minix fs-type
+allows three instances of inode-operation sets (for
+direcotries, for files and for symbolic links) and two
+instances of file-operation sets (symlinks don't need one).
+
+<p>Directory operations (<tt>minix_readdir</tt> alone) are to
+be found in fs/minix/dir.c; file operations (read and write)
+appear within fs/minix/file.c and symlink operations (reading
+and following the link) in fs/minix/symlink.c.
+
+<p>The rest of the minix directory implements the following
+tasks:
+<ul>
+<li>bitmap.c manages allocation and freeing of inodes and blocks
+(the ext2 fs, otherwise, has two different source files);
+<li>fsynk.c is responsible for the <tt>fsync()</tt> system calls--it
+manages direct, indirect and double indirect blocks (I assume
+you know about them, it's common Unix knowledge);
+<li>namei.c embeds all the name-related inode operations,
+such as creating and destroying nodes, renaming and linking;
+<li>truncate.c performs truncation of files.
+</ul>
+
+<!--
+%<h4>The {\tt ext2</h4>
+%<h4>Pipes</h4>
+%<h4>The buffer cache</h4>
+-->
+
+<h4>The console driver</h4>
+
+<p>Being the main I/O device on most Linux boxes, the console
+driver deserves some attention. The source code related to the
+console, as well as the other character drivers, is to be found
+in drivers/char, and we'll use this very directory as our
+referenece point when naming files.
+
+<p>Console initialization is performed by the function
+<tt>tty_init()</tt>, in tty_io.c. This function is only
+concerned in getting major device numbers and calling the init
+function for each device set. <tt>con_init()</tt>, then is the
+one related to the console, and resides in console.c.
+
+<p><IMG src="../../../KHGicons/new.gif" alt="[NEW]">Initialization of the console
+has changed quite a lot during 1.1 evolution.
+<tt>console_init()</tt> has been detatched from
+<tt>tty_init()</tt>, and is called directly by ../../main.c.
+The virtual consoles are now dynamically allocated, and quite a
+good deal of code has changed. So, I'll skip the details of
+initialization, allocation and such.
+
+<h5>How file operations are dispatched to the console</h5>
+
+<p>This paragraph is quite low-level, and can be happily
+skipped over.
+
+<p>Needless to say, a Unix device is accessed though the
+filesystem. This paragraph details all steps from the device
+file to the actual console functions. Moreover, the following
+information is extracted from the 1.1.73 source code, and it
+may be slightly different from the 1.0 source.
+
+<p>When a device inode is opened, the function
+<tt>chrdev_open()</tt> (or <tt>blkdev_open()</tt>, but we'll
+stich to character devices) in ../../fs/devices.c gets
+executed. This function is reached by means of the structure
+<tt>def_chr_fops</tt>, which in turn is referenced by
+<tt>chrdev_inode_operations</tt>, used by all the filesystem
+types (see the previous section about filesystems).
+
+<p><tt>chrdev_open</tt> takes care of specifying the device
+operations by substituting the device specific
+<tt>file_operations</tt> table in the current <tt>filp</tt> and
+calls the specific <tt>open()</tt>. Device specific tables are
+kept in the array <tt>chrdevs[]</tt>, indexed by the majour
+device number, and filled by the same ../../fs/devices.c.
+
+<p>If the device is a tty one (aren't we aiming at the
+console?), we come to the tty drivers, whose functions are in
+<tt>tty_io.c</tt>, indexed by <tt>tty_fops</tt>. Thus,
+<tt>tty_open()</tt> calls <tt>init_dev()</tt>, which allocates
+any data structure needed by the device, based on the minor
+device number.
+
+<p>The minor number is also used to retrieve the actual driver
+for the device, which has been registered through
+<tt>tty_register_driver()</tt>. The driver, then, is still
+another structure used to dispatch computation, just like
+<tt>file_ops</tt>; it is concerned with writing and controlling
+the device.  The last data structure used in managing a tty is
+the line discipline, described later. The line discipline for
+the console (and any other tty device) is set by
+<tt>initialize_tty_struct()</tt>, invoked by <tt>init_dev</tt>.
+
+<p>Everything we touched in this paragraph is
+device-independent. The only console-specific particular is
+that console.c, has registered its own driver during
+<tt>con_init()</tt>. The line discipline, on the contrary, in
+independent of the device.
+
+<p><IMG src="../../../KHGicons/more.gif" alt="[MORE]">The <tt>tty_driver</tt>
+structure is fully explained within
+<tt>&lt;linux/tty_driver.h&gt;</tt>.
+
+<p><IMG src="../../../KHGicons/new.gif" alt="[NEW]">The above information has
+been extracted from 1.1.73 source code. It isn't unlikely for
+your kernel to be somewhat different (``This information is
+subject to change without notice'').
+
+<h5>Writing to the console</h5>
+
+<p>When a console device is written to, the function
+<tt>con_write</tt> gets invoked. This function manages all the
+control characters and escape sequences used to provide
+applications with complete screen management. The escape
+sequences implemented are those of the vt102 terminal; This
+means that your environment should say <tt>TERM=vt102</tt> when
+you are telnetting to a non-Linux host; the best choice for
+local activities, however, is <tt>TERM=console</tt> because the
+Linux console offers a superset of vt102 functionality.
+
+<p><tt>con_write()</tt>, thus, is mostly made up of nested
+switch statements, used to handle a finite state automaton
+interpreting escape sequences one character at a time. When in
+normal mode, the character being printed is written directly to
+the video memory, using the current <tt>attr</tt>-ibute. Within
+console.c, all the fields of <tt>struct vc</tt> are made
+accessible through macros, so any reference to (for example)
+<tt>attr</tt>, does actually refer to the field in the
+structure <tt>vc_cons[currcons]</tt>, as long as
+<tt>currcons</tt> is the number of the console being referred
+to.
+
+<p><IMG src="../../../KHGicons/new.gif" alt="[NEW]">Actually, <tt>vc_cons</tt> in
+newer kernels is no longer an array of structures , it now is
+an array of pointers whose contents are <tt>kmalloc()</tt>ed.
+The use of macros greatly simplified changing the approach,
+because much of the code didn't need to be rewritten.
+
+<p>Actual mapping and unmapping of the console memory to screen
+is performed by the functions <tt>set_scrmem()</tt> (which
+copies data from the console buffer to video memory) and
+<tt>get_scrmem</tt> (which copies back data to the console
+buffer). The private buffer of the current console is
+physically mapped on the actual video RAM, in order to minimize
+the number of data transfers. This means that <tt>get</tt>- and
+<tt>set</tt>-<tt>_scrmem()</tt> are <tt>static</tt> to console.c and
+are called only during a console switch.
+
+<h5>Reading the console</h5>
+
+<p>Reading the console is accomplished through the
+line-discipline.  The default (and unique) line discipline in
+Linux is called <tt>tty_ldisc_N_TTY</tt>. The line discipline
+is what ``disciplines input through a line''. It is another
+function table (we're used to the approach, aren't we?), which
+is concerned with reading the device. With the help of
+<tt>termios</tt> flags, the line discipline is what controls
+input from the tty: raw, cbreak and cooked mode;
+<tt>select()</tt>; <tt>ioctl()</tt> and so on.
+
+<p>The read function in the line discipline is called
+<tt>read_chan()</tt>, which reads the tty buffer independently
+of whence it came from. The reason is that character arrival
+through a tty is managed by asynchronous hardware interrupts.
+
+<p><IMG src="../../../KHGicons/more.gif" alt="[MORE]">The line discipline
+<tt>N_TTY</tt> is to be found in the same tty_io.c, though
+later kernels use a different n_tty.c source file.
+
+<p>The lowest level of console input is part of keyboard
+management, and thus it is handled within keyboard.c, in the
+function <tt>keyboard_interrupt()</tt>.
+
+<h5>Keyboard management</h5>
+
+<p>Keyboard management is quite a nightmare. It is confined to
+the file keyboard.c, which is full of hexadecimal numbers to
+represent the various keycodes appearing in keyboards of
+different manifacturers.
+
+<p>I won't dig in keyboard.c, because no relevant information
+is there to the kernel hacker.
+
+<p><IMG src="../../../KHGicons/more.gif" alt="[MORE]">For those readers who are
+really interested in the Linux keyboard, the best approach to
+keyboard.c is from the last line upward. Lowest level details
+occur mainly in the first half of the file.
+
+<h5>Switching the current console</h5>
+
+<p>The current console is switched through invocation of the
+function <tt>change_console()</tt>, which resides in tty_io.c
+and is invoked by both keyboard.c and vt.c (the former switches
+console in response to keypresses, the latter when a program
+requests it by invoking an <tt>ioctl()</tt> call).
+
+<p>The actual switching process is performed in two steps, and
+the function <tt>complete_change_console()</tt> takes care of
+the second part of it. Splitting the switch is meant to
+complete the task after a possible handshake with the process
+controlling the tty we're leaving. If the console is not under
+process control, <tt>change_console()</tt> calls
+<tt>complete_change_console()</tt> by itself. Process
+intervertion is needed to successfully switch from a graphic
+console to a text one and viceversa, and the X server (for
+example) is the controlling process of its own graphic console.
+
+<h5>The selection mechanism</h5>
+
+<p>``<tt>selection</tt>'' is the cut and paste facility for the
+Linux text consoles. The mechanism is mainly handled by a
+user-level process, which can be instantiated by either
+selection or gpm. The user-level program uses <tt>ioctl()</tt>
+on the console to tell the kernel to highlight a region of the
+screen. The selected text, then, is copied to a selection
+buffer. The buffer is a static entity in console.c. Pasting
+text is accomplished by `manually' pushing characters in the
+tty input queue. The whole selection mechanism is protected by
+<tt>#ifdef</tt> so users can disable it during kernel
+configuration to save a few kilobytes of ram.
+
+<p>Selection is a very-low-level facility, and its workings are
+hidden from any other kernel activity. This means that most
+<tt>#ifdef</tt>'s simply deals with removing the highlight
+before the screen is modified in any way.
+
+<p><IMG src="../../../KHGicons/new.gif" alt="[NEW]">Newer kernels feature
+improved code for selection, and the mouse pointer can be
+highlighted independently of the selected text (1.1.32 and
+later).  Moreover, from 1.1.73 onward a dynamic buffer is used
+for selected text rather than a static one, making the kernel
+4kB smaller.
+
+<h5><tt>ioctl()</tt>ling the device</h5>
+
+<p>The <tt>ioctl()</tt> system call is the entry point for user
+processes to control the behaviour of device files. Ioctl
+management is spawned by ../../fs/ioctl.c, where the real
+<tt>sys_ioctl()</tt> resides. The standard <tt>ioctl</tt>
+requests are performed right there, other file-related requests
+are processed by <tt>file_ioctl()</tt> (same source file),
+while any other request is dispatches to the device-specific
+<tt>ioctl()</tt> function.
+
+<p>The <tt>ioctl</tt> material for console devices resides in
+vt.c, because the console driver dispatches ioctl requests to
+<tt>vt_ioctl()</tt>.
+
+<p><IMG src="../../../KHGicons/new.gif" alt="[NEW]">The information above refer
+to 1.1.7x. The 1.0 kernel doesn't have the ``driver'' table,
+and <tt>vt_ioctl()</tt> is pointed to directly by the
+<tt>file_operations()</tt> table.
+
+<p>Ioctl material is quite confused, indeed. Some requests are
+related to the device, and some are related to the line
+discipline. I'll try to summarize things for the 1.0 and the
+1.1.7x kernels. Anything happened in between.
+
+<p>The 1.1.7x series features the following approach:
+tty_ioctl.c implements only line discipline requests (namely
+<tt>n_tty_ioctl()</tt>, which is the only n_tty function
+outside of n_tty.c), while the <tt>file_operations</tt> field
+points to <tt>tty_ioctl()</tt> in tty_io.c. If the request
+number is not resolved by <tt>tty_ioctl()</tt>, it is passed
+along to <tt>tty->driver.ioctl</tt> or, if it fails, to
+<tt>tty->ldisc.ioctl</tt>. Driver-related stuff for the console
+it to be found in vt.c, while line discipline material is in
+tty_ioctl.c.
+
+<p>In the 1.0 kernel, <tt>tty_ioctl()</tt> is in tty_ioctl.c
+and is pointed to by generic tty <tt>file_operations</tt>.
+Unresolved requests are passed along to the specific ioctl
+function or to the line-discipline code, in a way similar to
+1.1.7x.
+
+<p>Note that in both cases, the <tt>TIOCLINUX</tt> request is
+in the device-independent code. This implies that the console
+selection can be set by <tt>ioctl</tt>ling any tty
+(<tt>set_selection()</tt> always operates on the foreground
+console), and this is a security hole. It is also a good reason
+to switch to a newer kernel, where the problem is fixed by only
+allowing the superuser to handle the selection.
+
+<!--
+% Well, I'm telling Linus about the problem right now...
+-->
+
+<p>A variety of requests can be issued to the console device,
+and the best way to know about them is to browse the source
+file vt.c.
+
+<!--
+%<h4>Other character drivers</h4>
+%
+% Here I should talk about serial lines and mouse types. More about
+% the latter because I'm more competent about them.
+
+%   maybe....
+%<h4>How the kernel is configured</h4>
+%		but kernel cfg is due to change, hopefully
+-->
+
+<p>Copyright (C) 1994 Alessandro Rubini, rubini@pop.systemy.it
+<P>
+<P><HR SIZE=3>
+<P><B><A NAME="Messages">Messages</A></B>
+<NOBR>
+<font size=-1>
+
+
+
+
+
+
+
+</font>
+</NOBR>
+ <P>
+<NOBR>
+<DL COMPACT>
+<DT> 8. <IMG src="../../../Icons/question.gif" ALT="Question:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="tour/8.html">
+access a file from module</A> <i> by proy018@avellano.usal.es</i> </DT>
+<DT> 7. <IMG src="../../../Icons/question.gif" ALT="Question:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="tour/7.html">
+Which head.S?</A> <i> by Johnie Stafford</i> </DT>
+<DD>
+<DL COMPACT>
+<DT> 1. <IMG src="../../../Icons/feedback.gif" ALT="Feedback:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="tour/7/1.html">
+Untitled</A> <i> by benschop@eb.ele.tue.nl</i> </DT>
+</DL>
+</DD>
+<DT> 6. <IMG src="../../../Icons/question.gif" ALT="Question:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="tour/6.html">
+STREAMS and Linux</A> <i> by <A HREF="http://purana.csa.iisc.ernet.in/~gvmt">Venkatesha Murthy G.</A></i> </DT>
+<DD>
+<DL COMPACT>
+<DT> 1. <IMG src="../../../Icons/note.gif" ALT="None:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="tour/6/1.html">
+Re: STREAMS and LINUX</A> <i> by Vineet Sharma</i> </DT>
+</DL>
+</DD>
+<DT> 5. <IMG src="../../../Icons/note.gif" ALT="None:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="tour/5.html">
+Do you still need to run update ?</A> <i> by <A HREF="http://www.wmin.ac.uk/~ncfee">Chris Ebenezer</A></i> </DT>
+<DT> 4. <IMG src="../../../Icons/question.gif" ALT="Question:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="tour/4.html">
+Do you still need to run bdflush?</A> <i> by <A HREF="http://www.lalaland.cl.msu.edu/~dunham">Steve Dunham</A></i> </DT>
+<DD>
+<DL COMPACT>
+<DT> 1. <IMG src="../../../Icons/note.gif" ALT="Note:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="tour/4/1.html">
+Already answered...</A> <i> by <A HREF="../../../~johnsonm">Michael K. Johnson</A></i> </DT>
+</DL>
+</DD>
+<DT> 3. <IMG src="../../../Icons/idea.gif" ALT="Idea:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="tour/3.html">
+Kernel Configuration and Makefile Structure</A> <i> by <A HREF="http://www.di.unito.it/~steffen">Steffen Moeller</A></i> </DT>
+<DD>
+<DL COMPACT>
+<DT> 1. <IMG src="../../../Icons/more.gif" ALT="More:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="tour/3/1.html">
+Editing services available...</A> <i> by <A HREF="../../../~johnsonm">Michael K. Johnson</A></i> </DT>
+<DT> 2. <IMG src="../../../Icons/feedback.gif" ALT="Feedback:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="tour/3/2.html">
+Kernel configuration</A> <i> by <A HREF="http://purana.csa.iisc.ernet.in/~gvmt">Venkatesha Murthy G.</A></i> </DT>
+</DL>
+</DD>
+<DT> 2. <IMG src="../../../Icons/note.gif" ALT="Note:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="tour/2.html">
+Re: Kernel threads</A> <i> by <A HREF="http://rsphy1.anu.edu.au/~gpg109">Paul Gortmaker</A></i> </DT>
+<DD>
+<DL COMPACT>
+<DT> 1. <IMG src="../../../Icons/note.gif" ALT="None:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="tour/2/1.html">
+More on usage of kernel threads.</A> <i> by <A HREF="http://www-caip.rutgers.edu/~davem">David S. Miller</A></i> </DT>
+</DL>
+</DD>
+<DT> 1. <IMG src="../../../Icons/more.gif" ALT="More:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="tour/1.html">
+kernel startup code</A> <i> by <A HREF="http://www.cymru.net/~alan">Alan Cox</A></i> </DT>
+<DD>
+<DL COMPACT>
+<DT> 1. <IMG src="../../../Icons/note.gif" ALT="None:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="tour/1/1.html">
+Untitled</A> <i> by Karapetyants Vladimir Vladimirovitch</i> </DT>
+</DL>
+</DD>
+</DL>
+</NOBR>
+
+<P>
+<P>
+
+
+
+  
+
+
+
+
+
+<BR> 
+ 
+<BR></BODY>
+</HTML>

@@ -1,0 +1,303 @@
+
+
+diff -ur linux-stock/Makefile linux/Makefile
+--- linux-stock/Makefile        Wed Mar  8 02:50:24 1995
++++ linux/Makefile      Wed Mar 15 15:33:19 1995
+@@ -194,6 +194,7 @@
+ net: dummy
+        $(MAKE) linuxsubdirs SUBDIRS=net
+ 
++ifdef CONFIG_MODULES
+ ifdef CONFIG_MODVERSIONS
+ MODV = -DCONFIG_MODVERSIONS
+ endif
+@@ -221,6 +222,18 @@
+        rm -f .misc .allmods; \
+        )
+ 
++else
++
++modules modules_install: dummy
++       @echo
++       @echo "The present kernel configuration has modules disabled."
++       @echo "Run 'make config' and enable loadable module support."
++       @echo "Then build a kernel with module support enabled."
++       @echo
++       @exit 1
++
++endif
++
+ clean: archclean
+        rm -f kernel/ksyms.lst
+        rm -f core `find . -name '*.[oas]' -print`
+diff -ur linux-stock/arch/i386/config.in linux/arch/i386/config.in
+--- linux-stock/arch/i386/config.in     Wed Mar  8 01:25:26 1995
++++ linux/arch/i386/config.in   Wed Mar 15 14:37:39 1995
+@@ -36,7 +36,10 @@
+ #fi
+ 
+ comment 'Loadable module support'
+-bool 'Set version information on all symbols for modules' CONFIG_MODVERSIONS n
++bool 'Enable loadable module support' CONFIG_MODULES y
++if [ "$CONFIG_MODULES" = "y" ]; then
++ bool 'Set version information on all symbols for modules' CONFIG_MODVERSIONS n
++fi
+ 
+ if [ "$CONFIG_NET" = "y" ]; then
+ comment 'Networking options'
+diff -ur linux-stock/drivers/net/net_init.c linux/drivers/net/net_init.c
+--- linux-stock/drivers/net/net_init.c  Mon Jan 23 08:21:44 1995
++++ linux/drivers/net/net_init.c        Wed Mar 15 14:37:39 1995
+@@ -217,6 +217,7 @@
+        return 0;
+ }
+ 
++#ifdef CONFIG_MODULES
+ int register_netdev(struct device *dev)
+ {
+        struct device *d = dev_base;
+@@ -303,6 +304,7 @@
+        }
+        restore_flags(flags);
+ }
++#endif         /* CONFIG_MODULES */
+ 
+ 
+  
+diff -ur linux-stock/drivers/scsi/scsi.c linux/drivers/scsi/scsi.c
+--- linux-stock/drivers/scsi/scsi.c     Mon Feb 20 19:57:10 1995
++++ linux/drivers/scsi/scsi.c   Wed Mar 15 14:37:39 1995
+@@ -23,6 +23,7 @@
+ #include <linux/timer.h>
+ #include <linux/string.h>
+ #include <linux/malloc.h>
++#include <linux/config.h>
+ #include <asm/irq.h>
+ #include <asm/dma.h>
+ #include <linux/ioport.h>
+@@ -1832,8 +1833,10 @@
+ static unsigned char ** dma_malloc_pages = NULL;
+ #define MALLOC_PAGEBITS 12
+ 
++#ifdef CONFIG_MODULES
+ static int scsi_register_host(Scsi_Host_Template *);
+ static void scsi_unregister_host(Scsi_Host_Template *);
++#endif
+ 
+ void *scsi_malloc(unsigned int len)
+ {
+@@ -2145,6 +2148,8 @@
+          printk("\n");
+ }
+ 
++#ifdef CONFIG_MODULES          /* a big #ifdef block... */
++
+ /*
+  * This entry point should be called by a loadable module if it is trying
+  * add a low level scsi driver to the system.
+@@ -2482,6 +2487,7 @@
+   }
+   return;
+ }
++#endif /* CONFIG_MODULES */
+ 
+ #ifdef DEBUG_TIMEOUT
+ static void
+diff -ur linux-stock/fs/exec.c linux/fs/exec.c
+--- linux-stock/fs/exec.c       Mon Jan 30 22:08:04 1995
++++ linux/fs/exec.c     Wed Mar 15 14:37:39 1995
+@@ -71,6 +71,7 @@
+ 
+ static struct linux_binfmt *formats = &aout_format;
+ 
++#ifdef CONFIG_MODULES
+ int register_binfmt(struct linux_binfmt * fmt)
+ {
+        struct linux_binfmt ** tmp = &formats;
+@@ -101,6 +102,7 @@
+        }
+        return -EINVAL;
+ }
++#endif
+ 
+ int open_inode(struct inode * inode, int mode)
+ {
+diff -ur linux-stock/fs/proc/array.c linux/fs/proc/array.c
+--- linux-stock/fs/proc/array.c Thu Feb 23 22:31:41 1995
++++ linux/fs/proc/array.c       Wed Mar 15 14:37:39 1995
+@@ -744,10 +744,12 @@
+        return destptr-buf;
+ }
+ 
++#ifdef CONFIG_MODULES
+ extern int get_module_list(char *);
++extern int get_ksyms_list(char *);
++#endif
+ extern int get_device_list(char *);
+ extern int get_filesystem_list(char *);
+-extern int get_ksyms_list(char *);
+ extern int get_irq_list(char *);
+ extern int get_dma_list(char *);
+ extern int get_cpuinfo(char *);
+@@ -781,9 +783,14 @@
+                        return get_malloc(page);
+ #endif
+ 
++#ifdef CONFIG_MODULES
+                case PROC_MODULES:
+                        return get_module_list(page);
+ 
++               case PROC_KSYMS:
++                       return get_ksyms_list(page);
++#endif
++
+                case PROC_STAT:
+                        return get_kstat(page);
+ 
+@@ -796,9 +803,6 @@
+                case PROC_FILESYSTEMS:
+                        return get_filesystem_list(page);
+ 
+-               case PROC_KSYMS:
+-                       return get_ksyms_list(page);
+-
+                case PROC_DMA:
+                        return get_dma_list(page);
+ 
+diff -ur linux-stock/fs/proc/root.c linux/fs/proc/root.c
+--- linux-stock/fs/proc/root.c  Wed Jan 11 17:55:07 1995
++++ linux/fs/proc/root.c        Wed Mar 15 14:37:39 1995
+@@ -69,12 +69,14 @@
+        { PROC_MALLOC,          6, "malloc" },
+ #endif
+        { PROC_KCORE,           5, "kcore" },
++#ifdef CONFIG_MODULES
+        { PROC_MODULES,         7, "modules" },
++       { PROC_KSYMS,           5, "ksyms" },
++#endif
+        { PROC_STAT,            4, "stat" },
+        { PROC_DEVICES,         7, "devices" },
+        { PROC_INTERRUPTS,      10,"interrupts" },
+        { PROC_FILESYSTEMS,     11,"filesystems" },
+-       { PROC_KSYMS,           5, "ksyms" },
+        { PROC_DMA,             3, "dma" },
+        { PROC_IOPORTS,         7, "ioports"},
+ #ifdef CONFIG_PROFILE
+diff -ur linux-stock/fs/super.c linux/fs/super.c
+--- linux-stock/fs/super.c      Wed Jan 18 18:31:40 1995
++++ linux/fs/super.c    Wed Mar 15 15:12:39 1995
+@@ -57,6 +57,7 @@
+        return 0;
+ }
+ 
++#ifdef CONFIG_MODULES
+ int unregister_filesystem(struct file_system_type * fs)
+ {
+        struct file_system_type ** tmp;
+@@ -72,6 +73,7 @@
+        }
+        return -EINVAL;
+ }
++#endif         /* CONFIG_MODULES */
+ 
+ static int fs_index(const char * __name)
+ {
+diff -ur linux-stock/init/main.c linux/init/main.c
+--- linux-stock/init/main.c     Sat Feb 25 01:41:01 1995
++++ linux/init/main.c   Wed Mar 15 14:37:39 1995
+@@ -40,7 +40,9 @@
+ 
+ extern void init(void);
+ extern void init_IRQ(void);
++#ifdef CONFIG_MODULES
+ extern void init_modules(void);
++#endif
+ extern long console_init(long, long);
+ extern long kmalloc_init(long,long);
+ extern long blk_dev_init(long,long);
+@@ -352,7 +354,9 @@
+        init_IRQ();
+        sched_init();
+        parse_options(command_line);
++#ifdef CONFIG_MODULES
+        init_modules();
++#endif
+ #ifdef CONFIG_PROFILE
+        prof_buffer = (unsigned long *) memory_start;
+        /* only text is profiled */
+diff -ur linux-stock/kernel/Makefile linux/kernel/Makefile
+--- linux-stock/kernel/Makefile Mon Jan 23 19:38:30 1995
++++ linux/kernel/Makefile       Wed Mar 15 14:37:39 1995
+@@ -20,11 +20,13 @@
+        module.o exit.o signal.o itimer.o info.o time.o softirq.o \
+        resource.o
+ 
++ifdef CONFIG_MODULES
+ SYMTAB_OBJS = ksyms.o
++include ../versions.mk
++endif
+ 
+ all: kernel.o
+ 
+-include ../versions.mk
+ 
+ kernel.o: $(SYMTAB_OBJS) $(OBJS)
+        $(LD) -r -o kernel.o $(SYMTAB_OBJS) $(OBJS)
+diff -ur linux-stock/kernel/module.c linux/kernel/module.c
+--- linux-stock/kernel/module.c Tue Jan 31 18:36:21 1995
++++ linux/kernel/module.c       Wed Mar 15 14:37:39 1995
+@@ -6,6 +6,7 @@
+ #include <linux/module.h>
+ #include <linux/sched.h>
+ #include <linux/malloc.h>
++
+ /*
+  * Originally by Anonymous (as far as I know...)
+  * Linux version by Bas Laarhoven <bas@vimec.nl>
+@@ -34,8 +35,15 @@
+  *       and finally: reducing the number of entries in ksyms.c
+  *       since every subsystem should now be able to decide and
+  *       control exactly what symbols it wants to export, locally!
++ *
++ * 1.3.x, March 1995: (Paul Gortmaker) -- reduce kernel bloat.
++ *     - use dummy syscall functions for users who disable all
++ *       module support. Similar to kernel/sys.c
++ *
+  */
+ 
++#ifdef CONFIG_MODULES          /* a *big* #ifdef block... */
++
+ #ifdef DEBUG_MODULE
+ #define PRINTK(a) printk a
+ #else
+@@ -759,3 +767,29 @@
+ 
+        return 0;
+ }
++
++#else          /* CONFIG_MODULES */
++
++/* Dummy syscalls for people who don't want modules */
++
++asmlinkage unsigned long sys_create_module(void)
++{
++       return -ENOSYS;
++}
++
++asmlinkage int sys_init_module(void)
++{
++       return -ENOSYS;
++}
++
++asmlinkage int sys_delete_module(void)
++{
++       return -ENOSYS;
++}
++
++asmlinkage int sys_get_kernel_syms(void)
++{
++       return -ENOSYS;
++}
++
++#endif /* CONFIG_MODULES */
+

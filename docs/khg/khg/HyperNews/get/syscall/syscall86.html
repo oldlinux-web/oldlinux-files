@@ -1,0 +1,325 @@
+
+<HTML>
+<HEAD>
+<TITLE>How System Calls Work on Linux/i86</TITLE>
+<LINK rel="owner" href="mailto:">
+<SCRIPT LANGUAGE="JavaScript">
+<!-- hide this
+
+function help(message) {
+  self.status = message;
+  return true;
+}
+// stop hiding -->
+</SCRIPT>
+
+</HEAD>
+<BODY>
+<strong>The
+HyperNews <a href="../khg.html">Linux KHG</a>
+Discussion Pages</strong>
+<hr>
+
+<h2>How System Calls Work on Linux/i86</h2>
+
+<p>This section covers first the mechanisms provided by the 386
+for handling system calls, and then shows how Linux uses those
+mechanisms.  This is not a reference to the individual system
+calls: There are very many of them, new ones are added
+occasionally, and they are documented in man pages that should
+be on your Linux system.
+
+<h3>What Does the 386 Provide?</h3>
+
+<p>The 386 recognizes two event classes: exceptions and
+interrupts.  Both cause a forced context switch to new a
+procedure or task.  Interrupts can occur at unexpected times
+during the execution of a program and are used to respond to
+signals from hardware.  Exceptions are caused by the execution
+of instructions.
+
+<p>Two sources of interrupts are recognized by the 386:
+Maskable interrupts and Nonmaskable interrupts.  Two sources of
+exceptions are recognized by the 386: Processor detected
+exceptions and programmed exceptions.
+
+<p>Each interrupt or exception has a number, which is referred
+to by the 386 literature as the vector.  The NMI interrupt and
+the processor detected exceptions have been assigned vectors in
+the range 0 through 31, inclusive.  The vectors for maskable
+interrupts are determined by the hardware.  External interrupt
+controllers put the vector on the bus during the
+interrupt-acknowledge cycle.  Any vector in the range 32
+through 255, inclusive, can be used for maskable interrupts or
+programmed exceptions.  Here is a listing of all the possible
+interrupts and exceptions:
+<table border>
+<tr><th>0</th><td>divide error</td></tr>
+<tr><th>1</th><td>debug exception</td></tr>
+<tr><th>2</th><td>NMI interrupt</td></tr>
+<tr><th>3</th><td>Breakpoint</td></tr>
+<tr><th>4</th><td>INTO-detected Overflow</td></tr>
+<tr><th>5</th><td>BOUND range exceeded</td></tr>
+<tr><th>6</th><td>Invalid opcode</td></tr>
+<tr><th>7</th><td>coprocessor not available</td></tr>
+<tr><th>8</th><td>double fault</td></tr>
+<tr><th>9</th><td>coprocessor segment overrun</td></tr>
+<tr><th>10</th><td>invalid task state segment</td></tr>
+<tr><th>11</th><td>segment not present</td></tr>
+<tr><th>12</th><td>stack fault</td></tr>
+<tr><th>13</th><td>general protection</td></tr>
+<tr><th>14</th><td>page fault</td></tr>
+<tr><th>15</th><td>reserved</td></tr>
+<tr><th>16</th><td>coprocessor error</td></tr>
+<tr><th>17-31</th><td>reserved</td></tr>
+<tr><th>32-255</th><td>maskable interrupts</td></tr>
+</table>
+
+<p>The priority of simultaneous interrupts and exceptions is:
+<table>
+<tr><th>HIGHEST</th><td>Faults except debug faults</td></tr>
+<tr><td align="center">.</td><td>Trap instructions INTO, INT n, INT 3</td></tr>
+<tr><td align="center">.</td><td>Debug traps for this instruction</td></tr>
+<tr><td align="center">.</td><td>Debug traps for next instruction</td></tr>
+<tr><td align="center">.</td><td>NMI interrupt</td></tr>
+<tr><th>LOWEST</th><td>INTR interrupt</td></tr>
+</table>
+
+<h3>How Linux Uses Interrupts and Exceptions</h3>
+
+<p>Under Linux the execution of a system call is invoked by a
+maskable interrupt or <b>exception</b> class transfer, caused
+by the instruction <tt>int 0x80</tt>.  We use vector 0x80 to
+transfer control to the kernel. This interrupt vector is
+initialized during system startup, along with other important
+vectors like the system clock vector.
+
+<p>iBCS2 requries an <tt>lcall 0,7</tt> instruction, which
+Linux can send to the iBCS2 compatibility module appropriate if
+an iBCS2-compliant binary is being executed.  In fact, Linux
+will assume that an iBCS2-compliant binary is being executed if
+an <tt>lcall 0,7</tt> call is executed, and will automatically
+switch modes.
+
+<p>As of version 0.99.2 of Linux, there are 116 system calls.
+Documentation for these can be found in the man (2) pages. When
+a user invokes a system call, execution flow is as follows:
+<ul>
+<li>Each call is vectored through a stub in libc.  Each call
+within the libc library is generally a
+<tt>syscall<i>X</i>()</tt> macro, where <tt><i>X</i></tt> is
+the number of parameters used by the actual routine. Some
+system calls are more complex then others because of variable
+length argument lists, but even these complex system calls must
+use the same entry point: they just have more parameter setup
+overhead.  Examples of a complex system call include
+<tt>open()</tt> and <tt>ioctl()</tt>.
+<li>Each syscall macro expands to an assembly routine which
+sets up the calling stack frame and calls
+<tt>_system_call()</tt> through an interrupt, via the
+instruction <tt>int $0x80</tt>
+
+<p>For example, the setuid system call is coded as<br>
+<tt>_syscall1(int,setuid,uid_t,uid);</tt><br>
+which will expand to:
+<pre>
+_setuid:
+  subl $4,%exp
+  pushl %ebx
+  movzwl 12(%esp),%eax
+  movl %eax,4(%esp)
+  movl $23,%eax
+  movl 4(%esp),%ebx
+  int $0x80
+  movl %eax,%edx
+  testl %edx,%edx
+  jge L2
+  negl %edx
+  movl %edx,_errno
+  movl $-1,%eax
+  popl %ebx
+  addl $4,%esp
+  ret
+L2:
+  movl %edx,%eax
+  popl %ebx
+  addl $4,%esp
+  ret
+</pre>
+The macro definition for the <tt>syscall<i>X</i>()</tt> macros
+can be found in /usr/include/linux/unistd.h, and the user-space
+system call library code can be found in /usr/src/libc/syscall/
+
+<li>At this point no system code for the call has been
+executed. Not until the <tt>int $0x80</tt> is executed does the
+call transfer to the kernel entry point
+<tt>_system_call()</tt>.  This entry point is the same for all
+system calls. It is responsible for saving all registers,
+checking to make sure a valid system call was invoked and then
+ultimately transfering control to the actual system call code
+via the offsets in the <tt>_sys_call_table</tt>.  It is also
+responsible for calling <tt>_ret_from_sys_call()</tt> when the
+system call has been completed, but before returning to user
+space.
+
+<p>Actual code for <tt>system_call</tt> entry point can be found
+in /usr/src/linux/kernel/sys_call.S Actual code for many of the
+system calls can be found in /usr/src/linux/kernel/sys.c, and
+the rest are found elsewhere. <tt>find</tt> is your friend.
+
+<li>After the system call has executed,
+<tt>_ret_from_sys_call()</tt> is called.  It checks to see if
+the scheduler should be run, and if so, calls it.
+
+<li>Upon return from the system call, the
+<tt>syscall<i>X</i>()</tt> macro code checks for a negative
+return value, and if there is one, puts a positive copy of the
+return value in the global variable <tt>_errno</tt>, so that it
+can be accessed by code like <tt>perror()</tt>.
+</ul>
+
+<h3>How Linux Initializes the system call vectors</h3>
+
+<p>The <tt>startup_32()</tt> code found in
+/usr/src/linux/boot/head.S starts everything off by calling
+<tt>setup_idt()</tt>. This routine sets up an IDT (Interrupt
+Descriptor Table) with 256 entries.  No interrupt entry points
+are actually loaded by this routine, as that is done only after
+paging has been enabled and the kernel has been moved to
+0xC0000000. An IDT has 256 entries, each 4 bytes long, for a
+total of 1024 bytes.
+
+When <tt>start_kernel()</tt> (found in /usr/src/linux/init/main.c) is
+called it invokes <tt>trap_init()</tt> (found in
+/usr/src/linux/kernel/traps.c).  <tt>trap_init()</tt> sets up the IDT via
+the macro <tt>set_trap_gate()</tt> (found in /usr/include/asm/system.h).
+<tt>trap_init()</tt> initializes the interrupt descriptor table as shown
+here:
+<table border>
+<tr><th>0</th><td>divide_error</td></tr>
+<tr><th>1</th><td>debug</td></tr>
+<tr><th>2</th><td>nmi</td></tr>
+<tr><th>3</th><td>int3</td></tr>
+<tr><th>4</th><td>overflow</td></tr>
+<tr><th>5</th><td>bounds</td></tr>
+<tr><th>6</th><td>invalid_op</td></tr>
+<tr><th>7</th><td>device_not_available</td></tr>
+<tr><th>8</th><td>double_fault</td></tr>
+<tr><th>9</th><td>coprocessor_segment_overrun</td></tr>
+<tr><th>10</th><td>invalid_TSS</td></tr>
+<tr><th>11</th><td>segment_not_present</td></tr>
+<tr><th>12</th><td>stack_segment</td></tr>
+<tr><th>13</th><td>general_protection</td></tr>
+<tr><th>14</th><td>page_fault</td></tr>
+<tr><th>15</th><td>reserved</td></tr>
+<tr><th>16</th><td>coprocessor_error</td></tr>
+<tr><th>17</th><td>alignment_check</td></tr>
+<tr><th>18-48</th><td>reserved</td></tr>
+</table>
+At this point the interrupt vector for the system calls is not
+set up. It is initialized by <tt>sched_init()</tt> (found in
+/usr/src/linux/kernel/sched.c). A call to <tt>set_system_gate
+(0x80, &system_call)</tt> sets interrupt 0x80 to be a vector to
+the <tt>system_call()</tt> entry point.
+
+
+<h3>How to Add Your Own System Calls</h3>
+
+<ol>
+<li>Create a directory under the /usr/src/linux/ directory to hold
+your code.
+
+<li>Put any include files in /usr/include/sys/ and /usr/include/linux/.
+
+<li>Add the relocatable module produced by the link of your new
+kernel code to the <tt>ARCHIVES</tt> and the subdirectory to
+the <tt>SUBDIRS</tt> lines of the top level Makefile. See
+fs/Makefile, target fs.o for an example.
+
+<li>Add a <tt>#define __NR_<i>xx</i></tt> to unistd.h to assign
+a call number for your system call, where <tt><i>xx</i></tt>,
+the index, is something descriptive relating to your system
+call. It will be used to set up the vector through
+<tt>sys_call_table</tt> to invoke you code.
+
+<li>Add an entry point for your system call to the
+<tt>sys_call_table</tt> in sys.h. It should match the index
+(<tt><i>xx</i></tt>) that you assigned in the previous step.
+The <tt>NR_syscalls</tt> variable will be recalculated
+automatically.
+
+<li>Modify any kernel code in kernel/fs/mm/, etc. to take into
+account the environment needed to support your new code.
+
+<li>Run make from the top level to produce the new kernel
+incorporating your new code.
+</ol>
+At this point, you will have to either add a syscall to your
+libraries, or use the proper <tt>_syscall<i>n</i>()</tt> macro
+in your user program for your programs to access the new system
+call.
+
+The <i>386DX Microprocessor Programmer's Reference Manual</i> is a
+helpful reference, as is James Turley's <i>Advanced 80386
+Programming Techniques.</i>  See the
+<A HREF="../bib/bib.html">Annotated Bibliography</a>.
+
+<p>Copyright (C) 1993, 1996 Michael K. Johnson, johnsonm@redhat.com.<br>
+Copyright (C) 1993 Stanley Scalsky
+<P>
+<P><HR SIZE=3>
+<P><B><A NAME="Messages">Messages</A></B>
+<NOBR>
+<font size=-1>
+
+
+
+
+
+
+
+</font>
+</NOBR>
+ <P>
+<NOBR>
+<DL COMPACT>
+<DT> 4. <IMG src="../../../Icons/note.gif" ALT="Note:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="syscall86/4.html">
+wrong file for system_call code</A> <i> by Tim Bird</i> </DT>
+<DT> 3. <IMG src="../../../Icons/note.gif" ALT="Note:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="syscall86/3.html">
+would be nice to explain syscall macros</A> <i> by Tim Bird</i> </DT>
+<DT> 2. <IMG src="../../../Icons/note.gif" ALT="Note:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="syscall86/2.html">
+wrong file for syscallX() macro</A> <i> by Tim Bird</i> </DT>
+<DT> 1. <IMG src="../../../Icons/feedback.gif" ALT="Feedback:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="syscall86/1.html">
+the directory /usr/src/libc/syscall/</A> <i> by <A HREF="http://www.crhc.uiuc.edu/~vijay">vijay gupta</A></i> </DT>
+<DD>
+<DL COMPACT>
+<DT> 1. <IMG src="../../../Icons/note.gif" ALT="Note:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="syscall86/1/1.html">
+...no longer exists.</A> <i> by <A HREF="../../../~johnsonm">Michael K. Johnson</A></i> </DT>
+<DT> -&gt; <IMG src="../../../Icons/feedback.gif" ALT="Feedback:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="syscall86/1/1/1.html">
+the solution to the problem </A> <i> by Vijay Gupta</i> </DT>
+</DL>
+</DD>
+</DL>
+</NOBR>
+
+<P>
+<P>
+
+
+
+  
+
+
+
+
+
+<BR> 
+ 
+<BR></BODY>
+</HTML>

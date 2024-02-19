@@ -1,0 +1,521 @@
+Subject: Linux-Development Digest #549
+From: Digestifier <Linux-Development-Request@senator-bedfellow.MIT.EDU>
+To: Linux-Development@senator-bedfellow.MIT.EDU
+Reply-To: Linux-Development@senator-bedfellow.MIT.EDU
+Date:     Sun, 13 Mar 94 17:13:09 EST
+
+Linux-Development Digest #549, Volume #1         Sun, 13 Mar 94 17:13:09 EST
+
+Contents:
+  Re: DIP: tty: getc: I/O error (Arnoud Martens)
+  Re: A truely non-debugging Kernel? (Bryan Ford)
+  Re: [Possible bug?] rm * on write-protected dos floppy (Anton Ertl)
+  Re: Amiga File System, once again (The Lord of VI)
+  Re: Support for ACCTON EtherPocket pocket ethernet adaptor? (Russell Nelson)
+  Re: A truely non-debugging Kernel? (Doug McNaught)
+  Re: Linux pre-1 bug with NFS (Dhaliwal Bikram Singh)
+  Re: YP or NIS for linux? (Peter Eriksson)
+  Re: YP or NIS for linux? (Peter Eriksson)
+  Re: YP or NIS for linux? (Barry Flanagan)
+  Re: DIP: tty: getc: I/O error (Uri Blumenthal)
+
+----------------------------------------------------------------------------
+
+From: arnoud@ijssel.hacktic.nl (Arnoud Martens)
+Subject: Re: DIP: tty: getc: I/O error
+Date: Sun, 13 Mar 1994 14:00:17 GMT
+Reply-To: arnoudm@ijssel.hacktic.nl
+
+Sys admin writes in newsgroup comp.os.linux.development:
+> * No gettys on the serial ports *
+> When I first boot my machine, I can run kermit as much as I want with no 
+> problems.  My first DIP script runs fine, but when I kill DIP
+> via kill -9 pid,
+
+Sys admins who complain about a system failure when they kill a
+system program with -9 signal should be forced to read a goood
+Unix book. Ever heard of proper clean up? Read the man-page: Dip
+provides the -k option which lets dip to do it's own clean up
+(even hangup the line).
+
+> enter kermit, enter hang command to hang up modem, I have to re-boot!
+> DIP now gives me the error in the subject, or sometimes it hangs when setting
+> the port to ttyS0.  Kermit starts, then hangs untill I enter CTRL-C, which
+> brings me to the kermit prompt.  When I enter 'connect' I get 
+> Kermit -> Can't send character: I/O error.
+ 
+I am not sursprised.
+-- 
+Arnoud Martens                  Delft, the Netherlands
+                                +31(0)15-563621/572701
+                                arnoudm@ijssel.hacktic.nl
+
+
+------------------------------
+
+From: baford@cs.utah.edu (Bryan Ford)
+Subject: Re: A truely non-debugging Kernel?
+Date: 13 Mar 94 09:47:23 MST
+
+John F. Haugh II (jfh@rpp386) wrote:
+>In article <DOUG.94Mar11165709@midget.towson.edu> doug@midget.towson.edu (Doug McNaught) writes:
+>>In article <2loo9h$fo8@aurora.engr.latech.edu> ramos@engr.latech.edu (Alex Ramos) writes:
+>>
+>>>Geez! The kernel has _so much_ debugging code (sanity checks, etc) that
+>>>I wonder how much smaller it could be. It seems most kernel developers
+>>>have never heard of #ifdef... Just a thought :-)
+>>
+>>  Well, I'd rather give up some memory and have something that panics
+>>and shuts itself down rather than blindly hosing my filesystems and/or
+>>hardware... I *like* sanity checks. A lot.
+>
+>That's all or nothing thinking -- ship the kernel with #ifdef DEBUG and
+>after a few weeks when you are happy, recompile with -UDEBUG.
+
+I'm sure lots of people have similar versions of something like this,
+but for those who don't, here's a little header file that refines the
+idea somewhat.  I'm not suggesting that it should be used in the Linux
+kernel; I personally would probably keep the sanity checks in permanently
+since the kernel has the dubious distinction of being the one part of
+the system capable of doing anything to anything else if things go wrong.
+(Not that it ever has, for me - but I'm wary just the same. :-) )
+
+#ifndef _sleepy_misc_debug_
+#define _sleepy_misc_debug_
+
+/*** Handy debug header - public domain from Sleepless Software ***/
+
+#ifdef DEBUG
+
+#include <stdio.h>
+
+void die(const char *format, ...);
+#define panic die
+
+/* Print a debugging message, like this:  `message(("foo %s", bar));'
+   This macro is not defined at all when debugging is turned off,
+   so you will learn quickly if you've accidentally left spurrious debugging messages
+   lying around...  */
+#define message(x) \
+        ({ printf("%s:%d: ", __FILE__, __LINE__); printf x; printf("\n"); })
+
+/* I sometimes sprinkle these around a problematical area;
+   they provide a convenient execution trace,
+   printing enough information to find out where they came from
+   without me having to cons up a bunch of different messages.
+   Like message(), these will cause errors if DEBUG is not defined.  */
+#define here() printf("@ %s:%d\n", __FILE__, __LINE__);
+
+/* Use these to insert simple sanity checks in the program,
+   which will get compiled out when DEBUG is turned off.
+   Both panic unless the condition `t' is true,
+   and assertv additionally prints out `v' as an integer if it panics
+   (presumably some number related to the cause of the panic). */
+#define assert(t) \
+        ({ if (!(t)) panic("failed assertion `"#t"' %s:%d", __FILE__, __LINE__); })
+#define assertv(t,v) \
+        ({ if (!(t)) panic("failed assertion `"#t"' (value=%d) %s:%d", (v), __FILE__, __LINE__); })
+
+/* "Off The Straight And Narrow":
+   Place this on paths that should never be reached.
+   These get compiled out when DEBUG is off.  */
+#define otsan() panic("shouldn't have gotten to %s:%d", __FILE__, __LINE__);
+
+/* This macro can be used to surround some arbitrary code statement,
+   as a less unsightly version of #ifdef DEBUG/#endif.  */
+#define do_debug(op) ({ op; })
+
+/* I sometimes use these to mark the beginnings of untested code paths.
+   When DEBUG is on, hitting one of these causes a panic,
+   so I know exactly what path is now being exercised that never was before.
+   When DEBUG is off, the macro generates an error by default,
+   reminding me to go back and test the path.
+   It can be forced to be compiled out by giving -DUNTESTED to the compiler.  */
+#define untested() panic("untested code path at %s:%d", __FILE__, __LINE__);
+
+#else !DEBUG
+
+#define message(x) #error `message' debugging macro used without DEBUG
+#define here() #error `here' debugging macro used without DEBUG
+#define assert(t)
+#define assertv(t,v)
+#define otsan()
+#define do_debug(op)
+
+#ifdef UNTESTED
+#define untested()
+#else
+#define untested() #error untested code path
+#endif
+
+#endif !DEBUG
+
+#endif _sleepy_misc_debug_
+
+                                Bryan
+---
+Bryan Ford      baford@cs.utah.edu      University of Utah, CSS
+`finger baford@schirf.cs.utah.edu' for PGP key and other info.
+
+------------------------------
+
+From: anton@mips.complang.tuwien.ac.at (Anton Ertl)
+Subject: Re: [Possible bug?] rm * on write-protected dos floppy
+Date: 13 Mar 1994 18:11:15 GMT
+
+In article <2lqjp9$7nd@cmcl2.NYU.EDU>, gans@acf2.nyu.edu (gans) writes:
+|> I would think that some sort of error message about attempting
+|> a write operation on a write protected disk would be appropriate.
+|> Previous versions (0.99pl14) did give some immediate feedback.
+
+Not the version I have (0.99pl14p). I don't get any error message when
+writing to a write-protected disk as super-user.
+
+- anton
+-- 
+M. Anton Ertl                    Some things have to be seen to be believed
+anton@mips.complang.tuwien.ac.at Most things have to be believed to be seen
+
+------------------------------
+
+From: meshkin@sol.cs.wmich.edu (The Lord of VI)
+Subject: Re: Amiga File System, once again
+Date: Sun, 13 Mar 1994 03:08:29 GMT
+
+Back on 10 Mar 1994 10:06:54 GMT, Donald Faulkner (dfaulkne@comp..uark.edu)
+spouted this in comp.os.linux.development:
+> Amiga File System for Linux. It seems that all the discussion has 
+> centered around such a file system for ix86-Linux. Other than the 
+> fact that this is probably possible, I see no reason why such a 
+> file system is needed. PC users don't need an Amiga file system, and 
+> the rest of us who have Amigas can use CrossDos(tm) or MSH, or some
+> other transfer system to create a PC-readable disk. So on the PC side,
+> an Amiga file system is kindof useless.
+
+Well, there are those of us who might like to pull files from our Amiga
+floppies without having to go through the tedium of having to copy all
+our files twice (once for amiga->720Kpc, then from 720Kpc -> tape or
+wherever).  Not to mention that without a high density drive, we can't fit
+a whole 880K amiga floppy on a pc disk without compression.
+
+Then there's the idea of maybe hooking our hard drives from the amiga up
+to the pc, thus bypassing about 2-3 afternoons of tedious backing up to
+floppies.
+
+> and hard disk partitions in Amiga Linux. I don't really see why this would
+> be very difficult (though I am not volunteering to do it :).
+
+Heh heh heh, me neither. ;^)
+
+-- 
+      "Her ways are always with me
+       I wonder all the while
+       But please you must forgive me
+       I am old, but still a child"
+
+------------------------------
+
+From: nelson@crynwr.crynwr.com (Russell Nelson)
+Subject: Re: Support for ACCTON EtherPocket pocket ethernet adaptor?
+Date: 13 Mar 1994 04:54:17 GMT
+
+In article <2lstq5$84f@hydrox.cs.umd.edu> hdesiato@cs.umd.edu (Hui-Hui Hu) writes:
+
+   [I'm cc'ing this to support at ACCTON. So to explain a bit
+   of background, I'm trying to use an EtherPocket for Linux,
+   a free UNIX clone for the i386+ architecture. This post
+   is going out on the Linux development newsgroup.]
+
+   if I need to write a driver for this, where should I start?
+   I am amazingly bad at coding :) would appreciate any pointers..
+   I can't find any Crynwr drivers.
+
+I don't distribute their driver because 1) they've modified head.asm and
+tail.asm pretty heavily, and 2) they provide support for it included for
+free, so I figure that there isn't much market for me to do it.
+
+   OK, GPL question. The packet driver is based on
+   "Packet driver skeleton copyright 1988-90, Russell Nelson."
+   with the standard GPL disclaimer. I'm not sure if
+   GPL says that the source code should be available
+   from ACCTON ("Portions Copyright 1990-1992, ACCTON CO.,LTD.")
+
+It does, and they *will* provide source code.
+
+   [Bad sign. ACCTON support host is unreachable :( ]
+
+It might be an MX record.  I know that the US Accton office is (accton.com).
+That means that they're only reachable by mail, not by FTP, finger, etc.
+
+--
+-russ <nelson@crynwr.com>      ftp.msen.com:pub/vendor/crynwr/crynwr.wav
+Crynwr Software   | Crynwr Software sells packet driver support | ask4 PGP key
+11 Grant St.      | +1 315 268 1925 (9201 FAX)    | Quakers do it in the light
+Potsdam, NY 13676 | LPF member - ask me about the harm software patents do.
+
+------------------------------
+
+From: doug@midget.towson.edu (Doug McNaught)
+Subject: Re: A truely non-debugging Kernel?
+Date: 11 Mar 1994 21:57:07 GMT
+
+In article <2loo9h$fo8@aurora.engr.latech.edu> ramos@engr.latech.edu (Alex Ramos) writes:
+
+>Geez! The kernel has _so much_ debugging code (sanity checks, etc) that
+>I wonder how much smaller it could be. It seems most kernel developers
+>have never heard of #ifdef... Just a thought :-)
+
+  Well, I'd rather give up some memory and have something that panics
+and shuts itself down rather than blindly hosing my filesystems and/or
+hardware... I *like* sanity checks. A lot.
+--
+Doug McNaught     Systems Guy and Physics Student     Towson State University
+Internet: doug@midget.towson.edu   *or*   mcnaught-d@toe.towson.edu
+BITNET:   e7opdam@towsonvx            Office: Cook 28D, (410) 830-4148
+PGP fingerprint: D5 DF 12 0F AE EA 8C C1  CC DA 44 D6 D1 97 62 6B
+
+------------------------------
+
+From: a336dhal@cdf.toronto.edu (Dhaliwal Bikram Singh)
+Subject: Re: Linux pre-1 bug with NFS
+Date: Sun, 13 Mar 1994 04:49:41 GMT
+
+In article <1994Mar9.213709.14156@Princeton.EDU> lpkruger@tucson.Princeton.EDU (Louis P. Kruger) writes:
+>I had a NFS server crash on me today while I was running a "df"
+>command, so I switched to another V.C. and issued the command
+>kill -9 pid, where pid was the pid of the df command.
+>Normally this works, since I mount the server with the options
+>(intr,soft) but this time, the process just sat there with
+>a "D" in the ps status field forever, no matter how many times
+>I sent it a kill signal.  This used to work in previous versions,
+>so it leads me to believe that it might be a bug.  Thanks!
+>
+>       Louis Kruger
+
+Yes I have the same problems whenever I do du, df, and ls .  the only
+way to kill the session is to logout, or kill the xsession if you
+are in X.  This is very annoying because I would like to have
+NFS working cleanly before I trust it for every-day use.  
+
+I am using a 99pl15 kernel, and a WD8023 compat. card.  Everything
+else usually runs OK, rlogin, ftp, telnet, etc.  Although I do
+get uneplainably low transfer rates sometimes (for a two node net!).
+
+-bik
+-- 
+-a336dhal@cdf.toronto.edu
+-bikram dhaliwal
+
+------------------------------
+
+From: peter@ifm.liu.se (Peter Eriksson)
+Subject: Re: YP or NIS for linux?
+Date: 13 Mar 1994 13:28:41 +0100
+
+jfh@rpp386 (John F. Haugh II) writes:
+
+>In article <2li09g$6il@celsius.ifm.liu.se> peter@ifm.liu.se (Peter Eriksson) writes:
+
+>>(The major reason was that at the time when I wrote that stuff JFH's
+>>shadow library wasn't LGPL'd. Another big reason was that I wanted
+>>a set of *clean* functions and header files without all the compatibility
+>>stuff for 4711 different unixes that pollutes JFH's shadow library).
+
+>But Peter, you've made your code so clean it is no longer compatible with
+>the largest base of systems supporting those functions -- SVR4 boxes.
+
+Do SVR4 support YP and NIS+ thru the Name Service Switch functionality?
+I was under the impression that the Name Service Switch was a SunOS 5
+(Solaris 2) invention. Right or wrong?
+
+Under SunOS 5 a call to getspnam() will try to get information from
+/etc/shadow, YP and NIS+ in sequence if the configuration line in
+/etc/nsswitch.conf looks like:
+
+        passwd: files nis nisplus
+
+In NYS I've made one extension and that is to use /etc/passwd as a
+source for Shadow information if the file /etc/shadow doesn't exist
+so one can have _one_ /bin/login binary that works with or without
+the file "/etc/shadow".
+
+Even if I hadn't made that extension then one still would have to
+find out from which source the data comes if one wants to modify it
+and send it back. So what's the big deal with my addition to the
+functionality? 
+
+>though Xenix doesn't support concurrent groups.  When you start saying
+>"I know better -- I'm going to do it right" you confront the very
+>real possibility that
+
+>       1). You don't know better.
+>       2). Fewer people will use it because they can't afford to
+>           be incompatible with whatever else they must use.
+
+As far as I can see there is a very limited set of programs that
+this will cause problems for, namely those that modify shadow/passwd
+information. But is I said, I'm not aiming for 100% compatibility with
+your Shadow suite (or SVR4). Aiming for 100% compatibility would mean
+I couldn't use the SunOS 5 Name Service Switch technique.
+
+>Why would I write anything for Linux that requires the use of getspnam()
+>if I can't trust it to return "NULL" when there is no entry in /etc/shadow?
+>If you'd follow the SVR4 semantics at least an application which cares
+>can PORTABLY determine the existence of shadowed entries.
+
+If you would try to use that technique on a SunOS 5 machine then you
+would fail miserably (the shadow entry returned might come from YP
+or NIS+ (and in the YP case it would be from the "passwd" file)). It
+would be no different from a system using NYS.
+
+With NYS you could call __getspnam() to read the file /etc/shadow and
+nothing else (ie, bypassing the name service switch). I suppose there is
+some similar function in SunOS 5. 
+
+>>Btw, what's stopping you from writing your own NYS library with your
+>>shadow stuff if you think my stuff is so bogus, wrong and totally useless?
+
+>Given that your code is under the GPL this is a very real possibility.
+>This is also one of the reasons I've never (and never will) place all
+>of Shadow under the GPL.  And I did get the note about the GDBM hooks
+>being added.  Putting NDBM support into NYS is a pretty likely occurance.
+>Why limit myself to GDBM when NDBM is more widely available (given that
+>every system which supports GDBM also supports NDBM).
+
+NDBM has a very big limitation. Namely the 4096 bytes / key-value pair
+limit. One thing I've tried to avoid in NYS is stupid builtin limitations 
+like that.
+
+Btw, I won't be using GDBM either since GDBM is only available under
+the ordinary GPL license and not under the LGPL. The most likely
+candidate right now looks like the new Berkeley DBM that is used
+in Sendmail v8.
+
+/Peter
+---
+Peter Eriksson <peter@ifm.liu.se>               Linkvping University,
+Systems Administrator                           Department of Physics, 
+Phone: +46 13 28 27 86                          S-581 83 Linkvping, Sweden
+
+
+------------------------------
+
+From: peter@ifm.liu.se (Peter Eriksson)
+Subject: Re: YP or NIS for linux?
+Date: 13 Mar 1994 13:33:33 +0100
+
+jfh@rpp386 (John F. Haugh II) writes:
+
+>In article <2li66b$f62@gauss.ifm.liu.se> peter@ifm.liu.se (Peter Eriksson) writes:
+>>If one is using NYS and ypserv or ypbind dies/hangs then one simply
+>>logs in as root (since the root passwd and things are in
+>>/etc/passwd+/etc/shadow and one keeps "files" ahead of "yp"
+>>in "/etc/nsswitch.conf" line for "passwd") and then restarts
+>>ypserv and/or ypbind if needed.
+
+>Ah, the old assumption about just being able to login as root
+>and make everything OK.
+
+>What do you do when this happens and the only person with the
+>root password is in Nebraska and you're in another state?
+
+And what do you do if the DBM databases are corrupt and causes
+/bin/login to core dump? (Atleast one version of GDBM had the
+nasty habit of calling abort() if it detected something wrong
+with its database files).
+
+One can always find situations where there will be problems
+and no way of doing things (DBM, YP, NIS+, DNS/Hesiod) will
+ever be perfect.
+
+/Peter
+---
+Peter Eriksson <peter@ifm.liu.se>               Linkvping University,
+Systems Administrator                           Department of Physics, 
+Phone: +46 13 28 27 86                          S-581 83 Linkvping, Sweden
+
+------------------------------
+
+From: barryf@iol.ie (Barry Flanagan)
+Subject: Re: YP or NIS for linux?
+Date: 13 Mar 1994 18:32:57 -0000
+
+
+
+jfh@rpp386 (John F. Haugh II) wrote:
+>
+>I have spoken with people who use DBM files to support 
+>/etc/passwd  files with upward of 30,000 users.  I'm 
+>not aware of any scalability  problems with DBM files.  
+>I am aware of problems pushing YP maps  that are that 
+>size.
+>-- 
+
+I would really appreciate some pointers to more information on 
+this. It appears that NIS (at least on SCO) becomes very flakey 
+with upwards of 100 users, which seems to me to defeat the 
+purpose of NIS.
+
+I need to share passwd/shadow files between different types of 
+Unix (currently SCO, Solaris and Linux) and need to be able to 
+add many users.
+
+Email is fine, since this is hardly appropriate for the 
+thread...
+
+Thanks in advance.
+
+
+------------------------------
+
+From: uri@watson.ibm.com (Uri Blumenthal)
+Subject: Re: DIP: tty: getc: I/O error
+Date: 11 Mar 1994 21:17:26 GMT
+Reply-To: uri@watson.ibm.com
+
+In article <2lgqt8$buo@nic.ott.hookup.net>, root@borg.ott.ca (Sys admin) writes:
+> * No gettys on the serial ports *
+> When I first boot my machine, I can run kermit as much as I want with no 
+> problems.  My first DIP script runs fine, but when I kill DIP via kill -9 pid,
+
+Please, please... Don't kill DIP with "-9", unless you're willing to
+cope with your serial port left in some weird state, from which it's
+rather difficult to recover.
+
+> Can anyone else confirm this????
+
+Of course! But what do you want - to shoot yourself in
+the foot and not feel some pain? (:-)
+
+There are two "civilized" ways of quitting the DIP (at least
+my modification of it):
+
+1. Run "dip -k" - it will take care of you and your DIP.
+2. If you insist on being insolent - "kill -1 `cat /etc/dip.pid`"
+-- 
+Regards,
+Uri.      uri@watson.ibm.com     scifi!angmar!uri 
+============
+<Disclaimer>
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

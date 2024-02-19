@@ -1,0 +1,192 @@
+
+<HTML>
+<HEAD>
+<TITLE>Re: fixed, patch for kernel 2.0.30</TITLE>
+<LINK rel="owner" href="mailto:">
+<SCRIPT LANGUAGE="JavaScript">
+<!-- hide this
+
+function help(message) {
+  self.status = message;
+  return true;
+}
+// stop hiding -->
+</SCRIPT>
+
+</HEAD>
+<BODY>
+<strong>The
+HyperNews <a href="../../khg.html">Linux KHG</a>
+Discussion Pages</strong>
+<hr>
+<NOBR>
+
+
+
+
+
+</NOBR><BR>
+<H2><IMG src="../../../../Icons/feedback.gif" ALT="Feedback:"
+  WIDTH=15 HEIGHT=15
+  ALIGN="bottom">
+Re: fixed, patch for kernel 2.0.30</H2>
+
+<DL> <DD>
+<NOBR>
+<font size=+1><I>Forum:</I> <A HREF="../../khg.html" >
+ The Linux Kernel Hackers' Guide</A> </font><BR>
+
+<I>Re</I>: 
+  <IMG SRC="../../../../Icons/question.gif" 
+   WIDTH=15 HEIGHT=15
+   ALT="Question" ALIGN="absmiddle">
+  <A HREF="../83.html" >
+   reset the irq 0 timer after APM suspend</A>  (Dong Chen)<BR>
+<I>Keywords:</I> timer, APM <BR>
+<I>Date:</I> Fri, 27 Jun 1997 15:44:46 GMT <BR>
+<I>From:</I> Dong Chen &lt;<A HREF="mailto:chen@ctp.mit.edu" >chen@ctp.mit.edu</A>&gt; <BR>
+
+</NOBR>
+</DD> </DL>
+
+<P>
+<table border cellpadding=5 cellspacing=0 
+ width="100%" BGCOLOR="#FFFFFF">
+ <tr><td>
+<PRE>(This is the message I sent to the linux-kernel mailing list)
+
+Hi,
+
+This is a patch for "drivers/char/apm_bios.c", it fixes the following
+problems:
+
+(1) On some notebooks (AST J series, for example), the timer on interrupt 0
+is reset to DOS default: 18 Hz.  This patch re-initialize it to 100 Hz.
+Thanks to Pavel (<A HREF="mailto:pavel@Elf.mj.gts.cz">pavel@Elf.mj.gts.cz</A>) for pointing out to me that I should
+add some delays after the outb_p() and outb() calls.
+
+(2) The clock is not correctly restored after a standby().
+
+There are still some problems with not getting the correct time after APM
+suspend or standby, namely before the first suspend() or standby()
+call, if the clock is already slowed by CPU_IDLE call, then the estimate
+time zone "clock_cmos_diff" would be wrong.  Ideally, "clock_cmos_diff"
+should be setup at boot time after the time zone is set.  But that
+will require changing code other than "apm_bios.c".  Also, APM will not
+correct for the change between daylight savings time and normal time.
+
+Dong Chen
+<A HREF="mailto:chen@ctp.mit.edu">chen@ctp.mit.edu</A>
+
+---------------------------CUT HERE-------------------------------------
+--- drivers/char/apm_bios.c.orig        Mon May 26 11:05:15 1997
++++ drivers/char/apm_bios.c     Tue Jun 24 12:09:06 1997
+@@ -73,6 +73,18 @@
+ #include &lt;linux/miscdevice.h&gt;
+ #include &lt;linux/apm_bios.h&gt;
+ 
++/*
++ * INIT_TIMER_AFTER_SUSPEND: define to re-initialize the interrupt 0 timer
++ * to 100 Hz after a suspend.
++ */
++#define INIT_TIMER_AFTER_SUSPEND
++
++#ifdef INIT_TIMER_AFTER_SUSPEND
++#include &lt;linux/timex.h&gt;
++#include &lt;asm/io.h&gt;
++#include &lt;linux/delay.h&gt;
++#endif
++ static struct symbol_table     apm_syms = {
+ #include &lt;linux/symtab_begin.h&gt;
+        X(apm_register_callback),
+@@ -627,28 +639,53 @@
+        unsigned long   flags;
+        int             err;
+ 
+-                               /* Estimate time zone so that set_time can
+-                                   update the clock */
+-       save_flags(flags);
+-       clock_cmos_diff = -get_cmos_time();
+-       cli();
+-       clock_cmos_diff += CURRENT_TIME;
+-       got_clock_diff = 1;
+-       restore_flags(flags);
++       if (!got_clock_diff) {
++                               /* Estimate time zone */
++               save_flags(flags);
++               clock_cmos_diff = -get_cmos_time();
++               cli();
++               clock_cmos_diff += CURRENT_TIME;
++               got_clock_diff = 1;
++               restore_flags(flags);
++       }
+ 
+        err = apm_set_power_state(APM_STATE_SUSPEND);
+        if (err)
+                apm_error("suspend", err);
++
++#ifdef INIT_TIMER_AFTER_SUSPEND
++       cli();
++        /* set the clock to 100 Hz */
++        outb_p(0x34,0x43);              /* binary, mode 2, LSB/MSB, ch 0 */
++        udelay(10);
++        outb_p(LATCH &amp; 0xff , 0x40);    /* LSB */
++        udelay(10);
++        outb(LATCH &gt;&gt; 8 , 0x40);        /* MSB */
++        udelay(10);
++#endif
++
+        set_time();
+ }
+ 
+ static void standby(void)
+ {
++       unsigned long   flags;
+        int     err;
+ 
++       if (!got_clock_diff) {
++                               /* Estimate time zone */
++               save_flags(flags);
++               clock_cmos_diff = -get_cmos_time();
++               cli();
++               clock_cmos_diff += CURRENT_TIME;
++               got_clock_diff = 1;
++               restore_flags(flags);
++       }
++
+        err = apm_set_power_state(APM_STATE_STANDBY);
+        if (err)
+                apm_error("standby", err);
++       set_time();
+ }
+ 
+ static apm_event_t get_event(void)
+
+
+</PRE>
+</td></tr>
+</table>
+<P><NOBR>
+
+
+
+
+
+</NOBR><BR>
+
+<P>
+<P>
+
+
+
+  
+
+
+
+
+
+
+<BR> 
+ 
+<BR></BODY>
+</HTML>

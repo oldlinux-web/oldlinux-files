@@ -1,0 +1,666 @@
+
+<HTML>
+<HEAD>
+<TITLE>Linux Memory Management Overview</TITLE>
+<LINK rel="owner" href="mailto:">
+<SCRIPT LANGUAGE="JavaScript">
+<!-- hide this
+
+function help(message) {
+  self.status = message;
+  return true;
+}
+// stop hiding -->
+</SCRIPT>
+
+</HEAD>
+<BODY>
+<strong>The
+HyperNews <a href="../khg.html">Linux KHG</a>
+Discussion Pages</strong>
+<hr>
+<h3>Linux Memory Management Overview</h3>
+
+<b>[Note: This overview of Linux's Memory Management is several
+years old. Linux's MM has gone through a nearly complete rewrite
+since this was written. However, if you can't understand the
+Linux MM code, reading this and understanding that this documents
+the predecessor to the current MM code <i>may</i> help you out.]</b>
+
+<p>The Linux memory manager implements demand paging with a
+copy-on-write strategy relying on the 386's paging support. A
+process acquires its page tables from its parent (during a
+<tt>fork()</tt>) with the entries marked as read-only or
+swapped.  Then, if the process tries to write to that memory
+space, and the page is a copy-on-write page, it is copied, and
+the page is marked read-write.  An <tt>exec()</tt> results in
+the reading in of a page or so from the executable.  The
+process then faults in any other pages it needs.
+
+<p>Each process has a page directory which means it can access
+1 KB of page tables pointing to 1 MB of 4 KB pages which is 4
+GB of memory.  A process' page directory is initialized during
+a fork by <tt>copy_page_tables()</tt>.  The idle process has
+its page directory initialized during the initialization
+sequence.
+
+<p>Each user process has a local descriptor table that contains
+a code segment and data-stack segment. These user segments
+extend from 0 to 3 GB (0xc0000000).  In user space, linear
+addresses and logical addresses are identical.
+
+<p>On the 80386, linear address run from 0GB to 4GB.  A linear
+address points to a particular memory location within this
+space.  A linear address is <b>not</b> a physical address--it
+is a virtual address. A logical address consists of a selector
+and an offset.  The selector points to a segment and the offset
+tells how far into that segment the address is located)
+
+<p>The kernel code and data segments are priveleged segments
+defined in the global descriptor table and extend from 3 GB to
+4 GB.  The swapper page directory (<tt>swapper_page_dir</tt> is
+set up so that logical addresses and physical addresses are
+identical in kernel space.
+
+<p>The space above 3 GB appears in a process' page directory as
+pointers to kernel page tables. This space is invisible to the
+process in user mode but the mapping becomes relevant when
+privileged mode is entered, for example, to handle a system
+call.
+
+Supervisor mode is entered within the context of the current
+process so address translation occurs with respect to the
+process' page directory but using kernel segments. This is
+identically the mapping produced by using the
+<tt>swapper_pg_dir</tt> and kernel segments as both page
+directories use the same page tables in this space. Only
+<tt>task[0]</tt> (the idle task, sometimes called the swapper
+task for historical reasons, even though it has nothing to do
+with swapping in the Linux implementation) uses the
+<tt>swapper_pg_dir</tt> directly.
+<ul>
+<li>The user process' <tt>segment_base</tt> = 0x00, <tt>page_dir</tt>
+private to the process. 
+<li>user process makes a system call: <tt>segment_base</tt>=0xc0000000
+<tt>page_dir</tt> = same user <tt>page_dir</tt>.
+<li><tt>swapper_pg_dir</tt> contains a mapping for all physical pages
+from 0xc0000000 to 0xc0000000 + <tt>end_mem</tt>,
+so the first 768 entries in <tt>swapper_pg_dir</tt> are 0's, and
+then there are 4 or more that point to kernel page tables.
+<li>The user page directories have the same entries as <tt>swapper_pg_dir</tt>
+above 768. The first 768 entries map the user space.
+</ul>
+The upshot is that whenever the linear address is above 0xc0000000
+everything uses the same kernel page tables.
+
+<p>The user stack sits at the top of the user data segment and
+grows down. The kernel stack is not a pretty data structure or
+segment that I can point to with a ``yon lies the kernel
+stack.'' A <tt>kernel_stack_frame</tt> (a page) is associated
+with each newly created process and is used whenever the kernel
+operates within the context of that process. Bad things would
+happen if the kernel stack were to grow below its current stack
+frame.  <b>[Where is the kernel stack put?  I know that there
+is one for every process, but where is it stored when it's not
+being used?]</b>
+
+<p>User pages can be stolen or swapped.  A user page is one
+that is mapped below 3 GB in a user page table.  This region
+does not contain page directories or page tables.  Only dirty
+pages are swapped.
+
+<p>Minor alterations are needed in some places (tests for
+process memory limits comes to mind) to provide support for
+programmer defined segments.
+
+<p><b>[There is now a modify_ldt() system call used by dosemu,
+Wine, TWIN, and Wabi to create arbitrary segments.]</b>
+
+<h3>Physical memory</h3>
+
+<p>Here is a map of physical memory before any user processes
+are executed. The column on the left gives the <b>starting</b>
+address of the item, numbers in <i>italics</i> are approximate.
+The column in the middle names the item(s).  The column on the
+far right gives the relevant routine or variable name or
+explains the entry.
+<table border>
+<tr><td><i>0x110000</i></td><td>FREE</td><td><tt>memory_end</tt> or <tt>high_memory</tt></td></tr>
+<tr><td></td><td><tt>mem_map</tt></td><td><tt>mem_init()</tt></td></tr>
+<tr><td></td><td><tt>inode_table</tt></td><td><tt>inode_init()</tt></td></tr>
+<tr><td></td><td>device data</td><td><tt>device_init()</tt>*</td></tr>
+<tr><td>0x100000</td><td>more <tt>pg_table</tt>s</td><td><tt>paging_init()</tt></td></tr>
+<tr><td>0x0A0000</td><td>RESERVED</td></tr>
+<tr><td><i>0x060000</i></td><td>FREE</td></tr>
+<tr><td></td><td><tt>low_memory_start</tt></td></tr>
+<tr><td>0x006000</td><td>kernel code + data</td></tr>
+<tr><td></td><td><tt>floppy_track_buffer</tt></td></tr>
+<tr><td></td><td><tt>bad_pg_table</tt><br><tt>bad_page</tt></td><td>used by <tt>page_fault_handler</tt>s to kill processes gracefully when out of memory.</td></tr>
+<tr><td>0x002000</td><td><tt>pg0</tt></td><td>the first kernel page table.</td></tr>
+<tr><td>0x001000</td><td><tt>swapper_pg_dir</tt></td><td>the kernel page directory.</td></tr>
+<tr><td>0x000000</td><td>null page</td></tr>
+</table>
+*device-inits that acquire memory are(main.c):
+<tt>profil_buffer</tt>, <tt>con_init</tt>, <tt>psaux_init</tt>,
+<tt>rd_init</tt>, <tt>scsi_dev_init</tt>.
+
+<p>Note that all memory not marked as FREE is RESERVED
+(<tt>mem_init</tt>). RESERVED pages belong to the kernel and
+are <b>never</b> freed or swapped.
+
+<h3>A user process' view of memory</h3>
+
+<table border>
+<tr><td>0xc0000000</td><td>The invisible kernel</td><td>reserved</td></tr>
+<tr><td></td><td>initial stack</td></tr>
+<tr><td></td><td>room for stack growth</td><td>4 pages</td></tr>
+<tr><td>0x60000000</td><td>shared libraries</td></tr>
+<tr><td><tt>brk</tt></td><td>unused</td></tr>
+<tr><td></td><td>malloc memory</td></tr>
+<tr><td><tt>end_data</tt></td><td>uninitialized data</td></tr>
+<tr><td><tt>end_code</tt></td><td>initialized data</td></tr>
+<tr><td>0x00000000</td><td>text</td></tr>
+</table>
+
+<p>Both the code segment and data segment extend all the way
+from 0x00 to 3 GB.  Currently the page fault handler
+<tt>do_wp_page</tt> checks to ensure that a process does not
+write to its code space.  However, by catching the
+<tt>SEGV</tt> signal, it is possible to write to code space,
+causing a copy-on-write to occur.  The handler
+<tt>do_no_page</tt> ensures that any new pages the process
+acquires belong to either the executable, a shared library, the
+stack, or lie within the <tt>brk</tt> value.
+
+<p>A user process can reset its <tt>brk</tt> value by calling
+<tt>sbrk()</tt>. This is what <tt>malloc()</tt> does when it
+needs to. The text and data portions are allocated on separate
+pages unless one chooses the <tt>-N</tt> compiler option.
+Shared library load addresses are currently taken from the
+shared image itself. The address is between 1.5 GB and 3 GB,
+except in special cases.
+
+<p><b>User process Memory Allocation</b>
+<table border>
+<tr><td></td><th>swappable</th><th>shareable</th></tr>
+<tr><td>a few code pages</td><td>Y</td><td>Y</td></tr>
+<tr><td>a few data pages</td><td>Y</td><td>N?</td></tr>
+<tr><td>stack</td><td>Y</td><td>N</td></tr>
+<tr><td><tt>pg_dir</tt></td><td>N</td><td>N</td></tr>
+<tr><td>code/data <tt>page_table</tt></td><td>N</td><td>N</td></tr>
+<tr><td>stack <tt>page_table</tt></td><td>N</td><td>N</td></tr>
+<tr><td><tt>task_struct</tt></td><td>N</td><td>N</td></tr>
+<tr><td><tt>kernel_stack_frame</tt></td><td>N</td><td>N</td></tr>
+<tr><td>shlib <tt>page_table</tt></td><td>N</td><td>N</td></tr>
+<tr><td>a few shlib pages</td><td>Y</td><td>Y?</td></tr>
+</table>
+<b>[What do the question marks mean?  Do they mean that they might
+go either way, or that you are not sure?]</b>
+
+<p>The stack, shlibs and data are too far removed from each
+other to be spanned by one page table. All kernel
+<tt>page_table</tt>s are shared by all processes so they are
+not in the list.  Only dirty pages are swapped.  Clean pages
+are stolen so the process can read them back in from the
+executable if it likes.  Mostly only clean pages are shared.  A
+dirty page ends up shared across a fork until the parent or
+child chooses to write to it again.
+
+<h3>Memory Management data in the process table</h3>
+
+<p>Here is a summary of some of the data kept in the process
+table which is used for memory managment:
+
+<dl>
+<dt><b>Process memory limits</b>
+<dd><tt>ulong start_code, end_code, end_data, brk, start_stack;</tt>
+<dt><b>Page fault counting</b>
+<dd><tt>ulong min_flt, maj_flt, cmin_flt, cmaj_flt</tt>
+<dt><b>Local descriptor table</b>
+<dd><tt>struct desc_struct ldt[32]</tt> is the local descriptor table for task.
+<dt><tt><b>rss</b></tt>
+<dd>number of resident pages.
+<dt><tt><b>swappable</b></tt>
+<dd>if 0, then process's pages will not be swapped.
+<dt><tt><b>kernel_stack_page</b></tt>
+<dd>pointer to page allocated in fork.
+<dt><tt><b>saved_kernel_stack</b></tt>
+<dd>V86 mode stuff
+<dt><tt><b>struct tss</b></tt>
+ <ul>
+ <li>Stack segments
+  <dl>
+  <dt><tt>esp0</tt>
+  <dd>kernel stack pointer (<tt>kernel_stack_page</tt>)
+  <dt><tt>ss0</tt>
+  <dd>kernel stack segment (0x10)
+  <dt><tt>esp1</tt>
+  <dd>= <tt>ss1</tt> = <tt>esp2</tt> = <tt>ss2</tt> = 0<br>
+      unused privelege levels.
+  </dl>
+
+ <li>Segment selectors: ds = es = fs = gs = ss = 0x17, cs = 0x0f<br>
+All point to segments in the current <tt>ldt[]</tt>.
+
+ <li><tt>cr3</tt>: points to the page directory for this process.
+
+ <li><tt>ldt</tt>: <tt>_LDT(n)</tt> selector for current task's LDT.
+ </ul>
+</dl>
+
+<h3>Memory initialization</h3>
+
+<p>In <tt>start_kernel()</tt> (main.c) there are 3 variables
+related to memory initialization:
+<table border>
+<tr><td><tt>memory_start</tt></td><td>starts out at 1 MB. Updated by device initialization.</td></tr>
+<tr><td><tt>memory_end</tt></td><td>end of physical memory: 8 MB, 16 MB, or whatever.</td></tr>
+<tr><td><tt>low_memory_start</tt></td><td>end of the kernel code and data that is loaded initially.</td></tr>
+</table>
+
+<p>Each device init typically takes <tt>memory_start</tt> and
+returns an updated value if it allocates space at
+<tt>memory_start</tt> (by simply grabbing it).
+<tt>paging_init()</tt> initializes the page tables in the {\tt
+swapper_pg_dir} (starting at 0xc0000000) to cover all of the
+physical memory from <tt>memory_start</tt> to
+<tt>memory_end</tt>. Actually the first 4 MB is done in
+<tt>startup_32</tt> (head.S). <tt>memory_start</tt> is
+incremented if any new <tt>page_table</tt>s are added. The
+first page is zeroed to trap null pointer references in the
+kernel.
+
+<p>In <tt>sched_init()</tt> the <tt>ldt</tt> and <tt>tss</tt>
+descriptors for <tt>task[0]</tt> are set in the GDT, and loaded
+into the TR and LDTR (the only time it's done explicitly).  A
+trap gate (0x80) is set up for <tt>system_call()</tt>. The
+nested task flag is turned off in preparation for entering user
+mode. The timer is turned on.  The <tt>task_struct</tt> for
+<tt>task[0]</tt> appears in its entirety in
+<tt>&lt;linux/sched.h&gt;</tt>.
+
+<p><tt>mem_map</tt> is then constructed by <tt>mem_init()</tt>
+to reflect the current usage of physical pages. This is the
+state reflected in the physical memory map of the previous
+section.
+
+<p>Then Linux moves into user mode with an <tt>iret</tt> after
+pushing the current <tt>ss</tt>, <tt>esp</tt>, etc. Of course
+the user segments for <tt>task[0]</tt> are mapped right over
+the kernel segments so execution continues exactly where it
+left off.
+
+<p><tt>task[0]</tt>:<dl>
+<dt><tt>pg_dir</tt>
+<dd>= <tt>swapper_pg_dir</tt> which means the the only addresses mapped are in the range 3 GB to 3 GB + <tt>high_memory</tt>.
+<dt><tt>LDT[1]</tt>
+<dd>= user code, base=0xc0000000, size = 640K
+<dt><tt>LDT[2]</tt>
+<dd>= user data, base=0xc0000000, size = 640K
+</dl>
+
+<p>The first <tt>exec()</tt> sets the LDT entries for
+<tt>task[1]</tt> to the user values of base = 0x0, limit =
+TASK_SIZE = 0xc0000000. Thereafter, no process sees the kernel
+segments while in user mode.
+
+<h4>Processes and the Memory Manager</h4>
+
+<p>Memory-related work done by <tt>fork()</tt>:
+<ul>
+<li>Memory allocation
+  <ul>
+  <li>1 page for the <tt>task_struct</tt>.
+  <li>1 page for the kernel stack.
+  <li>1 for the <tt>pg_dir</tt> and some for <tt>pg_table</tt>s (copy_page_tables)
+  </ul>
+
+<li>Other changes
+  <ul>
+  <li><tt>ss0</tt> set to kernel stack segment (0x10) to be sure?
+  <li><tt>esp0</tt> set to top of the newly allocated <tt>kernel_stack_page</tt>
+  <li><tt>cr3</tt> set by <tt>copy_page_tables()</tt> to point to newly allocated page directory.
+  <li><tt>ldt = _LDT(task_nr)</tt> creates new ldt descriptor.
+  <li>descriptors set in gdt for new tss and <tt>ldt[]</tt>.
+  <li>The remaining registers are inherited from parent. 
+  </ul>
+</ul>
+The processes end up sharing their code and data segments (although
+they have separate local desctriptor tables, the entries point 
+to the same segments). The stack and data pages will be copied when 
+the parent or child writes to them (copy-on-write).
+
+<p>Memory-related work done by <tt>exec()</tt>:
+<ul>
+<li>memory allocation
+  <ul>
+  <li>1 page for exec header entire file for omagic
+  <li>1 page or more for stack (MAX_ARG_PAGES)
+  </ul>
+
+<li><tt>clear_page_tables()</tt> used to remove old pages.
+
+<li><tt>change_ldt()</tt> sets the descriptors in the new <tt>LDT[]</tt>
+<li><tt>ldt[1]</tt> = code base=0x00, limit=TASK_SIZE
+<li><tt>ldt[2]</tt> = data base=0x00, limit=TASK_SIZE<br>
+These segments are DPL=3, P=1, S=1, G=1. type=a (code) or 2 (data)
+
+<li> Up to <tt>MAX_ARG_PAGES</tt> dirty pages of argv and envp are
+allocated and stashed at the top of the data segment for the newly
+created user stack.  
+
+<li>Set the instruction pointer of the caller <tt>eip = ex.a_entry</tt>
+<li>Set the stack pointer of the caller to the stack just created
+(esp = stack pointer) These will be popped off the stack when the caller resumes. 
+
+<li>update memory limits<br>
+    <tt>end_code = ex.a_text</tt><br>
+    <tt>end_data = end_code + ex.a_data</tt><br>
+    <tt>brk = end_data + ex.a_bss</tt>
+</ul>
+
+<p>Interrupts and traps are handled within the context of the
+current task. In particular, the page directory of the current
+process is used in address translation. The segments, however,
+are kernel segments so that all linear addresses point into
+kernel memory.  For example, assume a user process invokes a
+system call and the kernel wants to access a variable at
+address 0x01.  The linear address is 0xc0000001 (using kernel
+segments) and the physical address is 0x01.  The later is
+because the process' page directory maps this range exactly as
+<tt>page_pg_dir</tt>.
+
+<p>The kernel space (0xc0000000 + <tt>high_memory</tt>) is
+mapped by the kernel page tables which are themselves part of
+the RESERVED memory. They are therefore shared by all
+processes. During a fork <tt>copy_page_tables()</tt> treats
+RESERVED page tables differently. It sets pointers in the
+process page directories to point to kernel page tables and
+does not actually allocate new page tables as it does normally.
+As an example the <tt>kernel_stack_page</tt> (which sits
+somewhere in the kernel space) does not need an associated
+<tt>page_table</tt> allocated in the process' <tt>pg_dir</tt>
+to map it.
+
+<p>The interrupt instruction sets the stack pointer and stack
+segment from the privilege 0 values saved in the tss of the
+current task. Note that the kernel stack is a really fragmented
+object--it's not a single object, but rather a bunch of stack
+frames each allocated when a process is created, and released
+when it exits. The kernel stack should never grow so rapidly
+within a process context that it extends below the current
+frame.
+
+<h3>Acquiring and Freeing Memory: Paging Policy</h3>
+
+<b>[Note: swapping has also been massively changed in recent
+kernels, with the ``kswap'' changes.]</b>
+
+<p>When any kernel routine wants memory it ends up calling
+<tt>get_free_page()</tt>. This is at a lower level than
+<tt>kmalloc()</tt> (in fact <tt>kmalloc()</tt> uses
+<tt>get_free_page()</tt> when it needs more memory).
+
+<p><tt>get_free_page()</tt> takes one parameter, a priority.
+Possible values are <tt>GFP_BUFFER</tt>, <tt>GFP_KERNEL</tt>,
+<tt>GFP_NFS</tt>, and <tt>GFP_ATOMIC</tt>.  It takes a page off
+of the <tt>free_page_list</tt>, updates <tt>mem_map</tt>,
+zeroes the page and returns the physical address of the page
+(note that <tt>kmalloc()</tt> returns a physical address. The
+logic of the mm depends on the identity map between logical and
+physical addresses).
+
+<p>That itself is simple enough. The problem, of course, is
+that the <tt>free_page_list</tt> may be empty. If you did not
+request an atomic operation, at this stage, you enter into the
+realm of page stealing which we'll go into in a moment.  As a
+last resort (and for atomic requests) a page is torn off from
+the <tt>secondary_page_list</tt> (as you may have guessed, when
+pages are freed, the <tt>secondary_page_list</tt> gets filled
+up first).
+
+<p>The actual manipulation of the <tt>page_list</tt>s and
+<tt>mem_map</tt> occurs in this mysterious macro called
+<tt>REMOVE_FROM_MEM_QUEUE()</tt> which you probably never want
+to look into. Suffice it to say that interrupts are disabled.
+<b>[I think that this should be explained here.  It is not
+<i>that</i> hard...]</b>
+
+<p>Now back to the page stealing bit. <tt>get_free_page()</tt>
+calls <tt>try_to_free_page()</tt> which repeatedly calls
+<tt>shrink_buffers()</tt> and <tt>swap_out()</tt> in that order
+until it is successful in freeing a page. The priority is
+increased on each successive iteration so that these two
+routines run through their page stealing loops more often.
+
+<p>Here's one run through <tt>swap_out()</tt>: 
+<ul>
+<li>Run through the process table and get a swappable task, say, <i>Q</i>.
+<li>Find a user page table (not RESERVED) in <i>Q</i>'s space.
+<li>For each <i>page</i> in the table <tt>try_to_swap_out(<i>page</i>)</tt>.
+<li>Quit when a page is freed.
+</ul>
+Note that <tt>swap_out()</tt> (called by
+<tt>try_to_free_page()</tt>) maintains static variables so it
+may resume the search where it left off on the previous call.
+
+<p><tt>try_to_swap_out()</tt> scans the page tables of
+all user processes and enforces the stealing policy:
+<ol>
+<li>Do not fiddle with RESERVED pages.
+<li>Age the page if it is marked accessed (1 bit).
+<li>Don't tamper with recently acquired pages (<tt>last_free_pages[]</tt>).
+<li>Leave dirty pages with <tt>map_counts</tt> &gt; 1 alone.
+<li>Decrement the <tt>map_count</tt> of clean pages.
+<li>Free clean pages if they are unmapped.
+<li>Swap dirty pages with a <tt>map_count</tt> of 1.
+</ol>
+
+<p>Of these actions, 6 and 7 will stop the process as they
+result in the actual freeing of a physical page.  Action 5
+results in one of the processes losing an unshared clean page
+that was not accessed recently (decrement
+<tt><i>Q</i>->rss</tt>) which is not all that bad, but the
+cumulative effects of a few iterations can slow down a process
+considerably.  At present, there are 6 iterations, so a page
+shared by 6 processes can get stolen if it is clean.
+
+<p>Page table entries are updated and the TLB invalidated.
+
+<p>The actual work of freeing the page is done by
+<tt>free_page()</tt>, the complement of
+<tt>get_free_page()</tt>. It ignores RESERVED pages, updates
+<tt>mem_map</tt>, then frees the page and updates the
+<tt>page_list</tt>s if it is unmapped. For swapping (in 6
+above), <tt>write_swap_page()</tt> gets called and does nothing
+remarkable from the memory management perspective.
+
+<p>The details of <tt>shrink_buffers()</tt> would take us too
+far afield. Essentially it looks for free buffers, then writes
+out dirty buffers, then goes at busy buffers and calls
+<tt>free_page()</tt> when its able to free all the buffers on a
+page.
+
+<p>Note that page directories and page tables along with
+RESERVED pages do not get swapped, stolen or aged. They are
+mapped in the process page directory through reserved page
+tables. They are freed only on exit from the process.
+
+<h3>The page fault handlers</h3>
+
+<p>When a process is created via fork, it starts out with a
+page directory and a page or so of the executable. So the page
+fault handler is the source of most of a processes' memory.
+
+<p>The page fault handler <tt>do_page_fault()</tt> retrieves
+the faulting address from the register cr2. The error code
+(retrieved in sys_call.S) differentiates user/supervisor access
+and the reason for the fault--write protection or a missing
+page. The former is handled by <tt>do_wp_page()</tt> and the
+latter by <tt>do_no_page()</tt>.
+
+<p>If the faulting address is greater than TASK_SIZE the
+process receives a SIGKILL.  <b>[Why this check?  This can only
+happen in kernel mode because of segment level protection.]</b>
+
+<p>These routines have some subtleties as they can get called
+from an interrupt. You can't assume that it is the ``current''
+task that is executing.
+
+<p><tt>do_no_page()</tt> handles three possible situations:
+<ol>
+<li>The page is swapped.
+<li>The page belongs to the executable or a shared library.
+<li>The page is missing--a data page that has not been allocated.
+</ol>
+
+<p>In all cases <tt>get_empty_pgtable()</tt> is called first to
+ensure the existence of a page table that covers the faulting
+address. In case 3 <tt>get_empty_page()</tt> is called to
+provide a page at the required address and in case of the
+swapped page, <tt>swap_in()</tt> is called.
+
+<p>In case 2, the handler calls <tt>share_page()</tt> to see if
+the page is shareable with some other process. If that fails it
+reads in the page from the executable or library (It repeats
+the call to <tt>share_page()</tt> in case another process did
+the same meanwhile). Any portion of the page beyond the brk
+value is zeroed.
+
+<p>A page read in from the disk is counted as a major fault
+(<tt>maj_flt</tt>). This happens with a <tt>swap_in()</tt> or
+when it is read from the executable or a library.  Other cases
+are deemed minor faults (<tt>min_flt</tt>).
+
+<p>When a shareable page is found, it is write-protected. A
+process that writes to a shared page will then have to go
+through <tt>do_wp_page()</tt> which does the copy-on-write.
+
+<p><tt>do_wp_page()</tt> does the following: 
+<ul>
+<li>Send SIGSEGV if any user process is writing to current <tt>code_space</tt>.
+<li>If the old page is not shared then just unprotect it.<br>
+Else <tt>get_free_page()</tt> and <tt>copy_page()</tt>. The page
+acquires the dirty flag from the old page.  Decrement the map
+count of the old page.
+</ul>
+
+<h3>Paging</h3>
+
+<p>Paging is swapping on a page basis rather than by entire
+processes. We will use swapping here to refer to paging, since
+Linux only pages, and does not swap, and people are more used
+to the word ``swap'' than ``page.'' Kernel pages are never
+swapped.  Clean pages are also not written to swap. They are
+freed and reloaded when required. The swapper maintains a
+single bit of aging info in the <tt>PAGE_ACCESSED</tt> bit of
+the page table entries.  <b>[What are the maintainance details?
+How is it used?]</b>
+
+<p>Linux supports multiple swap files or devices which may be
+turned on or off by the swapon and swapoff system calls. Each
+swapfile or device is described by a <tt>struct
+swap_info_struct</tt> (swap.c).
+<pre>
+static struct swap_info_struct {
+      unsigned long flags;
+      struct inode * swap_file;
+      unsigned int swap_device;
+      unsigned char * swap_map;
+      char * swap_lockmap;
+      int lowest_bit;
+      int highest_bit;
+} swap_info[MAX_SWAPFILES];
+</pre>
+
+<p>The flags field (<tt>SWP_USED</tt> or <tt>SWP_WRITEOK</tt>)
+is used to control access to the swap files. When
+<tt>SWP_WRITEOK</tt> is off space will not be allocated in that
+file. This is used by swapoff when it tries to unuse a file.
+When swapon adds a new swap file it sets <tt>SWP_USED</tt>. A
+static variable <tt>nr_swapfiles</tt> stores the number of
+currently active swap files.  The fields <tt>lowest_bit</tt>
+and <tt>highest_bit</tt> bound the free region in the swap file
+and are used to speed up the search for free swap space.
+
+<p>The user program mkswap initializes a swap device or file.
+The first page contains a signature (`<tt>SWAP-SPACE</tt>') in
+the last 10 bytes, and holds a bitmap. Initially 0's in the
+bitmap signal bad pages. A `1' in the bitmap means the
+corresponding page is free. This page is never allocated so the
+initialization needs to be done just once.
+
+<p>The syscall <tt>swapon()</tt> is called by the user program
+swapon typically from /etc/rc. A couple of pages of memory are
+allocated for <tt>swap_map</tt> and <tt>swap_lockmap</tt>.
+
+<p><tt>swap_map</tt> holds a byte for each page in the
+swapfile. It is initialized from the bitmap to contain a 0 for
+available pages and 128 for unusable pages. It is used to
+maintain a count of swap requests on each page in the swap
+file.  <tt>swap_lockmap</tt> holds a bit for each page that is
+used to ensure mutual exclusion when reading or writing swap
+files.
+
+<p>When a page of memory is to be swapped out an index to the
+swap location is obtained by a call to
+<tt>get_swap_page()</tt>. This index is then stored in bits
+1-31 of the page table entry so the swapped page may be located
+by the page fault handler, <tt>do_no_page()</tt> when needed.
+
+<p>The upper 7 bits of the index give the swapfile (or device)
+and the lower 24 bits give the page number on that device. That
+makes as many as 128 swapfiles, each with room for about 64 GB,
+but the space overhead due to the <tt>swap_map</tt> would be
+large. Instead the swapfile size is limited to 16 MB, because
+the <tt>swap_map</tt> then takes 1 page.
+
+<p>The function <tt>swap_duplicate()</tt> is used by
+<tt>copy_page_tables()</tt> to let a child process inherit
+swapped pages during a fork. It just increments the count
+maintained in <tt>swap_map</tt> for that page. Each process
+will swap in a separate copy of the page when it accesses it.
+
+<p><tt>swap_free()</tt> decrements the count maintained in
+<tt>swap_map</tt>. When the count drops to 0 the page can be
+reallocated by <tt>get_swap_page()</tt>. It is called each time
+a swapped page is read into memory (<tt>swap_in()</tt>) or when
+a page is to be discarded (<tt>free_one_table()</tt>, etc.).
+
+<p>Copyright (C) 1992, 1993, 1996 Michael K. Johnson,
+johnsonm@redhat.com.<br>
+Copyright (C) 1992, 1993 Krishna Balasubramanian and Douglas Johnson
+
+<P>
+<P><HR SIZE=3>
+<P><B><A NAME="Messages">Messages</A></B>
+<NOBR>
+<font size=-1>
+
+
+
+
+
+
+
+</font>
+</NOBR>
+ <P>
+<NOBR>
+</NOBR>
+
+<P>
+<P>
+
+
+
+  
+
+
+
+
+
+<BR> 
+ 
+<BR></BODY>
+</HTML>

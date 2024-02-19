@@ -1,0 +1,206 @@
+
+		Using Linux v0.11
+		Linus Torvalds 08.12.91
+
+NOTE: Users of 0.10, please check the "changed" list before using 0.11.
+
+		Booting linux
+
+Linux-0.11 can easily be booted by getting the 2 files bootimage-0.11.Z
+and rootimage-0.11.Z from the linux archive, uncompressing them and
+writing them out to disks of the same size (ie 2 1.44M floppies or 2
+1.2M floppies). Writing the disks is done with the "rawrite.exe" program
+from dos, or with "dd" from unix. Linux is then booted simply by
+inserting the bootdiskette in drive A, and rebooting the machine. If
+everything goes well, linux will ask you to insert the root-disk after
+loading the system. Hopefully linux will then correctly load the shell
+executable, and leave you as root on the new system (prompt '# ').
+
+		Using it.
+
+You can get a complete list of available commands by pressing <tab>
+twice: the root-disk contains mostly setup-programs needed to install
+the system on a harddisk.  You can test them a bit, reading directories
+etc. 
+
+In order to install linux on the harddisk, first check out your harddisk
+by executing the command "fdisk" - it should show you all the partitions
+available.  If you have only 1 AT-harddisk, you should get a
+errormessage, just ignore it.  At my system fdisk reports the following:
+
+/dev/hd1:  20476 blocks minix
+/dev/hd2:  19975 blocks minix
+/dev/hd3:   1020 blocks minix
+/dev/hd4:    170 blocks active 16-bit DOS (>=32M)
+/dev/hd6:  41641 blocks active minix
+
+The partition type given (12-bit DOS, minix etc) doesn{t really mean
+anything, unless it's a "extended partition", in which case you
+shouldn't use that partition for anything: linux doesn't yet understand
+them. When later using "mkfs" to make a linux file system, it won't
+change the output of fdisk, so fdisk may well report "DOS", while in
+fact you have made it a linux partition.
+
+If fdisk doesn't print out anything but errors, linux is unable to read
+your harddisk, and you are f**ked.  Play around with the floppy version,
+but you won't be able to do anything real.
+
+		Making a filesystem
+
+In order to really use linux, you will have to make a filesystem on your
+harddisk. This starts by deciding which partition you can use. Look
+again at what fdisk reports, and try to figure out which of the
+partitions you are using for DOS, OS/2 etc. /dev/hdX where X={1,2,3,4}
+always refers to the first harddisk, X={6,7,8,9} always refers to the
+second disk. /dev/hd0 and /dev/hd5 are special: they are all of the
+drive, and mkfs will refuse to use them for a filesystem.
+
+When you are certain you know which device points to which partition,
+you make a filesystem on the partition of your choice by writing:
+
+	mkfs -c /dev/hdX blocks
+
+where "-c" means that you want mkfs to check for errors, "dev/hdX" is
+the free partition you intend to use for linux, and "blocks" is the
+number of blocks fdisk reports for that particular partition. NOTE! mkfs
+will overwrite the partition you selected, so be doubly (or triply) sure
+that you don't mind that.
+
+Note that when using the "-c" flag, mkfs will read through the entire
+partition: this can take some time. If there are read errors, mkfs will
+mark the particular block as bad, and continue: linux will also print a
+little message "harddisk I/O error". After running mkfs these messages
+should never occur again: if they do, your data may be corrupted.
+
+		Mounting the filesystem
+
+After mkfs has exited, it's time to mount the file-system, and do the
+necessary things to make it a root file system. Mount the new filesystem
+on /user by writing:
+
+	cd /
+	mount /dev/hdX /user
+
+If you get errors for this, mkfs failed, and there is probably something
+seriously wrong.
+
+After mounting the device, you want to move all the files on the current
+floppy-root to the new fs. This can most easily be done by writing:
+
+	cd /user
+	for i in bin dev etc usr tmp floppy
+	do
+	cp +recursive +verbose /$i $i
+	done
+	sync
+
+which will also tell you what it is doing (/bin/sh -> bin/sh etc).
+
+After that, you should have a new filesystem that contains the bare
+necessities to start hacking linux. Play around some more, and exit
+linux by writing "logout or exit". This should result in
+
+	child 4 died with error code 0000
+	#
+
+Do a couple of syncs (3 is a magic number), and reboot the machine.
+ALWAYS remember to sync before rebooting: terrible things happen if you
+don't.
+
+		Using the harddisk as root
+
+Once you have happily made a new root, you will want to boot up with it.
+This is done by changing a word at offset 508 in the boot-image. The
+word (in 386-order, ie low byte first) tells the system which device to
+use as root: it is initially 0, which means that we want to use a floppy
+of the same type as the boot-disk (and this is the reason that you may
+not use a 360kB boot-disk even though the system fits on one: it has to
+be the same type as the root-diskette).
+
+In order to use the harddisk as root, this value has to be changed to
+point to the correct device. Harddisks have a major number of 3 under
+linux, and the minor nr is the same as the number X in /dev/hdX. The
+complete device number is then calculated with
+
+	DEV_NO = (major<<8)+minor
+
+or alternatively major*256+minor. Thus /dev/hd1 is (3<<8)+1 = 0x301,
+/dev/hd6 = 0x0306 etc. Assuming the partition you made into the new root
+was /dev/hd2, you will have to write 0x0302 into the boot-image. That
+is, you should change the 508th byte in the image to 0x02, and the 509th
+byte to 0x03. There is a sample program for this in some of the older
+INSTALL-notes, if you don't understand what it's all about.
+
+		Ok, I got the root on hd, what now?
+
+As you have probably noticed, you cannot get very far with the binaries
+found on the original root-diskette. So the first thing you want to do
+is to import some new binaries. To do this you need to tell linux what
+kind of floppies you have, as that's the easiest way to import things.
+
+As with harddisk, floppies have device numbers, but this time major = 2
+instead of 3. The minor number is not as easy: it's a composite that
+tells which drive (A, B, C or D) and what type of drive (360kB, 1.2M,
+1.44M etc). The formula is 'minor = type*4+nr', where nr is 0-3 for A-D,
+and type is 2 for 1.2M disks, and 7 for 1.44M disks. There are other
+types, but these should suffice for now.
+
+Thus if you have a 1.2M A-drive, and want to call it "floppy0", you have
+to tell linux so. This is done with the "mknod" command. mknod takes 4
+paramters: the unix name of the device, a "b" or a "c" depending on
+whether it's a Block of Character device, and the major and minor
+numbers. Thus to make "floppy0" a 1.2M A-drive, you write:
+
+	mknod /dev/floppy0 b 2 8
+
+b is for Block-device, the 2 is for floppy, and the 8 is 4*2+0, where
+the 2 is 1.2M-drive and the 0 is drive A. Likewise to make a "floppy1"
+device that is a 1.44M drive in B, you write:
+
+	mknod /dev/floppy1 b 2 29
+
+where 29 = 4*7 + 1.  There are a couple of standard names, for users
+that are used to minix (major, minor in parentheses): /dev/PS0 is a
+1.44M in A (2,28), /dev/PS1 a 1.44M in B (2,29), /dev/at0 is a 1.2M in A
+(2,8), /dev/at1 is a 1.2M in B (2,9). Use mknod to make those that fit
+your computer.
+
+After you have made these special block devices, you can now read a
+floppy under linux. The easiest way to import things into linux is by
+writing a tar-file to a floppy with rawrite.exe, and then using:
+
+	tar xvf /dev/floppy0
+
+to untar it under linux. This way you can get the gcc binaries etc
+available from the linux-carrying sites.
+
+		Changes from 0.10:
+
+- /bin/update is no longer automatically executed upon bootup: instead
+the file /etc/rc is evaluated by the shell. This file can then start the
+update process, mount andy needed filesystems, possibly fsck'ing them
+first. A minimal /etc/rc looks like this:
+
+	/bin/update &
+	> /etc/mtab
+	echo " Ok."
+
+- init() restarts the shell every time it is exited: logout from the
+login shell results in a "child xxx died with error code yyy", a sync
+and then a new shell as root.
+
+- floppies work a lot better than in 0.10. Even using two floppies at
+the same time seems to work out ok. Reading big chunks at a time is also
+faster then in 0.10 (I think).
+
+- harddisk errors are handled better. Use the "-c" option in mkfs to map
+out all errors.
+
+- linux accepts most video-cards: harcules, MDA, CGA etc seem to work.
+
+- ^G beeps on the console, so command completion under bash etc will
+notify of errors.
+
+- sticky directories, corrected handling of uid/gid bits, and better
+handling of protections when not root. Most of these won't be noticeable
+until we get a init/login.

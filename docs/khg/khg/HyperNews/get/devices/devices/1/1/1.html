@@ -1,0 +1,254 @@
+
+<HTML>
+<HEAD>
+<TITLE>network driver info</TITLE>
+<LINK rel="owner" href="mailto:">
+<SCRIPT LANGUAGE="JavaScript">
+<!-- hide this
+
+function help(message) {
+  self.status = message;
+  return true;
+}
+// stop hiding -->
+</SCRIPT>
+
+</HEAD>
+<BODY>
+<strong>The
+HyperNews <a href="../../../../khg.html">Linux KHG</a>
+Discussion Pages</strong>
+<hr>
+<NOBR>
+
+
+
+
+
+</NOBR><BR>
+<H2><IMG src="../../../../../../Icons/more.gif" ALT="More:"
+  WIDTH=15 HEIGHT=15
+  ALIGN="bottom">
+network driver info</H2>
+
+<DL> <DD>
+<NOBR>
+<font size=+1><I>Forum:</I> <A HREF="../../../devices.html" >
+ Device Drivers</A> </font><BR>
+
+<I>Re</I>: 
+  <IMG SRC="../../../../../../Icons/note.gif" 
+   WIDTH=15 HEIGHT=15
+   ALT="Note" ALIGN="absmiddle">
+  <A HREF="../../1.html" >
+   Re: Network Device Drivers</A>  (<A HREF="http://rsphy1.anu.edu.au/~gpg109" >Paul Gortmaker</A>)<BR>
+
+<I>Re</I>: 
+  <IMG SRC="../../../../../../Icons/more.gif" 
+   WIDTH=15 HEIGHT=15
+   ALT="More" ALIGN="absmiddle">
+  <A HREF="../1.html" >
+   Re: Network Device Drivers</A>  (<A HREF="http://www.csc.calpoly.edu/~ntucker/" >Neal Tucker</A>)<BR>
+<I>Keywords:</I> network driver functions <BR>
+<I>Date:</I> Sat, 15 Jun 1996 03:33:21 GMT <BR>
+<I>From:</I> <A HREF="http://www.csc.calpoly.edu/~ntucker/" >Neal Tucker</A> &lt;<A HREF="mailto:ntucker@adobe.com" >ntucker@adobe.com</A>&gt; <BR>
+
+</NOBR>
+</DD> </DL>
+
+<P>
+<table border cellpadding=5 cellspacing=0 
+ width="100%" BGCOLOR="#FFFFFF">
+ <tr><td>
+Earlier, I posted a pointer to a bit of info on network
+device drivers, and the site that the web page is on is
+going away, so I am including what was there here...
+
+    <h4>
+      How a Network Device Gets Added to the Kernel
+    </h4>
+    
+    There is a global variable called <tt>dev_base</tt> which points to a
+    linked list of "device" structures.  Each record represents a network
+    device, and contains a pointer to the device driver's initialization
+    function.  The initialization function is the first code from the driver
+    to ever get executed, and is responsible for setting up the hooks to the
+    other driver code.
+    <p>
+    At boot time, the function <tt>device_setup</tt> (<i>drivers/block/genhd.c</i>)
+    calls a function called <tt>net_dev_init</tt> (<i>net/core/dev.c</i>) which 
+walks through
+    the linked list pointed to by <tt>dev_base</tt>, calling each device's <tt>init</tt> function.
+    If the <tt>init</tt> indicates failure (by returning a nonzero result),
+    <tt>net_dev_init</tt> removes the device from the linked list and continues
+    on.
+    <p>
+    This brings up the question of how the devices get added to the linked
+    list of devices before any of their code is executed.  That is accomplished
+    by a clever piece of C preprocessor work in <i>drivers/net/Space.c</i>.  This file
+    has the static declarations for each device's "device" struct, including
+    the pointer to the next device in the list.  How can we define these links
+    statically without knowing which devices are going to be included?  Here's
+    how it's done (from <i>drivers/net/Space.c</i>):
+    
+    <pre>
+    #define NEXT_DEV        NULL
+    
+    #if defined(CONFIG_SLIP)
+    static struct device slip_dev =
+    {
+      device name and some other info goes here
+      ...
+      NEXT_DEV,    /* <- link to previously listed */
+                   /*    device struct (NULL here) */
+      slip_init,   /* <- pointer to init function */
+    };
+    
+    #undef NEXT_DEV
+    #define NEXT_DEV (&slip_dev)
+    #endif
+    
+    #if defined(CONFIG_PPP)
+    static struct device ppp_dev =
+    {
+      device name and some other info goes here
+      ...
+      NEXT_DEV,   /* <- link to previously listed   */
+                  /*    device struct, which is now *
+                  /*    defined as &slip_dev        */
+      ppp_init,   /* <- pointer to init function */
+    };
+    
+    #undef NEXT_DEV
+    #define NEXT_DEV (&ppp_dev)
+    #endif
+    
+    struct device loopback_dev =
+    {
+      device name and some other info goes here
+      ...
+      NEXT_DEV,        /* <- link to previously listed   */
+                       /*    device struct, which is now */
+                       /*    defined as &ppp_dev         */
+      loopback_init,   /* <- pointer to init function */
+    };
+    
+    /* And finally, the head of the list, which points   */
+    /* to the most recently defined device struct,       */
+    /* loopback_dev.  This (dev_base) is the pointer the */
+    /* kernel uses to access all the devices.            */
+    
+    struct device *dev_base = &loopback_dev;
+    </pre>
+    <p>
+    There is a constant, <tt>NEXT_DEV</tt>, defined to always point at the
+    last device record declared.  When each device record gets
+    declared, it puts the value of <tt>NEXT_DEV</tt> in itself as the "next"
+    pointer and then <em>redefines</em> <tt>NEXT_DEV</tt> to point to itself.
+    This is how the linked list is built.  Note that <tt>NEXT_DEV</tt> starts
+    out <tt>NULL</tt> so that the first device structure is the end of the
+    list, and at the end, the global <tt>dev_base</tt>, which is the head
+    of the list, gets the value of the last device structure.
+
+    <h5>
+      Ethernet devices
+    </h5>
+    Ethernet devices are a bit of a special case in how they get called
+    at initialization time, probably due to the fact that there are so
+    many different types of ethernet devices that we'd like to be able to
+    refer to them by just calling them ethernet devices (ie "eth0", "eth1", etc),
+    rather than calling them by name (ie "NE2000", "3C509", etc).
+    <p>
+    In the linked list mentioned above, there is a single entry for all
+    ethernet devices, whose initialization function is set to the function
+    <tt>ethif_probe</tt> (also defined in <i>drivers/net/Space.c</i>).
+    This function simply calls each ethernet device's <tt>init</tt> function
+    until it finds one that succeeds.  This is done with a huge expression
+    made up of the ANDed results of the calls to the initialization functions
+    (note that with the ethernet devices, the init function is conventionally
+    called <tt><i>xxx</i>_probe</tt>).  Here is an abridged version of that
+    function:
+
+    <pre>
+    static int ethif_probe(struct device *dev)
+    {
+        u_long base_addr = dev->base_addr;
+    
+        if ((base_addr == 0xffe0)  ||  (base_addr == 1))
+            return 1;
+    
+        if (1                  /* note start of expression here */
+    #ifdef CONFIG_DGRS
+            && dgrs_probe(dev)
+    #endif
+    #ifdef CONFIG_VORTEX
+            && tc59x_probe(dev)
+    #endif
+    #ifdef CONFIG_NE2000
+            && ne_probe(dev)
+    #endif
+            && 1 ) {          /* end of expression here         */
+            return 1;
+        }
+        return 0;
+    }
+    </pre>
+
+    <p>
+    The result is that the if statement bails out as false if any of
+    the <tt>probe</tt> calls returns zero (success), and only one ethernet
+    card is initialized and used, no matter how many drivers you have
+    installed.  For the drivers that aren't installed, the <tt>#ifdef</tt>
+    removes the code completely, and the expression gets a bit smaller.
+    The implications of this scheme are that supporting multiple ethernet
+    cards is now a special case, and requires providing command line
+    parameters to the kernel which cause <tt>ethif_probe</tt> to be
+    executed multiple times.
+
+
+</td></tr>
+</table>
+<P><NOBR>
+
+
+
+
+
+</NOBR><BR>
+<P><B><A NAME="Messages">Messages</A></B>
+<NOBR>
+<font size=-1>
+
+
+
+
+
+
+
+</font>
+</NOBR>
+ <P>
+<NOBR>
+<DL COMPACT>
+<DT> 1. <IMG src="../../../../../../Icons/idea.gif" ALT="Idea:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="1/1.html">
+Network Driver Desprately Needed</A> <i> by <A HREF="http://www.aerotek.co.uk">Paul Atkinson</A></i> </DT>
+</DL>
+</NOBR>
+
+<P>
+<P>
+
+
+
+  
+
+
+
+
+
+
+<BR> 
+ 
+<BR></BODY>
+</HTML>

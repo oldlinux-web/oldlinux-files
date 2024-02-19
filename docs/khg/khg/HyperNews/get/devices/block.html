@@ -1,0 +1,248 @@
+
+<HTML>
+<HEAD>
+<TITLE>Block Device Drivers</TITLE>
+<LINK rel="owner" href="mailto:">
+<SCRIPT LANGUAGE="JavaScript">
+<!-- hide this
+
+function help(message) {
+  self.status = message;
+  return true;
+}
+// stop hiding -->
+</SCRIPT>
+
+</HEAD>
+<BODY>
+<strong>The
+HyperNews <a href="../khg.html">Linux KHG</a>
+Discussion Pages</strong>
+<hr>
+<h3>Block Device Drivers</h3>
+
+<p><b>[Note: This has not been updated since changes were made
+in the block device interface to support block device loadable
+modules.  The changes shouldn't make it impossible for you to
+apply any of this...]</b>
+
+<p>To mount a filesystem on a device, it must be a block device
+driven by a block device driver.  This means that the device
+must be a random access device, not a stream device.  In other
+words, you must be able to seek to any location on the physical
+device at any time.
+
+<p>You do not provide <tt>read()</tt> and <tt>write()</tt>
+routines for a block device.  Instead, your driver uses
+<tt>block_read()</tt> and <tt>block_write()</tt>, which are
+generic functions, provided by the VFS, which will call the
+<b>strategy</b> routine, or <tt>request()</tt> function, which
+you write in place of <tt>read()</tt> and <tt>write()</tt> for
+your driver.  This strategy routine is also called by the
+<b>buffer cache</b>, which is called by the VFS routines, which
+is how normal files on normal filesystems are read and written.
+
+<p>Requests for I/O are given by the buffer cache to a routine
+called <tt>ll_rw_block()</tt>, which constructs lists of
+requests ordered by an <b>elevator algorithm,</b> which sorts
+the lists to make accesses faster and more efficient. It, in
+turn, calls your <tt>request()</tt> function to actually do the
+I/O.
+
+<p>Note that although SCSI disks and CDROMs are considered
+block devices, they are handled specially (as are all SCSI
+devices).  Refer to <A HREF="scsi.html">Writing a SCSI
+Driver</a> for details. (Although SCSI disks and CDROMs are
+block devices, SCSI tapes, like other tapes, are generally
+character devices.)
+
+<A name="init">
+<h4>Initialization</h4></a>
+
+<p>Initialization of block devices is a bit more complex than
+initialization of character devices, especially as some
+``initialization'' has to be done at compile time.  There is
+also a <tt>register_blkdev()</tt> call that corresponds to the
+character device <tt>register_chrdev()</tt> call, which the
+driver must call to say that it is present, working, and
+active.
+
+<h4>The file blk.h</h4>
+
+<p>At the top of your driver code, after all other included
+header files, you need to write two lines of code:
+<pre>
+#define MAJOR_NR <i>DEVICE</i>_MAJOR
+#include "blk.h"
+</pre>
+where <tt><i>DEVICE</i>_MAJOR</tt> is the major number of your
+device. drivers/block/blk.h requires the use of the
+<tt>MAJOR_NR</tt> define to set up many other defines and
+macros for your driver.
+
+<p>Now you need to edit blk.h.  Under <tt>#ifdef MAJOR_NR</tt>,
+there is a section of defines that are conditionally included
+for certain major numbers, protected by <tt>#elif (MAJOR_NR ==
+<i>DEVICE</i>_MAJOR)</tt>.  At the end of this list, you will
+add another section for your driver.  In that section, the
+following lines are required:
+<pre>
+#define DEVICE_NAME        "<i>device</i>"
+#define DEVICE_REQUEST     do_<i>dev</i>_request
+#define DEVICE_ON(device)  /* <i>usually blank, see below</i> */
+#define DEVICE_OFF(device) /* <i>usually blank, see below</i> */
+#define DEVICE_NR(device)  (MINOR(device))
+</pre>
+
+<p><tt>DEVICE_NAME</tt> is simply the device name.  See the
+other entries in blk.h for examples.
+
+<p><tt>DEVICE_REQUEST</tt> is your strategy routine, which will
+do all the I/O on the device.  See <A href="#strategy">The
+Strategy Routine</a> for more details on the strategy routine.
+
+<p><tt>DEVICE_ON</tt> and <tt>DEVICE_OFF</tt> are for devices
+that need to be turned on and off, like floppies.  In fact, the
+floppy driver is currently the only device driver which uses
+these defines.
+
+<p><tt>DEVICE_NR(device)</tt> is used to determine the number
+of the physical device from the minor device number.  For
+instance, in the <tt>hd</tt> driver, since the second hard
+drive starts at minor 64, <tt>DEVICE_NR(device)</tt> is defined
+to be <tt>(MINOR(device)&gt;&gt;6)</tt>.
+
+<p>If your driver is interrupt-driven, you will also set
+<pre>
+#define DEVICE_INTR do_<i>dev</i>
+</pre>
+which will become a variable automatically defined and used by
+the remainder of blk.h, specifically by the <tt>SET_INTR()</tt>
+and <tt>CLEAR_INTR</tt> macros.
+
+<p>You might also consider setting these defines:
+<pre>
+#define DEVICE_TIMEOUT <i>DEV</i>_TIMER
+#define TIMEOUT_VALUE <i>n</i>
+</pre>
+where <tt><i>n</i></tt> is the number of jiffies (clock ticks;
+hundredths of a second on Linux/386; thousandths or so on
+Linux/Alpha) to time out after if no interrupt is received.
+These are used if your device can become ``stuck'': a condition
+where the driver waits indefinitely for an interrupt that will
+never arrive. If you define these, they will automatically be
+used in <tt>SET_INTR</tt> to make your driver time out.  Of
+course, your driver will have to be able to handle the
+possibility of being timed out by a timer.
+
+<h4>Recognizing PC standard partitions</h4>
+
+<p><b>[Inspect the routines in genhd.c and include detailed,
+correct instructions on how to use them to allow your device to
+use the standard dos partitioning scheme.  By now, bsd disklabel
+and sun's SMD labelling are also supported, and I still haven't
+gotten around to documenting this.  Shame on me--but people seem
+to have been able to figure it out anyway <tt>:-)</tt>]</b>
+
+<h4>The Buffer Cache</h4>
+
+<p><b>[Here, it should be explained briefly how
+<tt>ll_rw_block()</tt> is called, about <tt>getblk()</tt> and
+<tt>bread()</tt> and <tt>breada()</tt> and <tt>bwrite()</tt>,
+etc. A real explanation of the buffer cache is reserved for the
+VFS reference section. Jean-Marc Lugrin wrote one, but I can't
+find him now.]</b>
+
+<A name="strategy">
+<h4>The Strategy Routine</h4></a>
+
+<p>All reading and writing of blocks is done through the
+<b>strategy routine</b>.  This routine takes no arguments and
+returns nothing, but it knows where to find a list of requests
+for I/O (<tt>CURRENT</tt>, defined by default as
+<tt>blk_dev[MAJOR_NR].current_request</tt>), and knows how to
+get data from the device into the blocks.  It is called with
+interrupts <b>disabled</b> so as to avoid race conditions, and
+is responsible for turning on interrupts with a call to
+<tt>sti()</tt> before returning.
+
+<p>The strategy routine first calls the <tt>INIT_REQUEST</tt>
+macro, which makes sure that requests are really on the request
+list and does some other sanity checking.
+<tt>add_request()</tt> will have already sorted the requests in
+the proper order according to the elevator algorithm (using an
+insertion sort, as it is called once for every request), so the
+strategy routine ``merely'' has to satisfy the request, call
+<tt>end_request(1)</tt>, which will take the request off the
+list, and then if there is still another request on the list,
+satisfy it and call <tt>end_request(1)</tt>, until there are no
+more requests on the list, at which time it returns.
+
+<p>If the driver is interrupt-driven, the strategy routine need
+only schedule the first request to occur, and have the
+interrupt-handler call <tt>end_request(1)</tt> and the call the
+strategy routine again, in order to schedule the next request.
+If the driver is not interrupt-driven, the strategy routine may
+not return until all I/O is complete.
+
+<p>If for some reason I/O fails permanently on the current
+request, <tt>end_request(0)</tt> must be called to destroy the
+request.
+
+<p>A request may be for a read or write.  The driver determines
+whether a request is for a read or write by examining
+<tt>CURRENT-&gt;cmd</tt>.  If <tt>CURRENT-&gt;cmd == READ</tt>,
+the request is for a read, and if <tt>CURRENT-&gt;cmd ==
+WRITE</tt>, the request is for a write.  If the device has
+seperate interrupt routines for handling reads and writes,
+<tt>SET_INTR(<i>n</i>)</tt> must be called to assure that the
+proper interrupt routine will be called.
+
+<p><b>[Here I need to include samples of both a polled strategy
+routine and an interrupt-driven one.  The interrupt-driven one
+should provide seperate read and write interrupt routines to
+show the use of <tt>SET_INTR</tt>.]</b>
+
+<p>Copyright (C) 1992, 1993, 1994, 1996 Michael K. Johnson,
+johnsonm@redhat.com.<br>
+<P>
+<P><HR SIZE=3>
+<P><B><A NAME="Messages">Messages</A></B>
+<NOBR>
+<font size=-1>
+
+
+
+
+
+
+
+</font>
+</NOBR>
+ <P>
+<NOBR>
+<DL COMPACT>
+<DT> 1. <IMG src="../../../Icons/idea.gif" ALT="Idea:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="block/1.html">
+non-block-cached block device?</A> <i> by <A HREF="http://www.csc.calpoly.edu/~ntucker/">Neal Tucker</A></i> </DT>
+<DT> 2. <IMG src="../../../Icons/idea.gif" ALT="Idea:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="block/2.html">
+Shall I explain elevator algorithm (+sawtooth etc)</A> <i> by <A HREF="http://www.tardis.ed.ac.uk/~mikedlr/">Michael De La Rue</A></i> </DT>
+</DL>
+</NOBR>
+
+<P>
+<P>
+
+
+
+  
+
+
+
+
+
+<BR> 
+ 
+<BR></BODY>
+</HTML>

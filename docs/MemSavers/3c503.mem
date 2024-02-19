@@ -1,0 +1,198 @@
+
+--- 3c503.c.old Sun Apr 30 17:06:31 1995
++++ 3c503.c     Sun Apr 30 17:07:24 1995
+@@ -12,8 +12,8 @@
+        Code 930.5, Goddard Space Flight Center, Greenbelt MD 20771
+ 
+     This driver should work with the 3c503 and 3c503/16.  It should be used
+-    in shared memory mode for best performance, although it may also work
+-    in programmed-I/O mode.
++    in shared memory mode for best performance, although it can be
++    configured to work in programmed-I/O mode.
+ 
+     Sources:
+     EtherLink II Technical Reference Guide,
+@@ -25,6 +25,12 @@
+ static char *version =
+     "3c503.c:v1.10 9/23/93  Donald Becker (becker@cesdis.gsfc.nasa.gov)\n";
+ 
++/* Do we support the slower, bug-ridden PIO mode of the 8390? */
++/* #define CONFIG_EL2_PIO */
++
++/* Do we do a quick test on the card's memory at boot? */
++/* #define CONFIG_EL2_MEMTEST */
++
+ #include <linux/kernel.h>
+ #include <linux/sched.h>
+ #include <linux/errno.h>
+@@ -56,9 +62,11 @@
+    the other for the typical I/O probe. */
+ struct netdev_entry el2_drv =
+ {"3c503", el2_probe, EL1_IO_EXTENT, 0};
++#ifdef CONFIG_EL2_PIO
+ struct netdev_entry el2pio_drv =
+ {"3c503pio", el2_pioprobe1, EL1_IO_EXTENT, netcard_portlist};
+ #endif
++#endif
+ 
+ static int el2_open(struct device *dev);
+ static int el2_close(struct device *dev);
+@@ -102,14 +110,14 @@
+        if (el2_probe1(dev, netcard_portlist[i]) == 0)
+            return 0;
+     }
+-#if ! defined(no_probe_nonshared_memory) && ! defined (HAVE_DEVLIST)
++#if defined(CONFIG_EL2_PIO) && ! defined (HAVE_DEVLIST)
+     return el2_pio_probe(dev);
+ #else
+     return ENODEV;
+ #endif
+ }
+ 
+-#ifndef HAVE_DEVLIST
++#if defined(CONFIG_EL2_PIO) && ! defined (HAVE_DEVLIST)
+ /*  Try all of the locations that aren't obviously empty.  This touches
+     a lot of locations, and is much riskier than the code above. */
+ int
+@@ -172,6 +180,13 @@
+        return ENODEV;
+     }
+ 
++#ifndef CONFIG_EL2_PIO
++    if ((membase_reg & 0xf0) == 0) {
++       printk("3c503 in PIO mode ignored - rejumper for shared memory.\n");
++       return ENODEV;
++    }
++#endif
++
+     request_region(ioaddr, EL2_IO_EXTENT,"3c503");
+ 
+     if (dev == NULL)
+@@ -206,14 +221,18 @@
+     ei_status.interface_num = dev->mem_end & 0xf;
+ #endif
+ 
++#ifdef CONFIG_EL2_PIO
+     if ((membase_reg & 0xf0) == 0) {
+        dev->mem_start = 0;
+     } else {
++#else
++    {
++#endif
+        dev->mem_start = ((membase_reg & 0xc0) ? 0xD8000 : 0xC8000) +
+            ((membase_reg & 0xA0) ? 0x4000 : 0);
+ 
+ #define EL2_MEMSIZE (EL2SM_STOP_PG - EL2SM_START_PG)*256
+-#ifdef EL2MEMTEST
++#ifdef CONFIG_EL2_MEMTEST
+        /* This has never found an error, but someone might care. */
+        {                       /* Check the card's memory. */
+            int *mem_base = (int *)dev->mem_start;
+@@ -224,14 +243,16 @@
+                if (mem_base[0] != 0xba5eba5e
+                    || mem_base[i] != memtest_value) {
+                    printk(" memory failure or memory address conflict.\n");
++#ifdef CONFIG_EL2_PIO
+                    dev->mem_start = 0;
++#endif
+                    break;
+                }
+                memtest_value += 0x55555555;
+                mem_base[i] = 0;
+            }
+        }
+-#endif  /* EL2MEMTEST */
++#endif  /* EL2_MEMTEST */
+        /* Divide the on-board memory into a single maximum-sized transmit
+           (double-sized for ping-pong transmit) buffer at the base, and
+           use the rest as a receive ring. */
+@@ -262,12 +283,14 @@
+     dev->open = &el2_open;
+     dev->stop = &el2_close;
+ 
+-    if (dev->mem_start)
+-       printk("\n%s: %s with shared memory at %#6lx-%#6lx,\n",
+-              dev->name, ei_status.name, dev->mem_start, dev->mem_end-1);
+-    else
++#ifdef CONFIG_EL2_PIO
++    if (dev->mem_start == 0)
+        printk("\n%s: %s using programmed I/O (REJUMPER for SHARED MEMORY).\n",
+               dev->name, ei_status.name);
++    else
++#endif
++       printk("\n%s: %s with shared memory at %#6lx-%#6lx,\n",
++              dev->name, ei_status.name, dev->mem_start, dev->mem_end-1);
+ 
+     if (ei_debug > 1)
+        printk(version);
+@@ -376,20 +399,26 @@
+ el2_block_output(struct device *dev, int count,
+                 const unsigned char *buf, const start_page)
+ {
+-    int i;                             /* Buffer index */
++#ifdef CONFIG_EL2_PIO
++    int i;                     /* Buffer index */
+     int boguscount = 0;                /* timeout counter */
++#endif
++    void *dest_addr;
+ 
+     /* This should really be set with during an open(). */
+     outb(EGACFR_NORM, E33G_GACFR);     /* Enable RAM and interrupts. */
+ 
++#ifdef CONFIG_EL2_PIO
+     if (dev->mem_start) {      /* Shared memory transfer */
+-       void *dest_addr = (void *)(dev->mem_start +
++#endif
++       dest_addr = (void *)(dev->mem_start +
+            ((start_page - ei_status.tx_start_page) << 8));
+        memcpy(dest_addr, buf, count);
+        if (ei_debug > 2  &&  memcmp(dest_addr, buf, count))
+            printk("%s: 3c503 send_packet() bad memory copy @ %#5x.\n",
+                   dev->name, (int) dest_addr);
+        return;
++#ifdef CONFIG_EL2_PIO
+     }
+     /* No shared memory, put the packet out the slow way. */
+     /* Set up then start the internal memory transfer to Tx Start Page */
+@@ -413,18 +442,23 @@
+     }
+     outb_p(ei_status.interface_num==0 ? ECNTRL_THIN : ECNTRL_AUI, E33G_CNTRL);
+     return;
++#endif
+ }
+ 
+ /* Returns the new ring pointer. */
+ static int
+ el2_block_input(struct device *dev, int count, char *buf, int ring_offset)
+ {
++#ifdef CONFIG_EL2_PIO
+     int boguscount = 0;
+-    int end_of_ring = dev->rmem_end;
+     unsigned int i;
++#endif
++    int end_of_ring = dev->rmem_end;
+ 
+     /* Maybe enable shared memory just be to be safe... nahh.*/
++#ifdef CONFIG_EL2_PIO
+     if (dev->mem_start) {      /* Use the shared memory. */
++#endif
+        ring_offset -= (EL2SM_START_PG<<8);
+        if (dev->mem_start + ring_offset + count > end_of_ring) {
+            /* We must wrap the input move. */
+@@ -436,6 +470,7 @@
+        }
+        memcpy(buf, (char *)dev->mem_start + ring_offset, count);
+        return ring_offset + count;
++#ifdef CONFIG_EL2_PIO
+     }
+     /* No shared memory, use programmed I/O. */
+     outb(ring_offset & 0xff, E33G_DMAAL);
+@@ -458,6 +493,7 @@
+     }
+     outb_p(ei_status.interface_num == 0 ? ECNTRL_THIN : ECNTRL_AUI, E33G_CNTRL);
+     return 0;
++#endif
+ }
+  
+ /*
+

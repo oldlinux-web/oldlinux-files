@@ -1,0 +1,1340 @@
+% scsi.tex -- Writing a SCSI Device Driver for Linux
+% Created: Sat Feb 20 12:56:25 1993 by faith@cs.unc.edu
+% Revised: Mon Jun  7 21:30:37 1993 by faith@cs.unc.edu
+% Written at the University of North Carolina, 1993, for COMP-291.
+% The information contained herein comes with ABSOLUTELY NO WARRANTY.
+%
+% Copyright 1993 Rickard E. Faith (faith@cs.unc.edu).  All rights reserved.
+% Permission is granted to make and distribute verbatim copies of this
+% paper provided the copyright notice and this permission notice are
+% preserved on all copies.
+%
+% 
+% $Log: scsi.tex,v $
+% Revision 1.12  1993/06/07  21:35:46  root
+% First Public Release
+%
+% Revision 1.11  1993/06/06  22:23:59  root
+% Filename change to scsi.tex
+%
+% Revision 1.10  1993/06/06  22:20:10  root
+% Pre-release Draft
+%
+% Revision 1.9  1993/04/03  22:50:55  root
+% Draft #2
+%
+% Revision 1.8  1993/03/20  19:39:47  root
+% Saturday's Draft
+%
+% Revision 1.7  1993/03/13  15:46:30  root
+% Draft #1
+%
+% Revision 1.6  1993/03/12  20:49:43  root
+% Friday's Draft.
+%
+% Revision 1.5  1993/03/10  21:19:10  root
+% Wednesday's Final Draft
+%
+% Revision 1.4  1993/03/10  20:37:41  root
+% Wednesday's Draft
+%
+% Revision 1.3  1993/03/08  22:40:30  root
+% Monday's Draft
+%
+% Revision 1.2  1993/03/08  13:36:40  root
+% Draft 0.1
+%
+% Revision 1.1  1993/03/08  10:49:46  root
+% Initial revision
+%
+%
+\def\FileCreated{Sat Feb 20 12:56:25 1993}
+\def\FileRevised{Mon Jun  7 21:30:37 1993}
+\newcommand{\Linux}{{\sc Linux}}
+\documentstyle[12pt,draft]{article}%\setstretch{1.0}
+
+\makeatletter
+\def\@date{\FileRevised}        % get rid of changedate style
+\def\singlespace{}              % get rid of doublespace style
+\def\endsinglespace{}
+
+% This is to get a copyright notice at the bottom of page one without a
+% footnote mark.
+\def\mynote#1{\begingroup\noindent
+  \def\protect{\noexpand\protect\noexpand}\xdef\@thanks{\@thanks
+    \protect\footnotetext[\the\c@footnote]{#1}}\endgroup}
+
+% This is for the desc environment, modified from the description
+% environment.
+\def\desclabel#1{\hspace\labelsep\mbox{\bf #1}\hfil}
+\def\desc#1{\list{}{\settowidth{\labelwidth}{\desclabel{#1}}
+    \leftmargin\labelwidth\let\makelabel\desclabel}}
+\let\enddesc\endlist
+
+% This is stuff for the Linux document style.
+% Comment it out if you have linuxdoc.sty
+\topmargin -0.5in
+%\textheight 8.75in
+\textheight 8.5in
+\advance\headsep 2ex
+\advance\textheight -2ex        % decrease by amount headsep was increased
+\marginparwidth 0in
+%\textwidth 6.25in
+\textwidth 6in
+
+\if@twoside
+%\oddsidemargin 0.25in
+\oddsidemargin 0.5in
+\evensidemargin 0in
+\def\ps@headings{\let\@mkboth\markboth
+  \def\@oddfoot{}\def\@evenfoot{}%       No feet.
+  \def\@evenhead{\protect\rule[-4pt]{\textwidth}{.5pt}\kern-\textwidth
+    \rm \thepage\hfil \sl \leftmark}     % Left heading.
+  \def\@oddhead{\protect\rule[-4pt]{\textwidth}{.5pt}\kern-\textwidth
+    {\sl \rightmark}\hfil \rm\thepage}    % Right heading.
+  \def\chaptermark##1{\markboth {\uppercase{\ifnum \c@secnumdepth >\m@ne
+        \@chapapp\ \thechapter. \ \fi ##1}}{}}%
+  \def\sectionmark##1{\markright {\uppercase{\ifnum \c@secnumdepth >\z@
+        \thesection. \ \fi ##1}}}}
+\else
+%\oddsidemargin 0.25in
+\oddsidemargin 0.5in
+\evensidemargin\oddsidemargin
+\def\ps@headings{\let\@mkboth\markboth
+  \def\@oddfoot{}\def\@evenfoot{}%       No feet.
+  \def\@oddhead{\protect\rule[-4pt]{\textwidth}{.5pt}\kern-\textwidth
+    {\sl \rightmark}\hfil \rm\thepage}    % Right heading.
+  \def\@evenhead\@oddhead
+  \def\chaptermark##1{\markboth {\uppercase{\ifnum \c@secnumdepth >\m@ne
+        \@chapapp\ \thechapter. \ \fi ##1}}{}}%
+  \def\sectionmark##1{\markright {\uppercase{\ifnum \c@secnumdepth >\z@
+        \thesection. \ \fi ##1}}}}
+\fi
+\ps@headings
+\makeatother
+
+\title{Writing a SCSI Device Driver for \Linux{}}
+
+\author{Rickard E. Faith\mynote{Copyright \copyright{} 1993 Rickard E.
+    Faith (faith@cs.unc.edu).  All rights reserved.  Permission is granted
+    to make and distribute verbatim copies of this paper provided the
+    copyright notice and this permission notice are preserved on all
+    copies.}}
+
+\begin{document}\bibliographystyle{alpha}\pagenumbering{roman}
+
+\begin{singlespace}
+  \maketitle\thispagestyle{empty}
+  \tableofcontents
+%  \pagebreak
+%  \listoffigures
+%  \pagebreak
+%  \listoftables
+\end{singlespace}
+
+\pagebreak\pagenumbering{arabic}
+
+
+\section{Introduction}
+
+In this paper, I have presented an overview of the information necessary to
+write a low-level SCSI device driver for \Linux{}.  The author of such a
+driver is expected to have a thorough knowledge of C programming, but does
+not need to have previous experience writing kernel or device driver code.
+References to other resources have been provided---access to these
+resources will make writing and debugging a low-level driver much easier.
+
+\subsection{\Linux{}: The Operating System}
+
+\Linux{} is a freely available {\sc unix}\footnote{{\sc unix} is a
+  registered trademark of AT\&T Bell Laboratories.}-like operating system
+for 386 and i486 systems.\footnote{386 and i486 are trademarks of Intel
+  Corporation.} The kernel, written from scratch by Linus
+Torvalds,\footnote{Internet mail address: torvalds@kruuna.Helsinki.FI}
+contains {\em no\/} proprietary source code and is available for use
+without licensing fees.  Linus distributes the kernel freely under the terms
+of the GNU General Public License.\footnote{For those interested, a copy of
+  the GNU General Public License is available via anonymous ftp from {\tt
+    prep.ai.mit.edu}.  Copies can also be obtained by writing to the Free
+  Software Foundation, Inc., 675 Massachusetts Ave., Cambridge, MA 02139,
+  USA.}
+
+Since its introduction in November 1991, \Linux{} has matured rapidly.  The
+kernel contains support for SCSI disks and tapes, sound cards, mice,
+TCP/IP, and several file systems.  The C library contains POSIX, System~V,
+and BSD compatible routines.  \Linux{} installations are capable of running
+large software packages such as \TeX{} and the X Window System.
+
+\subsection{Why You Want to Write a SCSI Driver}
+
+Currently, the \Linux{} kernel contains drivers for the following SCSI host
+adapters: Adaptec 1542, Adaptec 1740, Future Domain TMC-1660/TMC-1680,
+Seagate ST-01/ST-02, UltraStor 14F, and Western Digital WD-7000.  You may
+want to write your own driver for an unsupported host adapter.  You may
+also want to re-write or update one of the existing drivers.
+
+
+
+\section{What is SCSI?}
+
+The foreword to the SCSI-2 standard draft \cite{scsi2.standard} gives a
+succinct definition of the Small Computer System Interface and briefly
+explains how SCSI-2 is related to SCSI-1 and CCS:
+\begin{singlespace}
+  \begin{quotation}
+    The SCSI protocol is designed to provide an efficient peer-to-peer I/O
+    bus with up to 8 devices, including one or more hosts.  Data may be
+    transferred asynchronously at rates that only depend on device
+    implementation and cable length.  Synchronous data transfers are
+    supported at rates up to 10 mega-transfers per second.  With the 32~bit
+    wide data transfer option, data rates of up to 40 megabytes per second
+    are possible.
+
+    SCSI-2 includes command sets for magnetic and optical disks, tapes,
+    printers, processors, CD-ROMs, scanners, medium changers, and
+    communications devices.
+
+    In 1985, when the first SCSI standard was being finalized as an
+    American National Standard, several manufacturers approached the X3T9.2
+    Task Group.  They wanted to increase the mandatory requirements of SCSI
+    and to define further features for direct-access devices.  Rather than
+    delay the SCSI standard, X3T9.2 formed an ad hoc group to develop a
+    working paper that was eventually called the Common Command Set
+    (CCS)\@.  Many disk products were designed using this working paper in
+    conjunction with the SCSI standard.
+
+    In parallel with the development of the CCS working paper, X3T9.2 began
+    work on an enhanced SCSI standard which was named SCSI-2.  SCSI-2
+    included the results of the CCS working paper and extended them to all
+    device types.  It also added caching commands, performance enhancement
+    features, and other functions that X3T9.2 deemed worthwhile.  While
+    SCSI-2 has gone well beyond the original SCSI standard (now referred to
+    as SCSI-1), it retains a high degree of compatibility with SCSI-1
+    devices.
+  \end{quotation}
+\end{singlespace}
+
+
+\subsection{SCSI Phases}
+\label{sec:status}
+\label{sec:message}
+
+The ``SCSI bus'' transfers data and state information between
+interconnected SCSI devices.  A single transaction between an ``initiator''
+and a ``target'' can involve up to 8 distinct ``phases.''  These phases are
+almost entirely determined by the target (e.g., the hard disk drive).  The
+current phase can be determined from an examination of five SCSI bus
+signals, as shown in Table~\ref{tab:phase} \cite[p.~57]{lxt.manual}.
+
+\begin{table}[hbtp]
+  \leavevmode
+  \begin{center}
+    \begin{tabular}{|c|c|c|c|c|l|} \hline
+      -SEL & -BSY & -MSG & -C/D & -I/O & PHASE \\\hline\hline
+      HI   & HI   & ?    & ?    & ?    & BUS FREE \\\hline
+      HI   & LO   & ?    & ?    & ?    & ARBITRATION \\\hline
+      I    & I\&T & ?    & ?    & ?    & SELECTION \\\hline
+      T    & I\&T & ?    & ?    & ?    & RESELECTION \\\hline
+      HI   & LO   & HI   & HI   & HI   & DATA OUT \\\hline
+      HI   & LO   & HI   & HI   & LO   & DATA IN \\\hline
+      HI   & LO   & HI   & LO   & HI   & COMMAND \\\hline
+      HI   & LO   & HI   & LO   & LO   & STATUS \\\hline
+      HI   & LO   & LO   & LO   & HI   & MESSAGE OUT \\\hline
+      HI   & LO   & LO   & LO   & LO   & MESSAGE IN \\\hline
+      \multicolumn{6}{l}{{\footnotesize I = Initiator Asserts, T = Target
+          Asserts, ? = HI or LO}}
+    \end{tabular}
+    \caption{SCSI Bus Phase Determination}
+    \label{tab:phase}
+  \end{center}
+\end{table}
+
+Some controllers (notably the inexpensive Seagate controller) require
+direct manipulation of the SCSI bus---other controllers automatically
+handle these low-level details.  Each of the eight phases will be described
+in detail.
+
+\begin{description}
+\item[BUS FREE Phase] The BUS FREE phase indicates that the SCSI bus is
+  idle and is not currently being used.
+\item[ARBITRATION Phase] The ARBITRATION phase is entered when a SCSI
+  device attempts to gain control of the SCSI bus.  Arbitration can start
+  only if the bus was previously in the BUS FREE phase.  During
+  arbitration, the arbitrating device asserts its SCSI ID on the DATA
+  BUS\@.  For example, if the arbitrating device's SCSI ID is 2, then the
+  device will assert {\tt 0x04}\@.  If multiple devices attempt
+  simultaneous arbitration, the device with the highest SCSI ID will win.
+  Although ARBITRATION is optional in the SCSI-1 standard, it is a required
+  phase in the SCSI-2 standard.
+\item[SELECTION Phase] After ARBITRATION, the arbitrating device (now
+  called the initiator) asserts the SCSI ID of the target on the DATA
+  BUS\@.  The target, if present, will acknowledge the selection by raising
+  the -BSY line.  This line remains active as long as the target is
+  connected to the initiator.
+\item[RESELECTION Phase] The SCSI protocol allows a device to disconnect
+  from the bus while processing a request.  When the device is ready, it
+  reconnects to the host adapter.  The RESELECTION phase is identical to
+  the SELECTION phase, with the exception that it is used by the
+  disconnected target to reconnect to the original initiator.  Drivers
+  which do not currently support RESELECTION do not allow the SCSI target
+  to disconnect.  RESELECTION should be supported by all drivers, however,
+  so that multiple SCSI devices can simultaneously process commands.  This
+  allows dramatically increased throughput due to interleaved I/O requests.
+\item[COMMAND Phase] During this phase, 6, 10, or 12 bytes of command
+  information are transferred from the initiator to the target.
+\item[DATA OUT and DATA IN Phases] During these phases, data are
+  transferred between the initiator and the target.  For example, the DATA
+  OUT phase transfers data from the host adapter to the disk drive.  The
+  DATA IN phase transfers data from the disk drive to the host adapter.  If
+  the SCSI command does not require data transfer, then neither phase is
+  entered.
+\item[STATUS Phase] This phase is entered after completion of all commands,
+  and allows the target to send a status byte to the initiator.  There are
+  nine valid status bytes, as shown in Table~\ref{tab:status}
+  \cite[p.~77]{scsi2.standard}.  Note that since bits\footnote{Bit 0 is the
+    least significant bit.} 1--5 are used for the status code (the other
+  bits are reserved), the status byte should be masked with \verb|0x3e|
+  before being examined.
+
+  \begin{table}[hbtp]
+    \leavevmode
+    \begin{center}
+      \begin{tabular}{|l|l|} \hline
+        Value${}^{\dag}$ & Status \\\hline\hline
+        0x00  & GOOD \\\hline
+        0x02  & CHECK CONDITION \\\hline
+        0x04  & CONDITION MET \\\hline
+        0x08  & BUSY \\\hline
+        0x10  & INTERMEDIATE \\\hline
+        0x14  & INTERMEDIATE-CONDITION MET \\\hline
+        0x18  & RESERVATION CONFLICT \\\hline
+        0x22  & COMMAND TERMINATED \\\hline
+        0x28  & QUEUE FULL \\\hline
+        \multicolumn{2}{l}{{\footnotesize ${}^{\dag}$ After masking with 0x3e}}
+      \end{tabular}
+      \caption{SCSI Status Codes}
+      \label{tab:status}
+    \end{center}
+  \end{table}
+
+  The meanings of the three most important status codes are outlined below:
+  \begin{desc}{CHECK CONDITION}
+  \item[GOOD] The operation completed successfully.
+  \item[CHECK CONDITION] An error occurred.  The REQUEST SENSE command
+    should be used to find out more information about the error (see
+    section~\ref{sec:scsi.commands}).
+  \item[BUSY] The device was unable to accept a command.  This may occur
+    during a self-test or shortly after power-up.
+  \end{desc}
+\item[MESSAGE OUT and MESSAGE IN Phases] Additional information is
+  transferred between the target and the initiator.  This information may
+  regard the status of an outstanding command, or may be a request for a
+  change of protocol.  Multiple MESSAGE IN and MESSAGE OUT phases may occur
+  during a single SCSI transaction.  If RESELECTION is supported, the
+  driver must be able to correctly process the SAVE DATA POINTERS, RESTORE
+  POINTERS, and DISCONNECT messages.  Although required by the SCSI-2
+  standard, some devices do not automatically send a SAVE DATA POINTERS
+  message prior to a DISCONNECT message.
+\end{description}
+
+
+\subsection{SCSI Commands}
+\label{sec:scsi.commands}
+
+Each SCSI command is 6, 10, or 12 bytes long.  The following commands must
+be well understood by a SCSI driver developer.
+\begin{description}
+\item[REQUEST SENSE] Whenever a command returns a CHECK CONDITION status,
+  the high-level \Linux{} SCSI code automatically obtains more information
+  about the error by executing the REQUEST SENSE\@.  This command returns a
+  sense key and a sense code (called the ``additional sense code,'' or ASC,
+  in the SCSI-2 standard \cite{scsi2.standard}).  Some SCSI devices may
+  also report an ``additional sense code qualifier'' (ASCQ)\@.  The 16
+  possible sense keys are described in Table~\ref{tab:sense.keys}.  For
+  information on the ASC and ASCQ, please refer to the SCSI standard
+  \cite{scsi2.standard} or to a SCSI device technical manual.
+
+  \begin{table}[hbtp]
+    \leavevmode
+    \begin{center}
+      \begin{tabular}{|l|l|}\hline
+        Sense Key & Description \\\hline\hline
+        {\tt 0x00} & NO SENSE \\\hline
+        {\tt 0x01} & RECOVERED ERROR \\\hline
+        {\tt 0x02} & NOT READY \\\hline
+        {\tt 0x03} & MEDIUM ERROR \\\hline
+        {\tt 0x04} & HARDWARE ERROR \\\hline
+        {\tt 0x05} & ILLEGAL REQUEST \\\hline
+        {\tt 0x06} & UNIT ATTENTION \\\hline
+        {\tt 0x07} & DATA PROTECT \\\hline
+        {\tt 0x08} & BLANK CHECK \\\hline
+        {\tt 0x09} & (Vendor specific error) \\\hline
+        {\tt 0x0a} & COPY ABORTED \\\hline
+        {\tt 0x0b} & ABORTED COMMAND \\\hline
+        {\tt 0x0c} & EQUAL \\\hline
+        {\tt 0x0d} & VOLUME OVERFLOW \\\hline
+        {\tt 0x0e} & MISCOMPARE \\\hline
+        {\tt 0x0f} & RESERVED \\\hline
+      \end{tabular}
+      \caption{Sense Key Descriptions}
+      \label{tab:sense.keys}
+    \end{center}
+  \end{table}
+  
+\item[TEST UNIT READY] This command is used to test the target's status.
+  If the target can accept a medium-access command (e.g., a READ or a
+  WRITE), the command returns with a GOOD status.  Otherwise, the command
+  returns with a CHECK CONDITION status and a sense key of NOT READY\@.
+  This response usually indicates that the target is completing power-on
+  self-tests.
+\item[INQUIRY] This command returns the target's make, model, and device
+  type.  The high-level \Linux{} code uses this command to differentiate
+  among magnetic disks, optical disks, and tape drives (the high-level code
+  currently does not support printers, processors, or juke boxes).
+\item[READ and WRITE] These commands are used to transfer data from and to
+  the target.  You should be sure your driver can support simpler commands,
+  such as TEST UNIT READY and INQUIRY, before attempting to use the READ and
+  WRITE commands.
+\end{description}
+
+
+
+\section{Getting Started}
+
+
+\subsection{Dangers of Kernel Hacking}
+
+Writing code for the \Linux{} kernel (or for any kernel) is somewhat
+different from writing normal C code.  The most striking differences are
+that static variables are not initialized to zero and that the common
+functions found in the standard C library are not available.
+
+
+\subsubsection{Uninitialized Static Variables are Evil}
+
+The ANSI C standard \cite[p.~40]{k.and.r} and the current C++ description
+\cite[pp.~19 and~150]{the.arm} both guarantee that static variables are, by
+default, initialized to zero.  While the merits of relying on this default
+initialization are debatable, static variables in the kernel are {\em
+  not\/} automatically initialized to zero.\footnote{Some boot/loader
+  programs (e.g., LILO) can zero memory before loading the kernel.  This
+  will make memory appear {\em as if\/} static variables were, indeed,
+  initialized to zero.  However, when the same kernel is placed on a floppy
+  disk, and the system is booted from that floppy, the uninitialized static
+  variables will contain random data.  Because of this behavior, a kernel
+  which works fine when booted from the hard disk sometimes fails
+  mysteriously when booted from the floppy.} To avoid many debugging
+nightmares, all otherwise uninitialized static variables should be {\em
+  explicitly\/} initialized to zero.
+
+
+\subsubsection{{\tt libc} Unavailable}
+
+The kernel maintains a small set of commonly used library functions, which
+permit file manipulation (e.g., \verb|open()|, \verb|close()|), string
+manipulation (e.g., \verb|strcmp()|), and character type testing (e.g.,
+\verb|isdigit()|).  Most other standard C library functions, however, are
+{\em not\/} available.
+
+
+\subsubsection{Commonly Used Kernel Functions}
+
+The kernel contains several special library functions.  The most commonly
+used function is \verb|printk()|.  This function acts exactly like
+\verb|printf()|, except its output will be sent to the console or to the
+system log facility.
+
+Another commonly used kernel function is \verb|panic()|.  This function
+takes a single parameter, which is a message to be printed on the console
+explaining why the system has just crashed.  This function should be used
+if the driver enters an unrecoverable error state in which the only option
+is to shut down the system.
+
+The author of a low-level device driver will need to have an understanding
+of how interruptions are handled by the kernel.  At minimum, the kernel
+functions that disable (\verb|cli()|) and enable (\verb|sti()|)
+interruptions should be understood.  The scheduling functions (e.g.,
+\verb|schedule()|, \verb|sleepon()|, and \verb|wakeup()|) may also be
+needed by some drivers.  A detailed explanation of these functions is
+outside the scope of this paper.
+
+
+\subsection{Before You Begin: Gathering Tools}
+
+Before you begin to write a SCSI driver for \Linux{}, you will need to
+obtain several resources.
+
+The most important is a bootable \Linux{} system---preferably one which
+boots from an IDE, RLL, or MFM hard disk.  During the development of your
+new SCSI driver, you will rebuild the kernel and reboot your system many
+times.  Programming errors may result in the destruction of data on your
+SCSI drive {\em and\/} on your non-SCSI drive.  {\em Back up your system
+  before you begin\/}.
+
+The installed \Linux{} system can be quite minimal: the GCC compiler
+distribution (including libraries and the binary utilities), an editor, and
+the kernel source are all you need.  Additional tools like \verb|od|,
+\verb|hexdump|, and \verb|less| will be quite helpful.  All of these tools
+will fit on an inexpensive 20-30~MB hard disk.\footnote{A used 20~MB MFM
+  hard disk and controller should cost less than US\$100.}.
+
+Documentation is essential.  At minimum, you will need a technical manual
+for your host adapter.  Since \Linux{} is freely distributable, and since
+you (ideally) want to distribute your source code freely, avoid
+non-disclosure agreements (NDA)\@.  Most NDA's will prohibit you from
+releasing your source code---you might be allowed to release an object file
+containing your driver, but this is simply not acceptable in the \Linux{}
+community at this time.
+
+A manual that explains the SCSI standard will be helpful.  Usually the
+technical manual for your disk drive will be sufficient, but a copy of the
+SCSI standard will often be helpful.\footnote{The October 17, 1991, draft
+  of the SCSI-2 standard document is available via anonymous ftp from
+  \verb|sunsite.unc.edu| in \verb|/pub/Linux/development/scsi-2.tar.Z|, and
+  is available for purchase from Global Engineering Documents (2805 McGaw,
+  Irvine, CA 92714), (800)-854-7179 or (714)-261-1455.  Please refer to
+  document X3.131-199X\@.  In early 1993, the manual cost US\$60--70.}
+
+
+Before you start, make hard copies of \verb|hosts.h|, \verb|scsi.h|, and
+one of the existing drivers in the \Linux{} kernel.  These will prove to be
+useful references while you write your driver.
+
+
+
+\section{The \Linux{} SCSI Interface}
+
+The high-level SCSI interface in the \Linux{} kernel manages all of the
+interaction between the kernel and the low-level SCSI device driver.
+Because of this layered design, a low-level SCSI driver need only provide a
+few basic services to the high-level code.  The author of a low-level
+driver does not need to understand the intricacies of the kernel I/O system
+and, hence, can write a low-level driver in a relatively short amount of
+time.
+
+Two main structures (\verb|Scsi_Host| and \verb|Scsi_Cmnd|) are used to
+communicate between the high-level code and the low-level code.  The next
+two sections provide detailed information about these structures and the
+requirements of the low-level driver.
+
+
+\section{The {\tt Scsi\_Host} Structure}
+
+The \verb|Scsi_Host| structure serves to describe the low-level driver to
+the high-level code.  Usually, this description is placed in the device
+driver's header file in a C preprocessor definition, as shown in
+Figure~\ref{fig:header}.
+
+\begin{figure}[hbtp]
+  \leavevmode
+  \begin{center}
+    \begin{verbatim}
+    #define FDOMAIN_16X0  { "Future Domain TMC-16x0",          \
+                             fdomain_16x0_detect,              \
+                             fdomain_16x0_info,                \
+                             fdomain_16x0_command,             \
+                             fdomain_16x0_queue,               \
+                             fdomain_16x0_abort,               \
+                             fdomain_16x0_reset,               \
+                             NULL,                             \
+                             fdomain_16x0_biosparam,           \
+                             1, 6, 64, 1 ,0, 0}
+    #endif
+    \end{verbatim}
+    \caption{Device Driver Header File}
+    \label{fig:header}
+  \end{center}
+\end{figure}
+
+The \verb|Scsi_Host| structure is presented in Figure~\ref{fig:scsi.host}.
+Each of the fields will be explained in detail later in this section.
+
+\begin{figure}[hbtp]
+  \leavevmode
+  \begin{center}
+    \begin{verbatim}
+    typedef struct     
+    {
+      char               *name;
+      int                (* detect)(int); 
+      const char         *(* info)(void);
+      int                (* queuecommand)(Scsi_Cmnd *,
+                          void (*done)(Scsi_Cmnd *));
+      int                (* command)(Scsi_Cmnd *);
+      int                (* abort)(Scsi_Cmnd *, int);
+      int                (* reset)(void);
+      int                (* slave_attach)(int, int);
+      int                (* bios_param)(int, int, int []);
+      int                can_queue;
+      int                this_id;
+      short unsigned int sg_tablesize;
+      short              cmd_per_lun;
+      unsigned           present:1;     
+      unsigned           unchecked_isa_dma:1;
+    } Scsi_Host;
+    \end{verbatim}
+    \caption{The {\tt Scsi\_Host} Structure}
+    \label{fig:scsi.host}
+  \end{center}
+\end{figure}
+
+
+\subsection{Variables in the {\tt Scsi\_Host} Structure}
+
+In general, the variables in the \verb|Scsi_Host| structure are not used
+until after the \verb|detect()| function (see section \ref{sec:detect}) is
+called.  Therefore, any variables which cannot be assigned before host
+adapter detection should be assigned during detection.  This situation
+might occur, for example, if a single driver provided support for several
+host adapters with very similar characteristics.  Some of the parameters in
+the \verb|Scsi_Host| structure might then depend on the specific host
+adapter detected.
+
+
+\subsubsection{{\tt name}}
+
+\verb|name| holds a pointer to a short description of the SCSI host adapter.
+
+
+\subsubsection{{\tt can\_queue}}
+\label{sec:can.queue}
+
+\verb|can_queue| holds the number of outstanding commands the host adapter
+can process.  Unless RESELECTION is supported by the driver and the driver
+is interrupt-driven,\footnote{Some of the early \Linux{} drivers were not
+  interrupt driven and, consequently, had very poor performance.} this
+variable should be set to 1.
+
+\subsubsection{{\tt this\_id}}
+
+Most host adapters have a specific SCSI ID assigned to them.  This SCSI ID,
+usually 6 or 7, is used for RESELECTION\@.  The \verb|this_id| variable
+holds the host adapter's SCSI ID.  If the host adapter does not have an
+assigned SCSI ID, this variable should be set to $-1$ (in this case,
+RESELECTION cannot be supported).
+
+
+
+\subsubsection{{\tt sg\_tablesize}}
+
+The high-level code supports ``scatter-gather,'' a method of increasing
+SCSI throughput by combining many small SCSI requests into a few large SCSI
+requests.  Since most SCSI disk drives are formatted with 1:1
+interleave,\footnote{``1:1 interleave'' means that all of the sectors in a
+  single track appear consecutively on the disk surface.} the time required
+to perform the SCSI ARBITRATION and SELECTION phases is longer than the
+rotational latency time between sectors.\footnote{This may be an
+  over-simplification.  On older devices, the actual command processing can
+  be significant.  Further, there is a great deal of layered overhead in
+  the kernel: the high-level SCSI code, the buffering code, and the
+  file-system code all contribute to poor SCSI performance.} Therefore,
+only one SCSI request can be processed per disk revolution, resulting in a
+throughput of about 50~kilobytes per second.  When scatter-gather is
+supported, however, average throughput is usually over 500~kilobytes per
+second.
+
+The \verb|sg_tablesize| variable holds the maximum allowable number of
+requests in the scatter-gather list.  If the driver does not support
+scatter-gather, this variable should be set to \verb|SG_NONE|\@.  If the
+driver can support an unlimited number of grouped requests, this variable
+should be set to \verb|SG_ALL|\@.  Some drivers will use the host adapter
+to manage the scatter-gather list and may need to limit \verb|sg_tablesize|
+to the number that the host adapter hardware supports.  For example, some
+Adaptec host adapters require a limit of 16.
+
+
+
+\subsubsection{{\tt cmd\_per\_lun}}
+
+The SCSI standard supports the notion of ``linked commands.''  Linked
+commands allow several commands to be queued consecutively to a single SCSI
+device.  The \verb|cmd_per_lun| variable specifies the number of linked
+commands allowed.  This variable should be set to 1 if command linking is
+not supported.  At this time, however, the high-level SCSI code will not
+take advantage of this feature.
+
+Linked commands are fundamentally different from multiple outstanding
+commands (as described by the \verb|can_queue| variable).  Linked commands
+always go to the same SCSI target and do not necessarily involve a
+RESELECTION phase.  Further, linked commands eliminate the ARBITRATION,
+SELECTION, and MESSAGE OUT phases on all commands after the first one in
+the set.  In contrast, multiple outstanding commands may be sent to an
+arbitrary SCSI target, and {\em require\/} the ARBITRATION, SELECTION,
+MESSAGE OUT, and RESELECTION phases.
+
+
+
+\subsubsection{{\tt present}}
+
+The \verb|present| bit is set (by the high-level code) if the host adapter
+is detected.
+
+
+
+\subsubsection{{\tt unchecked\_isa\_dma}}
+\label{sec:dma}
+
+Some host adapters use Direct Memory Access (DMA) to read and write blocks
+of data directly from or to the computer's main memory.  \Linux{} is a
+virtual memory operating system that can use more than 16~MB of physical
+memory.  Unfortunately, on machines using the ISA bus\footnote{The
+  so-called ``Industry Standard Architecture'' bus was introduced with the
+  IBM PC/XT and IBM PC/AT computers.}, DMA is limited to the low 16~MB of
+physical memory.
+
+If the \verb|unchecked_isa_dma| bit is set, the high-level code will
+provide data buffers which are guaranteed to be in the low 16~MB of the
+physical address space.  Drivers written for host adapters that do not use
+DMA should set this bit to zero.  Drivers specific to EISA bus\footnote{The
+  ``Extended Industry Standard Architecture'' bus is a non-proprietary
+  32-bit bus for 386 and i486 machines.} machines should also set this bit
+to zero, since EISA bus machines allow unrestricted DMA access.
+
+
+
+\subsection{Functions in the {\tt Scsi\_Host} Structure}
+
+
+
+\subsubsection{{\tt detect()}}
+\label{sec:detect}
+
+The \verb|detect()| function's only argument is the ``host number,'' an
+index into the \verb|scsi_hosts| variable (an array of type \verb|struct
+Scsi_Host|).  The \verb|detect()| function should return a non-zero value
+if the host adapter is detected, and should return zero otherwise.
+
+Host adapter detection must be done carefully.  Usually the process begins
+by looking in the ROM area for the ``BIOS signature'' of the host adapter.
+On PC/AT-compatible computers, the use of the address space between {\tt
+  0xc0000} and {\tt 0xfffff} is fairly well defined.  For example, the
+video BIOS on most machines starts at {\tt 0xc0000} and the hard disk BIOS,
+if present, starts at {\tt 0xc8000}.  When a PC/AT-compatible computer
+boots, every 2-kilobyte block from {\tt 0xc0000} to {\tt 0xf8000} is
+examined for the 2-byte signature ({\tt 0x55aa}) which indicates that a
+valid BIOS extension is present \cite{norton.guide}.
+
+The BIOS signature usually consists of a series of bytes that uniquely
+identifies the BIOS\@.  For example, one Future Domain BIOS signature is
+the string
+\begin{singlespace}
+  \begin{center}
+    \begin{verbatim}
+    FUTURE DOMAIN CORP. (C) 1986-1990 1800-V2.07/28/89
+    \end{verbatim}
+  \end{center}
+\end{singlespace}
+\noindent found exactly five bytes from the start of the BIOS block.
+
+After the BIOS signature is found, it is safe to test for the presence of a
+functioning host adapter in more specific ways.  Since the BIOS signatures
+are hard-coded in the kernel, the release of a new BIOS can cause the
+driver to mysteriously fail.  Further, people who use the SCSI adapter
+exclusively for \Linux{} may want to disable the BIOS to speed boot time.
+For these reasons, if the adapter can be detected safely without examining
+the BIOS, then that alternative method should be used.
+
+Usually, each host adapter has a series of I/O port addresses which are
+used for communications.  Sometimes these addresses will be hard coded into
+the driver, forcing all \Linux{} users who have this host adapter to use a
+specific set of I/O port addresses.  Other drivers are more flexible, and
+find the current I/O port address by scanning all possible port addresses.
+Usually each host adapter will allow 3 or 4 sets of addresses, which are
+selectable via hardware jumpers on the host adapter card.
+
+After the I/O port addresses are found, the host adapter can be
+interrogated to confirm that it is, indeed, the expected host adapter.
+These tests are host adapter specific, but commonly include methods to
+determine the BIOS base address (which can then be compared to the BIOS
+address found during the BIOS signature search) or to verify a unique
+identification number associated with the board.  For MCA bus\footnote{The
+  ``Micro-Channel Architecture'' bus is IBM's proprietary 32~bit bus for
+  386 and i486 machines.} machines, each type of board is given a unique
+identification number which no other manufacturer can use---several Future
+Domain host adapters, for example, also use this number as a unique
+identifier on ISA bus machines.  Other methods of verifying the host
+adapter existence and function will be available to the programmer.
+
+
+\paragraph{Requesting the IRQ}
+
+After detection, the \verb|detect()| routine must request any needed
+interrupt or DMA channels from the kernel.  There are 16 interrupt
+channels, labeled IRQ~0 through IRQ~15\@.  The kernel provides two methods
+for setting up an IRQ handler: \verb|irqaction()| and \verb|request_irq()|.
+
+The \verb|request_irq()| function takes two parameters, the IRQ number and
+a pointer to the handler routine.  It then sets up a default
+\verb|sigaction| structure and calls \verb|irqaction()|.  The
+code\footnote{\Linux{} 0.99.7 kernel source code,
+  \verb|linux/kernel/irq.c|} for the \verb|request_irq()| function is shown
+in Figure~\ref{fig:request.irq}.  I will limit my discussion to the more
+general \verb|irqaction()| function.
+
+\begin{figure}[hbtp]
+  \leavevmode
+  \begin{center}
+    \begin{verbatim}
+    int request_irq( unsigned int irq, void (*handler)( int ) )
+    {
+      struct sigaction sa;
+    
+      sa.sa_handler  = handler;
+      sa.sa_flags    = 0;
+      sa.sa_mask     = 0;
+      sa.sa_restorer = NULL;
+      return irqaction( irq, &sa );
+    }
+    \end{verbatim}
+    \caption{The {\tt request\_irq()} Function}
+    \label{fig:request.irq}
+  \end{center}
+\end{figure}
+
+
+The declaration\footnote{\Linux{} 0.99.5 kernel source code,
+  \verb|linux/kernel/irq.c|} for the \verb|irqaction()| function is
+\begin{singlespace}
+  \begin{center}
+    \begin{verbatim}
+    int irqaction( unsigned int irq, struct sigaction *new )
+    \end{verbatim}
+  \end{center}
+\end{singlespace}
+\noindent where the first parameter, \verb|irq|, is the number of the IRQ
+that is being requested, and the second parameter, \verb|new|, is a
+structure with the definition\footnote{\Linux{} 0.99.5 kernel source code,
+  \verb|linux/include/linux/signal.h|} shown in Figure~\ref{fig:sigaction}.
+
+\begin{figure}[hbtp]
+  \leavevmode
+  \begin{center}
+    \begin{verbatim}
+    struct sigaction
+    {
+      __sighandler_t sa_handler;
+      sigset_t       sa_mask;
+      int            sa_flags;
+      void           (*sa_restorer)(void);
+    };
+    \end{verbatim}
+    \caption{The {\tt sigaction} Structure}
+    \label{fig:sigaction}
+  \end{center}
+\end{figure}
+
+In this structure, \verb|sa_handler| should point to your interrupt handler
+routine, which should have a definition similar to the following:
+\begin{singlespace}
+  \begin{center}
+    \begin{verbatim}
+    void fdomain_16x0_intr( int irq )
+    \end{verbatim}
+  \end{center}
+\end{singlespace}
+\noindent where \verb|irq| will be the number of the IRQ which caused the
+interrupt handler routine to be invoked.
+
+The \verb|sa_mask| variable is used as an internal flag by the
+\verb|irqaction()| routine.  Traditionally, this variable is set to zero
+prior to calling \verb|irqaction()|.
+
+The \verb|sa_flags| variable can be set to zero or to
+\verb|SA_INTERRUPT|\@.  If zero is selected, the interrupt handler will run
+with other interrupts enabled, and will return via the signal-handling
+return functions.  This option is recommended for relatively slow IRQ's,
+such as those associated with the keyboard and timer interrupts.  If
+\verb|SA_INTERRUPT| is selected, the handler will be called with interrupts
+disabled and return will avoid the signal-handling return functions.
+\verb|SA_INTERRUPT| selects ``fast'' IRQ handler invocation routines, and
+is recommended for interrupt driven hard disk routines.  The interrupt
+handler should turn interrupts on as soon as possible, however, so that
+other interrupts can be processed.
+
+The \verb|sa_restorer| variable is not currently used, and is traditionally
+set to \verb|NULL|\@.
+
+The \verb|request_irq()| and \verb|irqaction()| functions will return zero
+if the IRQ was successfully assigned to the specified interrupt handler
+routine.  Non-zero result codes may be interpreted as follows:
+\begin{desc}{{\tt -EINVAL}}
+\item[{\tt -EINVAL}] Either the IRQ requested was larger than 15, or a
+  \verb|NULL| pointer was passed instead of a valid pointer to the
+  interrupt handler routine.
+\item[{\tt -EBUSY}] The IRQ requested has already been allocated to another
+  interrupt handler.  This situation should never occur, and is reasonable
+  cause for a call to \verb|panic()|.
+\end{desc}
+
+The kernel uses an Intel ``interrupt gate'' to set up IRQ handler routines
+requested via the \verb|irqaction()| function.  The Intel i486 manual
+\cite[p.~9-11]{i486.manual} explains the interrupt gate as follows:
+
+\begin{singlespace}
+  \begin{quotation}
+    Interrupts using\ldots interrupt gates\ldots cause the TF flag [trap
+    flag] to be cleared after its current value is saved on the stack as
+    part of the saved contents of the EFLAGS register.  In so doing, the
+    processor prevents instruction tracing from affecting interrupt
+    response.  A subsequent IRET [interrupt return] instruction restores
+    the TF flag to the value in the saved contents of the EFLAGS register
+    on the stack.
+
+    \ldots{} An interrupt which uses an interrupt gate clears the IF flag
+    [in\-ter\-rupt-enable flag], which prevents other interrupts from
+    interfering with the current interrupt handler.  A subsequent IRET
+    instruction restores the IF flag to the value in the saved contents of
+    the EFLAGS register on the stack.
+  \end{quotation}
+\end{singlespace}
+
+\paragraph{Requesting the DMA channel}
+
+Some SCSI host adapters use DMA to access large blocks of data in memory.
+Since the CPU does not have to deal with the individual DMA requests, data
+transfers are faster than CPU-mediated transfers and allow the CPU to do
+other useful work during a block transfer (assuming interrupts are
+enabled).
+
+The host adapter will use a specific DMA channel.  This DMA channel will be
+determined by the \verb|detect()| function and requested from the kernel
+with the \verb|request_dma()| function.  This function takes the DMA
+channel number as its only parameter and returns zero if the DMA channel
+was successfully allocated.  Non-zero results may be interpreted as
+follows:
+\begin{desc}{{\tt -EINVAL}}
+\item[{\tt -EINVAL}] The DMA channel number requested was larger than 7.
+\item[{\tt -EBUSY}] The requested DMA channel has already been allocated.
+  This is a very serious situation, and will probably cause any SCSI
+  requests to fail.  It is worthy of a call to \verb|panic()|.
+\end{desc}
+
+
+
+\subsubsection{{\tt info()}}
+
+The \verb|info()| function merely returns a pointer to a static area
+containing a brief description of the low-level driver.  This description,
+which is similar to that pointed to by the \verb|name| variable, will be
+printed at boot time.
+
+
+
+\subsubsection{{\tt queuecommand()}}
+\label{sec:queuecommand}
+
+The {\tt queuecommand()} function sets up the host adapter for processing
+a SCSI command and then returns.  When the command is finished, the
+\verb|done()| function is called with the \verb|Scsi_Cmnd| structure
+pointer as a parameter.  This allows the SCSI command to be executed in an
+interrupt-driven fashion.  Before returning, the \verb|queuecommand()|
+function must do several things:
+\begin{enumerate}
+\item Save the pointer to the \verb|Scsi_Cmnd| structure.
+\item Save the pointer to the \verb|done()| function in the
+  \verb|scsi_done()| function pointer in the \verb|Scsi_Cmnd| structure.
+  See section~\ref{sec:done} for more information.
+\item Set up the special \verb|Scsi_Cmnd| variables required by the driver.
+  See section~\ref{sec:scsi.cmnd} for detailed information on the
+  \verb|Scsi_Cmnd| structure.
+\item Start the SCSI command.  For an advanced host adapter, this may be as
+  simple as sending the command to a host adapter ``mailbox.''  For less
+  advanced host adapters, the ARBITRATION phase is manually started.
+\end{enumerate}
+
+The \verb|queuecommand()| function is called {\em only\/} if the
+\verb|can_queue| variable (see section~\ref{sec:can.queue}) is non-zero.
+Otherwise the \verb|command()| function is used for all SCSI requests.  The
+\verb|queuecommand()| function should return zero on success (the current
+high-level SCSI code presently ignores the return value).
+
+
+\subsubsection{{\tt done()}}
+\label{sec:done}
+
+The \verb|done()| function is called after the SCSI command completes.  The
+single parameter that this command requires is a pointer to the same
+\verb|Scsi_Cmnd| structure that was previously passed to the
+\verb|queuecommand()| function.  Before the \verb|done()| function is
+called, the \verb|result| variable must be set correctly.  The
+\verb|result| variable is a 32~bit integer, each byte of which has
+specific meaning:
+\begin{desc}{Byte 3 (MSB)}
+\item[Byte 0 (LSB)] This byte contains the SCSI STATUS code for the
+  command, as described in section~\ref{sec:status}.
+\item[Byte 1] This byte contains the SCSI MESSAGE, as described in
+  section~\ref{sec:message}.
+\item[Byte 2] This byte holds the host adapter's return code.  The valid
+  codes for this byte are given in \verb|scsi.h| and are described below:
+  \begin{desc}{{\tt DID\_NO\_CONNECT}}
+  \item[{\tt DID\_OK}] No error.
+  \item[{\tt DID\_NO\_CONNECT}] SCSI SELECTION failed because there was no
+    device at the address specified.
+  \item[{\tt DID\_BUS\_BUSY}] SCSI ARBITRATION failed.
+  \item[{\tt DID\_TIME\_OUT}] A time-out occurred for some unknown reason,
+    probably during SELECTION or while waiting for RE\-SE\-LEC\-TION\@.
+  \item[{\tt DID\_BAD\_TARGET}] The SCSI ID of the target was the same as
+    the SCSI ID of the host adapter.
+  \item[{\tt DID\_ABORT}] The high-level code called the low-level
+    \verb|abort()| function (see section~\ref{sec:abort}).
+  \item[{\tt DID\_PARITY}] A SCSI PARITY error was detected.
+  \item[{\tt DID\_ERROR}] An error occurred which lacks a more appropriate
+    error code (for example, an internal host adapter error).
+  \item[{\tt DID\_RESET}] The high-level code called the low-level
+    \verb|reset()| function (see section~\ref{sec:reset}).
+  \item[{\tt DID\_BAD\_INTR}] An unexpected interrupt occurred {\em and\/}
+    there is no appropriate way to handle this interrupt.
+  \end{desc}
+
+  Note that returning \verb|DID_BUS_BUSY| will force the command to be
+  retried, whereas returning \verb|DID_NO_CONNECT| will abort the command.
+\item[Byte 3 (MSB)] This byte is for a high-level return code, and should
+  be left as zero by the low-level code.
+\end{desc}
+
+Current low-level drivers do not uniformly (or correctly) implement error
+reporting, so it may be better to consult {\tt scsi.c} to determine exactly
+how errors should be reported, rather than exploring existing drivers.
+
+
+
+\subsubsection{{\tt command()}}
+
+The \verb|command()| function processes a SCSI command and returns when the
+command is finished.  When the original SCSI code was written,
+interrupt-driven drivers were not supported.  The old drivers are much less
+efficient (in terms of response time and latency) than the current
+interrupt-driven drivers, but are also much easier to write.  For new
+drivers, this command can be replaced with a call to the
+\verb|queuecommand()| function, as demonstrated in
+Figure~\ref{fig:command}.\footnote{\Linux{} 0.99.5 kernel, {\tt
+    linux/kernel/blk\_drv/scsi/aha1542.c}, written by Tommy Thorn.}
+
+\begin{figure}[hbtp]
+  \leavevmode
+  \begin{center}
+    \begin{verbatim}
+    static volatile int internal_done_flag    = 0;
+    static volatile int internal_done_errcode = 0;
+    static void         internal_done( Scsi_Cmnd *SCpnt )
+    {
+      internal_done_errcode = SCpnt->result;
+      ++internal_done_flag;
+    }
+
+    int aha1542_command( Scsi_Cmnd *SCpnt )
+    {
+      aha1542_queuecommand( SCpnt, internal_done );
+
+      while (!internal_done_flag);
+      internal_done_flag = 0;
+      return internal_done_errcode;
+    }
+    \end{verbatim}
+    \caption{Example {\tt command()} Function}
+    \label{fig:command}
+  \end{center}
+\end{figure}
+
+The return value is the same as the \verb|result| variable in the
+\verb|Scsi_Cmnd| structure.  Please see sections~\ref{sec:done} and
+\ref{sec:scsi.cmnd} for more details.
+
+
+\subsubsection{{\tt abort()}}
+\label{sec:abort}
+
+The high-level SCSI code handles all timeouts.  This frees the low-level
+driver from having to do timing, and permits different timeout periods to
+be used for different devices (e.g., the timeout for a SCSI tape drive is
+nearly infinite, whereas the timeout for a SCSI disk drive is relatively
+short).
+
+The {\tt abort()} function is used to request that the currently
+outstanding SCSI command, indicated by the \verb|Scsi_Cmnd| pointer, be
+aborted.  After setting the \verb|result| variable in the \verb|Scsi_Cmnd|
+structure, the \verb|abort()| function returns zero.  If \verb|code|, the
+second parameter to the \verb|abort()| function, is zero, then
+\verb|result| should be set to \verb|DID_ABORT|\@.  Otherwise,
+\verb|result| shoudl be set equal to \verb|code|\@.  If \verb|code| is not
+zero, it is usually \verb|DID_TIME_OUT| or \verb|DID_RESET|\@.
+
+Currently, none of the low-level drivers is able to correctly abort a SCSI
+command.  The initiator should request (by asserting the \verb|-ATN| line)
+that the target enter a MESSAGE OUT phase.  Then, the initiator should send
+an ABORT message to the target.
+
+
+
+
+\subsubsection{{\tt reset()}}
+\label{sec:reset}
+
+
+The {\tt reset()} function is used to reset the SCSI bus.  After a SCSI bus
+reset, any executing command should fail with a \verb|DID_RESET| result
+code (see section~\ref{sec:done}).
+
+Currently, none of the low-level drivers handles resets correctly.  To
+correctly reset a SCSI command, the initiator should request (by asserting
+the \verb|-ATN| line) that the target enter a MESSAGE OUT phase.  Then, the
+initiator should send a BUS DEVICE RESET message to the target.  It may
+also be necessary to initiate a SCSI RESET by asserting the \verb|-RST|
+line, which will cause all target devices to be reset.  After a reset, it
+may be necessary to renegotiate a synchronous communications protocol with
+the targets.
+
+
+\subsubsection{{\tt slave\_attach()}}
+
+The {\tt slave\_attach()} function is {\em not\/} currently implemented.
+This function would be used to negotiate synchronous communications between
+the host adapter and the target drive.  This negotiation requires an
+exchange of a pair of SYNCHRONOUS DATA TRANSFER REQUEST messages between
+the initiator and the target.  This exchange should occur under the
+following conditions \cite{lxt.manual}:
+\begin{singlespace}
+  \begin{quotation}
+    A SCSI device that supports synchronous data transfer recognizes it has
+    not communicated with the other SCSI device since receiving the last
+    ``hard'' RESET\@.
+
+    A SCSI device that supports synchronous data transfer recognizes it has
+    not communicated with the other SCSI device since receiving a BUS
+    DEVICE RESET message.
+  \end{quotation}
+\end{singlespace}
+
+
+
+
+\subsubsection{{\tt bios\_param()}}
+
+\Linux{} supports the MS-DOS\footnote{MS-DOS is a registered trademark of
+  Microsoft Corporation.} hard disk partitioning system.  Each disk
+contains a ``partition table'' which defines how the disk is divided into
+logical sections.  Interpretation of this partition table requires
+information about the size of the disk in terms of cylinders, heads, and
+sectors per cylinder.  SCSI disks, however, hide their physical geometry
+and are accessed logically as a contiguous list of sectors.  Therefore, in
+order to be compatible with MS-DOS, the SCSI host adapter will ``lie''
+about its geometry.  The physical geometry of the SCSI disk, while
+available, is seldom used as the ``logical geometry.''  (The reasons for
+this involve archaic and arbitrary limitations imposed by MS-DOS\@.)
+
+\Linux{} needs to determine the ``logical geometry'' so that it can
+correctly modify and interpret the partition table.  Unfortunately, there
+is no standard method for converting between physical and logical geometry.
+Hence, the {\tt bios\_param()} function was introduced in an attempt to
+provide access to the host adapter geometry information.
+
+The \verb|size| parameter is the size of the disk in sectors.  Some host
+adapters use a deterministic formula based on this number to calculate the
+logical geometry of the drive.  Other host adapters store geometry
+information in tables which the driver can access.  To facilitate this
+access, the \verb|dev| parameter contains the drive's device number.  Two
+macros are defined in \verb|linux/fs.h| which will help to interpret this
+value: \verb|MAJOR(dev)| is the device's major number, and
+\verb|MINOR(dev)| is the device's minor number.  These are the same major
+and minor device numbers used by the standard \Linux{} {\tt mknod} command
+to create the device in the {\tt /dev} directory.  The \verb|info|
+parameter points to an array of three integers that the \verb|bios_param()|
+function will fill in before returning:
+\begin{singlespace}
+  \begin{center}
+    \begin{desc}{{\tt info[2]}}
+    \item[{\tt info[0]}] Number of heads
+    \item[{\tt info[1]}] Number of sectors per cylinder
+    \item[{\tt info[2]}] Number of cylinders
+    \end{desc}
+  \end{center}
+\end{singlespace}
+
+The information in \verb|info| is {\em not\/} the physical geometry of the
+drive, but only a {\em logical\/} geometry that is identical to the {\em
+  logical\/} geometry used by MS-DOS to access the drive.  The distinction
+between physical and logical geometry cannot be overstressed.
+
+
+
+
+\section{The {\tt Scsi\_Cmnd} Structure}
+\label{sec:scsi.cmnd}
+
+The \verb|Scsi_Cmnd| structure,\footnote{\Linux{} 0.99.7 kernel, {\tt
+    linux/kernel/blk\_drv/scsi/scsi.h}} as shown in
+Figure~\ref{fig:scsi.cmnd}, is used by the high-level code to specify a
+SCSI command for execution by the low-level code.  Many variables in the
+\verb|Scsi_Cmnd| structure can be ignored by the low-level device
+driver---other variables, however, are extremely important.
+
+\begin{figure}[hbtp]
+  \leavevmode
+  \begin{center}
+    \begin{verbatim}
+    typedef struct scsi_cmnd
+    {
+      int              host;
+      unsigned char    target,
+                       lun,
+                       index;
+      struct scsi_cmnd *next,
+                       *prev;   
+
+      unsigned char    cmnd[10];
+      unsigned         request_bufflen;
+      void             *request_buffer;
+
+      unsigned char    data_cmnd[10];
+      unsigned short   use_sg;
+      unsigned short   sglist_len;
+      unsigned         bufflen;
+      void             *buffer;
+        
+      struct request   request;
+      unsigned char    sense_buffer[16];
+      int              retries;
+      int              allowed;
+      int              timeout_per_command,
+                       timeout_total,
+                       timeout;
+      unsigned char    internal_timeout;
+      unsigned         flags;
+                
+      void (*scsi_done)(struct scsi_cmnd *);  
+      void (*done)(struct scsi_cmnd *);
+
+      Scsi_Pointer     SCp;
+      unsigned char    *host_scribble;
+      int              result;
+      
+    } Scsi_Cmnd;                 
+    \end{verbatim}
+    \caption{The {\tt Scsi\_Cmnd} Structure}
+    \label{fig:scsi.cmnd}
+  \end{center}
+\end{figure}
+
+\subsection{Reserved Areas}
+
+\subsubsection{Informative Variables}
+
+\verb|host| is an index into the \verb|scsi_hosts| array.
+
+\verb|target| stores the SCSI ID of the target of the SCSI command.  This
+information is important if multiple outstanding commands or multiple
+commands per target are supported.
+
+\verb|cmnd| is an array of bytes which hold the actual SCSI command.  These
+bytes should be sent to the SCSI target during the COMMAND phase.
+\verb|cmnd[0]| is the SCSI command code.  The \verb|COMMAND_SIZE| macro,
+defined in \verb|scsi.h|, can be used to determine the length of the
+current SCSI command.
+
+\verb|result| is used to store the result code from the SCSI request.
+Please see section~\ref{sec:done} for more information about this variable.
+This variable {\em must\/} be correctly set before the low-level routines
+return.
+
+
+\subsubsection{The Scatter-Gather List}
+
+\verb|use_sg| contains a count of the number of pieces in the
+scatter-gather chain.  If \verb|use_sg| is zero, then \verb|request_buffer|
+points to the data buffer for the SCSI command, and \verb|request_bufflen|
+is the length of this buffer in bytes.  Otherwise, \verb|request_buffer|
+points to an array of \verb|scatterlist| structures, and \verb|use_sg| will
+indicate how many such structures are in the array.  The use of
+\verb|request_buffer| is non-intuitive and confusing.
+
+Each element of the \verb|scatterlist| array contains an \verb|address| and
+a \verb|length| component.  If the \verb|unchecked_isa_dma| flag in the
+\verb|Scsi_Host| structure is set to 1 (see section~\ref{sec:dma} for more
+information on DMA transfers), the address is guaranteed to be within
+the first 16~MB of physical memory.  Large amounts of data will be processed
+by a single SCSI command.  The length of these data will be equal to the sum
+of the lengths of all the buffers pointed to by the \verb|scatterlist|
+array.
+
+
+
+\subsection{Scratch Areas}
+
+Depending on the capabilities and requirements of the host adapter, the
+scatter-gather list can be handled in a variety of ways.  To support
+multiple methods, several scratch areas are provided for the exclusive use
+of the low-level driver.
+
+\subsubsection{The {\tt scsi\_done()} Pointer}
+
+This pointer should be set to the \verb|done()| function pointer in the
+\verb|queuecommand()| function (see section~\ref{sec:queuecommand} for more
+information).  There are no other uses for this pointer.
+
+\subsubsection{The {\tt host\_scribble} Pointer}
+
+The high-level code supplies a pair of memory allocation functions,
+\verb|scsi_malloc()| and \verb|scsi_free()|, which are guaranteed to return
+memory in the first 16~MB of physical memory.  This memory is, therefore,
+suitable for use with DMA\@.  The amount of memory allocated per request {\em
+  must\/} be a multiple of 512 bytes, and {\em must\/} be less than or
+equal to 4096 bytes.  The total amount of memory available via
+\verb|scsi_malloc()| is a complex function of the \verb|Scsi_Host|
+structure variables \verb|sg_tablesize|, \verb|cmd_per_lun|, and
+\verb|unchecked_isa_dma|.
+
+The \verb|host_scribble| pointer is available to point to a region of
+memory allocated with \verb|scsi_malloc()|.  The low-level SCSI driver is
+responsible for managing this pointer and its associated memory, and should
+free the area when it is no longer needed.
+
+\subsubsection{The {\tt Scsi\_Pointer} Structure}
+
+The \verb|SCp| variable, a structure of type \verb|Scsi_Pointer|, is
+described in Figure~\ref{fig:scsi.pointer}.
+\begin{figure}[hbtp]
+  \leavevmode
+  \begin{center}
+    \begin{verbatim}
+    typedef struct scsi_pointer
+    {
+      char               *ptr;             /* data pointer */
+      int                this_residual;    /* left in this buffer */
+      struct scatterlist *buffer;          /* which buffer */
+      int                buffers_residual; /* how many buffers left */
+
+      volatile int       Status;
+      volatile int       Message;
+      volatile int       have_data_in;
+      volatile int       sent_command;
+      volatile int       phase;
+    } Scsi_Pointer;
+    \end{verbatim}
+    \caption{The {\tt Scsi\_Pointer} Structure}
+    \label{fig:scsi.pointer}
+  \end{center}
+\end{figure}
+The variables in this structure can be used in {\em any\/} way necessary in
+the low-level driver.  Typically, \verb|buffer| points to the current entry
+in the \verb|scatterlist|, \verb|buffers_residual| counts the number of
+entries remaining in the \verb|scatterlist|, \verb|ptr| is used as a
+pointer into the buffer, and \verb|this_residual| counts the characters
+remaining in the transfer.  Some host adapters require support of this
+detail of interaction---others can completely ignore this structure.
+
+The second set of variables provide convenient locations to store SCSI
+status information and various pointers and flags.
+
+\section{Acknowledgements}
+
+Thanks to Drew Eckhardt, Michael K. Johnson, Karin Boes, Devesh Bhatnagar,
+and Doug Hoffman for reading early versions of this paper and for providing
+many helpful comments.  Special thanks to my official COMP-291
+(Professional Writing in Computer Science) ``readers,'' Professors Peter
+Calingaert and Raj Kumar Singh.
+
+\begin{singlespace}
+  \bibliography{scsi}
+\end{singlespace}
+
+\end{document}

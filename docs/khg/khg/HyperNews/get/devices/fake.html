@@ -1,0 +1,222 @@
+
+<HTML>
+<HEAD>
+<TITLE>User-space device drivers</TITLE>
+<LINK rel="owner" href="mailto:">
+<SCRIPT LANGUAGE="JavaScript">
+<!-- hide this
+
+function help(message) {
+  self.status = message;
+  return true;
+}
+// stop hiding -->
+</SCRIPT>
+
+</HEAD>
+<BODY>
+<strong>The
+HyperNews <a href="../khg.html">Linux KHG</a>
+Discussion Pages</strong>
+<hr>
+<h3>User-space device drivers</h3>
+
+<p>It is not always necessary to write a device driver for a
+device, especially in applications where no two applications
+will compete for the device.  The most useful example of this
+is a memory-mapped device, but you can also do this with
+devices in I/O space (devices accessed with <tt>inb()</tt> and
+<tt>outb()</tt>, etc.).  If your process is running as
+superuser (root), you can use the <tt>mmap()</tt> call to map
+some of your process memory to actual memory locations, by
+<tt>mmap()</tt>'ing a section of /dev/mem.  When you have done
+this mapping, it is pretty easy to write and read from real
+memory addresses just as you would read and write any
+variables.
+
+<p>If your driver needs to respond to interrupts, then you
+really need to be working in kernel space, and need to write a
+real device driver, as there is no good way at this time to
+deliver interrupts to user processes.  Although the DOSEMU
+project has created something called the SIG (Silly Interrupt
+Generator) which allows interrupts to be posted to user
+processes (I believe through the use of signals), the SIG is
+not particularly fast, and should be thought of as a last
+resort for things like DOSEMU.
+
+<p>An interrupt is an asyncronous notification posted by the
+hardware to alert the device driver of some condition. You have
+likely dealt with `IRQ's when setting up your hardware; an IRQ
+is an ``Interrupt ReQuest line,'' which is triggered when the
+device wants to talk to the driver.  This may be because it has
+data to give to the drive, or because it is now ready to
+receive data, or because of some other ``exceptional
+condition'' that the driver needs to know about.  It is similar
+to user-level processes receiving a signal, so similar that the
+same <tt>sigaction</tt> structure is used in the kernel to deal
+with interrupts as is used in user-level programs to deal with
+signals.  Where the user-level has its signals delivered to it
+by the kernel, the kernel has interrupt delivered to it by
+hardware.
+
+<p>If your driver must be accessible to multiple processes at
+once, and/or manage contention for a resource, then you also
+need to write a real device driver at the kernel level, and a
+user-space device driver will not be sufficient or even
+possible.
+
+<h4>Example: <tt>vgalib</tt></h4>
+
+<p>A good example of a user-space driver is the <tt>vgalib</tt>
+library. The standard <tt>read()</tt> and <tt>write()</tt>
+calls are really inadequate for writing a really fast graphics
+driver, and so instead there is a library which acts
+conceptually like a device driver, but runs in user space.  Any
+processes which use it <b>must</b> run setuid root, because it
+uses the <tt>ioperm()</tt> system call.  It is possible for a
+process that is not setuid root to write to /dev/mem if you
+have a group <tt>mem</tt> or <tt>kmem</tt> which is allowed
+write permission to /dev/mem and the process is properly
+setgid, but only a process running as root can execute the
+<tt>ioperm()</tt> call.
+
+<p>There are several I/O ports associated with VGA graphics.
+<b>vgalib</b> creates symbolic names for this with
+<tt>#define</tt> statements, and then issues the
+<tt>ioperm()</tt> call like this to make it possible for the
+process to read and write directly from and to those ports:
+<pre>
+    if (ioperm(CRT_IC, 1, 1)) {
+        printf("VGAlib: can't get I/O permissions \n");
+        exit (-1);
+    }
+    ioperm(CRT_IM,  1, 1);
+    ioperm(ATT_IW, 1, 1);
+<i>[...]</i>
+</pre>
+It only needs to do error checking once, because the only
+reason for the <tt>ioperm()</tt> call to fail is that it is not
+being called by the superuser, and this status is not going to
+change.
+
+<p><IMG src="../../../KHGicons/warning.gif" alt="[Careful!]">After making this
+call, the process is allowed to use <tt>inb</tt> and
+<tt>outb</tt> machine instructions, but only on the specified
+ports.  These instructions can be accessed without writing
+directly in assembly by including <tt><linux/asm></tt>, but
+will only work if you compile <b>with optimization on,</b> by
+giving the <tt>-O<i>?</i></tt> to gcc.  Read
+<tt>&lt;linux/asm.h&gt;</tt> for details.
+
+<p>After arranging for port I/O, <tt>vgalib</tt> arranges for
+writing directly to kernel memory with the following code:
+<pre>
+    /* open /dev/mem */
+    if ((mem_fd = open("/dev/mem", O_RDWR) ) &lt; 0) {
+        printf("VGAlib: can't open /dev/mem \n");
+        exit (-1);
+    }
+
+    /* mmap graphics memory */
+    if ((graph_mem = malloc(GRAPH_SIZE + (PAGE_SIZE-1))) == NULL) {
+        printf("VGAlib: allocation error \n");
+        exit (-1);
+    }
+    if ((unsigned long)graph_mem % PAGE_SIZE)
+        graph_mem += PAGE_SIZE - ((unsigned long)graph_mem % PAGE_SIZE);
+    graph_mem = (unsigned char *)mmap(
+        (caddr_t)graph_mem, 
+        GRAPH_SIZE,
+        PROT_READ|PROT_WRITE,
+        MAP_SHARED|MAP_FIXED,
+        mem_fd, 
+        GRAPH_BASE
+    );
+    if ((long)graph_mem &lt; 0) {
+        printf("VGAlib: mmap error \n");
+        exit (-1);
+    }
+</pre>
+It first opens /dev/mem, then allocates memory enough so that
+the mapping can be done on a page (4 KB) boundary, and then
+attempts the map.  <tt>GRAPH_SIZE</tt> is the size of VGA
+memory, and <tt>GRAPH_BASE</tt> is the first address of VGA
+memory in /dev/mem.  Then by writing to the address that is
+returned by <tt>mmap()</tt>, the process is actually writing to
+screen memory.
+
+<h4>Example: mouse conversion</h4>
+
+<p>If you want a driver that acts a bit more like a
+kernel-level driver, but does not live in kernel space, you can
+also make a fifo, or named pipe.  This usually lives in the
+/dev/ directory (although it doesn't need to) and acts
+substantially like a device once set up.  However, fifo's are
+one-directional only--they have one reader and one writer.
+
+<p>For instance, it used to be that if you had a PS/2-style
+mouse, and wanted to run XFree86, you had to create a fifo
+called /dev/mouse, and run a program called mconv which read
+PS/2 mouse ``droppings'' from /dev/psaux, and wrote the
+equivalent microsoft-style ``droppings'' to /dev/mouse.  Then
+XFree86 would read the ``droppings'' from /dev/mouse, and it
+would be as if there were a microsoft mouse connected to
+/dev/mouse.  Even though XFree86 is now able to read PS/2 style
+``droppings'', the concepts in this example still stand.  (If
+you have a better example, I'd be glad to see it.)
+
+<h4>The evil instruction</h4
+
+<p>Don't use the <tt>cli()</tt> instruction. It's possible to
+use it as root to disable interrupts, and one particular program
+used to used to use it--the <b>clock</b> program. However, this
+kills SMP machines.  If you need to use <tt>cli()</tt>, you need
+a kernel-space driver, and a user-space driver will only cause
+grief as more and more Linux users use SMP machines.
+
+<p>Copyright (C) 1992, 1993, 1994, 1995, 1996 Michael K. Johnson,
+johnsonm@redhat.com.<br>
+<P>
+<P><HR SIZE=3>
+<P><B><A NAME="Messages">Messages</A></B>
+<NOBR>
+<font size=-1>
+
+
+
+
+
+
+
+</font>
+</NOBR>
+ <P>
+<NOBR>
+<DL COMPACT>
+<DT> 1. <IMG src="../../../Icons/question.gif" ALT="Question:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="fake/1.html">
+What  is SMP?</A><i></i> </DT>
+<DT> -&gt; <IMG src="../../../Icons/more.gif" ALT="More:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="fake/1/1.html">
+SMP: Two Definitions?</A> <i> by Reinhold J. Gerharz</i> </DT>
+<DT> -&gt; <IMG src="../../../Icons/more.gif" ALT="More:" WIDTH=15 HEIGHT=15 ALIGN="absmiddle">
+<A HREF="fake/1/1/1.html">
+Only one definition for Linux...</A> <i> by <A HREF="../../../~johnsonm">Michael K. Johnson</A></i> </DT>
+</DL>
+</NOBR>
+
+<P>
+<P>
+
+
+
+  
+
+
+
+
+
+<BR> 
+ 
+<BR></BODY>
+</HTML>
