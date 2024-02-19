@@ -1,0 +1,414 @@
+                       HOW TO KICK OUT A MEMORY MANAGER                       
+                                                                             
+Warning :  this article  is meant  for coders  that are already  experienced 
+enough  with system programming.  Sorry, but the concepts we'll have  to use 
+are  complicated enough  to prevent me  from explaining everything  from the 
+very start. I think that this article will be long enough like that.         
+                                                                              
+If you read this coding corner since its first issue (it was in Imphobia #7) 
+you should already know  that one of my occupations was trying to find a way 
+to kick out  the memory managers  that likes to disable  the use of the flat 
+real mode,  or more generally to disable the acces to code privilege ring #0 
+(CPL0). Well, here is it.                                                    
+                                                                              
+The LOADALL option was not the good one. It is not supported on all types of 
+CPU. For example my intel 486DX2 does not support it. Moreover this instruct 
+seems to be a priviledged one,  so it was impossible  to use it to access to 
+CPL0.                                                                        
+                                                                              
+However there must be a way to access to CPL0  with a memory manager loaded. 
+Do you think that Micro$oft Windows runs in enhanced 386 mode  with a CPL3 ? 
+I don't.  So there was only one possible solution  :  they used some kind of 
+undocumented interface to gain total control to the CPU.                     
+                                                                              
+This interface is known as the "Windows Global EMM Import Specification" and 
+we will just write GEMMIS in the rest of this text.                          
+                                                                              
+Here I need to thank my friend Cedric BERMOND aka LCA / Infiny for his great 
+help.  He pointed out to me  the Micro$oft Windows argument,  and he told me 
+about  the following references.  He implemented his own system  at the same 
+time as me,  and we had a lot of chats about the problems we encountered and 
+the solutions we found.  Without him  the development  of this system  would 
+have been impossible. The code example included with this article is written 
+by me, but it's the result of a collaboration between us.                    
+                                                                              
+LCA will soon (before the Assembly'95) release his own protected mode memory 
+manager, featuring :                                                         
+                                                                              
+* user/supervisor protection system, with the user running at CPL0
+
+* own linker, for a true flat segmentation model (for example the screen     
+  really is at A0000 as opposed to pmode)                                    
+                                                                              
+* paging disabled by default                                                 
+                                                                              
+* full debugger and disassembler system                                      
+                                                                              
+Some references about the GEMMIS :                                           
+                                                                              
+* Ralf Brown's  interrupt list.  Provides  some quite  detailed  information 
+  about the undocumented functions and structures that we will use, but with 
+  no explanations at all. When I read this at the first time I believed that 
+  this functions were a part of the Windows kernel and I skipped the rest. I 
+  was wrong,  this is some undocumented functions made FOR windows  to allow 
+  him to access to CPL0
+
+* Dr Dobb's Journal, September 1994, Undocumented Corner,                    
+  "The Windows Global EMM Import Interface".  This article provides some ex- 
+  planations  and gives the general layout  we will have to use,  but with a 
+  lack of detail.                                                            
+This problem  becomes even more important today  that the organizers of  The 
+Assembly 95 said  in a pre-invitation textfile  that at this party the demos 
+will have to run with EMM386.EXE loaded.  This sucks badly,  however in this 
+article you have the solution. The only annoying thing is  that I guess that 
+the organizer's reason is not a technical one,  it is just because they want 
+to sell their damn CD's.... :(
+
+Okay, now let's start with the serious things.                               
+
+
+                            PART ONE - THE LAYOUT
+
+We have two basic needs :
+                                                                              
+* switching to real, unprotected mode                                        
+                                                                              
+* allocate some high memory                                                  
+
+To satisfy this needs we will have to use the following layout :
+                                                                              
+* call int 2f undocumented function 1605h                                    
+"Micro$oft Windows - WINDOWS ENHANCED MODE & 286 DOSX INIT BROADCAST"        
+This call  will fool  the memory manager  and  he will believe  that  we are 
+Windows trying to initialize itself. The memory manager will suddenly become 
+very friendly with us.  He will also provide us a pointer to a function that 
+we can call to switch to real, unprotected mode.                             
+                                                                              
+* before the switch we will allocate all available XMS and EMS memory        
+                                                                              
+* In order to be able to use the allocated memory blocks  we must know their 
+physical addresses.  With the XMS  it's easy,  we just have  to 'lock' them. 
+With the EMS  it's harder  because  we have  no documented way to know about 
+which physical pages are allocated to our EMS handle. That's no problem, the 
+switch to real mode function  will return  this information  in a table.  We 
+just need to know the physical address where this table will be, and we need 
+to use another undocumented function for that : we must do an  IOCTL read on 
+the "EMMXXXX0" device,  and the read will return  the desired address  along 
+with the version of the GEMMIS protocol. This function is referenced in RB's 
+interrupt list as "Memory Managers - GET EMM IMPORT STRUCTURE ADDRESS"       
+                                                                              
+* then we use  the switch to real mode function  that was provided to us  at 
+the first step.  It fills us a table  with all the information we could need 
+about the memory mapping and the pages allocated to our EMS handle,  then it 
+gives us acces to the real mode.                                             
+                                                                              
+* we need  to analyse this table.  It is located in high memory , so we will 
+have to switch to flat real mode (or in protected mode if you prefer it)  in 
+order to access this table.  It won't be a big problem  : now we are in real 
+mode and the memory manager is not there to annoy us.  But we must take care 
+of not enabling the interrupts  :  the UMB's  and  EMS page frames  does not 
+exist anymore, and an interrupt would most likely hang the system.           
+                                                                              
+* after that we have several ways to cope with the interrupts : the simplest 
+one is to be sure to  NEVER  call the any system interrupt during your demo, 
+the medium one is to switch back to V86 mode before any interrupt (it's easy 
+to do,  we just have  to use  the same function that allowed us  to acces to 
+real mode),  and the hardest one  (the one used by Micro$oft Windows)  is to 
+code  your own memory manager  that will be able  to run the system with the 
+same mapping that the DOS-memory manager used.                               
+                                                                              
+* When we have finished  playing with the computer  we must give it  back to 
+the system. We just have to switch it back to V86 mode.
+
+* Then we must call int 2f undocumented function 1606h
+"Micro$oft Windows - WINDOWS ENHANCED MODE & 286 DOSX EXIT BROADCAST"        
+This will return the memory manager to his normal, unfriendly state.         
+
+                            PART TWO - THE DETAILS
+
+ * first step :  call int 2f undocumented function 1605h "Micro$oft Windows - 
+ WINDOWS ENHANCED MODE & 286 DOSX INIT BROADCAST"  at the entry  of this call 
+ we must set ax=1605h (function number), and bx=cx=dx=si=ds=es=0. di  will be 
+ set of the Windows version number  we want to simulate.  For example  we can 
+ use 30ah for Windows version 3.10 then we call int 2fh.  If the memory mana- 
+ ger accepts  to run windows  he will return cx=0,  in any other case we will 
+ have to exit.   The memory manager  will return in ds:si a far pointer  to a 
+ modeswitch routine,  used later to switch between V86 and real mode.  It can 
+ also return 0:0,  and in this case we won't be able to enter real mode.  The 
+ memory manager will create a EMMXXXX0 device if there is not already one.    
+                                                                              
+ * then we have  to allocate the memory.  The simplest way is to allocate XMS 
+ memory, because we can then use the documented XMS function 0ch  to lock the 
+ memory block and get his address. We want to allocate ALL the XMS memory and 
+ perhaps  it will  already  be fragmentated,  so we should be able  to handle 
+ several XMS blocks.  However some memory managers won't allow us to allocate 
+ all the memory using XMS allocations,  or sometimes  they won't even support 
+ the XMS standard. So we must also allocate some EMS memory. If we want to be 
+ 100% sure of our memory allocations  we can use standard XMS & EMS functions 
+ to copy a known string in all our allocated memory blocks.  Later we will be 
+ able to verify that this string is present  at the expected physical addres- 
+ ses. This provides us a way to verify the physical adresses we will use.  In 
+ order to later identify our EMS handle it is best to assign it a name.       
+                                                                              
+ * we must get the GEMMIS address with an IOCTL read on the "EMMXXXX0" device 
+ "Memory Managers  -  GET EMM IMPORT STRUCTURE ADDRESS"  we will first verify 
+ that there  is an EMM present,  using the standard method defined  in lotus/ 
+ intel/microsoft Expanded Memory Specification (EMS) version 4.0 :    we must 
+ open a handle for the EMMXXXX0 device, using the same function as for a file 
+ open,  i.e. a call to int 21h with ax=3d00h and ds:dx pointing to the device 
+ name.  If the handle exists (that should be the case) we issue a 'get device 
+ information' IOCTL,  i.e. a call to int 21h with ax=4400h  and the handle to 
+ the EMMXXXX0 device in bx.   This call will return us some information about 
+ our handle in dx,  and we must verify that bits 14 and 7 are set, indicating 
+ that this handle is associated  to a device driver  and not a file, and that 
+ this  device driver  accepts IOCTL reads.  We will then issue  a 'get output 
+ status' IOCTL on this device,  i.e. a call to int 21h with ax=4407h  and the 
+ device handle in bx. we expect to have ax=255 upon exit, indicating that the 
+ device is ready. At this step we know that there is an EMM in memory, but we 
+ don't know which version of the EMM specification does it support.  We close 
+ our  device handle  (using  standard  file  close  function ah=3eh bx=device 
+ handle)  and  we ask for  EMM  version,  using int 67h function ah=46h.  The 
+ version returned in al should be at least 40h i.e. 4.0 now this memory mana- 
+ ger should be recent enough to support the GEMMIS specification,  so we will 
+ attempt an GEMMIS IOCTL read on it.   We must open again the EMMXXXX0 device 
+ (same process as above) and issue an IOCTL read on it i.e. a call to int 21h 
+ with ax=4402h bx=the device handle  ds:dx pointing  on a 6 bytes buffer  and 
+ cx=6=number  of bytes  to read.   The first byte  of the buffer must be pre- 
+ filled with a 01h value. (it's used by the GEMMIS protocol as a sub-function 
+ value) upon exit  we should have AX=6=nb bytes read,  and the buffer will be 
+ filled  with a dword value  indicating  the physical  memory address  of the 
+ GEMMIS data table,  and a word value  indicating  the version  of the GEMMIS 
+ specification. (format for the version word : one byte for the major number, 
+ and one byte for the minor number). We expect the version to be at least 1.0 
+ (the current version is 1.11 but is not supported by every manager.  Version 
+ 1.0 will be enough to know the pages allocated to our EMS block) then we can 
+ close again the device driver.
+
+ * we want  to switch  to real mode.   We will  use  the modeswitch  function
+ provided at the first step of the GEMMIS procedure. if we call it with  ax=0
+ it will switch us to real mode.  The carry flag should be cleared  upon exit
+ to indicate a success.   This function can (and will) destroy every register
+ except CS,IP,SS and SP. the DS,ES,FS,GS segments registers will also be des-
+ troyed.  The switch to real mode  will  of course  destroy the UMB's and EMS
+ frames,  so we take care  not to enable  the interrupts after this step.  We
+ must clear the interrupt flag  before the call,  and we can expect it  to be
+ still cleared after the call.  This function will not only switch us to real
+ mode, it will also fill up the GEMMIS data block with the V86 memory mapping
+ using  a data format  that  I won't  detail here,  but  you can look  at the
+ GEMMIS.DOC file that I spread you with my code example, it's an extract from
+ RB's interrupt list and it's very detailed.
+
+ * Now we run in real mode (at CPL0)  so we can do what we want with the CPU.
+ It's time to initialize flat real mode,  or protected mode at CPL0 or whate- 
+ ver else we wanted  to have acces to.   We must just have access  to all the 
+ physical memory, because the GEMMIS data table will be located in high memo- 
+ ry and we won't be able to acces it from [non-flat] real mode.  Nothing spe- 
+ cial to explain here,  I'll assume  that you already know  how to enter into 
+ flat real mode.                                                              
+                                                                              
+ * Now that we have access  to all the physical memory  it's time  to analyse 
+ the the GEMMIS data table.  Just look at its format  in the GEMMIS.DOC file, 
+ and  at my tips in the next section.  This analysis will allow us to get the 
+ physical addresses  of the pages of our EMS handle.  The interesting part of 
+ the GEMMIS data block  will be the EMS handle info records,  however we will 
+ need to use the rest  of the GEMMIS data block to find them.  We musn't rely 
+ on the EMS handle number to identify our EMS handle, it is necessary to  use 
+ the  EMS  handle name we assigned.  (because 386max  won't give us the right 
+ handle numbers).                                                             
+                                                                              
+ * We have done with the  GEMMIS  protocol.  The only problem now is  that we 
+ can't enable interrupts,  because the interrupt handlers could try to access 
+ to an UMB or to map some EMS pages  and they don't exist anymore.  So we can 
+ either keep the interrupts disabled,  or create  some new interrupt handlers 
+ that will switch back the CPU to V86 mode  (using  the modeswitch function), 
+ call the old interrupt handler,  and switch the CPU to flat real mode again. 
+ (or to protected mode if you prefer, do what you like)                       
+                                                                              
+ * At the end of our program  (or when an interrupt occurs)  we will want  to 
+ switch back the CPU to V86 mode,  in order to restore the UMB and EMS native 
+ structure of the DOS system.  We just have  to call  the modeswitch function 
+ with AX=1.  Again, this call will destroy every register except CS,IP,SS,SP. 
+ and we must call it with the interrupts disabled.                            
+                                                                              
+ * At the end of our code  we will have to fake a Windows exit.  We just have 
+ to call int 2fh with ax=1606h and dx=0                                       
+                                                                              
+ Phew, we are done with this shitty GEMMIS protocol !  Yes, but there is more 
+ to come.....                                                                 
+
+                          PART THREE - THE PROBLEMS                           
+                                                                              
+ Here I have to explain that this interface was keept very secret.  There was 
+ no official documentation about it and some of the memory manager makers did 
+ not  had the specification  in the hands  when they had  to support it.  For 
+ example it is known that Novell had to reverse engineer some code to support 
+ the last version of the specification. This explains why the GEMMIS protocol 
+ is  so badly implemented  in several memory managers.  Some data records are 
+ sometimes not filled for example.... :(                                      
+                                                                              
+ By the way  I think  it shows us  a very bad attitude  from Micro$oft.  They 
+ sometimes are accusated to monopolyse the market but I just have to say that 
+ this is true,  because I cannot admit that someone keeps secret a specifica- 
+ tion that is necessary  for a memory manager  to support Windows,  and for a 
+ Windows-like program to support the memory managers. It's a shame.           
+                                                                              
+ So here is a few tips that you must use  if you want your GEMMIS implementa- 
+ tion  to support every memory manager around  (you should read  this part of 
+ the article with a printed copy of GEMMIS.DOC near you.  This is only imple- 
+ mentation details,  so you won't understand anything  if you don't have  the 
+ format of the GEMMIS data table in the hands)                                
+                                                                              
+ * at offset 4  in the  GEMMIS  data  you should find  a word containing  the 
+ GEMMIS version number.  Don't use it.  Several memory managers,  for example 
+ QEMM386 v6.0,  won't fill it.  Instead  you  should use  the version  number 
+ provided by the GEMMIS IOCTL read, at offset 4 in the 6-bytes import buffer. 
+                                                                              
+ * don't rely  on the informations provided  by GEMMIS version 1.10 : several 
+ memory managers still only implement version 1.0 (for example 386max)        
+ * in the EMS frame status records,  don't use the "flags for non-EMS frames" 
+ byte (located at offset 5)  :  several memory managers, including 386max and 
+ QEMM386, won't fill it.  Use the "EMS frame type" at offset 0 instead.       
+                                                                              
+ * use the "number of UMB frame descriptors following" byte at offset 18Bh in 
+ the GEMMIS data.   Sometimes, for example if there is 386max loaded, the UMB 
+ frame descriptor table will not be entirely filled but this byte will always 
+ have the right value.                                                        
+                                                                              
+ * the  "number of EMS handle info records following" appears to be reliable. 
+                                                                              
+ * in each  EMS  handle info record, ignore the "handle number" byte.  Better 
+ use the "EMS handle's name"  to identify your EMS handle.  This is necessary 
+ with 386max.  The "physical address  of page table entries forming page map" 
+ entry points to a table giving us the physical memory adresses used for each 
+ 4K-page of the EMS handle.  This table contains  4*"number of 16K pages  for 
+ handle" double words,  and each or this double words  gives us  the physical 
+ address of one 4K-page used  for the EMS handle.  The lower 12 bits  of this 
+ double  words  should be  ignored  because  they will  be filled  with  some 
+ garbage.                                                                     
+                                                                              
+ * once again  :  don't use the information provided  by GEMMIS version 1.10, 
+ even Micro$oft's EMM386 v4.49 does not seems to fill it... You can just know 
+ the structure  in order to skip them,  thus giving you access  to the GEMMIS 
+ version 1.11 records (the memory manager name)                               
+                                                                              
+ * when you allocate your XMS memory,  you will probably want  to use the XMS 
+ function 08h  "Query Free Extended Memory".    At  this step  don't rely  on 
+ getting an errorlevel in BL.  Every XMS function returns some errorlevels in 
+ BL, and zero means OK, but obviously Micro$oft  just forgot  the line saying 
+ "BL = 00h  if  the  function  succeeds"  in their original  "eXtended Memory 
+ Specification (XMS), ver 3.0" publication.   The programmers at  QuarterDeck 
+ probably are not intelligent enough  to understand  this evidence,   so when 
+ everything is OK QEMM386 does not modify the BL register.  So you should set 
+ BL to zero before the call, and also test for AX=0 (no available XMS memory) 
+ instead of just relying on the errorlevel in BL.                             
+                                                                              
+ * QEMM is harder  to support  than the others.   With QEMM  you will have to 
+ restart  the whole protocol  if you want  to temporarily switch back  to V86 
+ mode.  Here is the thing you will have to code if you want to switch back to 
+ V86 mode for a little time  (for launching a system interrupt for example) : 
+ disable flat real mode, switch to native V86 mode using the modeswitch func- 
+ tion, fake a windows exit,  call your system interrupt, fake another windows 
+ init,  switch back to real mode  with the modeswitch  function,  enable flat 
+ real mode again.  You may think it's stupid  to fake a windows exit just for 
+ entering windows again later, yes it's stupid but remember : we don't try to 
+ be smart, we just try to emulate Windows code.   ;-)                         
+
+
+                        PART FOUR - THE IMPLEMENTATION
+
+ As an example I'll show you a simple flat real mode initializer. This imple-
+ mentation supports RAW, XMS and EMS memory allocations.  It's a "do-nothing" 
+ implementation,  i.e. it just initializes flat real mode,  then restores the 
+ previous mode and exits to dos. Well this should be enough for demonstration 
+ purposes.                                                                    
+                                                                              
+ It's written in turbo assembler 2.0, and I compile it with "tasm gemmis" and 
+ "tlink /m/3 gemmis". I guess it could also be compiled with further versions 
+ of turbo assembler, but I didn't tested this.                                
+ It should be very easy to use this code : just include what you want between 
+ the init and end portions of the code,  it could be a flat real mode program 
+ or a protected mode initialization with CPL0, and it will work.  You can use 
+ the 'available_memory_table', it will give you the adresses of every alloca- 
+ ted memory block. The number of such blocks will be stored in 'nb_available_ 
+ memory'                                                                      
+                                                                              
+ The init of this code may seem slow, the main reason for this is that I fil- 
+ led every allocated memory block with a known string in order to verify that 
+ the physical adresses are the right ones after the flat real mode switch.    
+                                                                              
+ There is two standards provided for interrupt support: The easyest one is to 
+ just call the interrupt,  there will be a handler installed  which will trap 
+ the interrupt  and switch back  to native V86 mode  to execute it.  Then the 
+ system will return  to flat real mode  and you will not have to worry  about 
+ the modeswitch.  However it will be a bit slow.  (by the way you should trap 
+ the timer interrupt yourself if you want to use this code in a demonstration 
+ in order to avoid all this unnecessary mode switches)                        
+ The other method  for the interrupt support is  to ask the memory manager to 
+ disable  the flat real mode  in  a code section  delimited  by  two function 
+ calls.  In this section you won't be in flat real mode, but you will be able 
+ to call every interrupt without any unnecessary delay.  I call that a native 
+ mode code section.                                                           
+                                                                              
+ Look at my code example :  you just have to call mem32_init  to setup every- 
+ thing.  At exit you will be  in flat real mode  and all the free high memory 
+ will  be  allocated  to  you.    You  will  be  able  to  use  the  data  in 
+ available_memory_table  to get some memory  :  it contains the starting  and 
+ ending physical  adresses  of every allocated memory blocks.   The number of 
+ such blocks will be stored in nb_available_memory.                           
+                                                                              
+ When you want to define a native mode code section  you'll just have to call 
+ the mem32_native and mem32_flatreal functions.                               
+ When you want  to exit your proggy  just jump to the exit label,  with DS:DX 
+ pointing to a message you want to display.                                   
+                                                                              
+ As an example proggy  I just included  a proggy  that dumps  the GEMMIS v1.0 
+ data table.  It's damn slow  because I use  DOS  interrupts  to display  the 
+ information  and this causes  a lot  of mode switches.   In a real code  you 
+ probably  would like  to build  your own string displayer  and  it would  be 
+ pretty much faster.                                                          
+                                                                              
+ This implementation  has been successfully tested  with the following memory 
+ managers  :   HIMEM.SYS alone,   EMM386.EXE v4.49,   QEMM386.SYS v6.00 beta, 
+ 386MAX.SYS v6.02                                                             
+
+                          PART FIVE - GOING FURTHER
+
+ In my code example I used flat real mode, but it could be easy to change the
+ library to use protected mode if you prefer it.  By the way a lot of protec- 
+ ted mode coders insists on the fact that protected mode is faster because it 
+ eliminates the need  for prefixes before 32-bit instructs,  but do they know 
+ that it's also possible to use some 32-bit flat real mode  without this ugly 
+ prefixes ??? most of them does not seems to.                                 
+                                                                              
+ The obvious problem  with this little example  is that you have a delay each 
+ time you want  to call an interrupt.  Because of that you will want  to make 
+ most of your init work in each part  in a native mode code section,  without 
+ the benefits of privilege level 0, and then start your part without any call 
+ to a V86 interrupt.                                                          
+ The alternate  method,  a much better one  but far beyond the scope  of this 
+ introduction, would be to have your own V86 mode handler which would be able 
+ to run the native system interrupts.  This way you could bypass all the open 
+ windows/close windows shit.  If someone goes this way, I would be very happy 
+ to get a little words from him.  This is the way  microsoft windows  handles 
+ the whole thing.                                                             
+
+                              PART SIX - GOODBYE
+
+ Demomakers : the only thing you have to remember is that if this article and
+ the associated code example is useful for you I would be happy to get a lit- 
+ tle greet.  It would be nice also  to say hello to my friend LCA/Infiny.  If 
+ you encounter some incompatibility problem  with some hardware  or with some 
+ memory manager please let us know.  Now I'm more or less obliged  to include 
+ the following disclaimer :                                                   
+                                                                              
+ You can use  this code example as you wish  if it's for your private use.  I
+ would prefer to receive a letter just to know that someone uses it, but it's
+ not necessary. Do what you want.
+                                                                              
+                  Here's an adress if you want to join me :                   
+                                                                              
+                       Walken / IMPACT Studios [coder]                        
+                              Michel LESPINASSE                               
+                              18 rue Jean Giono                               
+                                 80090 Amiens                                 
+                                    France

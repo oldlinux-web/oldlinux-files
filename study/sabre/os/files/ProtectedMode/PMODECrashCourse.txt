@@ -1,0 +1,328 @@
+
+
+                      A CRASH COURSE IN PROTECTED MODE
+
+
+                                                      By Adam Seychell
+
+
+     After my release of DOS32 V1.2 a lot of people were asking for basic
+help in protected mode programming. If you already know what a selector is
+then there is probably no need for you to read this file.
+ 
+     Ok you know all about the 8086 ( or a 386 in real mode ) architecture
+and what to know about this fantastic protected mode stuff. I'll start off
+saying that I think real mode on the 386 is like driving a car that is stuck
+in first gear. There is the potential of a lot of power but it is not being
+used. It really degrades the 386 processor and was not designed to normally
+operate in this mode. Even the Intel data book states  "Real mode is required
+primarily to set up the processor for Protected Mode operation".
+
+
+
+
+                      SEGMENTATION OF THE INTEL 80x86 
+
+     A segment is a block of memory that starts at a fixed base address and
+has a set length.  As you should already know that *every* memory reference
+by the CPU requires both a SEGMENT value and a OFFSET value to be specified.
+The OFFSET value is the location relative to the base address of the segment.
+The SEGMENT value contains the information for the segment. I am going to
+explain very basically how this SEGMENT value is interpreted by the 80386 to
+give the parameters of segments. 
+
+
+   In protected mode this SEGMENT value is interpreted completely different
+than in real mode and/or Virtual 86 mode. The SEGMENT values are now called
+"selectors". You'll see why when finished reading this file. So whenever you
+load a segment register you are loading it with a selector.
+
+
+
+The Selector is word length and contains three different fields.
+
+Bits  0..1       Request Privilege level        ( just set this to zero )
+
+Bit   2          Table Indicator        0 = Global Descriptor Table
+                                        1 = Local Descriptor Table
+
+Bits 3..15      The INDEX field value of the desired descriptor in the GDT   
+                This index value points to a descriptor in the table. 
+
+
+
+
+
+
+
+
+
+                     The  GLOBAL DESCRIPTOR TABLE  (GDT)
+
+    The Global Descriptor Table ( GDT ) is a table of DESCRIPTORS and it is
+stored in memory. The address of this table is given in a special 386
+register called the global descriptor table register. There always must be a
+GDT when in protected mode because it is in this table where all of the
+segments are defined.
+    Each DESCRIPTOR ( stored in the GDT ) contains the complete information
+about a segment. It is a description of the segment.  Each Descriptor is 64
+bits long and contains many different fields. I'll explain the fields later. 
+The INDEX field  ( stored in bits 3..15 of any segment register ) selects a
+descriptor to use for the type of segment wanted. So the only segments the
+programmer can use are the available descriptors in the GDT.
+
+
+Example:
+    Suppose you what to access location 012345h in your data segment and
+you were told that the descriptor for your data segment is descriptor
+number 6 in the Global Descriptor Table.  Assume that the Global Descriptor
+Table has already been set up and built for you  ( example, as in DOS32).
+
+Solution:
+    We need to load a segment register (SS,DS,FS,GS,ES)  with a value so
+that it will select (or index ) descriptor number 6 of the GDT. Then
+reference the address with a instruction that will use this loaded
+segment register.
+
+One of the segment registers (FS,DS,GS,SS,CS or ES) must be loaded with the
+following three fields,
+
+        Request Privilege level ( Bits 0..1 ) = 0  (always)
+        Table Indicator ( bit 2 )  = 0  
+        Index  ( bits 3..15 ) = 6
+
+             
+     mov  ax,0000000110000b      ;load DS with the selector value      
+     mov  ds,ax          
+     mov  byte ptr DS:[ 012345h ],0     ; Using the DS segment register
+
+
+
+    The 386 has hardware for a complete multitasking system. There are 
+several different types of descriptors available in the GDT for managing
+multitasking. You don't need to know about all the different descriptors just
+to program in protected mode. Just the info above is enough.  All you need to
+know to program in protected mode is what descriptors are available to you
+and what are the selector values to these descriptors.  The base address of
+the segment may also be known. See the file DOS32.DOC for obtaining the
+selector values.
+
+    There are two groups of descriptors
+1) CODE/DATA descriptors which are used for any code and data segments.
+
+2) SYSTEM descriptors are used for the multitasking system of the 386. These
+type of descriptors will never need to be used for programming applications.
+
+
+
+          Format of a code and data descriptor
+
+BITS                 description if the field
+----------------------------------------------------------------
+0..15                SEGMENT LIMIT 0...15
+16..39               SEGMENT BASE 0..23
+40                  (A)   accessed bit                           
+41..43              (TYPE) 0 = SEE BELOW
+44                  (0)  0 = code/data descriptor 1 = system descriptor
+45..46              (DPL) Descriptor Privilege level
+47                  (P)  Segment Present bit
+48..50              SEGMENT LIMIT 16..19
+51..52              (AVL)   2 bits available for the OS
+53                  zero for future processors
+54                  Default Operation size used by code descriptors only
+55                  Granularly:  1 = segment limit = limit field *1000h
+                                0 = segment limit = limit field
+56..63              SEGMENT BASE 24..31      
+
+format of TYPE field
+          bit  2    Executable (E)     0 = Descriptor is data type    
+               1    Expansion Direction (ED) 0 = Expand up
+                                             1 = Expand up
+               0    Writeable (W)       W = 0 data segment is read only
+                                        W = 1 data segment is R/W     
+
+
+          bit  2    Executable (E)  1 = Descriptor is code type  
+               1    Conforming (C)   ( I don't understand )
+               0    Readable (R)        R = 0 Code segment execute only
+                                        R = 1 Code segment is Readable
+
+
+   I'd better stop here, I am confusing myself. As you can see there is
+more to a segment that just it's base address and limit.
+    The three descriptors that are available in DOS32  all have limits of
+0ffffffffh (4GB). This means that the offsets can be any value. 
+For example, the instruction    XOR EAX,ES:[0FFFFFFFFh]  is allowed.
+   If you happen to load an invalid selector value into one of the segment
+registers then the 386 will report an General Protection exception
+( interrupt 13 ).  In protected mode this exception is also used for many
+other illegal operations.
+     
+
+
+                   The LINEAR ADDRESS and PHYSICAL ADDRESS
+
+     All the address translations described above is done by the 386
+segmentation unit. The segmentation unit looks up the descriptor tables,
+segment selectors, offsets and then outputs a 32bit linear address. This
+linear address is calculated by the segmentation unit in the following
+manner.
+
+Linear address = base address of segment + offset. 
+The segment base address is found in the Base address field ( bits 16..39 &
+56..63 ) of a descriptor which is located in the Global Descriptor Table. 
+The index field ( bits 3..15) of the segment register selects the descriptor
+to use. 
+
+
+An example of the linear address of the instruction.
+
+          MOV       EAX, ES:[EDX*8+012345678h]
+
+where EDX = 100h and ES equals a selector wich points to a descriptor with
+the base field equal to 02000000h.
+
+The linear address = 2000000h + ( 100h*8 + 012345678h ) = 014345E78h
+
+
+     Just to make things even more complicated the 386 has an second memory
+managing unit called the Paging Unit. The linear address calculated above may
+still not be the physical RAM location the 386 is addressing. This linear
+address has yet to go through another stage, the paging unit. If you are
+having trouble with what I've said so far then you may want to take a coffee
+break before continuing because this is even worse.
+
+     The 32bit linear address is directed to the paging unit. The paging unit
+divides the linear address into three sections.
+
+bits 0..12         Offset in a page
+bits 13..23        Points to the page entry in the page table
+bits 24..31        Points to the directory entry in the page directory table
+
+The page table contains 1024 double word entires. In each of these entries
+is the physical address of a 4KB page. The page directory also contains 1024
+double word entries. Each of these directory entries hold a physical address
+of a page table. See intel Documentation for the exact format of the page
+table entries and directory table entries.  The physical base address of the
+DIRECTORY TABLE is in control register 3 ( CR3 ) 
+
+  This means if every entry in the directory table is used then there would
+be 1024 page tables available. Because each page table hold 1024 page
+addresses then there would be a total of 1024*1024 4KB pages.
+The addresses in the page tables are all physical addresses. i.e the output
+of the CPU address bus pins. The paging unit can be enabled or disabled
+depending on wether bit 31 of CR0 is set. If the paging in disabled then the
+linear address simply equals the physical address. If paging is enabled the
+the linear address is translated by the paging unit to form a physical
+address.  Please note that it is possible to set up the page tables and
+directory such that the linear address equals the physical address. This is
+what DOS32 does for the first 1MB of linear address space.
+If you can not understand my hopeless attempt of describing the paging unit
+then the diagram below might help.
+
+
+
+
+
+
+
+
+
+
+
+
+
+            The 32 bit linear address from the segmentation unit
+  -------------------------------------------------------------------------
+  |   BITS  0..12             |    BITS  13..23       |    BITS 24..31     |
+  |                           |                       |                    |
+  -------------------------------------------------------------------------
+               |                                  |                   |
+               |------------------------          |                   |
+                                        |         |                   |
+                                        |         |                   |
+                                        |         |                   |
+        A Page in memory (4KB)          |         |                   |
+     --------------------------         |         |                   |    
+     |                        |         |         |                   |
+     |                        |         |         |                   |
+     |                        |         |         |                   |
+     |                        |         |         |                   |
+     |                        |         |         |                   |
+     |                        |         |         |                   |
+     |                        |         |         |                   |
+     |                        | <-------          |                   |
+     |                        |                   |                   |
+     |                        |                   |                   |
+     |                        |                   |                   |
+|---> -------------------------                   |                   |
+|                                                 |                   |
+|                                                 |                   |
+|                                                 |                   |
+|            PAGE  TABLE          Offset          |                   |
+|    --------------------------                   |                   |
+|    |                        |    4092           |                   |
+|    --------------------------                   |                   |
+|    .                        .                   |                   |
+|    .                        .                   |                   |
+|    .                        .                   |                   |
+|    --------------------------                   |                   |
+|    |                        |     12            |                   |
+|    --------------------------                   |                   |
+|---<|   address of page      |     8   <---------                    |
+     --------------------------                                       |    
+     |                        |     4                                 |
+     --------------------------                                       |
+     |                        |     0                                 |
+|--> --------------------------                                       |
+|                                                                     |
+|                                                                     |
+|                                                                     |
+|                                                                     |
+|                                                                     |
+|         DIRECTORY TABLE          Offset                             |
+|    --------------------------                                       |
+|    |                        |    4092                               |
+|    --------------------------                                       |
+|    .                        .                                       |
+|    .                        .                                       |
+|    .                        .                                       |
+|    --------------------------                                       |
+|---<| address of page table  |     12  <-----------------------------
+     --------------------------                                       
+     |                        |     8   
+     --------------------------                   
+     |                        |     4             
+     --------------------------                   
+     |                        |     0             
+|--> --------------------------                   
+|
+|
+|                           
+|         ----------------------------------------------
+--------<-|               CR3                          |
+          ----------------------------------------------
+
+
+
+
+
+
+
+   This was only meant to be a rough introduction to the protected mode
+segmentation mechanism of the 80386+. I hope I did not make this sound
+too complicated so that you have been put off with the whole idea of
+protected mode programming. If you want to know more then I suggest you buy a
+book on the 80386. The "Intel Programmers Reference guide" is the most
+detailed book around. The info here is only meant to give you an idea of how
+protected mode works.
+   Please note that DOS32 does *ALL* of the setting up needed for protected
+mode.  Don't worry if you couldn't understand half the stuff I was talking
+about. You don't have to know about any stupid things like the descriptor
+format, selector index fields, privilege levels ,paging, tables, ect , ect. 
+What you do need to know are the selector values for all the descriptors that
+are available to your program. Then the segment registers can simply be
+loaded with these known selector values. DOS32 uses only 3 descriptors ( or
+segments ) as described in DOS32.DOC.
+
+

@@ -1,0 +1,197 @@
+
+             8259A Interrupt Controller on the PC
+             ====================================
+
+                                        GMCH  1 Dec 93 10:49
+
+1.  Introduction & Scope
+
+The 8259A is a wonderful device.  It has a number of modes of
+operation, and some magic priority rotation features.  On the
+PC, however, only the very simplest mode is used.
+
+This discussion is limited to the way in which the 8259A is
+used on the PC.
+
+The function of the 8259A is to take up to eight interrupt
+sources, and feed any active interrupts, one at a time, to the
+CPU.  The processor can individually mask off interrupt
+sources.  The 8259A has a priority mechanism, so that lower
+priority interrupt sources do not interrupt the CPU while it is
+servicing a higher priority interrupt -- but a higher priority
+interrupt will be passed on to the processor.
+
+2.  The Jargon
+
+An interrupt source, fed into an 8259A, is known as an IRQ --
+Interrupt Request.  An 8259A has 8 IRQ inputs.
+
+The 8 IRQ inputs are fed into an 8 bit Interrupt Request
+Register (IRR), via some "rising edge" detection logic (8 bit
+Edge Sense Register -- ESR).
+
+The 8259A can be told to mask off any of the IRQ.  The 8259A
+has an 8 bit Interrupt Mask Register (IMR).  A one bit in the
+IMR masks off the corresponding IRQ.
+
+To perform its priority arbitration the 8259A has an 8 bit In
+Service Register (ISR).  In the register a bit is set to 1 when
+the corresponding interrupt has been passed to the CPU, and the
+CPU has not yet signalled End of Interrupt (EOI)
+
+The CPU interrupt input is known as INTR.  The 8259A interrupt
+output is known as INT, which is connected to the CPU (wait for
+it) INTR, or to another 8259A's IRQ.
+
+The 8 IRR bits are ANDed with the NOT of the IMR, giving the
+interrupt request input to the priority arbitration logic.
+Reading between the lines, there is an INT latch, which is set
+by the OR of the bits of (IRR AND NOT IMR) higher than the
+highest priority bit in the ISR.
+
+On an original PC there are 8 possible interrupt sources IRQ0
+to IRQ7, fed into one 8259A (I/O address #020..#03F).
+
+On AT's and beyond, there are 16 possible interrupt sources
+IRQ0 to IRQ15, fed into two 8259A's.  One 8259A (known as #1,
+I/O address #020..#03F) is the "Master" and the other is a
+"Slave" (known as #2, I/O address #0A0..#0BF).  Only the
+Master's INT is connected to the CPU's INTR.  The Slave's INT
+is connected to the Master's IRQ2.
+
+3.  The Mechanisms
+
+The PC sets the 8259A into:
+
+  * Edge Triggered Interrupts
+  * Cascaded (on AT and later) ; Single (on earlier machines)
+  * Not Special Fully Nested (to do with Slave 8259A, see below)
+  * Not Buffered Normal EOI (Not Automatic EOI on INTA)
+
+With this in mind, we will start with the simple cases, and
+work up.
+
+3.1  One 8259A, All IRQ Unmasked, No Interrupts In Service
+     and None Active.
+
+So we start from the simplest possible quiescent state.  The
+sequence of actions is as follows:
+
+   0  The ESR, ISR, IRR and IMR are all zero.
+   1  IRQ3 becomes active (goes to 1)
+   2  B3 of the ESR is set to 1
+   3  B3 of the IRR is set to 1
+   4  B3 of the IMR is 0, so the IRR B3 is passed to the
+      priority arbitration logic.
+   5  All bits of the ISR are 0 (no interrupts are in
+      service), so the priority arbitration logic sets the
+      INT latch -- so the INT output is set active.
+   6  Eventually the CPU issues the first of two INTA
+      cycles.  The contents of the IRR are frozen.  The
+      8279A selects the highest priority IRR (B3) and sets
+      the corresponding ISR (B3).
+   7  Setting B3 of the ISR clears B3 of the ESR.
+   8  The CPU issues the second of two INTA cycles.  The
+      8279A issues the interrupt vector associated with the
+      highest priority ISR (B3).  The contents of the IRR
+      are unfrozen.
+   9  The INT latch is cleared -- so the INT output is set
+      inactive.
+  10  B3 of the IRR is set to 0 (IRR is unfrozen and B3 of
+      ESR is zero).
+  11  At some time in the future, the CPU issues an EOI
+      command, which clears B3 of the ISR.
+
+IRQ3 can remain active beyond step 10, without generating any
+further interrupts -- because B3 of IRR has been cleared.  To
+produce another interrupt requires IRQ3 to go inactive (0), and
+then active (1) again.
+
+3.2  Meaning of "Edge Triggered Interrupt Mode"
+
+The behaviour of the ESR, IRR and ISR described above is what
+happens in the famous Edge Triggered Interrupt Mode.
+
+The purpose is to allow for IRQ signals to be short down/up
+pulses.  When the 8259A is reset the ESR is set to zero.  An
+upward transition of the IRQ sets the corresponding ESR bit to
+1, which allows the IRQ state to be copied to the IRR --
+provoking the interrupt.  When the interrupt is acknowledged
+the ISR bit is set, which resets the ESR bit, which forces the
+IRR bit to zero -- irrespective of the IRQ.  So even if IRQ is
+still 1 when the ISR bit is cleared, at End of Interrupt, no
+further interrupts will be generated.
+
+3.3  What Happens if IRQ Changes with the Interrupt is In Service
+
+It is clear what happens if IRQ does not do any further down/up
+transitions until after EOI.  It is OK for IRQ to go down
+before EOI, but going up again is not explicitly described in
+the manuals.
+
+If a down/up IRQ transition cannot be prevented before EOI,
+then it can be (reasonably safely) assumed that this will
+generate a further interrupt after EOI -- provided the IRQ is
+still up (active, 1) at EOI.  Multiple down/up transitions can
+be assumed to have the same effect.
+
+What happens if there are one or more down/up IRQ transitions
+followed by a final down transition before EOI, is also
+undocumented.  I guess that this has no effect.  The
+corresponding IRR bit will follow the IRQ, but this may be
+expected to have no effect on the (supposed) INT latch, because
+the ISR bit prevents it.
+
+Obviously, it would be safer to ensure that IRQ does not go
+down and then up again before EOI (just down is OK).  If this
+is not possible, then I believe the given assumptions to be
+reasonable -- perhaps MEJ's boys could help us !
+
+3.4  Master and Slave Handling
+
+The PC does not use "Special Fully Nested Mode".  What this
+means is that once one of the Slave's interrupts is In Service
+it takes precedence over all other Slave interrupts.
+
+Slave interrupts are generally indistinguishable from Master
+interrupts.  The only tricky bit is that an EOI must be sent to
+both Master and Slave.  EOI should be sent to the Slave first
+-- to allow any lower priority interrupts on the slave to
+assert themselves.  The EOI to the Master then allows any lower
+or equal priority interrupts to assert themselves.
+
+3.5  Fiddling with Interrupt Masking
+
+Clearing masking or unmasking an interrupt when all is quiet
+(no IRQ, IRR or ISR) is trivially OK, and produces no side
+effects.
+
+If an interrupt was masked and is unmasked, then any "pending"
+IRQ will immediately take effect.
+
+According to the 8259A diagram published by Intel, the IMR mask
+gates the IRR bits into the interrupt priority resolution
+logic.  Masking and unmasking an interrupt while its IRR is
+active is equivalent, as far as the interrupt priority
+resolution logic is concerned, to the IRQ coming and going.
+The effect can be seen to be the same as in 3.3 above.
+
+There is doubt and uncertainty about what happens if IRQ
+bounces up and down while ISR is set.  To avoid difficulties it
+would be reasonable (unless the Intel diagram I am working from
+is entirely wrong) to mask off the interrupt until EOI, and
+then unmask it again -- assuming that there is some other way
+of detecting and dealing with the reasons for IRQ changing.
+
+----------end of document-----------
+
+[Richard:]
+
+Note the worry about IRQ boucing up and down... this all comes
+back to the amusing behaviour of the serial chip whilst it is
+being serviced.
+
+Also, I have seen discussion (in the Crynwr packet driver source; on
+a Simtel20 mirror near you) of broken Chips & Technology (?) 8259s which
+do not handle non-specific EOIs properly.
+

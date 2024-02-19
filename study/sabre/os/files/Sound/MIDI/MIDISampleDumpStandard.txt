@@ -1,0 +1,214 @@
+                           MIDI SAMPLE DUMP STANDARD
+
+1) INTRODUCTION
+
+     The  MIDI  SDS  was  adopted  in  January  1986   by   the   MIDI
+Manufacturers  Association  and the Japanese MIDI Standards Committee.
+The SDS defines the standard method for transfer of sound sample  data
+between  MIDI-equipped devices.  Sample dumps may be accomplished with
+either an 'open loop' or 'closed loop' system.  The open  loop  method
+simply  involves  the straight dump of all sample data from its source
+to the destination, with no timeouts, packet acknowledgements,  or any
+other form of handshaking, much as in the manner of a sysex bulk dump,
+usually intiated at the source.  The closed loop method allows the use
+of handshaking messages between the dump source and  destination,  and
+usually  places  the  dump process under the control of the slave,  to
+allow it time to process the incoming data as necessary.  As with  any
+standard, it can not be assumed that a device adheres to it unless the
+accompanying documentation specifically indicates it. Even then, it is
+best to check its conformity with non-critical data.
+
+2) SPEC: SAMPLE DUMP FORMATS
+
+     DUMP HEADER:
+
+F0 7E cc 01 ss ss ee ff ff ff gg gg gg hh hh hh ii ii ii jj F7
+
+where
+
+cc       =     channel number
+ss ss    =     sample number (LSB first)
+ee       =     sample format (number of significant bits; 8->28)
+ff ff ff =     sample period (1/sample rate) in nanoseconds (LSB first)
+gg gg gg =     sample length, in words
+hh hh hh =     sustain loop start point (word number) (LSB first)
+ii ii ii =     sustain loop end point (word number) (LSB first)
+jj       =     loop type (00:forwards only; 01:alternating)
+
+     DATA PACKET:
+
+F0 7E cc 02 kk <120 bytes> mm F7
+
+where
+
+cc       =     channel number
+kk       =     running packet count (00->7F)
+mm       =     checksum (XOR of 7E, cc, 02, kk <120 bytes>)
+
+     The  total  size of a data packet is 127 bytes.  This is to avoid
+overflow of the MIDI input buffer of a device that may want to receive
+an entire packet before processing it.
+     A data packet consists of its own header,  a packet  number,  120
+bytes of data, a checksum, and an EOX.  The packet number begins at 00
+and increments with each new packet.  It resets to 00 after it reaches
+7F, and continues counting.  The packet number is used by the receiver
+to distinguish between a new data packet,  or a resend of  a  previous
+packet. The packet number is followed by 120 bytes of data, which form
+60,  40,  or 30 words (MSB first for multiword samples),  depending on
+the length of a single data sample.
+     Each data byte hold seven bits,  with the msb in each byte set to
+0,  in order to conform to the requirements of MIDI data transmission.
+Information is left justified within the 7-bit bytes,  and unused bits
+are filled with 0.
+     Example:  Assume  a data point in the memory of a 16-bit sampler,
+with the value 87E5. In binary, that would be
+
+                          1000 0111 1110 0101
+
+and would be encoded as the following MIDI data stream:
+
+                      01000011 01111001 00100000
+
+     The checksum is the running XOR of all the data after  the  SYSEX
+byte, up to but not including the checksum itself.
+
+3) SPEC: SAMPLE DUMP MESSAGES
+
+     DUMP REQUEST:
+
+F0 7E cc 03 ss ss F7
+
+where
+
+cc       =     channel number
+ss ss    =     sample number requested (LSB first)
+
+     Upon receiving the request,  the sampler checks the sample number
+to see if it is within legal range.  If it  is  not,  the  request  is
+ignored. If it is, the sample dump is started. One packet at a time is
+sent, under control of the handshaking messages outlined below.
+
+     HANDSHAKING MESSAGES:
+
+     For all below:
+
+cc       =     channel number
+pp       =     packet number
+
+     Packet  numbers  are  included  in  the  handshaking  messages to
+accomodate machines that have the intelligence to re-transmit specific
+packets after an entire dump is finished,  or  if  synchronization  is
+lost.
+
+     ACK :     F0 7E cc 7F pp F7
+
+     Means  last  packet  was  recieved correctly (checksum OK,  etc),
+please send next one.  Packet number is packet being  acknowledged  as
+correct.
+
+     NAK :     F0 7E cc 7E pp F7
+
+     Means  last  packet  not  received correctly,  please send again.
+Packet number is packet being rejected.
+
+     CANCEL :  F0 7E cc 7D pp F7
+
+     Means abort dump immediately.  Packet number is packet  on  which
+abort occurs.
+
+     WAIT   :  F0 7E cc 7C pp F7
+
+     Means pause dump indefinitely, until next message is sent. Allows
+the  unit  recieving the dump to perform other functions (disk access,
+etc), before receiving the remainder of the dump.  The next message it
+sends (eg ACK, ABORT) will determine if the dump continues or aborts.
+
+4) DUMP PROCEDURE: MASTER (DUMP SOURCE)
+
+     Once  a  dump has been requested,  either via MIDI or through the
+front panel,  the DUMP HEADER is sent.  After sending the header,  the
+master  must time out for at least two seconds,  to allow the receiver
+to decide if it will accept this sample (has enough memory, etc).
+     If it receives a  CANCEL,  within  this  time,  it  should  abort
+immediately.  If  it  receives  an CAK,  it will start sending packets
+immediately. If it receives a WAIT, it pauses until another message is
+received,  and then processes that  mesage  normally.  If  nothing  is
+recieved  within  the timeout,  an open loop is assumed,  and the dump
+starts with the first packet.
+     After sending each packet,  the master should  time  out  for  at
+least 20 milliseconds and watch its MIDI In. If an ACK is received, it
+sends  the  next  packet immediately.  If it receives an NAK,  and the
+packet number matches the number of the last packet  sent,  it  resend
+that  packet  If  the  packet  numbers don't match,  and the device is
+incapable of sending packets out of order, the NAK will be ignored.
+     If a WAIT is received,  the master should watch its MIDI In  port
+indefinitely for another ACK,  NAK, or CANCEL message, which it should
+then process normally.
+     If no  messages  are  received  within  20  milliseconds  of  the
+transmission  of  a  packet,  the  master  may  assume  an  open  loop
+configuration, and send the next packet.
+     This process continues until there are less than 121  data  bytes
+to send. The final packet will still consist of 120n bytes, regardless
+of  how  many significant bytes actually remain,  and the unused bytes
+will be filled  with  zeroes.  The  receiver  should  handshake  after
+receiving the last packet.
+
+5) DUMP PROCEDURE: SLAVE (DUMP DESTINATION)
+
+     When  receiving  a  sample  dump,  a device should keep a running
+checksum during reception. If its checksum matches the checksum in the
+data packet,  it will send an ACK and wait for the next packet.  If it
+does  not  match,  it  will  send  an NAK containing the number of the
+packet that caused the error, and wait for the next packet.  If, after
+sending an NAK, the packet number of the next packet doesn't match the
+previous  packet number (the one that was NAK'd),  and the unit is not
+capable of accepting packets out of order,  the error is  ignored  and
+the dump continues as if the checksums had matched.
+     If  a  receiver runs out of memory before the dumpo is completed,
+it should send a CANCEL to stop the dump.
+
+6) SDS OVERVIEW
+
+     SAMPLE DUMP DATA FORMAT: DUMP HEADER:
+
+     Sysex
+         ID: Universal Non-Real Time
+         Channel Number
+         Sub ID: Header
+         Sample Number (2 bytes, LSB first)
+         Sample Format
+         Sample Period (3 bytes, LSB first)
+         Sample Length (3 bytes, LSB first)
+         Sustain Loop Start Point (3 bytes, LSB first)
+         Sustain Loop End Point (3 bytes, LSB first)
+         Loop Type
+     Eox
+
+     SAMPLE DUMP DATA FORMAT: DATA PACKET:
+
+     Sysex
+         ID: Universal Non-Real Time
+         Channel Number
+         Sub ID: Data Packet
+         Packet Number
+         Sample Data (120 bytes)
+         Checksum
+     Eox
+
+     SAMPLE DUMP MESSAGES: DUMP REQUEST:
+
+     Sysex
+         ID: Universal Non-Real Time
+         Channel Number
+         Sub ID: Dump Request
+         Sample Number (2 bytes, LSB first)
+     Eox
+
+     SAMPLE DUMP MESSAGES: HANDSHAKING FLAGS:
+
+     Sysex
+         ID: Universal Non-Real Time
+         Channel Number
+         Sub ID: ACK or NAK or CANCEL or WAIT
+         Packet Number
+     Eox

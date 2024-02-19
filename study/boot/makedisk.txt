@@ -1,0 +1,71 @@
+#!/bin/sh
+# 
+#define Q+D
+#
+# This makes a bootkernel disk in /dev/fd0 from a kernel image.
+#
+# Run this in a directory containing the kernels you're gonna use, and a
+# subdirectory with a master image of the bootkernel disk.
+#
+# This is the command to use:
+#
+# makedisk kernel_image disk_size
+#          ^^           ^^^^^^^^^ This is 1440 or 1200
+#          ^^^^^ This is the name (and maybe path to) the kernel you're going
+#                to use, such as scsinet/scsinet.
+#
+#
+KERNEL=$1
+DISKSIZE=$2
+TARGET=/dev/fd0
+MASTER_DIR=master
+#
+if [ $DISKSIZE = 1200 ]; then
+ cp lilo.conf.1200 $MASTER_DIR/etc/lilo.conf
+ RAMSIZE=1440
+elif [ $DISKSIZE = 1440 ]; then
+ cp lilo.conf.1440 $MASTER_DIR/etc/lilo.conf
+ RAMSIZE=1440
+else
+ echo
+ echo "Usage: makedisk kernel_image disk_size"
+ echo
+ echo "Disk is made in /dev/fd0. Target disk must be formatted."
+ echo "Legal disk sizes are 1200 and 1440."
+ echo
+ exit
+fi
+if [ -r $1 ]; then
+ echo "Making a bootkernel disk from kernel image $1..."
+else
+ echo "Image $1 not readable."
+ exit
+fi
+cp $1 $MASTER_DIR/vmlinuz 
+echo "Rdeving -R $MASTER_DIR/vmlinuz 0"
+rdev -R $MASTER_DIR/vmlinuz 0
+echo "Rdeving -r $MASTER_DIR/vmlinuz $RAMSIZE"
+rdev -r $MASTER_DIR/vmlinuz $RAMSIZE
+echo "Rdeving -v $MASTER_DIR/vmlinuz -v"
+rdev -v $MASTER_DIR/vmlinuz -1
+# It's possible some people might want to use /dev/fd0h1200 or /dev/fd0H1440
+# on the line below...
+echo "Rdeving $MASTER_DIR/vmlinuz /dev/fd0"
+rdev $MASTER_DIR/vmlinuz /dev/fd0
+#echo "Formatting the target disk..."
+#fdformat /dev/fd0H1200
+echo "Blanking the target disk..."
+dd if=/dev/zero of=$TARGET 2> /dev/null
+echo "Making the MINIX/Linux filesystem..."
+mkfs -t minix $TARGET $DISKSIZE
+echo "Mounting the disk on /mnt..."
+mount $TARGET /mnt
+cd $MASTER_DIR
+echo "Copying the files over..."
+cp -a * /mnt
+sync
+echo "Installing LILO..."
+lilo -r /mnt
+sync
+umount /mnt
+echo "Bootkernel disk created."

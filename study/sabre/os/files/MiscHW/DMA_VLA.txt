@@ -1,0 +1,506 @@
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+                       INTRO TO DMA by Draeden of VLA
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+    
+
+    DMA means Direct Memory Access.  You probably already know where and
+why you use it, so I'll skip right down to the dirty stuff.  This all 
+should speak for it's self, so... Enjoy.
+
+    Draeden /VLA
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+    To do a DMA transfer, you need to know a few things:
+
+        1)  Address of the memory to access
+
+        2)  Length of data to read/write
+
+    This can all be put into a structure:
+    
+STRUC DMAInfo
+    Page        db  ?
+    Offset      dw  ?
+    Length      dw  ?
+ENDS
+
+    Page is the highest 4 bits of the absolute 20 bit address of the memory
+location.  Note that DMA transfers CANNOT cross 64k page boundries.
+    
+    The Length is actually LENGTH-1; sending in a 0 will move 1 byte,
+sending a 0FFFFh will move 64k.
+
+    ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+    ; IN: DX:AX = segment/offset address of memory area
+    ;
+    ;OUT: DH = Page (0-F)  (DL is destroyed)
+    ;     AX = Offset
+    ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+PROC MakePage
+    push    bx
+
+    mov     bl,dh
+    shr     bl,4    ;isolate upper 4 bits of segment
+
+    shl     dx,4    ;make segment into ABS address
+    add     ax,dx   ;add the offset and put it in AX
+    adc     bl,0    ;complete the addition
+
+    mov     dh,bl   ;put the PAGE where it goes
+
+    pop     bx      ; DH:AX is now the PAGE:OFFSET address
+    ret
+ENDP
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+    Programming DMA channels 0 thru 3
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+    There are 3 ports that are DMA channel specific:
+
+        1) The Page register
+        2) The DMA count (length) register
+        3) The memory address (offset register)
+
+    They are as follows:
+
+DMACH   PAGE    ADDRESS  LENGTH
+ 
+ 0       87h       0       1
+
+ 1       83h       2       3
+
+ 2       81h       4       5
+
+ 3       82h       6       7
+
+        
+    And now some general registers:
+
+ DMA Mask Register:  0Ah
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+        bit 7 - 3 = 0  Reserved
+
+            bit 2 = 0  clear mask
+                  = 1  set mask
+
+       bits 1 - 0 = 00 Select channel 0
+                  = 01 select channel 1
+                  = 10 select channel 2
+                  = 11 select channel 3
+
+       USE: You must set the mask of the channel before you
+            can reprogram it.
+
+ DMA Mode Register:  0Bh
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+        bit 7 - 6 = 00 Demand mode
+                  = 01 Signal mode
+                  = 10 Block mode
+                  = 11 Cascade mode
+
+        bit 5 - 4 = 0  Reserved
+
+        bit 3 - 2 = 00 Verify operation
+                  = 01 Write operation
+                  = 10 Read operation
+                  = 11 Reserved
+
+       bits 1 - 0 = 00 Select channel 0
+                  = 01 select channel 1
+                  = 10 select channel 2
+                  = 11 select channel 3
+
+       USE: Tell the DMAC what to do. Common modes are:
+
+            48h (Read operation, Signal mode)
+                Used to read data from host memory and send to whomever
+                polls it.
+
+            44h (Write operation, Signal mode)
+                Used to write data taken from a device to memory.
+
+DMA clear byte ptr:  0Ch
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+       USE: Send a zero to reset the internal ptrs
+
+
+
+    WHAT TO DO:
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+    1) Set the Mask bit for the channel
+
+        mov     al,4
+        add     al,[DMA_Channel]
+        out     0ah,al
+
+    2) Clear Byte Ptr
+
+        sub     al,al
+        out     0Ch,al
+
+    3) Set the DMA transfer mode
+
+        mov     al,48h                  ;MODE output (read)
+        add     al,[DMA_Channel]
+        out     0Bh,al
+
+    4) Set the memory ADDRESS and LENGTH
+
+        ;        AX = offset
+        ;        CX = Length
+        ;[DMA_Base] = port # of memory address
+        
+        mov     dx,[DMA_Base]
+        out     dx,al                   ;send lower byte address
+        mov     al,ah
+        out     dx,al                   ;send high byte address
+
+        inc     dl                  ;point to Count port
+        mov     al,cl
+        out     dx,al                   ;send low byte length
+        mov     al,ch
+        out     dx,al                   ;send high byte length
+
+    5) Set the DMA page
+
+        ; AL = Page
+
+        mov     dx,[Dma_Page]
+        out     dx,al                   ; write the Page
+
+    6) Clear DMA mask bit
+
+        mov     al,[byte DMA_Channel]
+        out     0Ah,al                  ; port 0Ah, DMA-1 mask reg bit
+
+    7) Program the other device that is going to use the DMA output/input
+
+
+    ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+    ; This routine programs the DMAC for channels 0-3
+    ;
+    ; IN: [DMA_Channel], [DMAbaseAdd], [DMApageReg] must be setup
+    ;       [DAMBaseAdd] =  Memory Address port
+    ;
+    ;     dh = mode
+    ;     ax = address
+    ;     cx = length  
+    ;     dl = page
+    ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+PROC Prog_DMA03 NEAR
+        push    bx
+        mov     bx,ax
+
+        mov     al,4
+        add     al,[DMA_Channel]
+        out     0Ah,al          ; mask reg bit
+
+        sub     al,al
+        out     0Ch,al          ; clr byte ptr
+
+        mov     al,dh
+        add     al,[DMA_Channel]
+        out     0Bh,al          ; set mode reg
+
+        push    dx
+        
+        mov     dx,[DMAbaseAdd]
+        mov     al,bl
+        out     dx,al           ; set base address low
+        mov     al,bh
+        out     dx,al           ; set base address high
+
+        inc     dx              ;point to length
+        mov     al,cl
+        out     dx,al           ; set length low
+        mov     al,ch
+        out     dx,al           ; set length high
+
+        pop     dx
+
+        mov     al,dl
+        mov     dx,[DmaPageReg]
+        out     dx,al           ; set DMA page reg
+
+        mov     al,[DMA_Channel]
+        out     0Ah,al          ; unmask (activate) dma channel
+        pop     bx
+        ret
+ENDP
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+    Programming DMA channels 4 thru 7
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+    Again, there are 3 ports that are DMA channel specific:
+
+        1) The Page register
+        2) The DMA count (length) register
+        3) The memory address (offset register
+
+    They are as follows:
+
+DMACH   PAGE    ADDRESS  LENGTH
+ 
+ 4       8Fh      C0h      C2h  
+
+ 5       8Bh      C4h      C6h  
+
+ 6       89h      C8h      CAh  
+
+ 7       8Ah      CCh      CEh 
+
+
+    And now some general registers:
+
+ DMA Mask Register: 0D4h
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+        bit 7 - 3 = 0  Reserved
+
+            bit 2 = 0  clear mask
+                  = 1  set mask
+
+       bits 1 - 0 = 00 Select channel 4
+                  = 01 select channel 5
+                  = 10 select channel 6
+                  = 11 select channel 7
+
+       USE: You must set the mask of the channel before you
+            can reprogram it.
+
+ DMA Mode Register: 0D6h
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+        bit 7 - 6 = 00 Demand mode
+                  = 01 Signal mode
+                  = 10 Block mode
+                  = 11 Cascade mode
+
+        bit 5 - 4 = 0  Reserved
+
+        bit 3 - 2 = 00 Verify operation
+                  = 01 Write operation
+                  = 10 Read operation
+                  = 11 Reserved
+
+       bits 1 - 0 = 00 Select channel 4
+                  = 01 select channel 5
+                  = 10 select channel 6
+                  = 11 select channel 7
+
+       USE: Tell the DMAC what to do. Common modes are:
+
+            48h (Read operation, Signal mode)
+                Used to read data from host memory and send to whomever
+                polls it.
+
+            44h (Write operation, Signal mode)
+                Used to write data taken from a device to memory.
+
+DMA clear byte ptr: 0D8h
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+       USE: Send a zero to reset the internal ptrs
+
+
+    WHAT TO DO: (exactly the same thing, just different io PORTs)
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+    1) Set the Mask bit for the channel
+
+        mov     al,[DMA_Channel]    ;because the DMA's are 4-7, bit #3
+        out     0D4h,al             ; is already set
+
+    2) Clear Byte Ptr
+
+        sub     al,al
+        out     0D8h,al
+
+    3) Set the DMA transfer mode
+        
+        mov     al,[DMA_Channel]
+        sub     al,4
+        or      al,48h                  ;MODE output (read)
+        out     0D6h,al
+
+    4) Set the memory ADDRESS and LENGTH
+
+        ;        AX = offset
+        ;        CX = Length
+        ;[DMA_Base] = port # of memory address
+        
+        mov     dx,[DMA_Base]
+        out     dx,al                   ;send lower byte address
+        mov     al,ah
+        out     dx,al                   ;send high byte address
+
+        add     dl,2                ;point to Count port (seperated by 2)
+        mov     al,cl
+        out     dx,al                   ;send low byte length
+        mov     al,ch
+        out     dx,al                   ;send high byte length
+
+    5) Set the DMA page
+
+        ; AL = Page
+
+        mov     dx,[Dma_Page]
+        out     dx,al                   ; write the Page
+
+    6) Clear DMA mask bit
+
+        mov     al,[byte DMA_Channel]
+        and     al,00000011b
+        out     0d4h,al                 ; port 0Ah, DMA-1 mask reg bit
+
+    7) Program the other device that is going to use the DMA output/input
+
+
+    ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+    ; This routine programs the DMAC for channels 4-7
+    ;
+    ; IN: [DMA_Channel], [DMAbaseAdd], [DMApageReg] must be setup
+    ;       [DAMBaseAdd] =  Memory Address port
+    ;
+    ;     dh = mode
+    ;     ax = address
+    ;     cx = length  
+    ;     dl = page
+    ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+PROC Prog_DMA47 NEAR
+        push    bx
+        mov     bx,ax
+
+        mov     al,[DMA_Channel]
+        out     0D4h,al         ; mask reg bit
+
+        sub     al,al
+        out     0D8h,al         ; clr byte ptr
+
+        mov     al,[DMA_Channel]
+        sub     al,4
+        add     al,dh
+        out     0D6h,al         ; set mode reg
+
+        push    dx
+
+        mov     dx,[DMAbaseAdd]
+        mov     al,bl
+        out     dx,al           ; set base address low
+        mov     al,bh
+        out     dx,al           ; set base address high
+
+        add     dl,2            ;point to length
+        mov     al,cl
+        out     dx,al           ; set length low
+        mov     al,ch
+        out     dx,al           ; set length high
+
+        pop     dx
+
+        mov     al,dl
+        mov     dx,[DmaPageReg]
+        out     dx,al           ; set DMA page reg
+
+        mov     al,[DMA_Channel]
+        and     al,00000011b
+        out     0D4h,al         ; unmask (activate) dma channel
+        pop     bx
+        ret
+ENDP
+
+    ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+    ; This routine programs the DMAC for channels 0-7
+    ;
+    ; IN: [DMA_Channel], [DMAbaseAdd], [DMApageReg] must be setup
+    ;       [DAMBaseAdd] =  Memory Address port
+    ;
+    ;     dh = mode
+    ;     ax = address
+    ;     cx = length  
+    ;     dl = page
+    ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+PROC Prog_DMA NEAR
+        push    bx
+        mov     bx,ax
+
+        cmp     [DMA_Channel],4
+        jb      @@DoDMA03
+
+        mov     al,[DMA_Channel]
+        out     0D4h,al         ; mask reg bit
+
+        sub     al,al
+        out     0D8h,al         ; clr byte ptr
+
+        mov     al,[DMA_Channel]
+        sub     al,4
+        add     al,dh
+        out     0D6h,al         ; set mode reg
+
+        push    dx
+
+        mov     dx,[DMAbaseAdd]
+        mov     al,bl
+        out     dx,al           ; set base address low
+        mov     al,bh
+        out     dx,al           ; set base address high
+
+        add     dl,2            ;point to length
+        mov     al,cl
+        out     dx,al           ; set length low
+        mov     al,ch
+        out     dx,al           ; set length high
+
+        pop     dx
+
+        mov     al,dl
+        mov     dx,[DmaPageReg]
+        out     dx,al           ; set DMA page reg
+
+        mov     al,[DMA_Channel]
+        and     al,00000011b
+        out     0D4h,al         ; unmask (activate) dma channel
+        pop     bx
+        ret
+
+@@DoDMA03:
+        mov     al,4
+        add     al,[DMA_Channel]
+        out     0Ah,al          ; mask reg bit
+
+        sub     al,al
+        out     0Ch,al          ; clr byte ptr
+
+        mov     al,dh
+        add     al,[DMA_Channel]
+        out     0Bh,al          ; set mode reg
+
+        push    dx
+        
+        mov     dx,[DMAbaseAdd]
+        mov     al,bl
+        out     dx,al           ; set base address low
+        mov     al,bh
+        out     dx,al           ; set base address high
+
+        inc     dx              ;point to length
+        mov     al,cl
+        out     dx,al           ; set length low
+        mov     al,ch
+        out     dx,al           ; set length high
+
+        pop     dx
+
+        mov     al,dl
+        mov     dx,[DmaPageReg]
+        out     dx,al           ; set DMA page reg
+
+        mov     al,[DMA_Channel]
+        out     0Ah,al          ; unmask (activate) dma channel
+        pop     bx
+        ret
+ENDP

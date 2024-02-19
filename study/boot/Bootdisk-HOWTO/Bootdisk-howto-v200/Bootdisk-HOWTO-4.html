@@ -1,0 +1,313 @@
+<HTML>
+<HEAD>
+<TITLE>The Linux Bootdisk HOWTO: Advanced Bootdisk Creation</TITLE>
+</HEAD>
+<BODY bgcolor="#ffffff">
+<A HREF="Bootdisk-HOWTO-3.html"><IMG SRC="prev.gif" ALT="Previous"></A>
+<A HREF="Bootdisk-HOWTO-5.html"><IMG SRC="next.gif" ALT="Next"></A>
+<A HREF="Bootdisk-HOWTO.html#toc4"><IMG SRC="toc.gif" ALT="Contents"></A>
+<HR>
+<H2><A NAME="s4">4. Advanced Bootdisk Creation</A></H2>
+
+
+<H2><A NAME="ss4.1">4.1 Overview</A></H2>
+
+<P>Previous Sections of this document covered the basics of creating
+boot/root disks, and are applicable to nearly all kernels up to the
+present (2.0, the latest stable kernel).</P>
+<P>Kernels 1.3.48+ involved a substantial rewrite of the ramdisk code,
+adding significant new capabilities.  These kernels could automatically
+detect compressed filesystems, uncompress them and load them into the
+ramdisk on boot-up.  Root filesystems could be placed on a second disk,
+and as of kernel 1.3.98 or so, ramdisks are dynamically expandable.</P>
+<P>Altogether, these new capabilities mean that boot disks can contain
+substantially more than they used to.  With compression, a 1722K disk may
+now hold up to about 3.5 megs of files.  As anyone who has created
+bootdisks knows, much time is spent pruning down the file set and finding
+trimmed-down versions of files that will all fit in a small filesystem.
+With the new capabilities this is no longer such a concern.</P>
+<P>Unfortunately, creating bootdisks to exploit these new features is
+slightly more difficult now.  To build a compressed filesystem on a
+floppy, the filesystem has to be built on another device and then
+compressed and transferred to the floppy.  This means a few more steps.</P>
+<P>The basic strategy is to create a compressed root filesystem, copy the
+kernel to the floppy disk, tell the kernel where to find the root
+filesystem, then copy the compressed root filesystem to the floppy.</P>
+<P>Here's a simple ASCII drawing of what the disk will look like:
+<BLOCKQUOTE><CODE>
+<PRE>
+|&lt;--- zImage ---&gt;|&lt;------ Compressed root filesystem --------&gt;|
+|________________|____________________________________________|
+             Floppy disk space
+</PRE>
+</CODE></BLOCKQUOTE>
+</P>
+<P>Here are the steps to create the boot floppy:</P>
+
+
+<H2><A NAME="ss4.2">4.2 Creating a root filesystem</A></H2>
+
+<P>The root filesystem is created pretty much the same way as outlined in
+Section 2.3 of this document.  The primary difference is that you can no
+longer create a root filesystem directly on a floppy -- you must create
+it on a separate device larger than the floppy area it will occupy.</P>
+
+<H3>Choosing a device</H3>
+
+<P>In order to build such a root filesystem, you need a spare device that is
+large enough.  There are several choices:
+<UL>
+<LI>If you have an unused hard disk partition that is large enough
+(several megabytes), this is the easiest solution.
+Alternatively, if you have enough physical RAM you can simply
+turn off swapping and build the filesystem in your swap
+partition.
+
+However, most people don't have a spare partition and can't afford
+to turn swapping off, so...</LI>
+<LI>Use a loopback device.  A loopback device allows a disk file on
+an existing filesystem to be treated as a device.  In order to
+use loopback devices you need specially modified mount
+and unmount programs.  You can find these at:
+<BLOCKQUOTE><CODE>
+<PRE>
+        ftp://ftp.win.tue.nl:/pub/linux/util/mount-2.5X.tar.gz
+</PRE>
+</CODE></BLOCKQUOTE>
+
+where X is the latest modification letter.
+
+One you've installed these special mount/umount binaries,
+create a temporary file on a hard disk with enough capacity (eg,
+/tmp/fsfile).
+
+Use this file name in place of DEVICE below.
+When you issue a mount command you must include the
+option "-o loop" to tell mount to use a loopback device.  
+For example:
+<BLOCKQUOTE><CODE>
+<PRE>
+        mount -o loop -t ext2 /tmp/fsfile /mnt
+</PRE>
+</CODE></BLOCKQUOTE>
+
+
+will mount /tmp/fsfile (via a loopback device) at the mount point
+/mnt.  A 'df' will confirm this.</LI>
+<LI>A final option is to use the ramdisk (DEVICE = /dev/ram or
+/dev/ramdisk).  In this case, RAM is used to simulate a disk
+drive.  The ramdisk must be large enough to hold a
+filesystem of the appropriate size. Check your Lilo configuration file
+(/etc/lilo.conf) for a line like:
+<BLOCKQUOTE><CODE>
+<PRE>
+        RAMDISK_SIZE = nnn
+</PRE>
+</CODE></BLOCKQUOTE>
+
+which determines how much RAM will be allocated.</LI>
+</UL>
+</P>
+<P>After you've chosen one of these options, prepare the device with:
+<BLOCKQUOTE><CODE>
+<PRE>
+        dd if=/dev/zero of=DEVICE bs=1k 4096
+</PRE>
+</CODE></BLOCKQUOTE>
+</P>
+<P>This command zeroes out the device.  This step is important because the
+filesystem on the device will be compressed later, so all unused
+portions should be filled with zeroes to achieve maximum compression.</P>
+<P>Next, create the filesystem with:
+<BLOCKQUOTE><CODE>
+<PRE>
+        mke2fs /dev/hdb5 -m 0 DEVICE
+</PRE>
+</CODE></BLOCKQUOTE>
+</P>
+<P>(If you're using a loopback device, the disk file you're using should be
+supplied in place of this DEVICE.  In this case, mke2fs will ask if you
+really want to do this; say yes.)</P>
+<P>Then mount the device:
+<BLOCKQUOTE><CODE>
+<PRE>
+        mount -t ext2 DEVICE /mnt
+</PRE>
+</CODE></BLOCKQUOTE>
+</P>
+<P>Proceed as before, copying files into /mnt, as specified in Section 2.3.</P>
+
+<H3>Compressing the filesystem</H3>
+
+<P>After you're done copying files into the root filesystem, you need to
+copy it back out and compress it.  First, umount it:
+<BLOCKQUOTE><CODE>
+<PRE>
+        umount /mnt
+</PRE>
+</CODE></BLOCKQUOTE>
+</P>
+<P>(Technically you can copy the filesystem without unmounting it first,
+but that's somewhat dangerous, and bad practice.)</P>
+<P>Next, copy data off the device to a disk file.  Call the disk file
+<CODE>rootfs</CODE>:
+<BLOCKQUOTE><CODE>
+<PRE>
+        dd if=DEVICE of=rootfs
+</PRE>
+</CODE></BLOCKQUOTE>
+</P>
+<P>Then compress it.  Use the '-9' option of gzip for maximal compression:
+<BLOCKQUOTE><CODE>
+<PRE>
+        gzip -9 rootfs
+</PRE>
+</CODE></BLOCKQUOTE>
+</P>
+<P>This may take several minutes.  When it finishes, you'll have a file
+rootfs.gz that is your compressed root filesystem.</P>
+<P>If you're tight on disk space you can combine dd and gzip:
+<BLOCKQUOTE><CODE>
+<PRE>
+        dd if=DEVICE bs=1k | gzip -9 &gt; rootfs.gz
+</PRE>
+</CODE></BLOCKQUOTE>
+</P>
+
+
+<H2><A NAME="ss4.3">4.3 Calculating the space</A></H2>
+
+<P>At this point, check the space to make sure both the kernel and the root
+filesystem will fit on the floppy.  An "ls -l" will show how many bytes
+each occupies; divide by 1024 to determine how many blocks each will
+need.  For partial blocks, be sure to round up to the next block.</P>
+<P>For example, if the kernel size is 453281 bytes, it will need
+<BLOCKQUOTE><CODE>
+<PRE>
+        ceil(453281 / 1024) = 443
+</PRE>
+</CODE></BLOCKQUOTE>
+
+blocks, so it will occupy blocks 0-442 on the floppy disk.  The
+compressed root filesystem will begin at block 443.  Remember this
+block number for the commands to follow; call it ROOTBEGIN.</P>
+<P>You must tell the kernel where on the floppy to find the root
+filesystem.  Inside the kernel image is a ramdisk word that specifies
+where the root filesystem is to be found, along with other options.  The
+word is defined in /usr/src/linux/arch/i386/kernel.setup.c and is
+interpreted as follows:
+<BLOCKQUOTE><CODE>
+<PRE>
+        bits  0-10:     Offset to start of ramdisk, in 1024 byte blocks
+                        (This is ROOTBEGIN, calculated above)
+        bits 11-13:     unused
+        bit     14:     Flag indicating that ramdisk is to be loaded
+        bit     15:     Flag indicating to prompt for floppy
+</PRE>
+</CODE></BLOCKQUOTE>
+</P>
+<P>(If bit 15 is set, on boot-up you will be prompted to place a new floppy
+disk in the drive.  This is necessary for a two-disk boot set, discussed
+below in Section 4.5.  For now, this will be zero.)</P>
+<P>If the root filesystem is to begin at block 443, the ramdisk word is
+<BLOCKQUOTE><CODE>
+<PRE>
+        1BB (hex)       443 (decimal)     (bits 0-10)
+     + 4000 (hex)       Ramdisk load flag (bit 14)
+       ----------
+     = 41BB (hex) 
+     =16827 (decimal)
+</PRE>
+</CODE></BLOCKQUOTE>
+</P>
+<P>This ramdisk word will be set in the kernel image using the "rdev -r"
+command in the next section.</P>
+
+
+<H2><A NAME="ss4.4">4.4 Copying files to the floppy</A></H2>
+
+
+<P>At this point you're ready to create the boot floppy.  First copy the
+kernel:
+<BLOCKQUOTE><CODE>
+<PRE>
+        dd if=zImage of=/dev/fd0
+</PRE>
+</CODE></BLOCKQUOTE>
+</P>
+<P>Next, tell the kernel to find its root filesystem on the floppy:
+<BLOCKQUOTE><CODE>
+<PRE>
+        rdev /dev/fd0 /dev/fd0
+</PRE>
+</CODE></BLOCKQUOTE>
+</P>
+<P>Next, you have to set the ramdisk word in the kernel image now residing
+on the floppy.  The ramdisk word is set using the "rdev -r" command.
+Using the figure calculated in 4.3:
+<BLOCKQUOTE><CODE>
+<PRE>
+        rdev -r zImage 16827
+</PRE>
+</CODE></BLOCKQUOTE>
+</P>
+<P>Finally, place the root filesystem on the floppy after the kernel.  The
+<CODE>dd</CODE> command has a <CODE>seek</CODE> option that allows you to specify how many
+blocks to skip:
+<BLOCKQUOTE><CODE>
+<PRE>
+        dd if=rootfs.gz of=/dev/fd0 bs=1k seek=443
+</PRE>
+</CODE></BLOCKQUOTE>
+</P>
+<P>(The value 443 is ROOTBEGIN from Section 4.3.)</P>
+<P>Wait for the floppy drive to finish writing, and you're done.</P>
+
+
+<H2><A NAME="ss4.5">4.5 Making a two-disk set.</A></H2>
+
+<P>If you want more space, you can make a two-disk boot set.  In this case,
+the first floppy disk will contain the kernel alone, and the second will
+contain the compressed root filesystem.  With this configuration you can use a
+compressed filesystem of up to 1440K.</P>
+<P>A two-disk set is created using a simple variation of the instructions
+above.  First, you must set the ramdisk PROMPT flag to 1 to instruct the
+kernel to prompt and wait for the second floppy.  The root filesystem
+will begin at byte 0 of the second floppy.  </P>
+<P>From section 4.3, the ramdisk PROMPT flag (bit 15) will be set to 1, and
+the ramdisk offset will be zero.  In our example the new calculation
+would be:
+<BLOCKQUOTE><CODE>
+<PRE>
+                4000 (hex)      Ramdisk load flag (bit 14)
+              + 8000 (hex)      Ramdisk prompt flag (bit 15)
+              ------------
+              = C000 (hex)
+              =49152 (decimal)
+</PRE>
+</CODE></BLOCKQUOTE>
+</P>
+<P>which would be used in the 'rdev -r' calculation as before.</P>
+<P>Follow the instructions of 4.4, above, but after issuing the 'rdev -r'
+command, put a new floppy in the drive and issue the command:
+<BLOCKQUOTE><CODE>
+<PRE>
+        dd if=rootfs.gz of=/dev/fd0
+</PRE>
+</CODE></BLOCKQUOTE>
+</P>
+<P>The <CODE>seek</CODE> option is not needed since the root filesystem starts at block
+zero.</P>
+
+
+<HR>
+<A HREF="Bootdisk-HOWTO-3.html"><IMG SRC="prev.gif" ALT="Previous"></A>
+<A HREF="Bootdisk-HOWTO-5.html"><IMG SRC="next.gif" ALT="Next"></A>
+<A HREF="Bootdisk-HOWTO.html#toc4"><IMG SRC="toc.gif" ALT="Contents"></A>
+<hr> 
+Space for these documents provided by 
+<A href="http://www.spade.com/">Ben Spade</A> 
+in support of the Linux community. 
+
+</BODY>
+</HTML>

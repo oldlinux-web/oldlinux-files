@@ -1,0 +1,401 @@
+<!doctype html public "-//W3C//DTD HTML 4.0 Transitional//EN">
+
+<html>
+
+<head>
+<title>Bringing SMP to Your UP Operating System</title>
+<meta http-equiv="Cache-Control" content="must-revalidate">
+</head>
+
+<body bgcolor="#ffffff" vlink="#0000ff">
+
+<table width=600 align=center>
+<tr><td>
+
+<center>
+<h1>Bringing SMP to Your UP Operating System</h1>
+Sidney Cammeresi
+</center>
+<br><br><br>
+
+<blockquote>
+<h3>Overview</h3>
+<ol>
+<li><a href="#preface">Preface</a></li>
+<li><a href="#terms">Terminology</a></li>
+<li><a href="#config">MP Configuration Tables</a></li>
+<li><a href="#apic">Using Local APICs</a></li>
+<li><a href="#booting">Booting Application Processors</a></li>
+<li><a href="#protmode">Switching from Real Mode to Protected Mode</a></li>
+<li><a href="#ipis">Interprocessor Interrupts</a></li>
+<li><a href="#other">Other Considerations<br><br></a></li>
+
+<li>Scheduling</li>
+<li>Using the I/O APIC<br><br></li>
+<!--
+<li><a href="#scheduling">Scheduling</a></li>
+<li><a href="#ioapic">Using the I/O APIC</a></li>
+-->
+
+<li><a href="#references">References</a></li>
+<li><a href="#revsions">Revision History</a></li>
+</ol>
+</blockquote>
+<br><br><br>
+
+<h3>
+<a name="preface">Preface</a></h3>
+
+This tutorial is intended as a supplement to the
+<a href="http://www.acm.uiuc.edu/sigops/roll_your_own">SigOps OS
+Tutorial</a> to teach the fundamentals of symmetric multprocessing
+using Intel MP compliant hardware.  Knowledge of the concepts and
+implementations of basic operating system parts such as managing virtual
+memory and multitasking are assumed and will not be discussed except as
+they relate to multiprocessing.  Knowledge equivalent to an intermediate
+or advanced computer architecture college course will be helpful in
+understanding scheduling issues, but is not required.
+<p>
+
+This tutorial is not intended to be a complete explanation of how to
+implement an SMP-capable operating system, nor as a replacement for
+Intel's documentation.  Rather it is designed to
+give an overview of the things I learned in writing SMP support for
+<a href="http://www.frotz.net/openblt">OpenBLT</a>, a freely
+redistributable microkernel-based operating system under the BSD
+licence.  Particularly, some tedious hardware
+aspects will not be discussed in detail when the reader could just as
+easily read official Intel documentation.  The interested reader should
+refer to the references for more detailed information.  For code examples,
+the reader should refer to the source code of
+<a href="http://www.frotz.net/openblt">OpenBLT</a> or
+<a href="http://www.freebsd.org">FreeBSD</a>.  The Linux kernel source
+code might be helpful, although it is under the GPL.
+<p>
+
+This tutorial is a work in progress.  If you see an error or something
+that needs clarification, please <a href="mailto:cammeres@uiuc.edu">e-mail
+me</a>.
+<p>
+
+<h3>
+<a name="terms">Terminology</a>
+</h3>
+
+<dl>
+<dt>AP
+    <dd>application processor.  A processor that is not the BSP.  All APs are
+        in a halted state when the BIOS first gives control to the operating
+        system.
+<dt>APIC
+    <dd>Advanced Programmable Interrupt Controller.  Either a local APIC or
+        an I/O APIC.  It is attached to the APIC bus.
+<dt>APIC bus
+    <dd>A special non-architechural bus on which the APICs in the system
+        send messages.
+<dt>BSP
+    <dd>bootstrap processor.  The processor which is given control after the
+        BIOS finishes its POST.
+<dt>I/O APIC
+    <dd>A special APIC for receiving and distributing interrupts from external
+        devices which is backward compatible with the PIC.  There is generally
+        only one per computer.
+<dt>IPI
+    <dd>interprocessor interrupt.  A special interrupt sent to a processor by
+        the originating processor programming its APIC with a target or logical
+        target ID, and an interrupt vector.
+<dt>Local APIC
+    <dd>an APIC built in to the processor.  It is responsible for dispatching
+        interrupts sent over the APIC bus to its processor core and sending
+        interrupts to other processors over the APIC bus.
+<dt>MP
+    <dd>Intel's MultiProcessor Specification, a standard which defines how
+        SMP hardware should be presented to the operating system and how the
+        operating system should interact with this hardware.
+<dt>serialisation
+    <dd>The act of executing a certain instruction which causes the processor
+        to pause to
+        retire all instructions currently being executed before proceeding
+        to the next instruction in the stream.  For example, before switching
+        to protected mode, the processor must retire all instructions that
+        began executing in real mode before beginning any in protected mode.
+<dt>SMP
+    <dd>symmetric multiprocessing.  Using multiple processors which share
+        the same physical memory in the same computer at the time.  You are
+        probably reading this tutorial with the hope that your operating
+        system will become SMP-capable.
+<dt>UP
+    <dd>uniprocessor.  Your operating system to date is a UP operating system.
+</dl>
+
+<h3>
+<a name="config">MP Detection and Configuration</a>
+</h3>
+
+When the system first starts, the BIOS detects the hardware installed in
+the system using electric means and then creates structures to describe
+this hardware to the operating system.  There are two such tables.
+The first is the MP Floating Pointer Structure, which is required.
+The second is the MP Configuration Table, which is optional.  If the
+configuration table does not exist, the operating system should set up
+the default configuration indicated in the floating pointer structure.
+Some data in the tables is in ASCII.  Strings are padded with spaces
+and are not null-terminated.
+<p>
+
+First, you need to find the floating pointer structure.  According to
+the spec, it can be in one of four places:  (1) in the first kilobyte
+of the extended BIOS data area, (2) the last kilobyte of base memory,
+(3) the top of physical memory, or (4) the BIOS read-only memory space
+between 0xe0000 and 0xfffff.  You need to search these areas for the
+four-byte signature "_MP_" which denotes the start of the floating
+pointer structure.  Absence of this structure indicates that the system
+is not MP compliant.  At this point your operating system can either halt,
+or it can fall back into a UP setup.
+<p>
+
+You should checksum the structure to make sure it has not been corrupted.
+There is not much of interest in the floating pointer structure, unless
+your system does not have a configuration table.  In this case, you will
+need to get the number of the default configuration your system adheres to
+and set up the system for SMP using those parameters.  Otherwise, you will
+need to get the address of the configuration table and begin parsing that.
+<p>
+
+The configuration table is divided into three parts:  a header, a base
+section, and an extended section.  The header begins with the four-byte
+signature "PCMP", although you do not have to search for it.  Once you
+find it, checksum it.  At this point, you can print the OEM and product
+ID strings in the configuration table if you want.  You should get the
+address of the local APIC from this and store it.  Then, proceed to
+parse the base section.
+<p>
+
+The base section consists of a set of entries that describe either
+processors, system busses, I/O APICs, I/O interrupt assignments, or
+local interrupt assignments.  All entries are eight bytes in length,
+save processor entries which are twenty bytes.  The first byte of each
+entry denotes the type of the entry.  Look through each entry.  You will
+probably want to generate quite a few OS-specific data structure here.
+In particular, you will want to note the APIC ID of each processor in
+the system, its version, and its type as well as the address of the
+system's I/O APIC.
+<p>
+
+<h3>
+<a name="apic">Using Local APICs</a>
+</h3>
+
+MP systems have a special bus to which all APICs in the system are
+connected.  This bus is one of the ways the processors can communicate
+with one another (the other, of course, is shared memory).  APICs (both
+local and I/O) are memory mapped devices.  The default location for
+the local APIC is at 0xfee00000 in physical memory.  The local APIC
+will appear in the same place for each processor, but each processor
+will reference its own APIC; the APIC intercepts memory references to
+its registers, and those references will not generate bus cycles on
+some systems.  Since APICs are mapped in high memory, the APs will have
+to switch to protected mode before they can intialise their local APICs.
+If you like, you can map the APIC to a different address using the paging
+unit, but be sure to disable caching in the page table entry since some
+registers can change between accesses.  For this reason, pointers to
+APIC registers should be volatile.  To initialise the BSP's local APIC,
+set the enable bit in the spurious interrupt vector register and set
+the error interrupt vector in the local vector table.
+<p>
+
+<h3>
+<a name="booting">Booting Application Processors</a>
+</h3>
+
+Once you have detected the processors in the system, set up your local
+APIC, and verified that you can communicate with it (hint: read the
+APIC version register), it's time to boot the APs.  N.B. that it is good
+practise to not try to boot the BSP here.  That would be bad.
+<p>
+
+Since the APs will wake up in real mode, everything they need to get
+started should be in low memory (below 0x100000 or one megabyte).
+First, set the shutdown code by setting address 0:f to 0xa.  Then,
+grab a page of memory for the AP's stack.  You will also need space
+to store the `trampoline' code, i.e. the code the processor executes
+after waking up to switch to protected mode and jump to the kernel.
+You can either use the same page of code for each processor or store
+the code at the bottom of the processor's stack.  Note that the start of
+the code must be at a page-aligned address.  Copy the code there, then
+set the warm reset vector at address 40:67 to the start of this code.
+Next, you should reset a bit in the kernel which the processor will use
+to signal that it has booted and finished initialisation and clear any
+APIC error by writing a zero to the error status register.  If you need
+to pass any parameters or data to the AP, now would be a good time to
+set that up.  For example, since OpenBLT's kernel runs in high memory,
+I have to pass the address of the page directory in memory so that the
+AP can load it and enable paging before calling the kernel.
+<p>
+
+Now you can actually boot the processor.  The procedure consists of
+sending a sequence of interrupts to the processor.  The incremental effect
+of each is undefined, but at the end of the sequence, the processor will
+be booted.  First send an INIT IPI.  Assert the INIT signal by writing
+the target processor's APIC ID to the high word of the interrupt command
+register.  Then write to the low word with the bits set to enable the INIT
+delivery mode, level triggered, and assert the interrupt.  Deassert INIT
+by repeating the procedure with the assert bit reset.  Now, wait 10 ms.
+Use of the APIC timer is suggested.
+<p>
+
+If the local APIC is not an 82489dx, you need to send two STARTUP IPIs.
+Clear APIC errors, set the target APIC ID in the ICR, then send the
+interrupt by writing to the low word of the ICR with bits set for STARTUP
+delivery mode and with the code vector in the low byte.  The code vector
+is the physical page number at which the processor should start executing,
+i.e. the start of your trampoline code.  Wait 200 ms, then check the low
+word of the ICR to make sure bit 16 is reset to indicate the interrupt
+was dispatched before sending the second STARTUP.  After sending it,
+spin and wait for the AP to set its ready bit in memory.  You may want
+to set a timeout of 5 seconds, after which you assume the processor did
+not wake up.
+<p>
+
+<h3>
+<a name="protmode">Switching from Real Mode to Protected Mode</a>
+</h3>
+
+Provided you did everything right above, the processor at some point woke
+up in real mode and started executing the code you told it to.  First,
+execute a "cli" instruction to turn off interrupts, just in case.  Now,
+begin the switch to protected mode.  Load an appropriatee value into GDTR.
+This can either point to the actual GDT or in my case, a temporary GDT.
+If you need to activate paging, load the address of a page directory
+into cr3.  Then set bit zero in cr0 to enable protected mode as well as
+bit 31 if you need to enable paging to get into the kernel.  Then do an
+ljmp to the kernel text segment with an offset that points to the next
+instruction to serialise the processor.  Now that you're in protected
+mode, load appropriate descriptors into the segment registers, then
+execute a "cld", which is reportedly what gcc expects.  Then, jump to
+the starting address of your kernel.
+<p>
+
+Don't reference any symbols in this code since it
+will be running at an address for which it was not linked;
+all memory references must be absolute.  Since your kernel is above
+one megabyte in memory, you can't access any global variables in real
+mode.  Also be careful in specifying your offset address for the ljmp
+instruction, and do specify the address of the start of your kernel,
+not a symbol in the instruction that goes into the kernel.
+Jumping to a symbol doesn't seem to work.  For details,
+see OpenBLT's kernel/trampoline.S.
+<p>
+
+Debugging this part is really not too bad.  What you have to do is
+establish some communication space in low memory, then have the AP write
+bytes to that memory to explain what it is doing and print these out on
+the BSP.
+<p>
+
+<h3>
+<a name="ipis">Interprocessor Interrupts</a>
+</h3>
+
+IPIs are used to maintain synchronisation between the processors.
+For example, if a kernel page table entry changes, both processors must
+either flush their TLBs or invalidate that particular page table entry.
+Whichever processor changed the mapping knows to do this automatically,
+but the other processor does not; therefore, the processor which changed
+the mapping must send an IPI to the other processor to tell it to flush
+its TLB or invalidate the page table entry.
+<p>
+
+Using the local APIC, you can send interrupts to all processors, all
+processors but the one sending the interrupt, or a specific processor
+or logical address as well as self-interrupts.  To send an IPI, write
+the destination APIC ID, if needed, into the high word of the ICR, then
+write the low word of ICR with the destination shorthand and interrupt
+vector set to send the IPI.  Be sure to wrap these functions in spinlocks.
+You might want to turn off interrupts as well while sending IPIs.
+<p>
+
+<h3>
+<a name="other">Other Considerations</a>
+</h3>
+
+One thing to note is that semaphores (a.k.a. spinlocks) may need to
+be done differently under SMP.  Consider a scenario where semaphores
+are procured with a ``bts'' instruction.  If both processors hit that
+instruction at the same time while the semaphore is reset, they might
+both think they have acquired it.  For this reason, you would need to
+use a ``lock'' prefix on that instruction to lock the system bus and
+maintain synchronisation.
+<p>
+
+<h3>
+<a name="scheduling">Scheduling</a>
+</h3>
+
+Not yet.
+
+<h3>
+<a name="ioapic">Using the I/O APIC</a>
+</h3>
+
+Not yet.
+
+<h3>
+<a name="references">References</a>
+</h3>
+
+All of these documents are available from Intel's developer web site at
+<a href="http://developer.intel.com">developer.intel.com</a>.  Supposedly,
+by request, Intel will also send you printed documentation by post.
+
+<ul>
+<li>82378ZB System I/O and 82379AB System I/O APIC
+    <ul>
+    <li>&sect;3.7: APIC Registers</li>
+    </ul>
+</li>
+<li>MultiProcessor Specification, Version 1.4
+    <ul>
+    <li>&sect;4: MP Configuration Table</li>
+    <li>&sect;B: Operating System Programming Guidelines</li>
+    </ul>
+</li>
+<li>Intel Architecture Software Developer's Manual, Volume 2:  Instruction
+    Set Reference</li>
+<li>Intel Architecture Software Developer's Manual, Volume 3:  System
+    Programming Guide
+    <ul>
+    <li>&sect;7.1: Locked Atomic Operations</li>
+    <li>&sect;7.4: The APIC</li>
+    <li>&sect;8.7: Software Initialization for Protected Mode</li>
+    <li>&sect;8.8: Mode Switching</li>
+    <li>&sect;B: MP Bootup Sequence</li>
+    </ul>
+</li>
+</ul>
+
+<h3>
+<a name="revisions">Revision History</a>
+</h3>
+
+<pre>
+07 Nov 1998   - initial version, most sections filled out.
+</pre>
+
+<br clear=all>
+<hr>
+<i>Bringing SMP to Your UP Operating System</i> is Copyright &copy; 1998 by
+Sidney Cammeresi in its entirety.  All rights reserved.<p>
+Permission is granted to make verbatim copies of this tutorial for
+non-commercial use provided this notice remains intact on all copies.
+
+</td></tr>
+</table>
+
+<pre>$Id: smp.html 1.3 Thu, 01 Jul 1999 10:51:51 -0500 sac $</pre>
+
+</body>
+
+</html>
+
+

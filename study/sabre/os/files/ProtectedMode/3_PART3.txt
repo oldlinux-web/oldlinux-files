@@ -1,0 +1,1856 @@
+                          PART III    COMPATIBILITY                       
+
+Chapter 13  Executing 80286 Protected-Mode Code
+
+13.1  80286 Code Executes as a Subset of the 80386
+13.2  Two Ways to Execute 80286 Tasks
+13.3  Differences from 80286
+       13.3.1  Wraparound of 80286 24-Bit Physical Address Space
+       13.3.2  Reserved Word of Descriptor
+       13.3.3  New Descriptor Type Codes
+       13.3.4  Restricted Semantics of LOCK
+       13.3.5  Additional Exceptions
+
+Chapter 14  80386 Real-Address Mode
+
+14.1  Physical Address Formation
+14.2  Registers and Instructions
+14.3  Interrupt and Exception Handling
+14.4  Entering and Leaving Real-Address Mode
+       14.4.1  Switching to Protected Mode
+
+14.5  Switching Back to Real-Address Mode
+14.6  Real-Address Mode Exceptions
+14.7  Differences from 8086
+14.8  Differences from 80286 Real-Address Mode
+       14.8.1  Bus Lock
+       14.8.2  Location of First Instruction
+       14.8.3  Initial Values of General Registers
+       14.8.4  MSW Initialization
+
+Chapter 15  Virtual 8088 Mode
+
+15.1  Executing 8086 Code
+       15.1.1  Registers and Instructions
+       15.1.2  Linear Address Formation
+
+15.2  Structure of a V86 Task
+       15.2.1  Using Paging for V86 Tasks
+       15.2.2  Protection within a V86 Task
+
+15.3  Entering and Leaving V86 Mode
+       15.3.1  Transitions Through Task Switches
+       15.3.2  Transitions Through Trap Gates and Interrupt Gates
+
+15.4  Additional Sensitive Instructions
+       15.4.1  Emulating 8086 Operating System Calls
+       15.4.2  Virtualizing the Interrupt-Enable Flag
+
+15.5  Virtual I/O
+       15.5.1  I/O-Mapped I/O
+       15.5.2  Memory-Mapped I/O
+       15.5.3  Special I/O Buffers
+
+15.6  Differences from 8086
+15.7  Differences from 80286 Real-Address Mode
+
+Chapter 16  Mixing 16-Bit and 32-Bit Code
+
+16.1  How the 80386 Implements 16-Bit and 32-Bit Features
+16.2  Mixing 32-Bit and 16-Bit Operations
+16.3  Sharing Data Segments among Mixed Code Segments
+16.4  Transferring Control among Mixed Code Segments
+       16.4.1  Size of Code-Segment Pointer
+       16.4.2  Stack Management for Control Transfers
+                16.4.2.1  Controlling the Operand-Size for a CALL
+                16.4.2.2  Changing Size of Call
+
+       16.4.3  Interrupt Control Transfers
+       16.4.4  Parameter Translation
+       16.4.5  The Interface Procedure
+
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+                          PART III  COMPATIBILITY
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+
+Chapter 13  Executing 80286 Protected-Mode Code
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+13.1  80286 Code Executes as a Subset of the 80386
+
+In general, programs designed for execution in protected mode on an 80286
+execute without modification on the 80386, because the features of the 80286
+are a subset of those of the 80386.
+
+All the descriptors used by the 80286 are supported by the 80386 as long as
+the Intel-reserved word (last word) of the 80286 descriptor is zero.
+
+The descriptors for data segments, executable segments, local descriptor
+tables, and task gates are common to both the 80286 and the 80386. Other
+80286 descriptorsÄÄTSS segment, call gate, interrupt gate, and trap
+gateÄÄare supported by the 80386. The 80386 also has new versions of
+descriptors for TSS segment, call gate, interrupt gate, and trap gate that
+support the 32-bit nature of the 80386. Both sets of descriptors can be
+used simultaneously in the same system.
+
+For those descriptors that are common to both the 80286 and the 80386, the
+presence of zeros in the final word causes the 80386 to interpret these
+descriptors exactly as 80286 does; for example:
+
+Base Address      The high-order eight bits of the 32-bit base address are
+                  zero, limiting base addresses to 24 bits.
+
+Limit             The high-order four bits of the limit field are zero,
+                  restricting the value of the limit field to 64K.
+
+Granularity bit   The granularity bit is zero, which implies that the value
+                  of the 16-bit limit is interpreted in units of one byte.
+
+B-bit             In a data-segment descriptor, the B-bit is zero, implying
+                  that the segment is no larger than 64 Kbytes.
+
+D-bit             In an executable-segment descriptor, the D-bit is zero,
+                  implying that 16-bit addressing and operands are the
+                  default.
+
+For formats of these descriptors and documentation of their use refer to
+the iAPX 286 Programmer's Reference Manual.
+
+
+13.2  Two ways to Execute 80286 Tasks
+
+When porting 80286 programs to the 80386, there are two cases to consider:
+
+  1.  Porting an entire 80286 system to the 80386, complete with 80286
+      operating system, loader, and system builder.
+
+      In this case, all tasks will have 80286 TSSs. The 80386 is being used
+      as a faster 286.
+
+  2.  Porting selected 80286 applications to run in an 80386 environment
+      with an 80386 operating system, loader, and system builder.
+
+      In this case, the TSSs used to represent 80286 tasks should be
+      changed to 80386 TSSs. It is theoretically possible to mix 80286 and
+      80386 TSSs, but the benefits are slight and the problems are great. It
+      is recommended that all tasks in a 80386 software system have 80386
+      TSSs. It is not necessary to change the 80286 object modules
+      themselves; TSSs are usually constructed by the operating system, by
+      the loader, or by the system builder. Refer to Chapter 16 for further
+      discussion of the interface between 16-bit and 32-bit code.
+
+
+13.3  Differences From 80286
+
+The few differences that do exist primarily affect operating system code.
+
+
+13.3.1  Wraparound of 80286 24-Bit Physical Address Space
+
+With the 80286, any base and offset combination that addresses beyond 16M
+bytes wraps around to the first megabyte of the 80286 address space. With
+the 80386, since it has a greater physical address space, any such address
+falls into the 17th megabyte. In the unlikely event that any software
+depends on this anomaly, the same effect can be simulated on the 80386 by
+using paging to map the first 64K bytes of the 17th megabyte of logical
+addresses to physical addresses in the first megabyte.
+
+
+13.3.2  Reserved Word of Descriptor
+
+Because the 80386 uses the contents of the reserved word (last word) of
+every descriptor, 80286 programs that place values in this word may not
+execute correctly on the 80386.
+
+
+13.3.3  New Descriptor Type Codes
+
+Operating-system code that manages space in descriptor tables often uses an
+invalid value in the access-rights field of descriptor-table entries to
+identify unused entries. Access rights values of 80H and 00H remain invalid
+for both the 80286 and 80386. Other values that were invalid on for the
+80286 may be valid for the 80386 because of the additional descriptor types
+defined by the 80386.
+
+
+13.3.4  Restricted Semantics of LOCK
+
+The 80286 processor implements the bus lock function differently than the
+80386. Programs that use forms of memory locking specific to the 80286 may
+not execute properly when transported to a specific application of the
+80386.
+
+The LOCK prefix and its corresponding output signal should only be used to
+prevent other bus masters from interrupting a data movement operation.  LOCK
+may only be used with the following 80386 instructions when they modify
+memory. An undefined-opcode exception results from using LOCK before any
+other instruction.
+
+  ş  Bit test and change:  BTS, BTR, BTC.
+  ş  Exchange: XCHG.
+  ş  One-operand arithmetic and logical: INC, DEC, NOT, and NEG.
+  ş  Two-operand arithmetic and logical:  ADD, ADC, SUB, SBB, AND, OR, XOR.
+
+A locked instruction is guaranteed to lock only the area of memory defined
+by the destination operand, but may lock a larger memory area.  For example,
+typical 8086 and 80286 configurations lock the entire physical memory space.
+With the 80386, the defined area of memory is guaranteed to be locked
+against access by a processor executing a locked instruction on exactly the
+same memory area, i.e., an operand with identical starting address and
+identical length.
+
+
+13.3.5  Additional Exceptions
+
+The 80386 defines new exceptions that can occur even in systems designed
+for the 80286.
+
+  ş  Exception #6 ÄÄ invalid opcode
+
+     This exception can result from improper use of the LOCK instruction.
+
+  ş  Exception #14 ÄÄ page fault
+
+     This exception may occur in an 80286 program if the operating system
+     enables paging. Paging can be used in a system with 80286 tasks as long
+     as all tasks use the same page directory. Because there is no place in
+     an 80286 TSS to store the PDBR, switching to an 80286 task does not
+     change the value of PDBR. Tasks ported from the 80286 should be given
+     80386 TSSs so they can take full advantage of paging.
+
+
+Chapter 14  80386 Real-Address Mode
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+The real-address mode of the 80386 executes object code designed for
+execution on 8086, 8088, 80186, or 80188 processors, or for execution in the
+real-address mode of an 80286:
+
+In effect, the architecture of the 80386 in this mode is almost identical
+to that of the 8086, 8088, 80186, and 80188. To a programmer, an 80386 in
+real-address mode appears as a high-speed 8086 with extensions to the
+instruction set and registers. The principal features of this architecture
+are defined in Chapters 2 and 3.
+
+This chapter discusses certain additional topics that complete the system
+programmer's view of the 80386 in real-address mode:
+
+  ş  Address formation.
+  ş  Extensions to registers and instructions.
+  ş  Interrupt and exception handling.
+  ş  Entering and leaving real-address mode.
+  ş  Real-address-mode exceptions.
+  ş  Differences from 8086.
+  ş  Differences from 80286 real-address mode.
+
+
+14.1  Physical Address Formation
+
+The 80386 provides a one Mbyte + 64 Kbyte memory space for an 8086 program.
+Segment relocation is performed as in the 8086: the 16-bit value in a
+segment selector is shifted left by four bits to form the base address of a
+segment. The effective address is extended with four high order zeros and
+added to the base to form a linear address as Figure 14-1 illustrates. (The
+linear address is equivalent to the physical address, because paging is not
+used in real-address mode.) Unlike the 8086, the resulting linear address
+may have up to 21 significant bits. There is a possibility of a carry when
+the base address is added to the effective address. On the 8086, the carried
+bit is truncated, whereas on the 80386 the carried bit is stored in bit
+position 20 of the linear address.
+
+Unlike the 8086 and 80286, 32-bit effective addresses can be generated (via
+the address-size prefix); however, the value of a 32-bit address may not
+exceed 65535 without causing an exception. For full compatibility with 80286
+real-address mode, pseudo-protection faults (interrupt 12 or 13 with no
+error code) occur if an effective address is generated outside the range 0
+through 65535.
+
+
+Figure 14-1.  Real-Address Mode Address Formation
+
+                      19                                3       0
+                     ÉÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍ»
+         BASE        º     16-BIT SEGMENT SELECTOR     ³ 0 0 0 0 º
+                     ÈÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍ¼
+
+         +
+                      19        15                              0
+                     ÉÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ»
+         OFFSET      º 0 0 0 0 ³    16-BIT EFFECTIVE ADDRESS     º
+                     ÈÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼
+
+         =
+                    20                                          0
+         LINEAR    ÉÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ»
+         ADDRESS   º X X X X X X X X X X X X X X X X X X X X X X º
+                   ÈÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼
+
+
+14.2  Registers and Instructions
+
+The register set available in real-address mode includes all the registers
+defined for the 8086 plus the new registers introduced by the 80386: FS, GS,
+debug registers, control registers, and test registers. New instructions
+that explicitly operate on the segment registers FS and GS are available,
+and the new segment-override prefixes can be used to cause instructions to
+utilize FS and GS for address calculations. Instructions can utilize 32-bit
+operands through the use of the operand size prefix.
+
+The instruction codes that cause undefined opcode traps (interrupt 6)
+include instructions of the protected mode that manipulate or interrogate
+80386 selectors and descriptors; namely, VERR, VERW, LAR, LSL, LTR, STR,
+LLDT, and SLDT. Programs executing in real-address mode are able to take
+advantage of the new applications-oriented instructions added to the
+architecture by the introduction of the 80186/80188, 80286 and 80386:
+
+ş New instructions introduced by 80186/80188 and 80286.
+
+   ÄÄ PUSH immediate data
+   ÄÄ Push all and pop all (PUSHA and POPA)
+   ÄÄ Multiply immediate data
+   ÄÄ Shift and rotate by immediate count
+   ÄÄ String I/O
+   ÄÄ ENTER and LEAVE
+   ÄÄ BOUND
+
+ş New instructions introduced by 80386.
+
+   ÄÄ LSS, LFS, LGS instructions
+   ÄÄ Long-displacement conditional jumps
+   ÄÄ Single-bit instructions
+   ÄÄ Bit scan
+   ÄÄ Double-shift instructions
+   ÄÄ Byte set on condition
+   ÄÄ Move with sign/zero extension
+   ÄÄ Generalized multiply
+   ÄÄ MOV to and from control registers
+   ÄÄ MOV to and from test registers
+   ÄÄ MOV to and from debug registers
+
+
+14.3  Interrupt and Exception Handling
+
+Interrupts and exceptions in 80386 real-address mode work as much as they
+do on an 8086. Interrupts and exceptions vector to interrupt procedures via
+an interrupt table. The processor multiplies the interrupt or exception
+identifier by four to obtain an index into the interrupt table. The entries
+of the interrupt table are far pointers to the entry points of interrupt or
+exception handler procedures. When an interrupt occurs, the processor
+pushes the current values of CS:IP onto the stack, disables interrupts,
+clears TF (the single-step flag), then transfers control to the location
+specified in the interrupt table. An IRET instruction at the end of the
+handler procedure reverses these steps before returning control to the
+interrupted procedure.
+
+The primary difference in the interrupt handling of the 80386 compared to
+the 8086 is that the location and size of the interrupt table depend on the
+contents of the IDTR (IDT register). Ordinarily, this fact is not apparent
+to programmers, because, after RESET, the IDTR contains a base address of 0
+and a limit of 3FFH, which is compatible with the 8086. However, the LIDT
+instruction can be used in real-address mode to change the base and limit
+values in the IDTR. Refer to Chapter 9 for details on the IDTR, and the
+LIDT and SIDT instructions. If an interrupt occurs and the corresponding
+entry of the interrupt table is beyond the limit stored in the IDTR, the
+processor raises exception 8.
+
+
+14.4  Entering and Leaving Real-Address Mode
+
+Real-address mode is in effect after a signal on the RESET pin. Even if the
+system is going to be used in protected mode, the start-up program will
+execute in real-address mode temporarily while initializing for protected
+mode.
+
+
+14.4.1  Switching to Protected Mode
+
+The only way to leave real-address mode is to switch to protected mode. The
+processor enters protected mode when a MOV to CR0 instruction sets the PE
+(protection enable) bit in CR0. (For compatibility with the 80286, the LMSW
+instruction may also be used to set the PE bit.)
+
+Refer to Chapter 10 "Initialization" for other aspects of switching to
+protected mode.
+
+
+14.5  Switching Back to Real-Address Mode
+
+The processor reenters real-address mode if software clears the PE bit in
+CR0 with a MOV to CR0 instruction. A procedure that attempts to do this,
+however, should proceed as follows:
+
+  1.  If paging is enabled, perform the following sequence:
+
+      ş  Transfer control to linear addresses that have an identity mapping;
+         i.e., linear addresses equal physical addresses.
+
+      ş  Clear the PG bit in CR0.
+
+      ş  Move zeros to CR3 to clear out the paging cache.
+
+  2.  Transfer control to a segment that has a limit of 64K (FFFFH). This
+      loads the CS register with the limit it needs to have in real mode.
+
+  3.  Load segment registers SS, DS, ES, FS, and GS with a selector that
+      points to a descriptor containing the following values, which are
+      appropriate to real mode:
+
+      ş  Limit = 64K   (FFFFH)
+      ş  Byte granular (G = 0)
+      ş  Expand up     (E = 0)
+      ş  Writable      (W = 1)
+      ş  Present       (P = 1)
+      ş  Base = any value
+
+  4.  Disable interrupts. A CLI instruction disables INTR interrupts. NMIs
+      can be disabled with external circuitry.
+
+  5.  Clear the PE bit.
+
+  6.  Jump to the real mode code to be executed using a far JMP. This
+      action flushes the instruction queue and puts appropriate values in
+      the access rights of the CS register.
+
+  7.  Use the LIDT instruction to load the base and limit of the real-mode
+      interrupt vector table.
+
+  8.  Enable interrupts.
+
+  9.  Load the segment registers as needed by the real-mode code.
+
+
+14.6  Real-Address Mode Exceptions
+
+The 80386 reports some exceptions differently when executing in
+real-address mode than when executing in protected mode. Table 14-1 details
+the real-address-mode exceptions.
+
+
+14.7  Differences From 8086
+
+In general, the 80386 in real-address mode will correctly execute ROM-based
+software designed for the 8086, 8088, 80186, and 80188. Following is a list
+of the minor differences between 8086 execution on the 80386 and on an 8086.
+
+  1.  Instruction clock counts.
+
+      The 80386 takes fewer clocks for most instructions than the 8086/8088.
+      The areas most likely to be affected are:
+
+      ş  Delays required by I/O devices between I/O operations.
+
+      ş  Assumed delays with 8086/8088 operating in parallel with an 8087.
+
+  2.  Divide Exceptions Point to the DIV instruction.
+
+      Divide exceptions on the 80386 always leave the saved CS:IP value
+      pointing to the instruction that failed. On the 8086/8088, the CS:IP
+      value points to the next instruction.
+
+  3.  Undefined 8086/8088 opcodes.
+
+      Opcodes that were not defined for the 8086/8088 will cause exception
+      6 or will execute one of the new instructions defined for the 80386.
+
+  4.  Value written by PUSH SP.
+
+      The 80386 pushes a different value on the stack for PUSH SP than the
+      8086/8088. The 80386 pushes the value of SP before SP is incremented
+      as part of the push operation; the 8086/8088 pushes the value of SP
+      after it is incremented. If the value pushed is important, replace
+      PUSH SP instructions with the following three instructions:
+
+      PUSH  BP
+      MOV   BP, SP
+      XCHG  BP, [BP]
+
+      This code functions as the 8086/8088 PUSH SP instruction on the 80386.
+
+  5.  Shift or rotate by more than 31 bits.
+
+      The 80386 masks all shift and rotate counts to the low-order five
+      bits. This MOD 32 operation limits the count to a maximum of 31 bits,
+      thereby limiting the time that interrupt response is delayed while
+      the instruction is executing.
+
+  6.  Redundant prefixes.
+
+      The 80386 sets a limit of 15 bytes on instruction length. The only
+      way to violate this limit is by putting redundant prefixes before an
+      instruction. Exception 13 occurs if the limit on instruction length
+      is violated. The 8086/8088 has no instruction length limit.
+
+  7.  Operand crossing offset 0 or 65,535.
+
+      On the 8086, an attempt to access a memory operand that crosses
+      offset 65,535 (e.g., MOV a word to offset 65,535) or offset 0 (e.g.,
+      PUSH a word when SP = 1) causes the offset to wrap around modulo
+      65,536. The 80386 raises an exception in these casesÄÄexception 13 if
+      the segment is a data segment (i.e., if CS, DS, ES, FS, or GS is being
+      used to address the segment), exception 12 if the segment is a stack
+      segment (i.e., if SS is being used).
+
+  8.  Sequential execution across offset 65,535.
+
+      On the 8086, if sequential execution of instructions proceeds past
+      offset 65,535, the processor fetches the next instruction byte from
+      offset 0 of the same segment. On the 80386, the processor raises
+      exception 13 in such a case.
+
+  9.  LOCK is restricted to certain instructions.
+
+      The LOCK prefix and its corresponding output signal should only be
+      used to prevent other bus masters from interrupting a data movement
+      operation. The 80386 always asserts the LOCK signal during an XCHG
+      instruction with memory (even if the LOCK prefix is not used). LOCK
+      may only be used with the following 80386 instructions when they
+      update memory: BTS, BTR, BTC, XCHG, ADD, ADC, SUB, SBB, INC, DEC,
+      AND, OR, XOR, NOT, and NEG. An undefined-opcode exception
+      (interrupt 6) results from using LOCK before any other instruction.
+
+ 10.  Single-stepping external interrupt handlers.
+
+      The priority of the 80386 single-step exception is different from that
+      of the 8086/8088. The change prevents an external interrupt handler
+      from being single-stepped if the interrupt occurs while a program is
+      being single-stepped. The 80386 single-step exception has higher
+      priority that any external interrupt. The 80386 will still single-step
+      through an interrupt handler invoked by the INT instructions or by an
+      exception.
+
+ 11.  IDIV exceptions for quotients of 80H or 8000H.
+
+      The 80386 can generate the largest negative number as a quotient for
+      the IDIV instruction. The 8086/8088 causes exception zero instead.
+
+ 12.  Flags in stack.
+
+      The setting of the flags stored by PUSHF, by interrupts, and by
+      exceptions is different from that stored by the 8086 in bit positions
+      12 through 15. On the 8086 these bits are stored as ones, but in
+      80386 real-address mode bit 15 is always zero, and bits 14 through 12
+      reflect the last value loaded into them.
+
+ 13.  NMI interrupting NMI handlers.
+
+      After an NMI is recognized on the 80386, the NMI interrupt is masked
+      until an IRET instruction is executed.
+
+ 14.  Coprocessor errors vector to interrupt 16.
+
+      Any 80386 system with a coprocessor must use interrupt vector 16 for
+      the coprocessor error exception. If an 8086/8088 system uses another
+      vector for the 8087 interrupt, both vectors should point to the
+      coprocessor-error exception handler.
+
+ 15.  Numeric exception handlers should allow prefixes.
+
+      On the 80386, the value of CS:IP saved for coprocessor exceptions
+      points at any prefixes before an ESC instruction. On 8086/8088
+      systems, the saved CS:IP points to the ESC instruction.
+
+ 16.  Coprocessor does not use interrupt controller.
+
+      The coprocessor error signal to the 80386 does not pass through an
+      interrupt controller (an 8087 INT signal does). Some instructions in
+      a coprocessor error handler may need to be deleted if they deal with
+      the interrupt controller.
+
+ 17.  Six new interrupt vectors.
+
+      The 80386 adds six exceptions that arise only if the 8086 program has
+      a hidden bug. It is recommended that exception handlers be added that
+      treat these exceptions as invalid operations. This additional
+      software does not significantly affect the existing 8086 software
+      because the interrupts do not normally occur. These interrupt
+      identifiers should not already have been used by the 8086 software,
+      because they are in the range reserved by Intel. Table 14-2 describes
+      the new 80386 exceptions.
+
+ 18.  One megabyte wraparound.
+
+      The 80386 does not wrap addresses at 1 megabyte in real-address mode.
+      On members of the 8086 family, it possible to specify addresses
+      greater than one megabyte.  For example, with a selector value 0FFFFH
+      and an offset of 0FFFFH, the effective address would be 10FFEFH (1
+      Mbyte + 65519).  The 8086, which can form adresses only up to 20 bits
+      long, truncates the high-order bit, thereby "wrapping" this address
+      to 0FFEFH.  However, the 80386, which can form addresses up to 32
+      bits long does not truncate such an address.
+
+
+Table 14-1. 80386 Real-Address Mode Exceptions
+
+
+Description                      Interrupt  Function that Can                   Return Address
+                                 Number     Generate the Exception              Points to Faulting
+                                                                                Instruction
+Divide error                     0          DIV, IDIV                           YES
+Debug exceptions                 1          All                                 
+Some debug exceptions point to the faulting instruction, others to the
+next instruction. The exception handler can determine which has occurred by
+examining DR6.
+
+
+
+
+
+Breakpoint                       3          INT                                 NO
+Overflow                         4          INTO                                NO
+Bounds check                     5          BOUND                               YES
+Invalid opcode                   6          Any undefined opcode or LOCK        YES
+                                            used with wrong instruction
+Coprocessor not available        7          ESC or WAIT                         YES
+Interrupt table limit too small  8          INT vector is not within IDTR       YES
+                                            limit
+Reserved                         9-12
+Stack fault                      12         Memory operand crosses offset       YES
+                                            0 or 0FFFFH
+Pseudo-protection exception      13         Memory operand crosses offset       YES
+                                            0FFFFH or attempt to execute
+                                            past offset 0FFFFH or
+                                            instruction longer than 15
+                                            bytes
+Reserved                         14,15
+Coprocessor error                16         ESC or WAIT                         YES
+Coprocessor errors are reported on the first ESC or WAIT instruction
+after the ESC instruction that caused the error.
+
+
+
+
+
+Two-byte SW interrupt            0-255      INT n                               NO
+
+
+Table 14-2. New 80386 Exceptions
+
+Interrupt   Function
+Identifier
+
+    5       A BOUND instruction was executed with a register value outside
+            the limit values.
+
+    6       An undefined opcode was encountered or LOCK was used improperly
+            before an instruction to which it does not apply.
+
+    7       The EM bit in the MSW is set when an ESC instruction was
+            encountered. This exception also occurs on a WAIT instruction
+            if TS is set.
+
+    8       An exception or interrupt has vectored to an interrupt table
+            entry beyond the interrupt table limit in IDTR. This can occur
+            only if the LIDT instruction has changed the limit from the
+            default value of 3FFH, which is enough for all 256 interrupt
+            IDs.
+
+   12       Operand crosses extremes of stack segment, e.g., MOV operation
+            at offset 0FFFFH or push with SP=1 during PUSH, CALL, or INT.
+
+   13       Operand crosses extremes of a segment other than a stack
+            segment; or sequential instruction execution attempts to
+            proceed beyond offset 0FFFFH; or an instruction is longer than
+            15 bytes (including prefixes).
+
+
+14.8  Differences From 80286 Real-Address Mode
+
+The few differences that exist between 80386 real-address mode and 80286
+real-address mode are not likely to affect any existing 80286 programs
+except possibly the system initialization procedures.
+
+
+14.8.1  Bus Lock
+
+The 80286 processor implements the bus lock function differently than the
+80386. Programs that use forms of memory locking specific to the 80286 may
+not execute properly if transported to a specific application of the 80386.
+
+The LOCK prefix and its corresponding output signal should only be used to
+prevent other bus masters from interrupting a data movement operation.  LOCK
+may only be used with the following 80386 instructions when they modify
+memory.  An undefined-opcode exception results from using LOCK before any
+other instruction.
+
+  ş  Bit test and change:  BTS, BTR, BTC.
+  ş  Exchange: XCHG.
+  ş  One-operand arithmetic and logical: INC, DEC, NOT, and NEG.
+  ş  Two-operand arithmetic and logical: ADD, ADC, SUB, SBB, AND, OR, XOR.
+
+A locked instruction is guaranteed to lock only the area of memory defined
+by the destination operand, but may lock a larger memory area.  For example,
+typical 8086 and 80286 configurations lock the entire physical memory space.
+With the 80386, the defined area of memory is guranteed to be locked against
+access by a processor executing a locked instruction on exactly the same
+memory area, i.e., an operand with identical starting address and identical
+length.
+
+
+14.8.2  Location of First Instruction
+
+The starting location is 0FFFFFFF0H (sixteen bytes from end of 32-bit
+address space) on the 80386 rather than 0FFFFF0H (sixteen bytes from end of
+24-bit address space) as on the 80286.  Many 80286 ROM initialization
+programs will work correctly in this new environment.  Others can be made to
+work correctly with external hardware that redefines the signals on
+A{31-20}.
+
+
+14.8.3  Initial Values of General Registers
+
+On the 80386, certain general registers may contain different values after
+RESET than on the 80286. This should not cause compatibility problems,
+because the content of 8086 registers after RESET is undefined.  If
+self-test is requested during the reset sequence and errors are detected in
+the 80386 unit, EAX will contain a nonzero value. EDX contains the component
+and revision identifier. Refer to Chapter 10 for more information.
+
+
+14.8.4  MSW Initialization
+
+The 80286 initializes the MSW register to FFF0H, but the 80386 initializes
+this register to 0000H. This difference should have no effect, because the
+bits that are different are undefined on the 80286.  Programs that read the
+value of the MSW will behave differently on the 80386 only if they depend on
+the setting of the undefined, high-order bits.
+
+
+Chapter 15  Virtual 8086 Mode
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+The 80386 supports execution of one or more 8086, 8088, 80186, or 80188
+programs in an 80386 protected-mode environment. An 8086 program runs in
+this environment as part of a V86 (virtual 8086) task. V86 tasks take
+advantage of the hardware support of multitasking offered by the protected
+mode. Not only can there be multiple V86 tasks, each one executing an 8086
+program, but V86 tasks can be multiprogrammed with other 80386 tasks.
+
+The purpose of a V86 task is to form a "virtual machine" with which to
+execute an 8086 program. A complete virtual machine consists not only of
+80386 hardware but also of systems software. Thus, the emulation of an 8086
+is the result of cooperation between hardware and software:
+
+  ş  The hardware provides a virtual set of registers (via the TSS), a
+     virtual memory space (the first megabyte of the linear address space of
+     the task), and directly executes all instructions that deal with these
+     registers and with this address space.
+
+  ş  The software controls the external interfaces of the virtual machine
+     (I/O, interrupts, and exceptions) in a manner consistent with the
+     larger environment in which it executes. In the case of I/O, software
+     can choose either to emulate I/O instructions or to let the hardware
+     execute them directly without software intervention.
+
+Software that helps implement virtual 8086 machines is called a V86
+monitor.
+
+
+15.1  Executing 8086 Code
+
+The processor executes in V86 mode when the VM (virtual machine) bit in the
+EFLAGS register is set. The processor tests this flag under two general
+conditions:
+
+  1.  When loading segment registers to know whether to use 8086-style
+      address formation.
+
+  2.  When decoding instructions to determine which instructions are
+      sensitive to IOPL.
+
+Except for these two modifications to its normal operations, the 80386 in
+V86 mode operated much as in protected mode.
+
+
+15.1.1  Registers and Instructions
+
+The register set available in V86 mode includes all the registers defined
+for the 8086 plus the new registers introduced by the 80386: FS, GS, debug
+registers, control registers, and test registers. New instructions that
+explicitly operate on the segment registers FS and GS are available, and the
+new segment-override prefixes can be used to cause instructions to utilize
+FS and GS for address calculations. Instructions can utilize 32-bit
+operands through the use of the operand size prefix.
+
+8086 programs running as V86 tasks are able to take advantage of the new
+applications-oriented instructions added to the architecture by the
+introduction of the 80186/80188, 80286 and 80386:
+
+  ş  New instructions introduced by 80186/80188 and 80286.
+     ÄÄ PUSH immediate data
+     ÄÄ Push all and pop all (PUSHA and POPA)
+     ÄÄ Multiply immediate data
+     ÄÄ Shift and rotate by immediate count
+     ÄÄ String I/O
+     ÄÄ ENTER and LEAVE
+     ÄÄ BOUND
+
+  ş  New instructions introduced by 80386.
+     ÄÄ LSS, LFS, LGS instructions
+     ÄÄ Long-displacement conditional jumps
+     ÄÄ Single-bit instructions
+     ÄÄ Bit scan
+     ÄÄ Double-shift instructions
+     ÄÄ Byte set on condition
+     ÄÄ Move with sign/zero extension
+     ÄÄ Generalized multiply
+
+
+15.1.2  Linear Address Formation
+
+In V86 mode, the 80386 processor does not interpret 8086 selectors by
+referring to descriptors; instead, it forms linear addresses as an 8086
+would. It shifts the selector left by four bits to form a 20-bit base
+address. The effective address is extended with four high-order zeros and
+added to the base address to create a linear address as Figure 15-1
+illustrates.
+
+Because of the possibility of a carry, the resulting linear address may
+contain up to 21 significant bits. An 8086 program may generate linear
+addresses anywhere in the range 0 to 10FFEFH (one megabyte plus
+approximately 64 Kbytes) of the task's linear address space.
+
+V86 tasks generate 32-bit linear addresses. While an 8086 program can only
+utilize the low-order 21 bits of a linear address, the linear address can be
+mapped via page tables to any 32-bit physical address.
+
+Unlike the 8086 and 80286, 32-bit effective addresses can be generated (via
+the address-size prefix); however, the value of a 32-bit address may not
+exceed 65,535 without causing an exception. For full compatibility with
+80286 real-address mode, pseudo-protection faults (interrupt 12 or 13 with
+no error code) occur if an address is generated outside the range 0 through
+65,535.
+
+
+Figure 15-1.  V86 Mode Address Formation
+
+                      19                                3       0
+                     ÉÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍ»
+         BASE        º     16-BIT SEGMENT SELECTOR     ³ 0 0 0 0 º
+                     ÈÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍ¼
+
+         +
+                      19        15                              0
+                     ÉÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ»
+         OFFSET      º 0 0 0 0 ³    16-BIT EFFECTIVE ADDRESS     º
+                     ÈÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼
+
+         =
+                    20                                          0
+         LINEAR    ÉÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ»
+         ADDRESS   º X X X X X X X X X X X X X X X X X X X X X X º
+                   ÈÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼
+
+
+15.2  Structure of a V86 Task
+
+A V86 task consists partly of the 8086 program to be executed and partly of
+80386 "native mode" code that serves as the virtual-machine monitor. The
+task must be represented by an 80386 TSS (not an 80286 TSS). The processor
+enters V86 mode to execute the 8086 program and returns to protected mode to
+execute the monitor or other 80386 tasks.
+
+To run successfully in V86 mode, an existing 8086 program needs the
+following:
+
+  ş  A V86 monitor.
+  ş  Operating-system services.
+
+The V86 monitor is 80386 protected-mode code that executes at
+privilege-level zero. The monitor consists primarily of initialization and
+exception-handling procedures. As for any other 80386 program,
+executable-segment descriptors for the monitor must exist in the GDT or in
+the task's LDT. The linear addresses above 10FFEFH are available for the
+V86 monitor, the operating system, and other systems software. The monitor
+may also need data-segment descriptors so that it can examine the interrupt
+vector table or other parts of the 8086 program in the first megabyte of the
+address space.
+
+In general, there are two options for implementing the 8086 operating
+system:
+
+  1.  The 8086 operating system may run as part of the 8086 code. This
+      approach is desirable for any of the following reasons:
+
+      ş  The 8086 applications code modifies the operating system.
+
+      ş  There is not sufficient development time to reimplement the 8086
+         operating system as 80386 code.
+
+  2.  The 8086 operating system may be implemented or emulated in the V86
+      monitor. This approach is desirable for any of the following reasons:
+
+      ş  Operating system functions can be more easily coordinated among
+         several V86 tasks.
+
+      ş  The functions of the 8086 operating system can be easily emulated
+         by calls to the 80386 operating system.
+
+Note that, regardless of the approach chosen for implementing the 8086
+operating system, different V86 tasks may use different 8086 operating
+systems.
+
+
+15.2.1  Using Paging for V86 Tasks
+
+Paging is not necessary for a single V86 task, but paging is useful or
+necessary for any of the following reasons:
+
+  ş  To create multiple V86 tasks. Each task must map the lower megabyte of
+     linear addresses to different physical locations.
+
+  ş  To emulate the megabyte wrap. On members of the 8086 family, it is
+     possible to specify addresses larger than one megabyte. For example,
+     with a selector value of 0FFFFH and an offset of 0FFFFH, the effective
+     address would be 10FFEFH (one megabyte + 65519). The 8086, which can
+     form addresses only up to 20 bits long, truncates the high-order bit,
+     thereby "wrapping" this address to 0FFEFH. The 80386, however, which
+     can form addresses up to 32 bits long does not truncate such an
+     address. If any 8086 programs depend on this addressing anomaly, the
+     same effect can be achieved in a V86 task by mapping linear addresses
+     between 100000H and 110000H and linear addresses between 0 and 10000H
+     to the same physical addresses.
+
+  ş  To create a virtual address space larger than the physical address
+     space.
+
+  ş  To share 8086 OS code or ROM code that is common to several 8086
+     programs that are executing simultaneously.
+
+  ş  To redirect or trap references to memory-mapped I/O devices.
+
+
+15.2.2  Protection within a V86 Task
+
+Because it does not refer to descriptors while executing 8086 programs, the
+processor also does not utilize the protection mechanisms offered by
+descriptors. To protect the systems software that runs in a V86 task from
+the 8086 program, software designers may follow either of these approaches:
+
+  ş  Reserve the first megabyte (plus 64 kilobytes) of each task's linear
+     address space for the 8086 program. An 8086 task cannot generate
+     addresses outside this range.
+
+  ş  Use the U/S bit of page-table entries to protect the virtual-machine
+     monitor and other systems software in each virtual 8086 task's space.
+     When the processor is in V86 mode, CPL is 3. Therefore, an 8086 program
+     has only user privileges. If the pages of the virtual-machine monitor
+     have supervisor privilege, they cannot be accessed by the 8086 program.
+
+
+15.3  Entering and Leaving V86 Mode
+
+Figure 15-2 summarizes the ways that the processor can enter and leave an
+8086 program. The processor can enter V86 by either of two means:
+
+  1.  A task switch to an 80386 task loads the image of EFLAGS from the new
+      TSS. The TSS of the new task must be an 80386 TSS, not an 80286 TSS,
+      because the 80286 TSS does not store the high-order word of EFLAGS,
+      which contains the VM flag. A value of one in the VM bit of the new
+      EFLAGS indicates that the new task is executing 8086 instructions;
+      therefore, while loading the segment registers from the TSS, the
+      processor forms base addresses as the 8086 would.
+
+  2.  An IRET from a procedure of an 80386 task loads the image of EFLAGS
+      from the stack. A value of one in VM in this case indicates that the
+      procedure to which control is being returned is an 8086 procedure. The
+      CPL at the time the IRET is executed must be zero, else the processor
+      does not change VM.
+
+The processor leaves V86 mode when an interrupt or exception occurs. There
+are two cases:
+
+  1.  The interrupt or exception causes a task switch. A task switch from a
+      V86 task to any other task loads EFLAGS from the TSS of the new task.
+      If the new TSS is an 80386 TSS and the VM bit in the EFLAGS image is
+      zero or if the new TSS is an 80286 TSS, then the processor clears the
+      VM bit of EFLAGS, loads the segment registers from the new TSS using
+      80386-style address formation, and begins executing the instructions
+      of the new task according to 80386 protected-mode semantics.
+
+  2.  The interrupt or exception vectors to a privilege-level zero
+      procedure. The processor stores the current setting of EFLAGS on the
+      stack, then clears the VM bit. The interrupt or exception handler,
+      therefore, executes as "native" 80386 protected-mode code. If an
+      interrupt or exception vectors to a conforming segment or to a
+      privilege level other than three, the processor causes a
+      general-protection exception; the error code is the selector of the
+      executable segment to which transfer was attempted.
+
+Systems software does not manipulate the VM flag directly, but rather
+manipulates the image of the EFLAGS register that is stored on the stack or
+in the TSS. The V86 monitor sets the VM flag in the EFLAGS image on the
+stack or in the TSS when first creating a V86 task. Exception and interrupt
+handlers can examine the VM flag on the stack. If the interrupted procedure
+was executing in V86 mode, the handler may need to invoke the V86 monitor.
+
+
+Figure 15-2.  Entering and Leaving the 8086 Program
+
+                            MODE TRANSITION DIAGRAM
+
+                                 ÉÍÍÍÍÍÍÍÍÍÍÍ»
+                  TASK SWITCH    º  INITIAL  º
+                ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¶   ENTRY   º
+                ³   OR IRET      ÈÍÍÍÍÍÍÍÍÍÍÍ¼
+                ³
+                
+        ÉÍÍÍÍÍÍÍÍÍÍÍÍÍÍ»    INTERRUPT, EXCEPTION      ÉÍÍÍÍÍÍÍÍÍÍÍÍÍ»
+        º 8086 PROGRAM ÇÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄº V86 MONITOR º
+        º  (V86 MODE)  ºÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¶ (PROTECTED  º
+        ÈÍÍÍÍÍÍÍÑÍÍÍÍÍÍ¼            IRET              º    MODE)    º
+               ³                                     ÈÍÍÍÍÍÑÍÍÍÍÍÍÍ¼
+              ³ ³                                           ³  
+              ³ ³                                           ³  ³
+              ³ ³                                           ³  ³
+              ³ ³TASK SWITCH ÉÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ» TASK SWITCH ³
+              ³ ÀÄÄÄÄÄÄÄÄÄÄÄº OTHER 80386 TASKS ºÄÄÄÄÄÄÄÄÄÙ  ³
+              ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¶ (PROTECTED MODE)  ÇÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+                 TASK SWITCH ÈÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼ TASK SWITCH
+
+
+15.3.1  Transitions Through Task Switches
+
+A task switch to or from a V86 task may be due to any of three causes:
+
+  1.  An interrupt that vectors to a task gate.
+  2.  An action of the scheduler of the 80386 operating system.
+  3.  An IRET when the NT flag is set.
+
+In any of these cases, the processor changes the VM bit in EFLAGS according
+to the image of EFLAGS in the new TSS. If the new TSS is an 80286 TSS, the
+high-order word of EFLAGS is not in the TSS; the processor clears VM in this
+case. The processor updates VM prior to loading the segment registers from
+the images in the new TSS. The new setting of VM determines whether the
+processor interprets the new segment-register images as 8086 selectors or
+80386/80286 selectors.
+
+
+15.3.2  Transitions Through Trap Gates and Interrupt Gates
+
+The processor leaves V86 mode as the result of an exception or interrupt
+that vectors via a trap or interrupt gate to a privilege-level zero
+procedure. The exception or interrupt handler returns to the 8086 code by
+executing an IRET.
+
+Because it was designed for execution by an 8086 processor, an 8086 program
+in a V86 task will have an 8086-style interrupt table starting at linear
+address zero. However, the 80386 does not use this table directly. For all
+exceptions and interrupts that occur in V86 mode, the processor vectors
+through the IDT. The IDT entry for an interrupt or exception that occurs in
+a V86 task must contain either:
+
+  ş  A task gate.
+
+  ş  An 80386 trap gate (type 14) or an 80386 interrupt gate (type 15),
+     which must point to a nonconforming, privilege-level zero, code
+     segment.
+
+Interrupts and exceptions that have 80386 trap or interrupt gates in the
+IDT vector to the appropriate handler procedure at privilege-level zero. The
+contents of all the 8086 segment registers are stored on the PL 0 stack.
+Figure 15-3 shows the format of the PL 0 stack after an exception or
+interrupt that occurs while a V86 task is executing an 8086 program.
+
+After the processor stores all the 8086 segment registers on the PL 0
+stack, it loads all the segment registers with zeros before starting to
+execute the handler procedure. This permits the interrupt handler to safely
+save and restore the DS, ES, FS, and GS registers as 80386 selectors.
+Interrupt handlers that may be invoked in the context of either a regular
+task or a V86 task, can use the same prolog and epilog code for register
+saving regardless of the kind of task. Restoring zeros to these registers
+before execution of the IRET does not cause a trap in the interrupt handler.
+Interrupt procedures that expect values in the segment registers or that
+return values via segment registers have to use the register images stored
+on the PL 0 stack. Interrupt handlers that need to know whether the
+interrupt occurred in V86 mode can examine the VM bit in the stored EFLAGS
+image.
+
+An interrupt handler passes control to the V86 monitor if the VM bit is set
+in the EFLAGS image stored on the stack and the interrupt or exception is
+one that the monitor needs to handle. The V86 monitor may either:
+
+  ş  Handle the interrupt completely within the V86 monitor.
+  ş  Invoke the 8086 program's interrupt handler.
+
+Reflecting an interrupt or exception back to the 8086 code involves the
+following steps:
+
+  1.  Refer to the 8086 interrupt vector to locate the appropriate handler
+      procedure.
+
+  2.  Store the state of the 8086 program on the privilege-level three
+      stack.
+
+  3.  Change the return link on the privilege-level zero stack to point to
+      the privilege-level three handler procedure.
+
+  4.  Execute an IRET so as to pass control to the handler.
+
+  5.  When the IRET by the privilege-level three handler again traps to the
+      V86 monitor, restore the return link on the privilege-level zero stack
+      to point to the originally interrupted, privilege-level three
+      procedure.
+
+  6.  Execute an IRET so as to pass control back to the interrupted
+      procedure.
+
+
+Figure 15-3. PL 0 Stack after Interrupt in V86 Task
+
+
+                WITHOUT ERROR CODE            WITH ERROR CODE
+                 31            0               31            0
+                ÉÍÍÍÍÍÍËÍÍÍÍÍÍÍ»ÄÄÄÄ¿        ÉÍÍÍÍÍÍËÍÍÍÍÍÍÍ»ÄÄÄÄ¿
+                º±±±±±±ºOLD GS º     ³        º±±±±±±ºOLD GS º     ³
+                ÌÍÍÍÍÍÍÎÍÍÍÍÍÍÍ¹   SS:ESP     ÌÍÍÍÍÍÍÎÍÍÍÍÍÍÍ¹   SS:ESP
+      D  O      º±±±±±±ºOLD FS º  FROM TSS    º±±±±±±ºOLD FS º  FROM TSS
+      I  F      ÌÍÍÍÍÍÍÎÍÍÍÍÍÍÍ¹              ÌÍÍÍÍÍÍÎÍÍÍÍÍÍÍ¹
+      R         º±±±±±±ºOLD DS º              º±±±±±±ºOLD DS º
+      E  E      ÌÍÍÍÍÍÍÎÍÍÍÍÍÍÍ¹              ÌÍÍÍÍÍÍÎÍÍÍÍÍÍÍ¹
+      C  X      º±±±±±±ºOLD ES º              º±±±±±±ºOLD ES º
+      T  P      ÌÍÍÍÍÍÍÎÍÍÍÍÍÍÍ¹              ÌÍÍÍÍÍÍÎÍÍÍÍÍÍÍ¹
+      I  A      º±±±±±±ºOLD SS º              º±±±±±±ºOLD SS º
+      O  N      ÌÍÍÍÍÍÍÊÍÍÍÍÍÍÍ¹              ÌÍÍÍÍÍÍÊÍÍÍÍÍÍÍ¹
+      N  S      º    OLD ESP   º              º    OLD ESP   º
+         I      ÌÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹              ÌÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹
+       ³ O      º  OLD EFLAGS  º              º  OLD EFLAGS  º
+       ³ N      ÌÍÍÍÍÍÍËÍÍÍÍÍÍÍ¹              ÌÍÍÍÍÍÍËÍÍÍÍÍÍÍ¹
+       ³        º±±±±±±ºOLD CS º   NEW        º±±±±±±ºOLD CS º
+               ÌÍÍÍÍÍÍÊÍÍÍÍÍÍÍ¹  SS:EIP      ÌÍÍÍÍÍÍÊÍÍÍÍÍÍÍ¹
+                º    OLD EIP   º    ³         º    OLD EIP   º   NEW
+                ÌÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹ÄÄÄÙ         ÌÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹  SS:EIP
+                º              º              º  ERROR CODE  º    ³
+                                            ÌÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹ÄÄÄÙ
+                                            º              º
+                                                          
+
+
+15.4  Additional Sensitive Instructions
+
+When the 80386 is executing in V86 mode, the instructions PUSHF, POPF,
+INT n, and IRET are sensitive to IOPL. The instructions IN, INS, OUT, and
+OUTS, which are ordinarily sensitive in protected mode, are not sensitive
+in V86 mode. Following is a complete list of instructions that are sensitive
+in V86 mode:
+
+   CLI     ÄÄ Clear Interrupt-Enable Flag
+   STI     ÄÄ Set Interrupt-Enable Flag
+   LOCK    ÄÄ Assert Bus-Lock Signal
+   PUSHF   ÄÄ Push Flags
+   POPF    ÄÄ Pop Flags
+   INT n   ÄÄ Software Interrupt
+   RET     ÄÄ Interrupt Return
+
+CPL is always three in V86 mode; therefore, if IOPL < 3, these instructions
+will trigger a general-protection exceptions. These instructions are made
+sensitive so that their functions can be simulated by the V86 monitor.
+
+
+15.4.1  Emulating 8086 Operating System Calls
+
+INT n is sensitive so that the V86 monitor can intercept calls to the
+8086 OS. Many 8086 operating systems are called by pushing parameters onto
+the stack, then executing an INT n instruction. If IOPL < 3, INT n
+instructions will be intercepted by the V86 monitor. The V86 monitor can
+then emulate the function of the 8086 operating system or reflect the
+interrupt back to the 8086 operating system in V86 mode.
+
+
+15.4.2  Virtualizing the Interrupt-Enable Flag
+
+When the processor is executing 8086 code in a V86 task, the instructions
+PUSHF, POPF, and IRET are sensitive to IOPL so that the V86 monitor can
+control changes to the interrupt-enable flag (IF). Other instructions that
+affect IF (STI and CLI) are IOPL sensitive both in 8086 code and in
+80386/80386 code.
+
+Many 8086 programs that were designed to execute on single-task systems set
+and clear IF to control interrupts. However, when these same programs are
+executed in a multitasking environment, such control of IF can be
+disruptive. If IOPL is less than three, all instructions that change or
+interrogate IF will trap to the V86 monitor. The V86 monitor can then
+control IF in a manner that both suits the needs of the larger environment
+and is transparent to the 8086 program.
+
+
+15.5  Virtual I/O
+
+Many 8086 programs that were designed to execute on single-task systems use
+I/O devices directly. However, when these same programs are executed in a
+multitasking environment, such use of devices can be disruptive. The 80386
+provides sufficient flexibility to control I/O in a manner that both suits
+the needs of the new environment and is transparent to the 8086 program.
+Designers may take any of several possible approaches to controlling I/O:
+
+  ş  Implement or emulate the 8086 operating system as an 80386 program and
+     require the 8086 application to do I/O via software interrupts to the
+     operating system, trapping all attempts to do I/O directly.
+
+  ş  Let the 8086 program take complete control of all I/O.
+
+  ş  Selectively trap and emulate references that a task makes to specific
+     I/O ports.
+
+  ş  Trap or redirect references to memory-mapped I/O addresses.
+
+The method of controlling I/O depends upon whether I/O ports are I/O mapped
+or memory mapped.
+
+
+15.5.1  I/O-Mapped I/O
+
+I/O-mapped I/O in V86 mode differs from protected mode only in that the
+protection mechanism does not consult IOPL when executing the I/O
+instructions IN, INS, OUT, OUTS. Only the I/O permission bit map controls
+the right for V86 tasks to execute these I/O instructions.
+
+The I/O permission map traps I/O instructions selectively depending on the
+I/O addresses to which they refer. The I/O permission bit map of each V86
+task determines which I/O addresses are trapped for that task. Because each
+task may have a different I/O permission bit map, the addresses trapped for
+one task may be different from those trapped for others. Refer to Chapter 8
+for more information about the I/O permission map.
+
+
+15.5.2  Memory-Mapped I/O
+
+In hardware designs that utilize memory-mapped I/O, the paging facilities
+of the 80386 can be used to trap or redirect I/O operations. Each task that
+executes memory-mapped I/O must have a page (or pages) for the memory-mapped
+address space. The V86 monitor may control memory-mapped I/O by any of
+these means:
+
+  ş  Assign the memory-mapped page to appropriate physical addresses.
+     Different tasks may have different physical addresses, thereby
+     preventing the tasks from interfering with each other.
+
+  ş  Cause a trap to the monitor by forcing a page fault on the
+     memory-mapped page. Read-only pages trap writes. Not-present pages trap
+     both reads and writes.
+
+Intervention for every I/O might be excessive for some kinds of I/O
+devices. A page fault can still be used in this case to cause intervention
+on the first I/O operation. The monitor can then at least make sure that the
+task has exclusive access to the device. Then the monitor can change the
+page status to present and read/write, allowing subsequent I/O to proceed at
+full speed.
+
+
+15.5.3  Special I/O Buffers
+
+Buffers of intelligent controllers (for example, a bit-mapped graphics
+buffer) can also be virtualized via page mapping. The linear space for the
+buffer can be mapped to a different physical space for each virtual 8086
+task. The V86 monitor can then assume responsibility for spooling the data
+or assigning the virtual buffer to the real buffer at appropriate times.
+
+
+15.6  Differences From 8086
+
+In general, V86 mode will correctly execute software designed for the 8086,
+8088, 80186, and 80188. Following is a list of the minor differences between
+8086 execution on the 80386 and on an 8086.
+
+  1.  Instruction clock counts.
+
+      The 80386 takes fewer clocks for most instructions than the 
+      8086/8088. The areas most likely to be affected are:
+
+      ş  Delays required by I/O devices between I/O operations.
+
+      ş  Assumed delays with 8086/8088 operating in parallel with an 8087.
+
+  2.  Divide exceptions point to the DIV instruction.
+
+      Divide exceptions on the 80386 always leave the saved CS:IP value
+      pointing to the instruction that failed. On the 8086/8088, the CS:IP
+      value points to the next instruction.
+
+  3.  Undefined 8086/8088 opcodes.
+
+      Opcodes that were not defined for the 8086/8088 will cause exception
+      6 or will execute one of the new instructions defined for the 80386.
+
+  4.  Value written by PUSH SP.
+
+      The 80386 pushes a different value on the stack for PUSH SP than the
+      8086/8088. The 80386 pushes the value of SP before SP is incremented
+      as part of the push operation; the 8086/8088 pushes the value of SP
+      after it is incremented. If the value pushed is important, replace
+      PUSH SP instructions with the following three instructions:
+
+      PUSH  BP
+      MOV   BP, SP
+      XCHG  BP, [BP]
+
+      This code functions as the 8086/8088 PUSH SP instruction on the 
+      80386.
+
+  5.  Shift or rotate by more than 31 bits.
+
+      The 80386 masks all shift and rotate counts to the low-order five
+      bits. This MOD 32 operation limits the count to a maximum of 31 bits,
+      thereby limiting the time that interrupt response is delayed while
+      the instruction is executing.
+
+  6.  Redundant prefixes.
+
+      The 80386 sets a limit of 15 bytes on instruction length. The only
+      way to violate this limit is by putting redundant prefixes before an
+      instruction. Exception 13 occurs if the limit on instruction length
+      is violated. The 8086/8088 has no instruction length limit.
+
+  7.  Operand crossing offset 0 or 65,535.
+
+      On the 8086, an attempt to access a memory operand that crosses
+      offset 65,535 (e.g., MOV a word to offset 65,535) or offset 0 (e.g.,
+      PUSH a word when SP = 1) causes the offset to wrap around modulo
+      65,536. The 80386 raises an exception in these casesÄÄexception 13 if
+      the segment is a data segment (i.e., if CS, DS, ES, FS, or GS is
+      being used to address the segment), exception 12 if the segment is a
+      stack segment (i.e., if SS is being used).
+
+  8.  Sequential execution across offset 65,535.
+
+      On the 8086, if sequential execution of instructions proceeds past
+      offset 65,535, the processor fetches the next instruction byte from
+      offset 0 of the same segment. On the 80386, the processor raises
+      exception 13 in such a case.
+
+  9.  LOCK is restricted to certain instructions.
+
+      The LOCK prefix and its corresponding output signal should only be
+      used to prevent other bus masters from interrupting a data movement
+      operation. The 80386 always asserts the LOCK signal during an XCHG
+      instruction with memory (even if the LOCK prefix is not used). LOCK
+      may only be used with the following 80386 instructions when they
+      update memory: BTS, BTR, BTC, XCHG, ADD, ADC, SUB, SBB, INC, DEC,
+      AND, OR, XOR, NOT, and NEG. An undefined-opcode exception (interrupt
+      6) results from using LOCK before any other instruction.
+
+ 10.  Single-stepping external interrupt handlers.
+
+      The priority of the 80386 single-step exception is different from
+      that of the 8086/8088. The change prevents an external interrupt
+      handler from being single-stepped if the interrupt occurs while a
+      program is being single-stepped. The 80386 single-step exception has
+      higher priority that any external interrupt. The 80386 will still
+      single-step through an interrupt handler invoked by the INT
+      instructions or by an exception.
+
+  11.  IDIV exceptions for quotients of 80H or 8000H.
+
+      The 80386 can generate the largest negative number as a quotient for
+      the IDIV instruction. The 8086/8088 causes exception zero instead.
+
+ 12.  Flags in stack.
+
+      The setting of the flags stored by PUSHF, by interrupts, and by
+      exceptions is different from that stored by the 8086 in bit positions
+      12 through 15. On the 8086 these bits are stored as ones, but in V86
+      mode bit 15 is always zero, and bits 14 through 12 reflect the last
+      value loaded into them.
+
+ 13.  NMI interrupting NMI handlers.
+
+      After an NMI is recognized on the 80386, the NMI interrupt is masked
+      until an IRET instruction is executed.
+
+ 14.  Coprocessor errors vector to interrupt 16.
+
+      Any 80386 system with a coprocessor must use interrupt vector 16 for
+      the coprocessor error exception. If an 8086/8088 system uses another
+      vector for the 8087 interrupt, both vectors should point to the
+      coprocessor-error exception handler.
+
+ 15.  Numeric exception handlers should allow prefixes.
+
+      On the 80386, the value of CS:IP saved for coprocessor exceptions
+      points at any prefixes before an ESC instruction. On 8086/8088
+      systems, the saved CS:IP points to the ESC instruction itself.
+
+ 16.  Coprocessor does not use interrupt controller.
+
+      The coprocessor error signal to the 80386 does not pass through an
+      interrupt controller (an 8087 INT signal does). Some instructions in
+      a coprocessor error handler may need to be deleted if they deal with
+      the interrupt controller.
+
+
+15.7  Differences From 80286 Real-Address Mode
+
+The 80286 processor implements the bus lock function differently than the
+80386. This fact may or may not be apparent to 8086 programs, depending on
+how the V86 monitor handles the LOCK prefix. LOCKed instructions are
+sensitive to IOPL; therefore, software designers can choose to emulate its
+function. If, however, 8086 programs are allowed to execute LOCK directly,
+programs that use forms of memory locking specific to the 8086 may not
+execute properly when transported to a specific application of the 80386.
+
+The LOCK prefix and its corresponding output signal should only be used to
+prevent other bus masters from interrupting a data movement operation. LOCK
+may only be used with the following 80386 instructions when they modify
+memory. An undefined-opcode exception results from using LOCK before any
+other instruction.
+
+  ş  Bit test and change: BTS, BTR, BTC.
+  ş  Exchange: XCHG.
+  ş  One-operand arithmetic and logical: INC, DEC, NOT, and NEG.
+  ş  Two-operand arithmetic and logical: ADD, ADC, SUB, SBB, AND, OR, XOR.
+
+A locked instruction is guaranteed to lock only the area of memory defined
+by the destination operand, but may lock a larger memory area. For example,
+typical 8086 and 80286 configurations lock the entire physical memory space.
+With the 80386, the defined area of memory is guaranteed to be locked
+against access by a processor executing a locked instruction on exactly the
+same memory area, i.e., an operand with identical starting address and
+identical length.
+
+
+Chapter 16  Mixing 16-Bit and 32 Bit Code
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+The 80386 running in protected mode is a 32-bit microprocessor, but it is
+designed to support 16-bit processing at three levels:
+
+  1.  Executing 8086/80286 16-bit programs efficiently with complete 
+      compatibility.
+
+  2.  Mixing 16-bit modules with 32-bit modules.
+
+  3.  Mixing 16-bit and 32-bit addresses and operands within one module.
+
+The first level of support for 16-bit programs has already been discussed
+in Chapter 13, Chapter 14, and Chapter 15. This chapter shows how 16-bit
+and 32-bit modules can cooperate with one another, and how one module can
+utilize both 16-bit and 32-bit operands and addressing.
+
+The 80386 functions most efficiently when it is possible to distinguish
+between pure 16-bit modules and pure 32-bit modules. A pure 16-bit module
+has these characteristics:
+
+  ş  All segments occupy 64 Kilobytes or less.
+  ş  Data items are either 8 bits or 16 bits wide.
+  ş  Pointers to code and data have 16-bit offsets.
+  ş  Control is transferred only among 16-bit segments.
+
+A pure 32-bit module has these characteristics:
+
+  ş  Segments may occupy more than 64 Kilobytes (zero bytes to 4 
+     gigabytes).
+
+  ş  Data items are either 8 bits or 32 bits wide.
+
+  ş  Pointers to code and data have 32-bit offsets.
+
+  ş  Control is transferred only among 32-bit segments.
+
+Pure 16-bit modules do exist; they are the modules designed for 16-bit
+microprocessors. Pure 32-bit modules may exist in new programs designed
+explicitly for the 80386. However, as systems designers move applications
+from 16-bit processors to the 32-bit 80386, it will not always be possible
+to maintain these ideals of pure 16-bit or 32-bit modules. It may be
+expedient to execute old 16-bit modules in a new 32-bit environment without
+making source-code changes to the old modules if any of the following
+conditions is true:
+
+  ş  Modules will be converted one-by-one from 16-bit environments to
+     32-bit environments.
+
+  ş  Older, 16-bit compilers and software-development tools will be
+     utilized in the new32-bit operating environment until new 32-bit
+     versions can be created.
+
+  ş  The source code of 16-bit modules is not available for modification.
+
+  ş  The specific data structures used by a given module inherently utilize
+     16-bit words.
+
+  ş  The native word size of the source language is 16 bits.
+
+On the 80386, 16-bit modules can be mixed with 32-bit modules. To design a
+system that mixes 16- and 32-bit code requires an understanding of the
+mechanisms that the 80386 uses to invoke and control its 32-bit and 16-bit
+features.
+
+
+16.1  How the 80386 Implements 16-Bit and 32-Bit Features
+
+The features of the architecture that permit the 80386 to work equally well
+with 32-bit and 16-bit address and operand sizes include:
+
+  ş  The D-bit (default bit) of code-segment descriptors, which determines
+     the default choice of operand-size and address-size for the
+     instructions of a code segment. (In real-address mode and V86 mode,
+     which do not use descriptors, the default is 16 bits.) A code segment
+     whose D-bit is set is known as a USE32 segment; a code segment whose
+     D-bit is zero is a USE16 segment. The D-bit eliminates the need to
+     encode the operand size and address size in instructions when all
+     instructions use operands and effective addresses of the same size.
+
+  ş  Instruction prefixes that explicitly override the default choice of
+     operand size and address size (available in protected mode as well as
+     in real-address mode and V86 mode).
+
+  ş  Separate 32-bit and 16-bit gates for intersegment control transfers
+     (including call gates, interrupt gates, and trap gates). The operand
+     size for the control transfer is determined by the type of gate, not by
+     the D-bit or prefix of the transfer instruction.
+
+  ş  Registers that can be used both for 32-bit and 16-bit operands and
+     effective-address calculations.
+
+  ş  The B-bit (big bit) of data-segment descriptors, which determines the
+     size of stack pointer (32-bit ESP or 16-bit SP) used by the CPU for
+     implicit stack references.
+
+
+16.2  Mixing 32-Bit and 16-Bit Operations
+
+The 80386 has two instruction prefixes that allow mixing of 32-bit and
+16-bit operations within one segment:
+
+  ş  The operand-size prefix (66H)
+  ş  The address-size prefix (67H)
+
+These prefixes reverse the default size selected by the D-bit. For example,
+the processor can interpret the word-move instruction MOV mem, reg in any of
+four ways:
+
+  ş  In a USE32 segment:
+
+     1.  Normally moves 32 bits from a 32-bit register to a 32-bit
+         effective address in memory.
+
+     2.  If preceded by an operand-size prefix, moves 16 bits from a 16-bit
+         register to 32-bit effective address in memory.
+
+     3.  If preceded by an address-size prefix, moves 32 bits from a 32-bit
+         register to a16-bit effective address in memory.
+
+     4.  If preceded by both an address-size prefix and an operand-size
+         prefix, moves 16 bits from a 16-bit register to a 16-bit effective
+         address in memory.
+
+  ş  In a USE16 segment:
+
+     1.  Normally moves 16 bits from a 16-bit register to a 16-bit
+         effective address in memory.
+
+     2.  If preceded by an operand-size prefix, moves 32 bits from a 32-bit
+         register to 16-bit effective address in memory.
+
+     3.  If preceded by an address-size prefix, moves 16 bits from a 16-bit
+         register to a32-bit effective address in memory.
+
+     4.  If preceded by both an address-size prefix and an operand-size
+         prefix, moves 32 bits from a 32-bit register to a 32-bit effective
+         address in memory.
+
+These examples illustrate that any instruction can generate any combination
+of operand size and address size regardless of whether the instruction is in
+a USE16 or USE32 segment. The choice of the USE16 or USE32 attribute for a
+code segment is based upon these criteria:
+
+  1.  The need to address instructions or data in segments that are larger
+      than 64 Kilobytes.
+
+  2.  The predominant size of operands.
+
+  3.  The addressing modes desired. (Refer to Chapter 17 for an explanation
+      of the additional addressing modes that are available when 32-bit
+      addressing is used.)
+
+Choosing a setting of the D-bit that is contrary to the predominant size of
+operands requires the generation of an excessive number of operand-size
+prefixes.
+
+
+16.3  Sharing Data Segments Among Mixed Code Segments
+
+Because the choice of operand size and address size is defined in code
+segments and their descriptors, data segments can be shared freely among
+both USE16 and USE32 code segments. The only limitation is the one imposed
+by pointers with 16-bit offsets, which can only point to the first 64
+Kilobytes of a segment. When a data segment that contains more than 64
+Kilobytes is to be shared among USE32 and USE16 segments, the data that is
+to be accessed by the USE16 segments must be located within the first 64
+Kilobytes.
+
+A stack that spans addresses less than 64K can be shared by both USE16 and
+USE32 code segments. This class of stacks includes:
+
+  ş  Stacks in expand-up segments with G=0 and B=0.
+
+  ş  Stacks in expand-down segments with G=0 and B=0.
+
+  ş  Stacks in expand-up segments with G=1 and B=0, in which the stack is
+     contained completely within the lower 64 Kilobytes. (Offsets greater
+     than 64K can be used for data, other than the stack, that is not
+     shared.)
+
+The B-bit of a stack segment cannot, in general, be used to change the size
+of stack used by a USE16 code segment. The size of stack pointer used by the
+processor for implicit stack references is controlled by the B-bit of the
+data-segment descriptor for the stack. Implicit references are those caused
+by interrupts, exceptions, and instructions such as PUSH, POP, CALL, and
+RET. One might be tempted, therefore, to try to increase beyond 64K the
+size of the stack used by 16-bit code simply by supplying a larger stack
+segment with the B-bit set. However, the B-bit does not control explicit
+stack references, such as accesses to parameters or local variables. A USE16
+code segment can utilize a "big" stack only if the code is modified so that
+all explicit references to the stack are preceded by the address-size
+prefix, causing those references to use 32-bit addressing.
+
+In big, expand-down segments (B=1, G=1, and E=1), all offsets are greater
+than 64K, therefore USE16 code cannot utilize such a stack segment unless
+the code segment is modified to employ 32-bit addressing. (Refer to Chapter
+6 for a review of the B, G, and E bits.)
+
+
+16.4  Transferring Control Among Mixed Code Segments
+
+When transferring control among procedures in USE16 and USE32 code
+segments, programmers must be aware of three points:
+
+  ş  Addressing limitations imposed by pointers with 16-bit offsets.
+
+  ş  Matching of operand-size attribute in effect for the CALL/RET pair and
+     theInterrupt/IRET pair so as to manage the stack correctly.
+
+  ş  Translation of parameters, especially pointer parameters.
+
+Clearly, 16-bit effective addresses cannot be used to address data or code
+located beyond 64K in a 32-bit segment, nor can large 32-bit parameters be
+squeezed into a 16-bit word; however, except for these obvious limits, most
+interfacing problems between 16-bit and 32-bit modules can be solved. Some
+solutions involve inserting interface procedures between the procedures in
+question.
+
+
+16.4.1  Size of Code-Segment Pointer
+
+For control-transfer instructions that use a pointer to identify the next
+instruction (i.e., those that do not use gates), the size of the offset
+portion of the pointer is determined by the operand-size attribute. The
+implications of the use of two different sizes of code-segment pointer are:
+
+  ş  JMP, CALL, or RET from 32-bit segment to 16-bit segment is always
+     possible using a 32-bit operand size.
+
+  ş  JMP, CALL, or RET from 16-bit segment using a 16-bit operand size
+     cannot address the target in a 32-bit segment if the address of the
+     target is greater than 64K.
+
+An interface procedure can enable transfers from USE16 segments to 32-bit
+addresses beyond 64K without requiring modifications any more extensive than
+relinking or rebinding the old programs. The requirements for such an
+interface procedure are discussed later in this chapter.
+
+
+16.4.2  Stack Management for Control Transfers
+
+Because stack management is different for 16-bit CALL/RET than for 32-bit
+CALL/RET, the operand size of RET must match that of CALL. (Refer to Figure
+16-1.) A 16-bit CALL pushes the 16-bit IP and (for calls between privilege
+levels) the 16-bit SP register. The corresponding RET must also use a 16-bit
+operand size to POP these 16-bit values from the stack into the 16-bit
+registers. A 32-bit CALL pushes the 32-bit EIP and (for interlevel calls)
+the 32-bit ESP register. The corresponding RET must also use a 32-bit
+operand size to POP these 32-bit values from the stack into the 32-bit
+registers. If the two halves of a CALL/RET pair do not have matching operand
+sizes, the stack will not be managed correctly and the values of the
+instruction pointer and stack pointer will not be restored to correct
+values.
+
+When the CALL and its corresponding RET are in segments that have D-bits
+with the same values (i.e., both have 32-bit defaults or both have 16-bit
+defaults), there is no problem. When the CALL and its corresponding RET are
+in segments that have different D-bit values, however, programmers (or
+program development software) must ensure that the CALL and RET match.
+
+There are three ways to cause a 16-bit procedure to execute a 32-bit call:
+
+  1.  Use a 16-bit call to a 32-bit interface procedure that then uses a
+      32-bit call to invoke the intended target.
+
+  2.  Bind the 16-bit call to a 32-bit call gate.
+
+  3.  Modify the 16-bit procedure, inserting an operand-size prefix before
+      the call, thereby changing it to a 32-bit call.
+
+Likewise, there are three ways to cause a 32-bit procedure to execute a
+16-bit call:
+
+  1.  Use a 32-bit call to a 32-bit interface procedure that then uses a
+      16-bit call to invoke the intended target.
+
+  2.  Bind the 32-bit call to a 16-bit call gate.
+
+  3.  Modify the 32-bit procedure, inserting an operand-size prefix before
+      the call, thereby changing it to a 16-bit call. (Be certain that the
+      return offset does not exceed 64K.)
+
+Programmers can utilize any of the preceding methods to make a CALL in a
+USE16 segment match the corresponding RET in a USE32 segment, or to make a
+CALL in a USE32 segment match the corresponding RET in a USE16 segment.
+
+
+Figure 16-1.  Stack after Far 16-Bit and 32-Bit Calls
+
+                           WITHOUT PRIVILEGE TRANSITION
+
+               AFTER 16-BIT CALL                AFTER 32-BIT CALL
+
+               31             0               31             0
+       D  O    º               º                º               º
+       I  F    ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹                ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹
+       R       º±±±±±±±±±±±±±±±º                º±±±±±±±±±±±±±±±º
+       E  E    ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹                ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹
+       C  X    º PARM2 ³ PARM1 º                º     PARM2     º
+       T  P    ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹                ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹
+       I  A    º  CS   ³  IP   ºÄÄSP           º     PARM1     º
+       O  N    ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹                ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹
+       N  S    º               º                º±±±±±±±³  CS   º
+          I    ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹                ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹
+        ³ O    º               º                º      EIP      ºÄÄESP
+        ³ N    ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹                ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹
+        ³      º               º                º               º
+                                                            
+
+                           WITH PRIVILEGE TRANSITION
+
+               AFTER 16-BIT CALL                AFTER 32-BIT CALL
+
+       D  O     31            0                  31            0
+       I  F    ÉÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ»                ÉÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ»
+       R       º   SS  ³  SP   º                º±±±±±±±³  SS   º
+       E  E    ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹                ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹
+       C  X    º PARM2 ³ PARM1 º                º      ESP      º
+       T  P    ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹                ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹
+       I  A    º  CS   ³  IP   ºÄÄSP           º     PARM2     º
+       O  N    ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹                ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹
+       N  S    º               º                º     PARM1     º
+          I    ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹                ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹
+        ³ O    º               º                º±±±±±±±³  CS   º
+        ³ N    ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹                ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹
+        ³      º               º                º      EIP      ºÄÄESP
+              ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹                ÌÍÍÍÍÍÍÍØÍÍÍÍÍÍÍ¹
+               º               º                º               º
+                                                             
+
+
+16.4.2.1  Controlling the Operand-Size for a Call
+
+When the selector of the pointer referenced by a CALL instruction selects a
+segment descriptor, the operand-size attribute in effect for the CALL
+instruction is determined by the D-bit in the segment descriptor and by any
+operand-size instruction prefix.
+
+When the selector of the pointer referenced by a CALL instruction selects a
+gate descriptor, the type of call is determined by the type of call gate. A
+call via an 80286 call gate (descriptor type 4)  always has a 16-bit
+operand-size attribute; a call via an 80386 call gate (descriptor type 12)
+always has a 32-bit operand-size attribute. The offset of the target
+procedure is taken from the gate descriptor; therefore, even a 16-bit
+procedure can call a procedure that is located more than 64 kilobytes from
+the base of a 32-bit segment, because a 32-bit call gate contains a 32-bit
+target offset.
+
+An unmodified 16-bit code segment that has run successfully on an 8086 or
+real-mode 80286 will always have a D-bit of zero and will not use
+operand-size override prefixes; therefore, it will always execute 16-bit
+versions of CALL. The only modification needed to make a16-bit procedure
+effect a 32-bit call is to relink the call to an 80386 call gate.
+
+
+16.4.2.2  Changing Size of Call
+
+When adding 32-bit gates to 16-bit procedures, it is important to consider
+the number of parameters. The count field of the gate descriptor specifies
+the size of the parameter string to copy from the current stack to the stack
+of the more privileged procedure. The count field of a 16-bit gate specifies
+the number of words to be copied, whereas the count field of a 32-bit gate
+specifies the number of doublewords to be copied; therefore, the 16-bit
+procedure must use an even number of words as parameters.
+
+
+16.4.3  Interrupt Control Transfers
+
+With a control transfer due to an interrupt or exception, a gate is always
+involved. The operand-size attribute for the interrupt is determined by the
+type of IDT gate.
+
+A 386 interrupt or trap gate (descriptor type 14 or 15) to a 32-bit
+interrupt procedure can be used to interrupt either 32-bit or 16-bit
+procedures. However, it is not generally feasible to permit an interrupt or
+exception to invoke a 16-bit handler procedure when 32-bit code is
+executing, because a 16-bit interrupt procedure has a return offset of only
+16-bits on its stack. If the 32-bit procedure is executing at an address
+greater than 64K, the 16-bit interrupt procedure cannot return correctly.
+
+
+16.4.4  Parameter Translation
+
+When segment offsets or pointers (which contain segment offsets) are passed
+as parameters between 16-bit and 32-bit procedures, some translation is
+required. Clearly, if a 32-bit procedure passes a pointer to data located
+beyond 64K to a 16-bit procedure, the 16-bit procedure cannot utilize it.
+Beyond this natural limitation, an interface procedure can perform any
+format conversion between 32-bit and 16-bit pointers that may be needed.
+
+Parameters passed by value between 32-bit and 16-bit code may also require
+translation between 32-bit and 16-bit formats. Such translation requirements
+are application dependent. Systems designers should take care to limit the
+range of values passed so that such translations are possible.
+
+
+16.4.5  The Interface Procedure
+
+Interposing an interface procedure between 32-bit and 16-bit procedures can
+be the solution to any of several interface requirements:
+
+  ş  Allowing procedures in 16-bit segments to transfer control to
+     instructions located beyond 64K in 32-bit segments.
+
+  ş  Matching of operand size for CALL/RET.
+
+  ş  Parameter translation.
+
+Interface procedures between USE32 and USE16 segments can be constructed
+with these properties:
+
+  ş  The procedures reside in a code segment whose D-bit is set, indicating
+     a default operand size of 32-bits.
+
+  ş  All entry points that may be called by 16-bit procedures have offsets
+     that are actually less than 64K.
+
+  ş  All points to which called 16-bit procedures may return also lie
+     within 64K.
+
+The interface procedures do little more than call corresponding procedures
+in other segments. There may be two kinds of procedures:
+
+  ş  Those that are called by 16-bit procedures and call 32-bit procedures.
+     These interface procedures are called by 16-bit CALLs and use the
+     operand-size prefix before RET instructions to cause a 16-bit RET.
+     CALLs to 32-bit segments are 32-bit calls (by default, because the
+     D-bit is set), and the 32-bit code returns with 32-bit RET
+     instructions.
+
+  ş  Those that are called by 32-bit procedures and call 16-bit procedures.
+     These interface procedures are called by 32-bit CALL instructions, and
+     return with 32-bit RET instructions (by default, because the D-bit is
+     set).  CALLs to 16-bit procedures use the operand-size prefix;
+     procedures in the 16-bit code return with 16-bit RET instructions.

@@ -1,0 +1,302 @@
+# Makefile for networking kernel using standard Minix directory 
+# layout and compiler.
+#
+# /usr/lib/cpp needs about 50K of stack, which is more than usual
+#
+# The following nonstandard flags are used:
+# -F:	run cpp and cem sequentially (used when memory is tight)
+# -T.:	put temporaries in working directory (when RAM disk is small)
+#
+# Define AM_KERNEL and NONET to get a networking kernel without
+# a network interface (only local transactions). Define
+# AM_KERNEL if you have a Western Digital Etherplus card and
+# want remote transactions. Define STATISTICS to keep track of 
+# Amoeba transaction statistics and to bind function key F5 to
+# dump them.
+#
+BIN		=.
+CC		=cc
+#CFLAGS		=-F -T.
+CFLAGS		=-DAM_KERNEL -DSTATISTICS -I../../kernel -I. -F
+CPP		=/usr/lib/cpp
+CPPFLAGS	=-DASLD -P
+END		=/usr/lib/end.s
+LD		=asld
+LDFLAGS		=-i
+LIBS		=/usr/lib/libc.a
+START		=start.s
+
+a		=$k/kernel.h $h/config.h $h/const.h $h/type.h \
+		 $s/types.h $i/limits.h $i/errno.h \
+		 $k/const.h $k/type.h $k/proto.h $k/glo.h
+h		=/usr/include/minix
+i		=/usr/include
+k		=../../kernel
+s		=/usr/include/sys
+
+
+KEROBJS		=cstart.s protect.s protect1.s klib.s mpx.s wini.s \
+	table.s main.s tty.s floppy.s system.s proc.s \
+	clock.s memory.s console.s rs232.s rs2.s printer.s \
+	amoeba.s conf.s dp8390.s util.s etherplus.s portcache.s \
+	trans.s dmp.s exception.s i8259.s misc.s keyboard.s
+SOBJS		=start.s klib.s mpx.s rs2.s
+
+# Rules.
+.SUFFIXES: .x		# .x files are .s files which need C-preprocessing
+.x.s:
+	$(CPP) $(CPPFLAGS) $k/$< >$@
+
+# What to make.
+dummy: $(BIN)/kernel	# this line fixes a bug in RAL's latest make
+
+$(BIN)/kernel: $(START) $(KEROBJS) $(LIBS) $(END)
+	$(LD) $(LDFLAGS) -o $(BIN)/kernel \
+	$(START) $(KEROBJS) \
+	$(LIBS) $(END)
+
+clean:
+	rm -f $(START) $(KEROBJS) $(SOBJS) *.bak 
+
+klib.s: $h/config.h $h/const.h $k/const.h $k/protect.h $k/sconst.h 
+klib.s: $k/klib.x
+	$(CPP) $(CPPFLAGS) $k/klib.x >$@
+
+mpx.s: $h/config.h $h/const.h $h/com.h $k/const.h $k/protect.h $k/sconst.h 
+mpx.s: $k/mpx.x
+	$(CPP) $(CPPFLAGS) $k/mpx.x >$@
+
+rs2.s: $h/config.h $h/const.h $k/const.h $k/sconst.h 
+rs2.s: $k/rs2.x
+	$(CPP) $(CPPFLAGS) $k/rs2.x >$@
+
+start.s: $h/config.h $h/const.h $h/com.h $k/const.h $k/protect.h $k/sconst.h 
+start.s: $k/start.x
+	$(CPP) $(CPPFLAGS) $k/start.x >$@
+
+clock.s:	$a
+clock.s:	$i/signal.h
+clock.s:	$h/callnr.h
+clock.s:	$h/com.h
+clock.s:	$k/proc.h
+clock.s:	$k/clock.c
+	$(CC) $(CFLAGS) -c $k/clock.c
+
+console.s:	$a
+console.s:	$i/sgtty.h
+console.s:	$h/callnr.h
+console.s:	$h/com.h
+console.s:	$k/protect.h
+console.s:	$k/tty.h
+console.s:	$k/console.c
+	$(CC) $(CFLAGS) -c $k/console.c
+
+cstart.s:	$a
+cstart.s:	$h/boot.h
+cstart.s:	$k/cstart.c
+	$(CC) $(CFLAGS) -c $k/cstart.c
+
+dmp.s:		$a
+dmp.s:		$h/callnr.h
+dmp.s:		$h/com.h
+dmp.s:		$k/proc.h
+dmp.s:		$k/dmp.c
+	$(CC) $(CFLAGS) -c $k/dmp.c
+
+exception.s:	$a
+exception.s:	$i/signal.h
+exception.s:	$k/proc.h
+exception.s:	$k/exception.c
+	$(CC) $(CFLAGS) -c $k/exception.c
+
+floppy.s:	$a
+floppy.s:	$h/callnr.h
+floppy.s:	$h/com.h
+floppy.s:	$k/floppy.c
+	$(CC) $(CFLAGS) -c $k/floppy.c
+
+i8259.s:	$a
+i8259.s:	$k/i8259.c
+	$(CC) $(CFLAGS) -c $k/i8259.c
+
+keyboard.s:	$a
+keyboard.s:	$i/sgtty.h
+keyboard.s:	$i/signal.h
+keyboard.s:	$h/callnr.h
+keyboard.s:	$h/com.h
+keyboard.s:	$k/tty.h
+keyboard.s:	$k/keyboard.c
+	$(CC) $(CFLAGS) -c $k/keyboard.c
+
+main.s:		$a
+main.s:		$i/signal.h
+main.s:		$h/callnr.h
+main.s:		$h/com.h
+main.s:		$k/proc.h
+main.s:		$k/main.c
+	$(CC) $(CFLAGS) -c $k/main.c
+
+memory.s:	$a
+memory.s:	$h/callnr.h
+memory.s:	$h/com.h
+memory.s:	$k/memory.c
+	$(CC) $(CFLAGS) -c $k/memory.c
+
+misc.s:		$a
+misc.s:		$h/com.h
+misc.s:		$k/misc.c
+	$(CC) $(CFLAGS) -c $k/misc.c
+
+printer.s:	$a
+printer.s:	$h/callnr.h
+printer.s:	$h/com.h
+printer.s:	$k/printer.c
+	$(CC) $(CFLAGS) -c $k/printer.c
+
+proc.s:		$a
+proc.s:		$h/callnr.h
+proc.s:		$h/com.h
+proc.s:		$k/proc.h
+proc.s:		$k/proc.c
+	$(CC) $(CFLAGS) -c $k/proc.c
+
+protect.s:	$a
+protect.s:	$k/protect.h
+protect.s:	$k/protect1.c
+protect.s:	$k/protect.c
+	$(CC) $(CFLAGS) -c $k/protect.c
+
+protect1.s:	$a
+protect1.s:	$k/proc.h
+protect1.s:	$k/protect.h
+protect1.s:	$k/protect1.c
+	$(CC) $(CFLAGS) -c $k/protect1.c
+
+rs232.s:	$a
+rs232.s:	$i/sgtty.h
+rs232.s:	$k/tty.h
+rs232.s:	$k/rs232.c
+	$(CC) $(CFLAGS) -c $k/rs232.c
+
+system.s:	$a
+system.s:	$i/signal.h
+system.s:	$h/boot.h
+system.s:	$h/callnr.h
+system.s:	$h/com.h
+system.s:	$k/proc.h
+system.s:	$k/protect.h
+system.s:	$k/system.c
+	$(CC) $(CFLAGS) -c $k/system.c
+
+table.s:	$a
+table.s:	$h/com.h
+table.s:	$k/proc.h
+table.s:	$k/tty.h
+table.s:	$k/table.c
+	$(CC) $(CFLAGS) -c $k/table.c
+
+tty.s:		$a
+tty.s:		$i/sgtty.h
+tty.s:		$i/signal.h
+tty.s:		$h/callnr.h
+tty.s:		$h/com.h
+tty.s:		$k/tty.h
+tty.s:		$k/tty.c
+	$(CC) $(CFLAGS) -c $k/tty.c
+
+wini.s:		$a
+wini.s:		$h/callnr.h
+wini.s:		$h/com.h
+wini.s:		$h/partition.h
+wini.s:		$k/wini.c
+	$(CC) $(CFLAGS) -c $k/wini.c
+
+amoeba.s:	$a
+amoeba.s: 	$i/amoeba.h
+amoeba.s: 	$i/host_os.h
+amoeba.s: 	$i/amparam.h
+amoeba.s: 	$i/signal.h
+amoeba.s: 	$i/assert.h
+amoeba.s: 	./byteorder.h
+amoeba.s: 	./dp8390info.h
+amoeba.s: 	./etherformat.h
+amoeba.s: 	./global.h
+amoeba.s: 	./internet.h
+amoeba.s: 	./mpx.H
+amoeba.s: 	./portcache.H
+amoeba.s: 	$k/proc.h
+amoeba.s: 	./task.h
+amoeba.s: 	./trans.H
+amoeba.s: 	amoeba.c
+
+conf.s:		$a
+conf.s: 	$i/amoeba.h
+conf.s: 	./conf.h
+conf.s: 	./global.h
+conf.s: 	./mpx.H
+conf.s: 	./portcache.H
+conf.s: 	./task.h
+conf.s: 	./trans.H
+conf.s: 	conf.c
+
+dp8390.s:	$a
+dp8390.s: 	$h/com.h
+dp8390.s: 	$i/assert.h
+dp8390.s: 	./dp8390.h
+dp8390.s: 	./dp8390info.h
+dp8390.s: 	./dp8390stat.h
+dp8390.s: 	./etherformat.h
+dp8390.s: 	./internet.h
+dp8390.s: 	dp8390.c
+
+etherplus.s: 	$a
+etherplus.s: 	$h/com.h
+etherplus.s: $i/assert.h
+etherplus.s: ./dp8390.h
+etherplus.s: ./dp8390info.h
+etherplus.s: ./eplinfo.h
+etherplus.s: ./etherformat.h
+etherplus.s: ./etherplus.h
+etherplus.s: ./internet.h
+etherplus.s: etherplus.c
+
+portcache.s: 	$a
+portcache.s: 	$i/amoeba.h
+portcache.s: 	$i/host_os.h
+portcache.s: 	./assert.h
+portcache.s: 	./conf.h
+portcache.s: 	./global.h
+portcache.s: 	./internet.h
+portcache.s: 	./mpx.H
+portcache.s: 	./portcache.H
+portcache.s: 	./task.h
+portcache.s: 	./trans.H
+portcache.s: 	portcache.c
+
+trans.s: $a
+trans.s: $i/amoeba.h
+trans.s: $i/host_os.h
+trans.s: ./amstat.h
+trans.s: ./assert.h
+trans.s: ./byteorder.h
+trans.s: ./exception.h
+trans.s: ./global.h
+trans.s: ./internet.h
+trans.s: ./mpx.H
+trans.s: ./portcache.H
+trans.s: ./task.h
+trans.s: ./trans.H
+trans.s: trans.c
+
+util.s: $a
+util.s: $h/com.h
+util.s: ./assert.h
+util.s: ./dp8390.h
+util.s: ./dp8390info.h
+util.s: ./eplinfo.h
+util.s: $k/proc.h
+util.s: util.c
+
+
+
+

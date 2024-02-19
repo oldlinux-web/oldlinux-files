@@ -1,0 +1,756 @@
+                          RealMem Memory Mode
+                          -------------------
+
+                By Mark Feldman (pcgpe@geocities.com)
+
+
+Disclaimer
+----------
+
+I assume no responsibility whatsoever for any effect that this file, the
+information contained therein or the use thereof has on you, your sanity,
+computer, spouse, children, pets or anything else related to you or your
+existance. No warranty is provided nor implied with this information.
+
+Introduction
+------------
+
+Intel's segmented memory scheme is a pain to use when you've got
+large data structures in memory that you want to move around. Being limited 
+to 640K of base memory is also somewhat restrictive and if you're trying to 
+write a decent game you'll probably need more.
+
+The most obvious way around segmented memory is to use protected mode.
+Unfortunately this has it's problems. For starters it's notoriously
+difficult to set up (unless you use an already made extender). You also
+have to be extremely careful with your programming in protected mode, one
+access to memory you're not supposed to access and up pops the notorious
+"General Protection Fault" (remember your first Windows program?).
+
+It'd be nice to be able to access all of memory, including xms, in a linear
+fashion while still being able to keep the CPU in real mode, and there is!
+
+If you are going to do any serious programming with realmem mode then
+you'll have to be competent in assembly, but the C++ classes included at the
+end of this article will get you started and could even be used for some
+simple applications.
+
+Let's say you are accessing memory by using the es:[ebx] pair. In normal
+real mode the value of ebx can never be greater than 0xFFFF, if it is and
+you try to access memory then a 0Dh interrupt is generated. On my 486
+it sometimes worked ok even though the interrupts were being generated, on
+the 386's I've tried it on it crashed the system every time. Real memory mode
+is a way of simply setting up the CPU so that this interrupt isn't generated
+and the correct memory is accessed.
+
+How safe is it? To be honest I have no idea. I can tell you however that I
+have successfully used it in one commercial project (da boss told me to)
+and countless of my own experimental programs and I've never had a
+problem with it. I believe Origin also uses it for their VOODOO memory
+manager in Ultima 7.
+
+I first learned about this technique from a text file written by the demo
+group PROGREX. The file is called REALMEM and It's available on
+x2ftp.oulu.fi in the /pub/msdos/programming/docs directory.
+
+
+Technical Stuff
+---------------
+
+The CPU maintains a number of lists called "Descriptor Tables". These are
+normally used in protected mode, the operating system (or dos extender)
+fills this list with a bunch of 8-byte entries, each entry specifies one
+block of memory that a program can access. An entry contains info such
+as where the block can start and how long it is. There is one list called
+the "Global Descriptor Table" which all programs can access. In a multi-
+tasking situation each program running also has a "Local Descriptor Table"
+which is a block specifying it's own memory area. If you try to access
+memory outside the memory specified in these lists then boy are you in
+trouble!!
+
+In regular CPU real mode the segment limits are set at 64K, so you can
+never access outside this area without generating a General Protection
+Fault. Real memory mode simply switches to protected mode and sets up the
+Global Descriptor Table so that there is one segment starting at address
+0000:0000 and it is 4 gigabytes long. It then switches back to real mode
+and the Global Descriptor Table holds. The only other thing we must do is
+enable the A20 line so that we can access all the upper memory.
+Fortunately HIMEM.SYS has a function to do this for us.
+
+
+                      *** PENTIUM UPDATE ***
+
+It would appear that REALMEM is not as attractive on the Pentium as it was
+with earlier machines. In order to use 32-bit addressing with the CPU in
+16-bit mode you need to prefix all relevent instructions with the address
+size prefix (67h). In general, prefix bytes can only execute in the U pipe
+and they cannot pair with anything in the V pipe. In other words, 1-cyle
+instructions can take up to 4 *TIMES* as long to execute as they would in
+32-bit mode.
+
+The situation could in fact be a lot worse. In 16-bit mode a simple
+instruction like MOV DS:[EDI],EAX contains 2 prefixes: an address size
+prefix (67h) and a data size prefix (66h). Assuming each prefix takes up
+both pipes for a full cycle, this simple instruction would take up to 6
+*TIMES* as long to run on a Pentium in real mode than it does in protected
+mode. I haven't managed to actually time this yet, but either way things
+don't look good for REALMEM on Pentiums.
+
+Advantages and Disadvantages
+----------------------------
+
+
+Real memory mode will not work if EMM386.EXE is installed in the system, and
+there's probably a few other memory managers it won't work with either. (THIS
+ARTICLE WAS ALSO WRITTEN BEFORE WIN95 WAS RELEASED. REALMEM WON'T RUN IN A DOS
+SHELL, THUS FORCING YOUR USERS TO BOOT IN DOS MODE. YECH! I've heard a rumor 
+that there is a way to get it to work in a dos shell, but so far I haven't been
+able to figure out how.) The reason for this is that EMM386 puts the system in 
+V86 mode. This is no big drama really, I never have it installed on my system 
+because it does cause problems with many protected mode programs, but you'll 
+have to make this clear in your user documentation.
+
+All CPU instructions will work in their regular real mode ways. This means
+that instructions such as movsb will move a byte from ds:[si] to es:[di],
+NOT ds:[esi] to es:[edi]. If you want to use 32-bit addresses for string
+instructions then you need to explicitly tell your assembler to add an
+address size prefix byte to the front of them, eg:
+
+rep movs word ptr es:[edi], ds:[esi]
+
+This is equivelent to rep movs, but it adds the address size prefix
+byte to the instruction.
+
+The code supplied with this file must have HIMEM.SYS installed. HIMEM.SYS
+contains a number of functions we need, such as finding out how much XMS
+memory is present and available, and enabling the A20 line.
+
+
+The realmem and XMS array C++ Classes
+-------------------------------------
+
+To help you get started with real memory mode I've written a simple Borland
+C++ 3.1 class. The class sets up real memory mode when the object is created
+and shuts it down again when it's destroyed. Make sure you only create one
+instance of this class, it can be either global (blech) or local. The
+realmem class allocates all available XMS, and trying to allocate another
+instance will return an ERROR_NOXMS error.
+
+The 'status' variable is used to determine whether an error has occurred.
+These are the values it can contain:
+
+There is also a range of classes you can use to access extended memory
+from within your C++ program. They are extremely slow however, so if you
+want to do any serious xms programming then I suggest writing your own
+routines to access xms directly. The classes included are:
+
+This is the class to set up real memory mode:
+ realmem
+
+This class contains these variables:
+
+int            status;      // holds any error messages if they occurr
+unsigned       XmsKBytes;   // number of xms kilobytes allocated
+unsigned long  XmsBytes;    // number of xms bytes allocated
+unsigned long  XmsStart;    // the starting address of available xms memory
+
+These classes are used to manipulate xms memory:
+ xmschar
+ xmsint
+ xmslong
+
+The last 3 classes contain a variable called address which is the absolute
+address of the variable. You can specify this address in the constructor
+if you like, like this:
+
+realmem rm;
+xmschar buffer(rm.XmsStart);  // set up a buffer at the start of xms
+
+The classes can then be used as arrays:
+
+unsigned i;
+for (i=0; i&lt;64000; i++) buffer[i] = 0;  // clear first 64K in the buffer
+
+Feel free to overload some of the other operators for these classes.
+
+
+TEST.CPP
+--------
+
+Here's a very simple demo program to show you how to use the C++ classes.
+First of all it attempts to set up real memory mode. If it can then it uses
+the first 64000 bytes in extended memory as a virtual buffer for the
+graphics screen. Next it switches over to graphics mode 13h, fills the
+virtual bufer with random pixels and copies it to the screen. It then
+waits for the user to press a key, switches back to normal mode and cleans
+up. Compile this source along with realmem.cpp. Note that this program is
+REALLY slow. Like I said, if you want to do anything serious you'll have to
+write your own assembly routines to quickly access memory.
+
+
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;conio.h&gt;
+#include "realmem.h"
+
+void main()
+{
+ realmem xms;
+ xmschar buffer;
+ char far * screen;
+ long i;
+
+ // Make sure we switched over to xms ok
+ if (xms.status != ERROR_OK)
+  {
+  printf("REALMEM error # %i occurred! 'Moutta here...",xms.status);
+  }
+ else
+  {
+  // Point buffer to start of xms and set up screen pointer
+  buffer.address = xms.XmsStart;
+  screen = (char far *)0xA0000000;
+
+  // Tell the user to wait a tik
+  printf("Filling virtual buffer with random pixels, one tik...");
+
+  // Fill xms virtual buffer with random pixels
+  for (i=0; i&lt;64000; i++) buffer[i] = random(256);
+
+  // Switch to graphics mode 13h
+  asm mov ax,0x13
+  asm int 0x10
+
+  // Now copy the entire virtual buffer to the graphics screen
+  for (i=0; i&lt;64000; i++) screen[i] = buffer[i];
+
+  // Wait for a keypress then switch back to text mode
+  getch();
+  asm mov ax,3
+  asm int 0x10
+  }
+}
+
+
+REALMEM.H
+---------
+
+#ifndef __REALMEM__
+#define __REALMEM__
+
+#define ERROR_OK            0
+#define ERROR_INV86         1
+#define ERROR_NODRIVER      2
+#define ERROR_WRONGVERSION  3
+#define ERROR_NOFUNC        4
+#define ERROR_VDISK         5
+#define ERROR_A20           6
+#define ERROR_NOXMS         7
+#define ERROR_NOMEM         8
+#define ERROR_NOHANDLES     9
+#define ERROR_INVALIDHANDLE 10
+#define ERROR_LOCKOVERFLOW  11
+#define ERROR_LOCKFAIL      12
+#define ERROR_UNKNOWN       13
+
+
+class realmem
+{
+ public:
+  realmem();
+  ~realmem();
+  int            status;
+  unsigned       XmsKBytes;
+  unsigned long  XmsBytes;
+  unsigned long  XmsStart;
+
+ private:
+  unsigned       XmsHandle;
+  unsigned long  XmsDriver;
+  int            InV86                ();
+  void           LoadGDT              ();
+  int            DriverPresent        ();
+  unsigned long  GetDriverAddress     ();
+  int            WrongVersion         ();
+  unsigned       XmsAvail             ();
+  int            EnableA20            ();
+  int            DisableA20           ();
+  unsigned       XmsAlloc             (unsigned kbytes);
+  void           XmsFree              (unsigned handle);
+  unsigned long  XmsLock              (unsigned handle);
+  void           XmsUnlock            (unsigned handle);
+};
+
+
+class xmschar
+{
+ public:
+  xmschar();
+  xmschar(unsigned long addr);
+  xmschar operator [] (unsigned long offset);
+  operator = (char value);
+  operator char();
+  unsigned long address;
+};
+
+
+class xmsint
+{
+ public:
+  xmsint();
+  xmsint(unsigned long addr);
+  xmsint operator [] (unsigned long offset);
+  operator = (int value);
+  operator int();
+  unsigned long address;
+};
+
+
+class xmslong
+{
+ public:
+  xmslong();
+  xmslong(unsigned long addr);
+  xmslong operator [] (unsigned long offset);
+  operator = (long value);
+  operator long();
+  unsigned long address;
+};
+
+
+#endif // __REALMEM__
+
+
+REALMEM.CPP
+-----------
+
+
+
+#include &lt;dos.h&gt;
+#include "realmem.h"
+
+#pragma inline
+asm     .386p
+
+unsigned char MemoryCode[16]={0,0,0,0,0,0,0,0,0xFF,0xFF,0,0,0,0x92,0xCF,0xFF};
+unsigned char Mem48[6];
+
+
+// ----------------- realmem class ------------------------
+
+
+realmem::realmem()
+{
+ status = ERROR_OK;
+
+ // Make sure we are not in V86 mode
+ if (InV86()) return;
+
+ // Load the Global Descriptor Table
+ asm mov   Mem48[0],16
+ asm mov   eax,seg MemoryCode
+ asm shl   eax,4
+ asm mov   bx,offset MemoryCode
+ asm movzx ebx,bx
+ asm add   eax,ebx
+ asm mov   dword ptr Mem48[2],eax
+ asm lgdt  pword ptr Mem48
+ asm mov   bx,08h
+ asm push  ds
+ asm cli
+ asm mov   eax,cr0
+ asm or    eax,1
+ asm mov   cr0,eax
+ asm jmp   protection_enabled
+ protection_enabled:
+ asm mov   gs,bx
+ asm mov   fs,bx
+ asm mov   es,bx
+ asm mov   ds,bx
+ asm and   al,0FEh
+ asm mov   cr0,eax
+ asm jmp   protection_disabled
+ protection_disabled:
+ asm sti
+ asm pop   ds
+
+ // Make sure an xms driver is present
+ if (!DriverPresent()) return;
+
+ // Get the driver function call address
+ XmsDriver = GetDriverAddress();
+
+ // Make sure the version number is at least 2
+ if (WrongVersion()) return;
+
+ // Find out how much xms is available
+ XmsKBytes = XmsAvail();
+ if (status != 0) return;
+ XmsBytes=(unsigned long)XmsKBytes * 1024L;
+
+ // Enable the A20 line
+ EnableA20();
+ if (status != 0) return;
+
+ // Allocate some xms
+ XmsHandle = XmsAlloc(XmsKBytes);
+ if (status != 0) return;
+
+ // Lock the block into place and get it's address
+ XmsStart = XmsLock(XmsHandle);
+}
+
+realmem::~realmem()
+{
+ // Unlock the memory block
+ XmsUnlock(XmsHandle);
+
+ // Free the block
+ XmsFree(XmsHandle);
+
+ // Disable the A20 line
+ DisableA20();
+}
+
+
+// This function tests if the cpu is in V86 mode, if it is then a memory
+// manager such as EMM386.EXE is probably running.
+int realmem::InV86()
+{
+ unsigned result;
+
+ asm mov eax,cr0
+ asm and ax,1
+ asm mov word ptr result,ax
+ if (result) status = ERROR_INV86;
+ return result;
+}
+
+// This function makes sure the HIMEM.SYS in installed.
+int realmem::DriverPresent()
+{
+ struct REGPACK regs;
+
+ regs.r_ax = 0x4300;
+ intr(0x2F,&regs);
+ regs.r_ax &= 0xFF;
+ if (regs.r_ax != 0x80)
+  {
+  status = ERROR_NODRIVER;
+  return 0;
+  }
+ return 1;
+}
+
+// This function gets an address used to call HIMEM.SYS functions directly.
+unsigned long realmem::GetDriverAddress()
+{
+ unsigned long address;
+
+ asm mov ax,0x4310
+ asm int 0x2F
+ asm mov ax,es
+ asm shl eax,16
+ asm mov ax,bx
+ asm mov [address+0],bx
+ asm mov [address+2],es
+ return address;
+}
+
+// This function makes sure that the HIMEM.SYS version is at least 2.0
+int realmem::WrongVersion()
+{
+ unsigned long addr = XmsDriver;
+ char version;
+
+ asm mov  ah,0
+ asm xor  dx,dx
+ asm call dword ptr addr
+ asm mov  version,ah
+ if (version &lt; 2)
+  {
+  status = ERROR_WRONGVERSION;
+  return 1;
+  }
+ return 0;
+}
+
+// This function returns the amount of free XMS memory available
+unsigned realmem::XmsAvail()
+{
+ unsigned long addr = XmsDriver;
+ unsigned kbytes;
+
+ asm mov ah,8
+ asm xor dx,dx
+ asm call dword ptr addr
+ asm mov word ptr kbytes,dx
+ if (kbytes == 0) status = ERROR_NOXMS;
+ return kbytes;
+}
+
+// This function calls HIMEM.STS to enable the A20 line so we can access
+// extended memory.
+int realmem::EnableA20()
+{
+ unsigned long addr = XmsDriver;
+ unsigned a,b;
+
+ asm mov ah,5
+ asm call dword ptr addr
+ asm mov a,ax
+ asm mov b,bx
+
+ if (a != 1)
+  {
+  b &= 0xFF;
+  switch (b)
+   {
+   case 0x80: status = ERROR_NOFUNC; return 0;
+   case 0x81: status = ERROR_VDISK;  return 0;
+     default: status = ERROR_A20;    return 0;
+   }
+  }
+
+ return 1;
+}
+
+// This function calls HIMEM.STS to disable the A20 line.
+int realmem::DisableA20()
+{
+ unsigned long addr = XmsDriver;
+ unsigned a,b;
+
+ asm mov ah,6
+ asm call dword ptr addr
+ asm mov a,ax
+ asm mov b,bx
+
+ if (a != 1)
+  {
+  b &= 0xFF;
+  switch (b)
+   {
+   case 0x80: status = ERROR_NOFUNC; return 0;
+   case 0x81: status = ERROR_VDISK;  return 0;
+     default: status = ERROR_A20;    return 0;
+   }
+  }
+ return 1;
+}
+
+
+// This function calls HIMEM.SYS to allocate a block of extended memory.
+unsigned realmem::XmsAlloc(unsigned kbytes)
+{
+ unsigned long addr = XmsDriver;
+ unsigned result,handle;
+ unsigned char error;
+
+ asm mov  ah,9
+ asm mov  dx,kbytes
+ asm call dword ptr addr
+ asm mov  result,ax
+ asm mov  error,bl
+ asm mov  handle,dx
+
+ if (result != 1)
+  {
+  switch (error)
+   {
+   case 0x80: status = ERROR_NOFUNC;    return 0;
+   case 0x81: status = ERROR_VDISK;     return 0;
+   case 0xA0: status = ERROR_NOMEM;     return 0;
+   case 0xA1: status = ERROR_NOHANDLES; return 0;
+     default: status = ERROR_UNKNOWN;   return 0;
+   }
+  }
+
+ return handle;
+}
+
+// This function calls HIMEM.SYS to lock an allocated block of memory into
+// place. This ensures that HIMEM.SYS won't go moving memory around on us.
+unsigned long realmem::XmsLock(unsigned handle)
+{
+ unsigned long addr = XmsDriver;
+ unsigned long address;
+ unsigned result;
+ unsigned char error;
+
+ asm mov  ah,0Ch
+ asm mov  dx,handle
+ asm call dword ptr addr
+ asm shl  edx,16
+ asm mov  dx,bx
+ asm mov  address,edx
+ asm mov  result,ax
+ asm mov  error,bl
+
+ if (result != 1)
+  {
+  switch (error)
+   {
+   case 0x80: status = ERROR_NOFUNC;        break;
+   case 0x81: status = ERROR_VDISK;         break;
+   case 0xA2: status = ERROR_INVALIDHANDLE; break;
+   case 0xAC: status = ERROR_LOCKOVERFLOW;  break;
+   case 0xAD: status = ERROR_LOCKFAIL;	    break;
+     default: status = ERROR_UNKNOWN;       break;
+   }
+  }
+
+ return address;
+}
+
+// This function calls HIMEM.SYS to unlock our allocated memory block.
+void realmem::XmsUnlock(unsigned handle)
+{
+ unsigned long addr = XmsDriver;
+
+ asm mov ah,0Dh
+ asm mov dx,handle
+ asm call dword ptr addr
+}
+
+// This function frees our allocated memory block.
+void realmem::XmsFree(unsigned handle)
+{
+ unsigned long addr = XmsDriver;
+
+ asm mov ah,0Ah
+ asm mov dx,handle
+ asm call dword ptr addr
+}
+
+
+// ----------------- xmschar class ------------------------
+
+xmschar::xmschar()
+{
+ address = 0;
+};
+
+xmschar::xmschar(unsigned long addr)
+{
+ address = addr;
+};
+
+xmschar xmschar::operator [] (unsigned long offset)
+{
+ return xmschar(address + offset);
+}
+
+xmschar::operator = (char value)
+{
+ unsigned long addr = address;
+
+ asm xor ax,ax
+ asm mov fs,ax
+ asm mov ebx,addr
+ asm mov al,value
+ asm mov fs:[ebx],al
+
+ return value;
+};
+
+xmschar::operator char()
+{
+ unsigned long addr = address;
+ char result;
+
+ asm xor ax,ax
+ asm mov fs,ax
+ asm mov ebx,addr
+ asm mov al,fs:[ebx]
+ asm mov result,al
+ return result;
+};
+
+// ----------------- xmsint class ------------------------
+
+xmsint::xmsint()
+{
+ address = 0;
+};
+
+xmsint::xmsint(unsigned long addr)
+{
+ address = addr;
+};
+
+xmsint xmsint::operator [] (unsigned long offset)
+{
+ return xmsint(address + offset);
+}
+
+xmsint::operator = (int value)
+{
+ unsigned long addr = address;
+
+ asm xor ax,ax
+ asm mov fs,ax
+ asm mov ebx,addr
+ asm mov ax,value
+ asm mov fs:[ebx],ax
+
+ return value;
+};
+
+xmsint::operator int()
+{
+ unsigned long addr = address;
+ int result;
+
+ asm xor ax,ax
+ asm mov fs,ax
+ asm mov ebx,addr
+ asm mov ax,fs:[ebx]
+ asm mov result,ax
+ return result;
+};
+
+
+// ----------------- xmslong class ------------------------
+
+xmslong::xmslong()
+{
+ address = 0;
+};
+
+xmslong::xmslong(unsigned long addr)
+{
+ address = addr;
+};
+
+xmslong xmslong::operator [] (unsigned long offset)
+{
+ return xmslong(address + offset);
+}
+
+xmslong::operator = (long value)
+{
+ unsigned long addr = address;
+
+ asm xor ax,ax
+ asm mov fs,ax
+ asm mov ebx,addr
+ asm mov eax,value
+ asm mov fs:[ebx],eax
+
+ return value;
+};
+
+xmslong::operator long()
+{
+ unsigned long addr = address;
+ long result;
+
+ asm xor ax,ax
+ asm mov fs,ax
+ asm mov ebx,addr
+ asm mov eax,fs:[ebx]
+ asm mov result,eax
+ return result;
+};
+

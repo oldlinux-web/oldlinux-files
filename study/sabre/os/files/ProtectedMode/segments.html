@@ -1,0 +1,557 @@
+<HTML><HEAD>
+<TITLE>Segment Registers: Real mode vs. Protected mode</TITLE>
+</HEAD>
+
+<h2>Segment Registers: Real mode vs. Protected mode</h2><p>
+
+Content by: <A HREF="mailto:johnfine@erols.com">johnfine@erols.com</A><br>
+HTML formatting by:  volunteer_needed<p>
+
+This page discusses the major difference between real mode and protected mode,
+which is the behavior of segment registers.<p>
+
+<UL>
+<LI><A href="#simple">The simple but wrong version</A>
+<LI><A href="#true">The way it really works</A>
+<LI><A href="#why">Examples (why you can't trust the simple version)</A>
+<UL>
+<LI><A href="#switch2">Switching to pmode</A>
+<LI><A href="#switchF">Switching from pmode</A>
+<LI><A href="#flat">Flat real mode</A>
+<LI><A href="#reset">CPU reset</A>
+<LI><A href="#change">Changing the GDT or LDT</A>
+</UL>
+<LI>Related topics
+<UL>
+<LI><A href="#wraparound">segment wraparound</A>
+<LI><A href="#null">NULL Selector</A>
+</UL>
+</UL>
+<P>
+
+<H3><A name="simple">The simple but wrong version</A></H3>
+
+Most memory accesses implicitly or explicitly use a segment register.
+If you don't understand that aspect of it yet, please look at
+<A href="#basics">Segment register basics</A>.<p>
+
+In real mode the CPU shifts the segment register value left by four places
+(multiplying it by 16) and adds the 16 bit offset to get a 20 bit physical
+address.<p>
+
+In pmode the value in a segment register is not a segment number.  It is
+a "selector".  Bit 2 of the selector tells the CPU whether to use the
+GDT or LDT.  Bits 3 to 15 of the selector index to one of the descriptors
+in the GDT or IDT.<p>
+
+The CPU adds the 16-bit or 32-bit offset (from the address portion of
+the instruction) to the "base" value from the descriptor.  The result
+is a 32-bit "linear" address.<p>
+
+The descriptor also contains a "limit" (length minus one) for the
+segment.  The CPU will generate a fault if you attempt to access
+beyond the limit of a segment.<p>
+
+Bits 0 and 1 of the selector are known as the "RPL".  The current
+priviledge level is known as the "CPL".  Those values are checked
+against the descriptor priviledge "DPL" to see if the access
+should be permitted.<p>
+
+<H3><A name="true">The way it really works</A></H3>
+
+<A NAME="hidden"></A>
+
+Each segment register is really four registers:
+<UL>
+<LI>A selector register
+<LI>A base register
+<LI>A limit register
+<LI>An attribute register
+</UL><p>
+
+In all modes, every access to memory that uses a segment register uses
+the base, limit, and attribute portions of the segment register and
+does not use the selector portion.<p>
+
+Every direct access to a segment register (PUSHing it on the stack,
+MOVing it to a general register etc.) uses only the selector
+portion.  The base, limit, and attribute portions are either very
+hard or impossible to read (depending on CPU type).  They are
+often called the "hidden" part of the segment register because
+they are so hard to read.<p>
+
+Intel documentation refers to the hidden part of the segment
+register as a "descriptor cache".  This name obscures the
+actual behavior of the "hidden" part.<p>
+
+<A NAME="ModeWriteSeg"></A>
+In real mode (or V86 mode), when you
+<A HREF="#WriteSeg">write any 16-bit value to a segment register</A>,
+the value you write goes into the selector and 16 times that value
+goes into the base.  The limit and attribute are not changed.<p>
+
+In pmode, any 
+<A HREF="#WriteSeg">write to a segment register</A>
+causes a descriptor to
+be fetched from the GDT or LDT and unpacked into the base, limit
+and attribute portion of the segment register.  (Special
+exception for the <A href="#null">NULL Selector</A>).<p>
+
+When the CPU <A href="#switch2">switchs</A>
+between real mode and pmode, the segment
+registers do not automatically change.  The selectors still
+contain the exact bit pattern that was loaded into them in
+the previous mode.  The hidden parts still contain the values
+they contained before, so the segment registers can still be
+used to access whatever segments they refered to before the
+switch.<p>
+
+When the CPU switches between V86 mode and pmode it updates
+all the segment registers to have values which are consistent
+with the new mode.  This is the reason that tricks like
+<A href="#flat">flat real mode</A>
+don't work in V86 mode.<p>
+
+<FONT size="-1">
+When the CPU switches to "System Manangement Mode" from any other
+mode it stores the entire contents of the segment register (hidden
+as well as selectors) in an SMM work area.  On some CPU's, this is
+the only way to read the hidden part of the segment registers.<p>
+
+When the CPU switches from SMM to any other mode it reads the entire
+contents of the segment registers from that work area.  It does not
+perform many of the consistency checks that would occur under other
+circumstances, so it is possible to create something like flat real
+mode for V86, but there are many further problems.<p>
+</FONT>
+
+<H3><A name="why">Examples (why you can't trust the simple version)</A></H3>
+
+In many situations the selectors will be "out of sync" with the base,
+limit and attribute values.<p>
+
+If you think of the hidden part as a "descriptor cache", you will
+find it very hard to work with these situations.  With a cache,
+you would have no idea when the values will pop back into sync, or
+what you can/can't safely do while they are out of sync.<p>
+
+Knowing that they are a
+<A HREF="#hidden">hidden portion</A>
+of the segment registers,
+means that you know they will change as described above, when
+you write to the segment registers.  Clearly you need to have
+interrupts disabled whenever the segment registers are out
+of sync (except for stable cases like flat real mode),
+because any interrupt routine might save and "restore" a
+segment register and that "restored" segment register will
+have only the same selector as was saved, not the same hidden
+part.<p>
+
+<H3><A name="switch2">Switching to pmode</A></H3>
+
+Switching to pmode is real easy.  Just<p>
+
+<PRE>
+   mov  eax, cr0
+   inc  ax
+   mov  cr0, eax
+</PRE>
+
+It is also real hard, because when you first switch to pmode, the slightest
+mistake will cause your CPU to "triple fault".  That makes your system
+reboot.  It doesn't tell you much about what you did wrong, just that you
+did SOMETHING wrong.<p>
+
+When you first switch to pmode, your CS register still has the same base,
+limit and attribute values it had before.  Don't worry about the fact
+that the CS selector is now "incorrect" for pmode.  As long as you don't
+have any interrupts or far CALLs, the CS selector doesn't matter.  You
+can execute lots of code, even do near JMPs and CALLs and RETs, all
+without loading a pmode compatible CS selector.<p>
+
+Similarly, your data, stack, etc. segment registers retain their base,
+limit and attributes.  This brings me to a great debugging aid for
+mode switching routines:<p>
+
+I will assume that your early pmode code does not use GS, and that
+your display is in text mode and that your display regen buffer is at B8000.
+(Make the obvious change if that last item is wrong).  Put the
+following code well before you switch to pmode:<p>
+
+<PRE>
+   mov  ax, 0B800h
+   mov  gs, ax
+   mov  byte [gs:0], '1'     ;<A href="#syntax">NASM Syntax</A>
+</PRE>
+
+Now take lines like these:<p>
+
+<PRE>
+   mov  byte [gs:2], '2'
+   mov  byte [gs:4], '3'
+   mov  byte [gs:6], '4'
+   etc.
+</PRE>
+
+and distribute them through the following code.  DO NOT WORRY about the
+fact that GS has a selector that is incompatible with pmode.  DO NOT
+load a pmode compatible selector into GS (until you are sure your GDT
+etc. work well enough that you probably don't need this debugging aid
+anymore anyway).<p>
+
+When your program triple faults, watch the display carefully.  The
+sequence of characters will be visible for a moment (even after the
+triple fault), so you can see how far your code got before it died.<p>
+
+Before you can change any segment register within pmode, you need to
+have a valid GDT.  You can do the LGDT instruction before or after
+switching to pmode.  It is safe before switching because the value
+in the GDT register is ignored in real mode;  It doesn't affect
+the loading of segment registers;  It doesn't even need to be valid.
+Doing the LGDT after switching to pmode is safe because all your
+segment registers still have valid base, limit and attributes, so
+memory references (like loading the GDT psuedo-descriptor into the
+GDT register) are still OK.<p>
+
+Many people misunderstand the extra level of indirection involved
+in pointing to the GDT.  The LGDT instruction encodes an address
+(usual memory addressing rules).  That address is the offset
+(within the indicated or implicit segment) of the psuedo-descriptor.
+The psuedo-descriptor in turn contains the address of the GDT.
+THAT address is a linear address and is not based on the
+contents of any segment register.<p>
+
+In all my examples I put that psuedo-descriptor in the same
+location as the GDT itself.  This is possible because the CPU
+never uses the first eight bytes of the GDT.  (See
+<A href="#null">NULL Selector</A>).<p>
+
+If your code is a DOS program, or is loaded in some other form in which you
+cannot know linear addresses until run time, then you must patch the
+psuedo-descriptor to get the correct linear address.<p>
+
+<PRE>
+   xor  eax, eax
+   mov  ax, ds
+   shl  eax, 4           ;eax = linear address of data segment
+   add  [GDT+2], eax     ;patch psuedo-descriptor
+   lgdt [GDT]
+. . .
+GDT  dw  GDT_length - 1
+     dd  GDT
+     dw  0
+;First descriptor goes here
+</PRE>
+
+Before enabling or using any interrupts, remember to set up a pmode compatible
+Interrupt Descriptor Table.  Like LGDT, LIDT may be executed before or after
+entering pmode;  However, unlike the GDT, the IDT does affect the CPU within
+real mode.  Interrupts should remain disabled from before the earlier of
+the LIDT or the switch to pmode, until after the later of the LIDT or loading
+pmode compatible selectors into all segment registers touched (including save/
+restore) by any interrupt.<p>
+
+<A name="cr0fast">WARNING:</A> A 386 needs a very tiny delay (any instruction would be
+more than enough) after switching to pmode, before it can correctly load a selector
+into a segment register.  In one version of my
+<A HREF="#flat">switch to flat real mode</A>
+I had the selector value in a general register before switching to pmode, and
+the very first instruction after switching to pmode was a fast instruction to
+MOV that selector to a segment register.  Depending on instruction alignment,
+it could corrupt the hidden part of the segment register (on a 386 only).
+You can safely write to a segment register with the very first instruction
+after switching to pmode if it is a slow instruction like a POP or a far JMP,
+but not if it is a fast instruction like "MOV DS,BX".
+Normally you wouldn't even notice this problem because it is more natural
+to move the selector to a register right before you move it to the
+segment register.<p>
+
+<H3><A name="switchF">Switching from pmode</A></H3>
+
+In switching from pmode, you usually need to reload your segment registers
+twice.<p>
+
+Before switching from pmode you must put real mode compatible values
+in the limit and attribute part of each segment register.  You
+cannot change the limit or attribute while you are in real mode, so
+you must set the values you want before you exit pmode.<p>
+
+After switching from pmode you must put real mode compatible values
+in the segment selectors.  Immediately after you exit pmode the
+segment registers still have the selector and base values that were
+loaded when you fixed the limit and attribute values (as described
+above).  As with the switch TO pmode, you can use the segment
+registers with those base values to execute code and access data
+as long as you want after switching.  However, you should understand
+the consequences of having the selector and base values out of sync.
+As soon as any interrupt service routine saves and restores a
+segment register, the pmode base will be lost and the base will
+become 16 times the selector.<p>
+
+There is a default size bit in each of the CS and SS attribute parts.
+It comes from bit 54 in the descriptor (that is the D_BIG bit, for
+those using my
+<A HREF="descript.htm#gdtinc">gdt.inc</A>
+definitions).  In the CS register the
+default size has a major effect.  It sets the default operand and
+address size to 16 or 32.  If you exited to real mode with that bit
+still set, you would get very strange results (and not very useful,
+because the BIOS wouldn't be usable and the IVT would still
+function in 16-bit real mode).<p>
+
+If you exit to real mode with the default size bit still set in
+SS (a common mistake), you get a much subtler problem.  AFAIK,
+the sole effect of the default size bit in SS is to cause all
+implicit uses of SP to use ESP instead.  Implicit uses of SP
+are PUSH, POP, CALL, RET, INT, etc.;  If the upper half of
+ESP is cleared, you won't immediately notice that it is
+being used.  However, there are several things that programs
+might do that will crash as a result of that SS bit.  My
+favorite is:<p>
+<PRE>
+   xor  sp, sp
+   push something
+</PRE>
+Normally that predecrements sp to FFFE and writes the value there.
+You may not like the results if the value gets written to ss:FFFFFFFE
+instead.<p>
+
+<H3><A name="flat">Flat real mode</A></H3>
+
+Flat real mode, AKA "unreal mode" is the mode you get to if you return
+to real mode from pmode leaving a 4GB limit in some or all of
+ds, es, fs, gs, ss.<p>
+
+Flat real mode has the major advantage over PMODE, that it is compatible
+with the BIOS and DOS.  In fact, if you are running HIMEM.SYS without
+EMM386.SYS you are probably already in flat real mode.<p>
+
+Getting into flat real mode is pretty easy:<p>
+<PRE>
+   cli                ;Don't allow interrupts during this
+   push ds            ;Save real mode selectors
+   push es
+   xor  eax, eax      ;Patch the GDT psuedo-descriptor
+   mov  ax, ds        ;  (assuming ds points the segment containing the GDT)
+   shl  eax, 4
+   add  [GDT+2], eax
+   lgdt [GDT]         ;Load the GDT
+   mov  eax, cr0      ;Switch to pmode
+   inc  ax
+   mov  cr0, eax
+   mov  bx, flat_data ;Our only pmode selector
+   mov  ds, bx        ;Install 4Gb limits <A HREF="#cr0fast">(warning)</A>
+   mov  es, bx
+   dec  ax            ;Switch back to real mode
+   mov  cr0, eax
+   pop  es            ;Restore real mode selectors
+   pop  ds
+   sti                ;Notice, I never needed to change the CS while in pmode.
+. . .
+           %include "<A HREF="descript.htm#gdtinc">gdtn.inc</A>"
+GDT        start_gdt
+flat_data  desc 0, 0xFFFFF, D_DATA+D_WRITE+D_BIG_LIM
+           end_gdt
+</PRE>
+
+Most people seem to build their GDT's in hex rather than using macros such as
+those defined in <A HREF="descript.htm#gdtinc">gdtn.inc</A>.
+If you really want to do it that way, the four lines above that create
+the GDT could be replaced by:
+<PRE>
+GDT        dw  0xF, GDT, 0, 0, 0xFFFF, 0, 0x9200, 0x8F
+flat_data  equ 8
+</PRE>
+I think the hex version is unreadable and error prone.<p>
+
+A common fallacy about flat real mode is that it is incompatible with programs
+that rely on
+<A name="wraparound">segment wraparound</A>.<p>
+
+On an 8086, offsets within a segment are truely and consistently 16 bits.
+If you access ds:[bx+si+7000h] and bx=7000h and si=7000h, then you are
+asking for 7000h*3 which is 15000h;  But of course you actually get
+offset 5000h because offsets are 16 bits.<p>
+
+Similarly, if you access a word at offset [0FFFFh], the low byte of
+the word will come from offset 0FFFFh and the high byte will come
+from offset 0, not from the byte that physically follows the low
+byte.<p>
+
+On a 386+, there is only a slight difference.  In 16-bit addressing,
+7000h + 7000h + 7000h still equals 5000h;  However, accesing the
+word at offset FFFFh now gives you a protection violation rather
+than a wraparound.<p>
+
+In flat real mode, there is another slight difference.  In 16-bit addressing,
+7000h + 7000h + 7000h STILL equals 5000h (despite nonsense to the contrary
+that I have seen written);  However, accesing the
+word at offset FFFFh now gives you the full word at that location rather
+than either a wraparound or a protection violation.<p>
+
+In the unlikely event that some program relied on the protection
+violation, it would be incompatible with flat real mode.  If it
+relied on the wraparound, it wouldn't run correctly on a 386+
+anyway.<p>
+
+Flat real mode is incompatible with V86 mode, so if you are running
+EMM386 etc. which put your DOS session in V86 mode, then you can't
+switch to flat real mode.  Also certain BIOS interrupts and other
+programs, that temporarily switch in and out of pmode, will trash
+your extended limits and take you back out of flat real mode.<p>
+
+Another common fallacy is that 32-bit addressing modes are possible
+in flat real mode but impossible in ordinary real mode.  In fact, the
+modes themselves are always valid;  Only the limits change.  In
+real mode you could do:<p>
+
+<PRE>
+   mov al, [ecx]
+</PRE>
+
+I have even found reasons to do that in ordinary real mode.  It allows
+you to use the cx register for an address (as long as the high bits of
+ecx are clear).  It just doesn't allow that address to be above 64K.<p>
+
+Flat real mode doesn't allow any new addressing modes;  It just allows
+larger offsets (that otherwise would have caused protection violations)
+in the 32-bit addressing modes that were already available (though rarely
+useful) in real mode.<p>
+<H3><A name="reset">CPU reset</A></H3>
+
+You probably don't care unless you are designing a BIOS or a motherboard,
+but a 386+ CPU starts up with a strange value in its CS registers.<p>
+
+The EIP is FFF0 and the CS selector is F000, so it would seem that it
+starts at physical address FFFF0, just like an 8086 (which starts at
+FFFF:0).<p>
+
+Actually the hidden base portion of the CS is FFFF0000, not F0000, so
+the actual starting address is FFFFFFF0.<p>
+
+As long as you don't write to the CS register in any way, that base value
+will remain and you can do near JMP, CALL and RET, to execute code in
+FFFFxxxx.  As soon as you do the first far JMP, CALL, INT, etc. the base
+value will be back in sync with the selector and you can't access above
+10FFEFh again until you switch to pmode.<p>
+
+<H3><A name="change">Changing the GDT or LDT</A></H3>
+
+While you are in pmode, you may have reason to execute another LGDT instruction,
+or to change the contents of a descriptor.<p>
+
+These actions do not affect the base, limit or attributes of any segment
+register.  The new descriptor values will only be used when you write to
+a segment register.<p>
+
+In this sense the "descriptor cache" acts very unlike a cache and very
+unlike the "TLB" which is the cache for the paging system.<p>
+
+When you change an entry in a page directory or page table, it is very
+hard to predict how long you can safely use the old "stale" entry in the
+TLB.  In general you can't.  When you write a new CR3 value (ananogous
+to doing another LGDT) the CPU flushes the TLB and immediately gets rid
+of all the "stale" values.  When you do a new LGDT the "descriptor cache"
+isn't touched.<p>
+
+<H3><A name="basics">Segment register basics</A></H3>
+
+Most memory accesses implicitly or explicitly use a segment register.
+<UL>
+<LI>To fetch instructions the CPU unconditionally uses the CS register.
+<LI>For most data accesses the CPU uses the DS register by default.
+<LI>When implicitly using DI or EDI in a string instruction, the
+CPU unconditionally uses the ES register.
+<LI>When implicitly using SP or ESP as a stack pointer the CPU
+unconditionally uses the SS register.
+<LI>When using BP, EBP, or ESP explicitly as a base register the
+CPU uses the SS register by default.
+</UL>
+In the cases in which DS or SS would be used by default,
+the choice of segment register may be overridden by a segment prefix.<p>
+
+The CPU first computes an offset.  In 16-bit addressing the CPU
+<A HREF="#wraparound">truncates the offset to the low 16 bits</A>.
+The CPU then adds the offset to the segment-base provided by the
+selected segment register.  This yields the
+<A HREF="paging.htm#linear">linear address</A> that will be accessed.
+
+<H3><A NAME="WriteSeg">Writes to a segment register</A></H3>
+
+When I refer to "writing to a segment register", I mean any action that
+puts a 16-bit value into a segment register.<p>
+
+The obvious example is something like:<PRE>  MOV  DS,AX  </PRE>
+However the same rules apply to many other situations, including:
+
+<UL>
+<LI>POP to a segment register.
+<LI>FAR JMP or CALL puts a value in CS.
+<LI>IRET or FAR RET puts a value in CS.
+<LI>Both hardware and software interrupts put a value in CS.
+<LI>A ring transition puts a value in both SS and CS.
+<LI>A task switch loads all the segment registers from a TSS.
+</UL>
+
+All of these writes to segment registers behave
+<A HREF="#ModeWriteSeg">as described above</A>
+according to the current mode of the CPU.<p>
+
+When you are writing code that crosses mode boundaries, you should
+consider all possible segment register writes.  Things like saving
+and restoring a segment register, that are normally transparent,
+may change the
+<A HREF="#hidden">hidden part</A> of the segment register, when
+executed after a mode change.
+
+<H3><A name="null">NULL Selector</A></H3>
+
+In pmode, a selector value of zero gets special handling.<p>
+
+The general rule would say that a selector of zero refers to the
+zeroth descriptor in the GDT.  But this does not occur.<p>
+
+The CPU never refers to the zeroth descriptor in the GDT.
+The
+<A HREF="descript.htm#null">first 8 bytes of the GDT</A>
+are available for any use you like and
+their contents will not affect the behavior of the GDT.<p>
+
+When you
+<A HREF="#WriteSeg">write</A>
+a zero to DS, ES, FS or GS in pmode the CPU sets the attributes
+of that segment register to mark it unusable, but does not generate
+a fault at that time.  If you then use that segment, you will
+get a fault.<p>
+
+The purpose of the NULL Selector is to cover situations in which
+you do not have valid contents for a segment register.  If you
+left old invalid contents in the register and simply didn't
+use that register, you might run into trouble when some routine
+saves and restores the register.  On restoring the register, it
+might generate a fault.<p>
+
+The NULL selector may be freely saved and restored without
+causing a fault.<p>
+
+Trying to put the NULL selector into the CS register will generate
+a fault on the instruction that attempts that.  It will NOT load the
+NULL selector and generate the fault on the next attempt to fetch an instruction.
+I am not sure whether putting NULL in SS generates an immediate fault
+or waits until the next use of SS.
+
+<H3><A name="syntax">NASM Syntax</A></H3>
+
+All the example here use NASM Syntax.<p>
+
+If you want to use MASM or TASM etc. I hope the meaning of the
+NASM instructions is clear enough that you can translate to
+the assembler you choose.<p>
+
+NASM is free, so you may be better off downloading a copy of NASM
+and using that, rather than trying to translate syntax.<p>
+
+I have made several enhancements to NASM.  You can find both my
+enhanced version of NASM and links to standard NASM on my web page:<p>
+
+<A HREF="http://www.erols.com/johnfine/">http://www.erols.com/johnfine/</A><p>

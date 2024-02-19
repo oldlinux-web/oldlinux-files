@@ -1,0 +1,1003 @@
+                 Virtual DMA Services (VDS)                              
+                        Version 1.00
+                   Printed July 16, 1990
+                     Table Of Contents
+
+
+Introduction..............................................1
+
+Notes For Writing DMA Device Drivers......................2
+
+Notes For DMA Service Environments........................3
+
+Services..................................................6
+    Reserved Subfunctions.................................7
+    Get Version...........................................8
+    Lock DMA Region.......................................9
+    Unlock DMA Region....................................11
+    Scatter/Gather Lock Region...........................12
+    Scatter/Gather Unlock Region.........................14
+    Request DMA Buffer...................................15
+    Release DMA Buffer...................................16
+    Copy Into DMA Buffer.................................17
+    Copy Out Of DMA Buffer...............................18
+    Disable DMA Translation..............................19
+    Enable DMA Translation...............................20
+
+Summary of Error Codes and Option Flags..................21
+.End Table C.
+
+
+                        INTRODUCTION
+
+
+DOS device  drivers which  perform DMA, program a controller
+with an address of a buffer region.  All software running in
+protected mode environments, whether running in virtual 8086
+mode or  in protected mode under a DOS extender, usually can
+not determine the physical address of their DMA region.  The
+DMA  controller   also  places   further  restrictions  upon
+acceptable DMA regions:  they must be in contiguous physical
+memory, on  XTs they  must be in the first 1Mb of memory and
+on XTs,  ATs and  compatibles they  must not  cross 64Kb  or
+128Kb alignment  boundaries.   These  services  provide  the
+necessary support  to allow  a device  driver or application
+program to obtain the necessary information to program a DMA
+transfer using  either the  on board  DMA  controller  or  a
+busmaster DMA controller.
+
+The services  are provided  through software  interrupt 4Bh.
+Programs  must   examine  bit   five  (5)  of  the  byte  at
+0040:007Bh.   If the bit is set then they should use the DMA
+services.   Otherwise, the device can assume that all memory
+is mapped  linear = physical (probably running in real mode,
+this can  be a  dangerous  assumption,  if  the  machine  is
+actually running in virtual mode, because the protected mode
+software may  not support  this specification,  and there is
+not a method for checking for physical = linear).
+
+An implementation  of the  DMA services  must provide either
+automatic remapping  of pages  to force regions of memory to
+be physically  contiguous or  support a  DMA buffer  with  a
+minimum size  of 16K,  if paging  is enabled  by the  system
+software.   Most 286  software can get by without supporting
+either option.
+
+With the  exception of  the AX register and unless otherwise
+specified, all  registers and flags are preserved across DMA
+service calls.   The  AX register  contents are undefined on
+return unless  the carry  flag  is  set  in  which  case  AL
+contains an error code.
+
+	    NOTES FOR WRITING DMA DEVICE DRIVERS
+
+
+DMA devices that use these services must continually monitor
+bit five  (5) of  the byte  at 0040:007Bh before programming
+DMA.   The services  may be initialized or turned off at any
+time.
+
+For example,  when a program begins using simulated expanded
+memory a  "LIMulator" will place the machine in Virtual 8086
+mode and  enable the  DMA services.  When all LIM memory has
+been deallocated it will return the machine to real mode and
+turn off the DMA services.
+
+Note also  that the  type of DMA support provided may change
+dynamically.   For example,  the user  may run one protected
+mode environment,  exit it,  and then  run another protected
+mode environment.    In  this  case  the  services  will  be
+provided by two different implementations.
+
+There are  various levels of support that device drivers can
+have for  DMA.	These options are listed below in order from
+best to worst:
+
+     Support scatter/gather on the hardware adaptor
+     Break DMA	requests up  in software so that a buffer is
+never required
+     Break up  DMA into 16K or smaller pieces so the default
+buffer can be used
+     Force the user to override the buffer size
+
+The last option is really not acceptable.  At the very least
+your software should chop up transfers into 16K pieces.  For
+example, it  is acceptable  to break  hard disk transfers at
+track boundaries.   A normal hard disk track will fit into a
+16K buffer.
+
+DMA devices  that are not as timing sensitive as disk drives
+should break  up transfers.  Ideally, all DMA adaptors would
+support scatter/gather in hardware.
+
+In some  situations a  device driver  has  a  real  physical
+address that  it wants	to use	in a  DMA transfer.    These
+physical addresses  may be from memory allocated through XMS
+or INT	15h before DMA services were provided, or may be for
+memory that  exists on	an adapter  card,  etc.    In  these
+situations, DMA lock calls should not be called, because the
+service routines  must interpret  region addresses as linear
+addresses.     It  is	necessary,  however   to  call	 the
+Disable/Enable Translation  services, if  the  standard  DMA
+controller is used for the transfer.
+
+By convention, a buffer ID of zero in the DDS indicates that
+no buffer  has been  allocated.   Device driver software can
+check this field to determine if a buffer was allocated.
+
+
+	    NOTES FOR IMPLEMENTING DMA SERVICES
+
+
+The recommended  method of  supporting these  services is to
+use a  DMA buffer  since it has been found to be faster than
+attempting to remap memory on 386 machines.  On 286 machines
+it is  possible to not implement a buffer; on these machines
+the software  calling the  services must already know how to
+split  up   transfers  to   deal  with	 crossing  alignment
+boundaries.   It is  necessary	to  return  the  "No  buffer
+available" error  (04h) for  the Request  DMA Buffer service
+(07h).
+
+All  implementations   of  these   services  should  provide
+mechanisms for	overriding the	size of  the DMA  buffer  or
+remap region.	Also,  all implementations  should provide a
+mechanism for  forcing the  buffer or remap region to reside
+in the	first megabyte	of  physical  memory.	 The  actual
+mechanism for  doing this  will be implementation dependent.
+For example,  some programs  may use  a  configuration	file
+while others could use command line switches.
+
+Lock calls  for memory	which is not "owned" by the provider
+of these  DMA services, memory allocated before the provider
+started running  including low	memory, EBIOS  data area and
+extended memory  allocated through  INT 15h or XMS, must not
+fail.	If auto-remapping  is supported,  then pages must be
+remapped to  force contiguous regions.	If auto-remapping is
+not supported, then it is necessary for the provider to keep
+these  memory  areas  contiguous.    Additionally,  in	some
+environments, device  drivers will  exist which attempt long
+term DMA  transfers.   In these environments it is necessary
+to allow  the user  to configure  the software	so that such
+transfers can  take place.   One  solution is  to force long
+term DMA  device drivers  to be  loaded after  the  provider
+software.   The other  solution is  to	keep  all  "unowned"
+memory mapped  at the  original location  so  linear  equals
+physical;  this   allows  transfers  started  prior  to  DMA
+services being provided to continue as normal.
+
+Since other  hardware/software services  can be  provided on
+the INT  4Bh chain, it is necessary for provider software to
+determine if  they should  chain interrupts  when AH  is not
+81h.   On  Micro  Channel  machines  this  can	be  done  by
+examining bit  three (3)  in the  byte at 0040:007Bh, if the
+bit is	set, then chaining is required, if it is clear, then
+it is  necessary to  examine the  vector contents.   If  the
+vector contents  are 0, or point to E000h or F000h ROM, then
+the interrupt  should not be chained, because it may go to a
+default IRQ  handler which  may EOI  an outstanding hardware
+interrupt.  Summary of bit 3 in 0040:007Bh:
+
+
+     Bit  3   Interrupt  4Bh  Intercepted  Indicator  (Micro
+	  Channel Only)
+
+     = 0  Interrupt vector  not intercepted.  check contents
+	  of the  interrupt vector.   If contents are 0:0 or
+	  segment values  of E000h or F000h, chaining is not
+	  permitted.
+     = 1  Interrupt vector intercepted, chaining required.
+
+
+On  other  non-Micro  Channel  architectures  examining  the
+vector value  may be the only way to determine if interrupts
+should be chained.
+
+If not	chaining, then	the interrupt should be ignored with
+an IRET without modifying registers or flags.
+
+
+Determining Which Error Codes to Return
+
+The following  logic should  be used for the Lock DMA Region
+service (AX=8103h):
+
+     IF region contiguous THEN
+	IF region does not cross alignment boundary THEN
+	   Lock region, set buffer ID to zero, and return
+	   with carry clear
+	ELSE
+	   DO Buffer/Remap
+	ENDIF
+     ELSE
+	DO Buffer/Remap
+     ENDIF
+
+
+     BUFFER/REMAP:
+     IF buffer supported THEN
+	IF buffer disable flag clear THEN
+	   DO Buffer
+	ELSE
+	   Return with carry flag set and AL=1, 2, or 3
+	ENDIF
+     ELSE
+	IF remap supported THEN
+	   IF remap disable flag clear THEN
+	      DO Remap
+	   ELSE
+	      Return with carry flag set and AL=1, 2, or 3
+	   ENDIF
+	ELSE
+	   Return with carry flag set and AL=1, 2, or 3
+	ENDIF
+     ENDIF
+
+
+     BUFFER:
+     IF buffer available THEN
+	IF region size <= buffer size THEN
+	   Allocate buffer
+	   IF copy flag set THEN
+	      Copy data from linear region to buffer
+	   ENDIF
+	   Set buffer ID (non-zero), set physical address
+	   field to buffer physical address, and return
+	   with carry clear
+	ELSE
+	   Return with carry flag set and AL=05h
+	ENDIF
+     ELSE
+	Return with carry flag set and AL=06h
+     ENDIF
+
+
+
+     REMAP:
+     IF region can be forced contiguous THEN
+	IF region will not cross specified boundary THEN
+	   Force region contiguous, set physical address
+	   field, set buffer ID to zero, and return with
+	   carry clear
+	ELSE
+	   Return with carry set and AL=02h
+	ENDIF
+     ELSE
+	Return with carry set and AL=01h
+     ENDIF
+
+
+			  SERVICES
+
+
+Most services  take a  pointer to a DMA descriptor structure
+(DDS) as a parameter.  The structure is defined as follows:
+
+
+		    DESCRIPTION 	   OFFSET
+
+		    Region Size 	    00h
+
+		       Offset		    04h
+
+	    Buffer ID	  Segment/Selector  08h
+
+		  Physical Address	    0Ch
+
+
+Region Size  is a  dword at offset 0.  It specifies the size
+     of the DMA region in bytes.
+
+Offset and Segment/Selector are an fword pair at offset 04h.
+     They  specify   a	48-bit	segment:offset	pointer  for
+     virtual 8086  mode, or  a selector:offset	pointer  for
+     protected mode  programs.	 Note  that  if  the  linear
+     address has  already been	determined then  you may set
+     the segment/selector  field to  0 and  place the linear
+     address in  the linear offset field.  It is possible to
+     specify 32-bit  offsets, even  with real  mode  segment
+     values; this makes it much easier for device drivers to
+     split up  DMA transfers, by simply modifying the offset
+     without having to modify the segment/selector.
+
+Buffer ID  is a word at offset 0Ah.  This field is filled in
+     by the Request DMA Buffer service and possibly the Lock
+     DMA Region service.
+
+Physical Address  is a	dword at  offset 0Ch.  This field is
+     filled in by the Lock DMA Region and Request DMA Buffer
+     services.
+
+============================================================
+
+ Reserved Subfunctions
+
+
+Functions 00h,	01h and  0Dh through  0FFh are reserved.  If
+called they will return with the Carry flag set and AL = 0Fh
+(Function not supported).
+
+Programmer's Notes
+
+      None
+
+============================================================
+
+ Get Version
+
+
+This service  returns the version of DMA services as well as
+information about the hardware, size of buffers, and support
+of automatic memory remapping.
+
+To Call
+
+     AH = 81h
+     AL = 02h
+     DX = Flags
+	  All bits reserved and must be zero
+
+Returns
+
+     If function was successful:
+     Carry clear
+     AH =  Major specification	version # (binary, currently
+	  1)
+     AL =  Minor specification	version # (binary, currently
+	  0)
+     BX = Product number
+     CX = Product revision number
+     SI:DI =  Maximum DMA  buffer size	in bytes that can be
+	  requested.
+     DX = Flags
+	  Bit 0  = 1 if PC/XT bus architecture (DMA in first
+	       meg only)
+	  Bit 1  = 1  if physical  buffer/remap region is in
+	       first meg
+	  Bit 2 = 1 if automatic remap supported
+	  Bit 3 = 1 if all memory physically contiguous
+	  Other flags reserved and must be zero
+     If function was not successful:
+     Carry flag set
+     AL = Error code
+	  10h = Reserved flag bits set in DX
+
+Programmer's Notes
+
+     o	  The version numbers returned in AH and AL are used
+	  to determine	the level of functionality supported
+	  by the current implementation.  The current driver
+	  will return AX=0100h.
+     o	  Bit 3  of the  flag  word  will  only  be  set  in
+	  environments that run in protected mode but do not
+	  use paging,  such as	286 DOS extenders.  In these
+	  environments, the  DMA services  are only provided
+	  to convert  selector:offset linear  address  pairs
+	  into physical addresses.
+
+============================================================
+
+ Lock DMA Region
+
+
+This service  is used to determine if a target DMA region is
+in contiguous  physical memory.   If  it is contiguous, then
+this service  returns the  physical address of the region so
+that the  software can	program for  the DMA.	A locked DMA
+region must always be unlocked once the DMA is complete.
+
+If the	DMA controller	has  memory  placement	restrictions
+(i.e. below  1Mb), then it can compare the returned physical
+address; if  the address  is not  suitable, then the program
+must unlock the region and request a DMA buffer.
+
+Some implementations  of the  DMA services  will attempt  to
+remap pages  to force  the region  to be contiguous physical
+memory.  The caller can disable this behavior by setting bit
+3 in  DX.   Normally, it  is faster  for a  device to  split
+transfers or  use a  DMA buffer instead of going through the
+remap process.
+
+It  is	 often	convenient   to  use  the  automatic  buffer
+allocation option  of this  service.   If the DMA region can
+not be	locked for  any reason then the service will attempt
+to allocate  a DMA  buffer.   If desired,  the data  in  the
+region will be automatically copied into the buffer.
+
+To Call
+
+     AH = 81h
+     AL = 03h
+     DX = Flags
+	  Bit 1  = 1  if data  should be  copied into buffer
+	       (ignored if bit 2 = 1)
+	  Bit 2  = 1  if buffer  should not  be allocated if
+	       region  is   not  contiguous   or  crosses  a
+	       physical alignment boundary specified by bits
+	       4 and 5
+	  Bit 3  =  1  if  automatic  remap  should  not  be
+	       attempted
+	  Bit 4  = 1 if region must not cross a 64K physical
+	       alignment boundary
+	  Bit 5 = 1 if region must not cross a 128K physical
+	       alignment boundary
+	  All other bits reserved and must be zero
+     ES:DI = Pointer to DMA Descriptor Structure
+	  The caller  must fill  in the  region size, linear
+	  offset, and selector/segment fields before calling
+	  this service
+
+Returns
+
+     If function was successful:
+     Carry flag clear
+     Memory is locked
+     Physical address  field of  DDS contains  the  starting
+	  physical address of the region.
+     The  buffer  ID  field  will  contain  the  ID  of  the
+	  allocated buffer or 0 if no buffer was allocated.
+
+     If function was not successful:
+     Carry flag set
+     Memory is not locked
+     Region  size   field  of	DDS  contains	the  maximum
+	  contiguous length in bytes.
+     AL = Error code
+	  01h = Region specified was not contiguous memory
+	  02h = Region crossed a physical alignment boundary
+	  03h = Unable to lock pages (virtual memory systems
+	       only)
+	  05h = Region too large for buffer
+	  06h = Buffer currently in use
+	  07h = Invalid memory region
+	  10h = Reserved flag bits set in DX
+
+Programmer's Notes
+
+     o	  Memory is  locked on	a page	granular basis.    A
+	  single page  can be  locked more  than once,	thus
+	  allowing two	DMA regions  to overlap  on a single
+	  page.   Page locking	is maintained  as  a  count.
+	  Some systems	need  not  maintain  a	count  since
+	  memory will never be discarded or moved.  In these
+	  systems, Unlock DMA Region will never fail.
+     o	  If  the  automatic  buffer  allocation  option  is
+	  selected by  clearing bit  2 of  the flags  in DX,
+	  then a  buffer will  be automatically allocated if
+	  the region could not be locked.  If data should be
+	  copied into the buffer for a memory read operation
+	  then bit  1 of  the flags in DX should be set.  If
+	  lock is  going to  fail and bit 2 is clear, but no
+	  buffer is  supported, then the actual cause of the
+	  error is  reported as  the error  message,  rather
+	  than returning a buffer not available error (4).
+     o	  You may  want to  wait in  a loop if this function
+	  returns a  "Buffer in  use" error to allow another
+	  device time  to release  the	buffer.    For	more
+	  details refer to the documentation for Request DMA
+	  Buffer on page 14.
+     o	  The buffer  alignment  mask  should  be  used  for
+	  devices  that   have	physical   memory   boundary
+	  constraints.	 For example, on an AT architecture,
+	  the standard DMA controllers will "wrap" at 64K or
+	  128K physical  boundaries.   If the DMA controller
+	  being programmed has an alignment constraint, then
+	  the applicable bit in DX should be set.
+
+===========================================================
+
+ Unlock DMA Region
+
+
+Service to unlock a previously locked DMA region.
+
+To Call
+
+     AH = 81h
+     AL = 04h
+     DX = Flags
+	  Bit 1 = 1 if data should be copied out of buffer
+	  All other bits reserved and must be zero
+     ES:DI = Pointer to DMA Descriptor Structure
+	  The caller  must fill in the region size, physical
+	  address, and	buffer ID fields before calling this
+	  service (Usually the caller simply passes the same
+	  structure which  was filled in by the call to Lock
+	  DMA Region).
+
+Returns
+
+     If function was successful:
+     Carry flag clear
+     Memory is unlocked or no count maintained
+
+     If function was not successful:
+     Carry flag set
+     All memory remains locked
+     AL = Error code
+	  08h = Memory was not locked
+	  0Ah = Invalid Buffer ID
+	  10h = Reserved flag bits set in DX
+
+Programmer's Notes
+
+     o	  This service	releases a  DMA buffer,  if one  was
+	  allocated by	the Lock  DMA Region call (if Buffer
+	  ID is non-zero in the DDS), so any data in it will
+	  be lost.   If  the DMA transfer was a memory write
+	  operation, then  setting bit	1 in  the  DX  flags
+	  parameter will  copy the  data out  of the  buffer
+	  before it is released.
+
+============================================================
+
+ Scatter/Gather Lock Region
+
+
+This service  is provided  so  that  hardware  devices	that
+support automatic  scatter/gather can  determine the  actual
+physical regions  of and lock an entire linear address range
+in one	call.  Device drivers that break up DMA requests may
+also want  to use this service instead of repeatedly calling
+lock DMA region.
+
+To Call
+
+     AH = 81h
+     AL = 05h
+     DX = Flags
+	  Bit 6  = 1  if EDDS  should be  returned with page
+	       table entries
+	  Bit 7  = 1 if only present pages should be locked,
+	       not present  pages will	be identified  as  a
+	       page table  entry of  0 (bit 7 is ignored, if
+	       bit 6 = 0)
+	  All other bits reserved and must be zero
+     ES:DI = Pointer to one of the following extended DDS:
+
+     If option	bit 6  = 0  then return  Extended DDS (EDDS)
+	  with table  of physical  regions (address and size
+	  pairs):
+
+
+		    DESCRIPTION 	    OFFSET
+
+		Region Size in Bytes	     00h
+
+		   Linear Offset	     04h
+
+	      Reserved	  Segment/Selector   08h
+
+	       # Used	      # Avail	     0Ch
+
+	     Region 0 Physical Address	     10h
+
+	       Region 0 Size in Bytes	     14h
+
+	     Region 1 Physical Address	     18h
+
+	       Region 1 Size in Bytes	     1Ch
+
+		       . . .		    . . .
+
+		       . . .		    . . .
+
+	     Region n Physical Address	   10h+n*8
+
+
+
+
+   Region n Size in Bytes      14h+n*8
+
+     If option bit 6 = 1 then return Extended DDS with table
+	  of page table entries (1 entry per 4Kb page in the
+	  same format as 80386 page table entries):
+
+
+		    DESCRIPTION 	    OFFSET
+
+		Region Size in Bytes	     00h
+
+		   Linear Offset	     04h
+
+	      Reserved	  Segment/Selector   08h
+
+	       # Used	      # Avail	     0Ch
+
+		 Page table entry 0	     10h
+
+		 Page table entry 1	     14h
+
+		       . . .		    . . .
+
+		       . . .		    . . .
+
+		 Page table entry n	   10h+n*4
+
+
+     Each page table entry contains the physical page number
+	  in the  upper 20  bits; the lower 12 bits are flag
+	  bits:
+
+	       Bit 0 = 1 if the page is present and locked
+	       Bits 1..11 are reserved and will be zero
+
+     If option	bit 7 = 1, then pages in the region which do
+	  not have  a physical	page   assigned will  have a
+	  page table  entry of	0, and will not be locked by
+	  this call.
+
+     The caller must fill in the region size, linear segment
+	  and offset,  and number  available field.   The  #
+	  Avail  field	specifies  the	number	of  physical
+	  regions/page table entries in the data structure.
+
+Returns
+
+     If function was successful:
+     Carry flag is clear
+     The #  used field	will contain  the  number  of  table
+	  entires   filled    in   with   physical   regions
+	  information.
+     If bit  6 of  option flags was 1 (page table copy) then
+	  low twelve  bits of  BX =  Offset in first page to
+	  start of region (high 4 bits will be zero).
+
+     If function was not successful:
+     Carry flag is set
+     Memory is not locked
+     Region size field of DDS contains the maximum length in
+	  bytes that  can be locked and described in the DDS
+	  table.
+     Table entries are undefined.
+     AL = Error code
+	  03h = Unable to lock pages
+	  07h = Invalid memory region
+	  09h = Number of physical regions/pages was greater
+	       than table  length (The	#  used  field	will
+	       contain the number of table entries needed to
+	       describe the DMA region.)
+	  10h = Reserved flag bits set in DX
+
+Programmer's Notes
+
+     o	  The maximum  number of  physical regions  required
+	  can be computed as:
+
+	  (Linear Address AND 0FFFh) + Region Size + 0FFFh
+				1000h
+
+============================================================
+
+ Scatter/Gather Unlock Region
+
+
+This service  is used  to unlock a region that was locked by
+the Scatter/Gather Lock Region service.
+
+To Call
+
+     AH = 81h
+     AL = 06h
+     DX = Flags
+	  Bit 6 = 1 if EDDS contains page table entries
+	  Bit 7  = 1  if EDDS may contain not present pages,
+	       not present  pages are  identified as  a page
+	       table entry  of 0 (bit 7 is ignored, if bit 6
+	       = 0)
+	  All other bits reserved and must be zero
+     ES:DI =  Pointer to the extended DDS that was used when
+	  calling the Scatter/Gather Lock Region service.
+
+Returns
+
+     If function was successful:
+     Carry flag is clear
+     Memory is unlocked
+
+     If function was not successful:
+     Carry flag is set
+     AL = Error code
+	  08h = Memory was not locked
+	  10h = Reserved flag bits set in DX
+
+Programmer's Notes
+
+     o	  Only	the   region   size,   linear	offset	 and
+	  segment/selector fields  are used.  Therefore, the
+	  physical address/size or page table entries do not
+	  need to  be maintained,  unless bits	6 and 7 were
+	  set in  DX in  the  call  to	Scatter/Gather	Lock
+	  Region.   If this  special form of page table lock
+	  was used,  then the  table is required so that the
+	  correct pages can be unlocked.
+
+============================================================
+
+ Request DMA Buffer
+
+
+Buffered DMA  requires a  device driver  to  request  a  DMA
+buffer,  copy  data  into  the	buffer	(if  a	memory	read
+operation  is	required),  start   the  DMA  transfer	with
+programmed I/O, copy data from the buffer (if a memory write
+operation is  required), and  release the  DMA buffer.	 The
+data must be copied to/from the DMA buffer before release is
+called and  the physical  address  of  the  buffer  must  be
+considered invalid as soon as release is called.
+
+To Call
+
+     AH = 81h
+     AL = 07h
+     DX = Flags
+	  Bit 1 = 1 if data should be copied into buffer
+	  All other bits reserved and must be zero
+     ES:DI = Pointer to DMA Descriptor Structure
+	  The caller must fill in the region size field.  If
+	  automatic copy  is selected  (bit 1  set) then the
+	  caller must also fill in the linear region segment
+	  and region offset fields.
+
+Returns
+
+     If function was successful:
+     Carry flag clear
+     The physical  address field  of the  DDS  contains  the
+	  starting physical address of the buffer.
+     The region size field specifies the size of the buffer.
+     The buffer  ID field  contains the  ID of the allocated
+	  buffer
+     If automatic  copy was  selected then  data was  copied
+	  into the buffer.
+
+     If function was not successful:
+     Carry flag set
+     AL = Error code
+	  04h = No buffer available
+	  05h = Region too large for buffer
+	  06h = Buffer currently in use
+	  07h = Invalid memory region
+	  10h = Reserved flag bits set in DX
+
+Programmer's Notes
+
+     o	  Under Windows/386 devices will often want to enter
+	  a Windows/386  critical section to prevent running
+	  other VMs while they are using a DMA buffer.
+     o	  If the  buffer is in use you may want to spin in a
+	  loop	with   interrupts  enabled   and  repeatedly
+	  attempt to  allocate the  buffer to  allow another
+	  device time to complete its DMA.
+     o	  Your device driver must either spin in a wait loop
+	  until  the   DMA  is	complete  and  then  release
+	  ownership  of   the  buffer  or  it  must  release
+	  ownership of the buffer from a hardware interrupt.
+	  Releasing ownership  from hardware interrupts will
+	  allow other  devices to  wait for the buffer to be
+	  freed as described above.
+
+
+============================================================
+
+ Release DMA Buffer
+
+
+Releases a  DMA buffer	that was  previously requested.  The
+physical address should be considered invalid following this
+call.
+
+To Call
+
+     AH = 81h
+     AL = 08h
+     DX = Flags
+	  Bit 1 = 1 if data should be copied out of buffer
+	  All other bits reserved and must be zero
+     ES:DI = Pointer to DMA Descriptor Structure
+	  The caller must fill in the buffer ID field of the
+	  DDS before calling this service.
+
+Returns
+
+     If function was successful:
+     Carry flag clear
+
+     If function was not successful:
+     Carry flag set
+     AL = Error code
+	  0Ah = Invalid buffer ID
+	  10h = Reserved flag bits set in DX
+
+Programmer's Notes
+
+     None
+
+============================================================
+
+ Copy Into DMA Buffer
+
+
+Copy data  from the  user's buffer  into the  DMA buffer  to
+prepare for a memory read DMA transfer.
+
+To Call
+
+     AH = 81h
+     AL = 09h
+     DX = Flags
+	  All bits reserved and must be zero
+     ES:DI = Pointer to DMA Descriptor Structure
+	  The caller  must fill  in the buffer ID field, the
+	  fword  segment/selector:linear  offset  fields  to
+	  specify the  source address  for the copy, and the
+	  region size.
+     BX:CX = Starting offset in DMA buffer to copy
+
+     The size  field of  the DDS  determines the  number  of
+	  bytes that will be copied
+
+Returns
+
+     If function was successful:
+     Carry flag clear
+
+     If function was not successful:
+     Carry flag set
+     AL = Error code
+	  0Ah = Invalid buffer ID
+	  0Bh =  Copy count+offset  is greater	than  buffer
+	       size
+	  10h = Reserved flag bits set in DX
+
+============================================================
+
+ Copy Out Of DMA Buffer
+
+
+Copy data from the DMA buffer into the user's buffer after a
+memory write DMA transfer.
+
+To Call
+
+     AH = 81h
+     AL = 0Ah
+     DX = Flags
+	  All bits reserved and must be zero
+     ES:DI = Pointer to DMA Descriptor Structure
+	  The caller  must fill  in the buffer ID field, the
+	  fword  segment/selector:linear  offset  fields  to
+	  specify the  destination address for the copy, and
+	  the region size.
+     BX:CX = Starting offset in DMA buffer to copy
+
+     The size  field of  the DDS  determines the  number  of
+	  bytes that will be copied
+
+Returns
+
+     If function was successful:
+     Carry flag clear
+
+     If function was not successful:
+     Carry flag set
+     AL = Error code
+	  0Ah = Invalid buffer ID
+	  0Bh =  Copy count+offset  is greater	than  buffer
+	       size
+	  10h = Reserved flag bits set in DX
+
+============================================================
+
+ Disable DMA Translation
+
+Environments that  support the	DMA services  will trap  the
+standard DMA  I/O ports  and attempt  to remap	the client's
+addresses, which  are assumed to be linear addresses, to the
+appropriate physical  address.	 However, programs which use
+the DMA  services to determine the physical address of their
+DMA region  must disable the automatic remapping of standard
+DMA by calling this function.
+
+A disable  count is  maintained so  you must call Enable DMA
+Translation for  every call to this service before automatic
+DMA translation will be enabled.
+
+To Call
+
+     AH = 81h
+     AL = 0Bh
+     BX = DMA channel number
+     DX = Flags
+	  All bits reserved and must be zero
+
+Returns
+
+     If function was successful:
+     Carry flag clear
+
+     If function was not successful:
+     Carry flag set
+     AL = Error code
+	  0Ch = Invalid DMA channel number
+	  0Dh = Disable count overflow
+	  10h = Reserved flag bits set in DX
+
+Programmer's Notes
+
+     None
+
+============================================================
+
+ Enable DMA Translation
+
+
+This service  must  be	called	after  calling	Disable  DMA
+Translation to re-enable automatic DMA remapping.
+
+A disable  count is maintained so you must call this service
+for every  call to  Disable DMA Translation before automatic
+DMA translation will be enabled.
+
+To Call
+
+     AH = 81h
+     AL = 0Ch
+     BX = DMA channel number
+     DX = Flags
+	  All bits reserved and must be zero
+
+Returns
+
+     If function was successful:
+     Carry flag clear
+     If disable count decremented to 0, then Zero flag set
+
+     If function was not successful:
+     Carry flag set
+     AL = Error code
+	  0Ch = Invalid DMA channel number
+	  0Eh =  Disable count underflow (was not previously
+	       disabled).  Count not changed.
+	  10h = Reserved flag bits set in DX
+
+Programmer's Notes
+
+     None
+
+
+	  SUMMARY OF ERROR CODES AND OPTION FLAGS
+
+
+
+Error codes:
+
+     01h = Region not in contiguous memory
+     02h = Region crossed a physical alignment boundary
+     03h = Unable to lock pages
+     04h = No buffer available
+     05h = Region too large for buffer
+     06h = Buffer currently in use
+     07h = Invalid memory region
+     08h = Region was not locked
+     09h =  Number of  physical pages was greater than table
+	  length
+     0Ah = Invalid buffer ID
+     0Bh = Copy out of buffer range
+     0Ch = Invalid DMA channel number
+     0Dh = Disable count overflow
+     0Eh = Disable count underflow
+     0Fh = Function not supported
+     10h = Reserved flag bits set in DX
+
+
+Flags:
+
+     Bit 1 = Automatically copy to/from buffer
+     Bit 2 = Disable automatic buffer allocation
+     Bit 3 = Disable automatic remap feature
+     Bit 4  = Region  must not	cross 64K physical alignment
+	  boundary
+     Bit 5  = Region  must not cross 128K physical alignment
+	  boundary
+     Bit 6 = Copy page table for scatter gather remap

@@ -1,0 +1,1079 @@
+
+
+Hi,
+	Find enclosed dma.asi, floppy.p, floppy.asm, floppy.asi.  Note that
+these functions do NOT automatically retry on an error; in particular if
+you get error #6 the main code should try again.
+
+Two parameter tables are supplied; the first does 1024 byte sectors
+and the second does 256 byte sectors.  If you need 512 bytes fill in the
+parameters appropriately... most of them are similar to the BIOS parameters
+or you can read the existing tables and guess what to change.
+
+Have fun,
+
+David
+
+
+-----------------------------DMA.ASI (header)--------------------------------
+; These macros only work for channels 0 - 3
+;
+DMAMODE_SINGLE = 40h
+DMAXFER_VERIFY = 0
+DMAXFER_WRITE = 4
+DMAXFER_READ = 8
+
+MACRO	DMA_CLEARBYTEFF
+	out	0ch,al
+ENDM	DMA_CLEARBYTEFF
+MACRO	DMA_WRITEBASE	low,high,channel
+	mov	al,low
+	out     00+2*channel,al
+	jmp	$+2
+	mov	al,high
+	out     00+2*channel,al
+	jmp	$+2
+ENDM	DMA_WRITEBASE
+MACRO	DMA_WRITECOUNT	low, high, channel
+	mov	al,low
+	out	01+2*channel,al
+	jmp	$+2
+	mov	al,high
+	out	01+2*channel,al
+	jmp	$+2
+ENDM	DMA_WRITECOUNT
+MACRO	DMA_MASKOFF	channel
+	mov	al,channel
+	out	0ah,al
+ENDM	DMA_MASKOFF
+MACRO	DMA_MASKON	channel
+	mov	al,channel OR 2
+	out	0ah,al
+ENDM	DMA_MASKON
+MACRO	DMA_GETMODE	mode,transfer,channel
+	mov	al,mode OR transfer OR channel
+ENDM	DMA_GETMODE
+MACRO	DMA_SETMODE
+	out	0bh,al
+ENDM	DMA_SETMODE
+MACRO	DMA_SETPAGE	data,channel
+	mov	al,data
+	if	channel eq 0
+	out	87h,al
+	else
+	if	channel eq 1
+	out	83h,al
+	else
+	if	channel eq 2
+	out	81h,al
+	else
+	if	channel eq 3
+	out	82h,al
+	endif
+	endif
+	endif
+	endif
+	jmp	$+2
+ENDM	DMA_SETPAGE
+
+
+--------------------------floppy.p (prototype file)----------------------
+/* MKLibHead 1.00 Wednesday October 25, 1995  22:13:16 */
+
+#ifdef __cplusplus
+extern "C" {
+#endif // __cplusplus
+
+                             /* Floppy.asm */
+
+   DiskSetInts(void);
+   DiskResetInts(void);
+   int FormatTrack(BYTE *buffer, int drive, int track, int head);
+   int DiskIO(BYTE *buffer, int drive, int track, int sector, int head, int towrite);
+   void Disk1024(void);
+
+#ifdef __cplusplus
+}
+#endif // __cplusplus
+
+--------------------------floppy.asi (header)------------------------------
+MOTORSELECT = 3f2h
+DISKSTATUS = 3f4h
+DISKDATA = 3f5h
+INPUTSTATUS = 3F6H
+RATECONFIG = 3F7H
+
+DK_WRITE = 2
+DK_READ = 1
+
+SPEC_NODMA = 1
+FLOPPY_DMA = 2
+
+HEADSEL_BIT = 2
+
+CMD_SPECIFY = 3
+CMD_RECALIBRATE = 7
+CMD_SENSE = 8
+CMD_SEEK = 0FH
+CMD_READID = 4ah
+CMD_FORMAT = 04DH
+CMD_WRITE = 045H
+CMD_READ = 066H
+
+CSR_READY = 80h
+CSR_READ = 40h
+CSR_IOINPROG = 20h
+
+MTR_NOSELECT = 0fch
+MTR_DMA	= 8
+MTR_NORESET = 4
+MTR_MASKOFF = 0fh
+
+DTIME_MUL = 182
+DTIME_DIV = 100
+
+CHANGEABLE = 80h
+MULTIHEAD = 1
+
+struc	stdparams
+cmd	db	?
+drivehead db	?
+cylinder db	?
+head	db	?
+sector	db	?
+size	db	?
+eot	db	?
+gaplen	db	?
+cusize	db	?
+ends	stdparams
+
+SR0_UNUSED =	7
+SR0_ABTERM = 	6
+SR0_SEEK   =	5
+SR0_RECALFAIL =	4
+
+SR1_SECTOOBIG = 7
+SR1_CRC	=	5
+SR1_OVERRUN =	4
+SR1_NODATA  =	2
+SR1_WRITEPROT = 1
+SR1_NOADDRESS = 0
+
+SR2_BADSEC =	6
+SR2_CRC	=	5
+SR2_WRONGCYL =	4
+SR2_BADCYL =	1
+SR2_MISSADDRESS = 0
+
+struc	stdresponse
+sr0	db	?
+sr1	db 	?
+sr2	db	?
+cylinder db	?
+head	db	?
+sector	db	?
+size	db	?
+ends	stdresponse
+
+DERR_NONE	=	0
+DERR_INVFUNC	=	1
+DERR_NOADDRESS	=	2
+DERR_WRITEPROT	=	3
+DERR_NOSECT	=	4
+DERR_CHANGED	=	6
+DERR_DMAOVER	=	8
+DERR_DMABOUND	=	9
+DERR_BADMEDIA	=	0CH
+DERR_BADCRC	=	10H
+DERR_CTRLFAIL	=	20H
+DERR_SEEKFAIL	=	40H
+DERR_TIMEOUT	=	80H
+
+STRUC	diskparm
+steploadul	dw	4 DUP (?)
+media		db	4 DUP (?)
+turnoff		db	4 DUP (?)
+hptchange	db	4 DUP (?)
+tpd		db	4 DUP (?)
+bpsspt		dw	4 DUP (?)
+fglfill		dw	4 DUP (?)
+settle		db	4 DUP (?)
+pup		db	4 DUP (?)
+ENDS	diskparm
+
+--------------------------------floppy.asm-------------------------------
+;
+; floppy.asm (DMA version)
+;
+; Function: 1.44MB floppy driver ( 4 drives)
+;   Handles floppy interrupt
+;   Handles managing floppy controller and DMA system
+;   Handles read/write format
+;   Handles OS floppy calls
+;
+	IDEAL
+	model	large,C
+	P386
+
+	public	DiskSetInts,DiskResetInts,DiskIO,FormatTrack,Disk1024
+include "floppy.asi"
+include "dma.asi"
+
+	STACK
+
+	DATASEG
+done	    dw	0			; Set true when an interrupt completes
+sectorsize dw 256             		; Size of a sector
+transfercount dw 0			; size to transfer
+turnofftime dw	0			; Ticks till disk turnoff
+countime    dw	0			; Ticks while delaying
+motors	db	0			; Motor on specifier
+responsebuf db	7 DUP (?)		; Controller response buffer
+calibrated db	0			; Calibration control flags
+error	db	0			; Error found
+tracks	db	4 DUP (?)		; Register current diskette tracks
+
+;
+; 256 byte sectors (default)
+parmtable dw	2a1h,2a1h,2a1h,2a1h	; Diskette params, see DISKPARAM struc
+	db	0,0,0,0
+	db	20,20,20,20
+	db	81h,81h,81h,81h
+	db	80,80,80,80
+	dw	2201h,2201h,2201h,2201h
+	dw	00028h,00028h,00028h,00028h
+	db	0fh,0fh,0fh,0fh
+	db	10,10,10,10
+;
+; 1024 byte sectors
+;
+parmtable2 dw	2a1h,2a1h,2a1h,2a1h	; Diskette params, see DISKPARAM struc
+	db	0,0,0,0
+	db	20,20,20,20
+	db	81h,81h,81h,81h
+	db	80,80,80,80
+	dw	0a03h,0a03h,0a03h,0a03h
+	dw	0c48ch,0c48ch,0c48ch,0c48ch
+	db	0fh,0fh,0fh,0fh
+	db	10,10,10,10
+
+sop = $ - parmtable2
+;
+; Tenths to ticks conversion
+;
+	CODESEG
+bufpos	dd	?
+multiplier dw	DTIME_MUL
+divisor	dw	DTIME_DIV
+oldint8	dd	?
+oldinte	dd	?
+cmd	db	DK_READ
+;
+; Timer interrupt
+;
+PROC	FloppyTimerInt
+	push	ax
+	push	ds
+	push	dgroup
+	pop	ds
+	test	[turnofftime],-1	; See if turnofftime active
+	jz	short noturnoff		; No
+	dec	[turnofftime]		; Yes, decrement
+	jnz	short noturnoff		; Not done
+	push	dx			; Else save dx
+	and	[motors],MTR_MASKOFF	; Kill all motors
+	mov	al,[motors]		; Inform controller
+	mov	dx,MOTORSELECT		;
+	out	dx,al			;
+	pop	dx			;
+noturnoff:
+	test	[countime],-1		; See if delaying
+	jz	short notcount		;
+	dec	[countime]		; Yes, decrement
+	jnz	short notcount		; Not done
+	or	[done],3		; Else inform task
+notcount:
+	mov	al,20h
+	out	20h,al
+	pop	ds
+	pop	ax
+	iret
+ENDP	FloppyTimerInt
+;
+; Floppy controller interrupt, interrupts after certain commands
+;
+PROC	FloppyInt
+	push	ax
+	push	ds
+	push	DGROUP			;
+	pop	ds			;
+	or	[done],1		; Mark controller came
+	mov	al,20h
+	out	20h,al
+	pop	ds
+	pop	ax			; and ax
+	iret
+ENDP	FloppyInt
+;
+; Stop the timer
+;
+PROC	StopTimer
+	mov	[countime],0		; Kill count time
+	and	[done],0		; Reset done flag
+	ret
+ENDP	StopTimer
+;
+; Start the timer
+;
+PROC	StartTimer
+	push	dx			; Convert to ticks
+	mul	[multiplier]		;
+	div	[divisor]		;
+	pop	dx			;
+SimpleStartTimer:
+	inc	ax			; Make sure at least 1
+	mov	[countime],ax		; Set timer
+	and	[done],0		; Reset done flag
+	ret
+ENDP	StartTimer
+;
+; Wait till done flag goes true
+;
+PROC	WaitDone
+	mov	ax,[done]
+	or	ax,ax
+	jz	WaitDone
+	ret
+ENDP	WaitDone
+;
+; Wait for controller to be ready
+;
+PROC	WaitControllerReady
+	mov	ax,2			; Give it two clock ticks
+	call	far SimpleStartTimer	;
+wcr_lp:
+	mov	dx,DISKSTATUS		; Poll status reg
+	in	al,dx			;
+	test	al,CSR_READY		; See if ready bit set
+	jnz	short wcr_ok		; Get out if so
+	test	[done],1
+	jz	wcr_lp			; Loop if not
+	call	StopTimer		; Timed out
+	mov	al,DERR_CTRLFAIL	; Mark controller fail
+	mov	[error],al		;
+	stc
+	ret
+wcr_ok:
+	call	StopTimer		; Stop timer
+	clc				; Everything ok
+	ret
+ENDP	WaitControllerReady
+;
+; Read a byte from controller
+;
+PROC	ReadControllerData
+	call	WaitControllerReady	; Wait for ready
+	jc	short rcd_fail		; In case fail
+	mov	dx,DISKDATA		; Get data reg
+	in	al,dx			; Get data
+	clc				; Life is ok
+rcd_fail:
+	ret
+ENDP	ReadControllerData
+;
+; Read the standard response from the controller
+;
+PROC	ReadSevenResponse
+	mov	cl,7			; 7 bytes to read
+	mov	di,offset responsebuf	; Get buffer
+ReadRespLoop:
+	call	ReadControllerData	; Read a byte
+	jc	short rsr_fail		; if it is raining
+	mov	[di],al	    		; otherwise Save char in buf
+	inc	di			;
+	dec	cl			; Next byte
+	jnz	short ReadRespLoop	;
+	clc				; Everything fine
+rsr_fail:
+	ret
+ENDP	ReadSevenResponse
+;
+; Write data to controller
+;
+PROC	WriteControllerDataC
+	jc	short wcd_fail		; Skip out if previous error
+WriteControllerData:
+	mov	bl,al			; bl gets the char
+	call	WaitControllerReady	; Wait for ready
+	jc	short wcd_fail2		; bail out if fail
+	test	al,CSR_READ		; Make sure direction = toward controller
+	mov	al,bl			; Get the char
+	jnz	short wcd_fail		; Bail out if wrong dir
+	mov	dx,DISKDATA		; Get data register
+	out	dx,al			; Output a byte
+	clc				; no errors
+wcd_fail2:
+	ret
+wcd_fail:
+	call	ReadSevenResponse	; Wrong dir, empty controller output buf
+	mov	al,DERR_CTRLFAIL	; Signal a fail
+	mov	[error],al		;
+	stc				;
+	ret
+ENDP	WriteControllerDataC
+;
+; Turn on motor
+;
+PROC	MotorOn
+	mov	[turnofftime],0		; NEver turn off
+	and	[motors],MTR_NOSELECT	; Kill select
+	or	[motors],al		; Set new select
+	or	[motors],MTR_DMA OR MTR_NORESET ; ints and dma enabled
+	add	al,4			; Get motor bit to turn on
+	push	ax
+	push	cx
+	mov	cl,al
+	mov	ax,1
+	shl	ax,cl
+	pop	cx
+	test	[word ptr motors],ax
+	pushf
+	or	[word ptr motors],ax
+	mov	al,[motors]		; Which motors
+	mov	dx,MOTORSELECT		; Motor reg
+	out	dx,al			;
+	popf
+	pop	ax			;
+	jnz	short alreadyon         ; No waiting if already on
+	sub	al,4			; Else get drive pup value
+	and	eax,0ffffh
+	lea	edi,[eax + DISkPARM.PUP]
+	add	di,offset parmtable	; In parm table
+	movzx	ax,[byte ptr di]	;
+	call	StartTimer              ; Start the timer
+	call	WaitDone		; Wait for timeout
+alreadyon:
+	clc				; Never an error with select
+	ret
+ENDP	MotorOn
+;
+; Check if disk change
+;
+PROC	Changed
+	and	eax,0ffffh
+	lea	edi,[eax+DISKPARM.HPTCHANGE]
+	add	di,offset parmtable	;
+	test	[byte ptr di],CHANGEABLE;
+	jz	short notchanging       ; No, just exit
+	push	ax			; Else read the digital input reg
+	mov	dx,RATECONFIG		;
+	in	al,dx			;
+	or	al,al			;
+	pop	ax                     ;
+	jns	short notchanging       ; Bit 7 is change line, 0=not changed
+	push	ax			; It changed, we have to have a head
+	push	cx			; move to reset the flipflop
+	mov	ch,7			;
+	call	far seek			;
+	pop	cx			;
+	pop	ax			;
+	push	ax			;
+	call	far home			; Now bring us back home
+	pop	ax			;
+	mov	ax,4			; Delay just a bit
+	call	far SimpleStartTimer        ;
+	call	WaitDone     		;
+	mov	dx,RATECONFIG           ; Read change line again
+	in	al,dx			;
+	or	al,al			;
+	mov	al,DERR_CHANGED		; Assume a disk present
+	jns	short missing		; yes, get out
+	mov	al,DERR_TIMEOUT		; Else no disk
+missing:
+	stc				; We have an error
+	mov	[error],al		;
+	ret				;
+notchanging:
+	clc				; Life is fine
+	ret
+ENDP	Changed
+;
+; Send the disk specify command
+;
+PROC	Specify
+	and	eax,0ffffh
+	lea	esi,[eax*2 + DISKPARM.STEPLOADUl]
+	add	si,offset parmtable	;
+	mov	al,CMD_SPECIFY          ; Specify command
+	call	far WriteControllerData	;
+	lodsb				; Step and load time
+	call	WriteControllerDataC	;
+	lodsb				; Unload time
+;	or	al,SPEC_NODMA
+	call	WriteControllerDataC	;
+; No interrupt for this command
+	ret
+ENDP	Specify
+;
+; Find out if seek succeeded
+;
+PROC	SenseInterruptStatus
+	mov	al,CMD_SENSE		; Sense command
+	call	far WriteControllerData
+; No interrupt this command
+	jc	short sis_fail
+	call	ReadControllerData	; First response byte
+	jc	short sis_fail
+	mov	ah,al
+	call	ReadControllerData	; Second response byte
+sis_fail:
+	ret
+ENDP	SenseInterruptStatus
+;
+; Home the drive head
+;
+PROC	Home
+	push	ax
+	push	cx
+	mov	cx,ax
+	mov	ax,1
+	shl	ax,cl
+	pop	cx
+	not	ax
+	and	[word ptr calibrated],ax
+	pop	ax
+	push	ax
+	mov	ah,al                   ; save drive number
+	and	[done],0
+	mov	al,CMD_RECALIBRATE	; Send recal command
+	call	far WriteControllerData	;
+	mov	al,ah			; Write drive number
+	call	WriteControllerDataC	;
+	jc	short hfail		;
+	call	WaitDone		; Wait for interrupt
+	call	SenseInterruptStatus	; Now see what happened
+	mov	al,DERR_SEEKFAIL	; Assume so
+	jc	short hfail
+	test	ah,(1 shl SR0_ABTERM )	; See if aborted
+	jnz	short hfail		; Branch if so
+	test	ah,(1 SHL SR0_SEEK)	; Check if seek ok
+	jnz	short hfail		; Branch if fail
+	pop	ax			;
+	push	bx
+	mov	bx,offset tracks
+	add	bx,ax
+	mov	[byte ptr bx],0
+	pop	bx
+	push	ax
+	push	cx
+	mov	cx,ax
+	mov	ax,1
+	shl	ax,cl
+	pop	cx
+	or	[word ptr calibrated],ax
+	pop	ax
+	clc                             ; Life is dandy, just like candy
+	ret
+hfail:
+	mov	[error],al		; Mark error
+	pop	ax			; Failure
+	stc
+	ret
+ENDP	Home
+;
+; Reset command
+;
+PROC	Reset
+	mov	[calibrated],0		; Mark everything uncalibrated
+	and	[motors],MTR_MASKOFF	; Turn off motors
+	mov	al,[motors]		;
+	mov	dx,MOTORSELECT		;
+	out	dx,al			;
+	mov	[turnofftime],0		; Don't need to turn off
+	ret
+ENDP	Reset
+;
+; Seek a track
+;
+PROC	Seek
+	push	ax
+	push	cx
+	mov	cx,ax
+	mov	ax,1
+	shl	ax,cl
+	pop	cx
+	test	[word ptr calibrated],ax
+	pop	ax
+	jnz	short nohome		; Yes, don't home
+	push	ax			; Else go home
+	call	home			;
+	pop	ax			;
+nohome:
+	mov	di,ax
+	add	di,offset tracks
+	cmp	[byte ptr di],ch	;
+	jz	short sthere		; Yes, get out
+	push	ax
+	and	[done],0
+	mov	al,CMD_SEEK		; Send seek command
+	call	far WriteControllerData	;
+	mov	al,ah			; Send drive
+	call	WriteControllerDataC	;
+	mov	al,ch			; Send track
+	call	WriteControllerDataC	;
+	jc	short sdone2            ; Out if error
+	call	WaitDone		; Wait for interrupt
+	call	SenseInterruptStatus	; Check seek status
+	mov	al,DERR_SEEKFAIL	;
+	jc	short sdone
+	test	ah,(1 SHL SR0_ABTERM)	; Error if aborted
+	jnz	short sdone		;
+	test	ah,(1 SHL SR0_SEEK)	; Error if can't seek
+	jnz	short sdone		;
+	pop	ax	
+	push	bx
+	mov	bx,ax		
+	add	bx,offset tracks
+	mov	[bx],ch	; Update track number
+	pop	bx
+sthere:
+	clc
+	ret
+sdone:	
+	mov	[error],al		; Mark error
+sdone2:
+	stc
+	pop	ax
+sdone3:
+      	ret
+ENDP	Seek
+;
+; Set the KPS for Media
+;
+PROC	SetMediaRate
+	and	eax,0ffffh
+	lea	edi,[eax + DISKPARM.MEDIA]
+	add	di, offset parmtable	;
+	mov	al,[di]		;
+	mov	dx,RATECONFIG		; Goes in rateconfig table
+	out	dx,al			;
+	ret
+ENDP	SetMediaRate
+;
+; XLATE a controller error to a bios error number
+;
+PROC	xlateerr
+	push	ax			; Save ax
+	mov	si,offset responsebuf	; Get response
+	mov	ax,[si]		;
+	test	al,(1 SHL SR0_ABTERM) + (1 SHL SR0_UNUSED); Any errors
+	jz	noerr			; No, get out
+	test	al,(1 SHL SR0_ABTERM)	; If we don't have abterm ctrlfail
+	mov	al,DERR_CTRLFAIL	;
+	jz	goterr
+	test	ah,(1 SHL SR1_NOADDRESS); No address mark
+	mov	al,DERR_NOADDRESS
+	jnz	goterr
+	test	ah,(1 SHL SR1_WRITEPROT); Write protect
+	mov	al,DERR_WRITEPROT
+	jnz	goterr
+	test	ah,(1 SHL SR1_NODATA)	; Can't find sector
+	mov	al,DERR_NOSECT
+	jnz	goterr
+	test	ah,(1 SHL SR1_OVERRUN)	; DMA too slow
+	mov	al,DERR_DMAOVER
+	jnz	goterr
+	test	ah,(1 SHL SR1_CRC)	; CRC error
+	mov	al,DERR_BADCRC
+	jnz	goterr
+	test	ah,( 1 SHL SR1_SECTOOBIG); Sector too big, so can't find it
+	mov	al,DERR_NOSECT
+	jnz	noerr
+	mov	al,DERR_CTRLFAIL	; Otherwise controller failed
+goterr:
+	stc				; Mark error
+	mov	[error],al		;
+	pop	ax
+	ret
+noerr:
+	pop	ax
+	clc
+	ret
+	
+ENDP	xlateerr
+;
+; Initialize DMA subsystem
+;
+PROC	SetDMA
+	push	ax
+	push	ecx
+	push	dx
+	mov	ah,[cmd]		; Get command
+	DMA_CLEARBYTEFF			; Put us at low byte
+	cmp	ah,DK_WRITE 		; See if write
+	DMA_GETMODE DMAMODE_SINGLE,DMAXFER_READ,FLOPPY_DMA ; Assume read from mem
+	jz	short wtmode		; Write, go fill in params
+	cmp	ah,DK_READ 		; See if read
+	DMA_GETMODE DMAMODE_SINGLE,DMAXFER_WRITE,FLOPPY_DMA ; Assume write to mem
+	jz	short	wtmode		; Branch if so
+	DMA_GETMODE DMAMODE_SINGLE,DMAXFER_VERIFY,FLOPPY_DMA ; Else must be verify
+wtmode:
+	DMA_SETMODE			; Set the mode
+	mov	dx,[transfercount]	; Get buffer count
+	dec	dx			; Count is last byte xferd
+	DMA_WRITECOUNT	dl,dh,FLOPPY_DMA ; WRite the count
+	inc	dx			; Get original
+	movzx	ecx,[word ptr bufpos+2]		; Get transfer buffer
+	movzx	eax,[word ptr bufpos]
+	shl	ecx,4
+	add	ecx,eax
+	DMA_WRITEBASE	cl,ch,FLOPPY_DMA; Write base address
+	push	ecx			;
+	shr	ecx,16			; Get page
+	mov	ah,ch			; Get high byte of page
+	DMA_SETPAGE	cl,FLOPPY_DMA	; Write page
+	pop	ecx			;
+	add	cx,dx			; See if overflow a page
+	mov	al,DERR_DMABOUND	; Bound err if so
+	jc	short dma_err		; Yes, mark it
+	or	ah,ah			; See if within lower 16 MB
+	stc				;
+	jnz	short dma_err		; No, bounds error
+	DMA_MASKOFF	FLOPPY_DMA	; Enable transfer
+	clc				;
+	sub	al,al			; No error
+dma_err:
+	mov	[error],al		; Mark error
+	pop	dx
+	pop	ecx
+	pop	ax
+	ret
+ENDP	SetDMA
+
+;
+; Read, write or verify a sector
+;
+PROC	rwv
+	call	SetDMA
+	jc	rwv_fail
+	push	ax
+	push	cx
+	and	eax,0ffffh
+	lea	edi,[eax + DISKPARM.BPSSPT]
+	add	di,offset parmtable	;
+	mov	cl,[byte ptr di]	;
+	mov	dx,1
+	shl	dx,cl			;
+	shl	dx,7			;
+	pop	cx
+	mov	ah,[cmd]		; Check the command
+	cmp	ah,DK_WRITE		; Is it write?
+	mov	al,CMD_WRITE		; Assume so
+	jz	short rwv_cmd		; Go do write
+	mov	al,CMD_READ		; Otherwise it is read or verify
+rwv_cmd:
+	push	bx			; Save head
+	call	far WriteControllerData	; Write command
+	pop	bx			;
+	pop	ax
+	pushf				; Save status
+	and	[done],0
+	test	bx,1
+	jz	short rwv_head0		;
+	bts	ax,HEADSEL_BIT		; Yes, set headsel bit of drive
+rwv_head0:
+	popf				; Restore status
+	push	ax			; Write drive and head
+	push	bx			;
+	call	WriteControllerDataC	;
+	pop	bx
+	mov	al,ch                   ; Now write track
+	push	bx			;
+	call	WriteControllerDataC	;
+	pop	bx			;
+	mov	al,bl			; Write head
+	call	WriteControllerDataC	;
+	mov	al,cl			; Write sector
+	call	WriteControllerDataC	;
+	
+	pop	ax			;
+	pushf	                        ; Reset head sel bit
+	and	ax,NOT (1 SHL HEADSEL_BIT)
+	popf
+	and	eax,0ffffh
+	lea	esi,[eax*2 + DISKPARM.BPSSPT]
+	add	si,offset parmtable	;
+	push	ax			;
+	lodsb				; Write bytes per sector
+	call	WriteControllerDataC	;
+	mov	al,cl                   ; This is last sector for xfer
+	call	WriteControllerDataC	;
+	pop	ax 
+	mov	si,ax
+	and	eax,0ffffh
+	lea	esi,[eax*2 + DISKPARM.FGLFILL]
+	add	si,offset parmtable	;
+	lodsb				;
+	shr	al,2
+	call	WriteControllerDataC    ; Write gap len/4
+	mov	al,255			; User specified data len = 255
+	call	WriteControllerDataC	; Write it
+	jc	short rwv_fail
+	call	WaitDone
+rwv_done:
+	call	ReadSevenResponse	; Read the response
+rwv_fail:
+	ret
+ENDP	rwv
+PROC	fmt
+	mov	[cmd],DK_WRITE
+	call	SetDMA
+	jc	fmt_fail
+	push	ax
+	mov	al,CMD_FORMAT		; Format command
+	push	bx			; Save head
+	call	far WriteControllerData	; Write command
+	pop	bx			;
+	pop	ax
+	push	ax			; Write drive and head
+	pushf				; Save status
+	and	[done],0
+	test	bx,1
+	jz	short fmt_head0		;
+	bts	ax,HEADSEL_BIT		; Yes, set headsel bit of drive
+fmt_head0:
+	popf				; Restore status
+	call	WriteControllerDataC	;
+	pop	ax
+	push	ax
+	pushf
+	and	eax,0ffffh
+	lea	edi,[eax + DISKPARM.BPSSPT]
+	add	di,offset parmtable	;
+	popf
+	mov	al,[di]			; Write sector size code
+	call	WriteControllerDataC	;
+	mov	al,[di+1]		; Write SPT
+	call	WriteControllerDataC
+	pop	ax
+	pushf	
+	lea	edi,[eax + DISKPARM.FGLFILL]
+	add	di,offset parmtable
+	mov	dx,[di]
+	popf
+	mov	al,[di]			; Write gap len
+	call	WriteControllerDataC	;
+	mov	al,[di+1]		; Write Fill
+	call	WriteControllerDataC	;
+	
+	jc	short fmt_fail
+	call	WaitDone
+	call	ReadSevenResponse	; Read the response
+fmt_fail:
+	ret
+endp	fmt
+;
+; Read, Write and verify a sector
+;
+PROC	ReadWriteVerify
+	push	cx
+	push	bx
+	push	ax                     ;
+	call	motoron                 ;
+	pop	ax                     ;
+	push	ax                     ;
+	call	changed                 ; See if changed or missing
+	pop	ax                     ;
+	jc	short rw_done           ; Err if so
+	push	ax                     ; Set the Media rate
+	call	SetMediaRate            ;
+	pop	ax                     ; Send the disk specify bytes
+	push	ax                     ;
+	call	Specify                 ;
+	pop	ax                     ;
+	jc	short rw_done           ; Err if failed
+	pop	bx
+	pop	cx
+	push	cx
+	push	bx
+	push	ax                     ; Seek the track
+	push	bx                     ;
+	push	cx                     ;
+	call	seek                    ;
+	pop	cx                     ;
+	pop	bx                     ;
+	pop	ax                     ;
+	jc	short rw_done           ; Err if failed
+	call	rwv                     ; Read Write or Verify the sector
+	jc	short rw_done           ; Err if failed
+	call	xlateErr                ; Translate the response
+rw_done:
+	pop	cx
+	pop	bx
+	ret                             ;
+ENDP	ReadWriteVerify
+;
+;* DiskSetInts(void);
+;
+proc	DiskSetInts
+	mov	ax,3508h
+	int	21h
+	mov	[word ptr oldint8],bx
+	mov	[word ptr oldint8+2],es
+	mov	ax,350eh
+	int	21h
+	mov	[word ptr oldinte],bx
+	mov	[word ptr oldinte+2],es
+	push	ds
+	push	cs
+	pop	ds
+	mov	dx,offset floppytimerint
+	mov	ax,2508h
+	int	21h
+	mov	dx,offset FloppyInt
+	mov	ax,250eh
+	int	21h
+	pop	ds
+	ret
+endp	DiskSetInts
+;
+;* DiskResetInts(void);
+;
+proc	DiskResetInts
+	push	ds
+	lds	dx,[oldint8]
+	mov	ax,2508h
+	int	21h
+	lds	dx,[oldinte]
+	mov	ax,250eh
+	int	21h
+	pop	ds
+	ret
+endp	DiskResetInts
+
+;
+;* int FormatTrack(BYTE *buffer, int drive, int track, int head);
+;
+proc	FormatTrack
+	arg	buffer:dword, drive:word, track : word, head: word
+	uses	si,di
+	mov	[error],0
+	les	di,[buffer]
+	mov	[word ptr bufpos],di
+	mov	[word ptr bufpos+2],es
+	movzx	eax,[word ptr drive]
+	lea	edi,[eax*2+diskparm.bpsspt]
+	add	di,offset parmtable;
+	mov	bx,[di]
+	mov	al,bl
+	shl	eax,8
+	mov	al,1
+	test	[head],-1
+	jz	short firsthead
+	add	al,bh
+firsthead:
+	shl	eax,8
+	mov	al,[byte ptr head]
+	shl	eax,8
+	mov	al,[byte ptr track]
+	mov	cl,bh
+	sub	ch,ch
+	les	di,[buffer]
+tbuf:
+	stosd
+	add	eax,10000h
+	loop	tbuf
+	mov	cl,bh
+	shl	cx,2
+	mov	[transfercount],cx
+	mov	ch,[byte ptr track]
+	mov	cl,1
+	mov	bx,[head]
+	mov	ax,[drive]
+	push	cx
+	push	bx
+	push	ax                     ;
+	call	motoron                 ;
+	pop	ax                     ;
+	push	ax                     ;
+	call	changed                 ; See if changed or missing
+	pop	ax                     ;
+	jc	short fmt_done           ; Err if so
+	push	ax                     ; Set the Media rate
+	call	SetMediaRate            ;
+	pop	ax                     ; Send the disk specify bytes
+	push	ax                     ;
+	call	Specify                 ;
+	pop	ax                     ;
+	jc	short fmt_done           ; Err if failed
+	pop	bx
+	pop	cx
+	push	cx
+	push	bx
+	push	ax                     ; Seek the track
+	push	bx                     ;
+	push	cx                     ;
+	call	seek                    ;
+	pop	cx                     ;
+	pop	bx                     ;
+	pop	ax                     ;
+	jc	short fmt_done           ; Err if failed
+	call	fmt
+	jc	short fmt_done           ; Err if failed
+	call	xlateErr                ; Translate the response
+fmt_done:
+	pop	cx
+	pop	bx
+	mov	al,[error]
+	sub	ah,ah
+	ret                             ;
+endp	FormatTrack
+;
+;* int DiskIO(BYTE *buffer, int drive, int track, int sector, int head, int towrite);
+;
+proc	DiskIO
+	arg	buffer:dword, drive:word, track : word, sector:word, head:word, towrite: word
+	USES	si,di
+	mov	[cmd],DK_READ
+	test	[towrite],-1
+	jz	short nowrite
+	mov	[cmd],DK_WRITE
+nowrite:
+	mov	[error],0
+	mov	ax,[sectorsize]
+	mov	[transfercount],ax
+	les	di,[buffer]
+	mov	[word ptr bufpos],di
+	mov	[word ptr bufpos+2],es
+	mov	ax,[drive]
+	mov	bl,[byte ptr head]
+	mov	ch,[byte ptr track]
+	mov	cl,[byte ptr sector]
+	call	ReadWriteVerify
+	sub	ebx,ebx
+	lea	ebx,[ebx+DISKPARM.TURNOFF]; Else get the off timer byte
+	add	bx,offset parmtable	;
+	movzx	ax,[byte ptr bx]	;
+	mul	[multiplier]		; Make it ticks
+	div	[divisor]		;
+	mov	[turnofftime],ax	; Set turnofftime
+	mov	al,[error]
+	cbw
+	ret
+endp	DiskIO
+;
+;* void Disk1024(void);
+;
+proc	Disk1024
+	USES	si,di
+	push	ds
+	pop	es
+	cld
+	mov	si,offset parmtable2
+	mov	di,offset parmtable
+	mov	cx,sop/4
+	rep	movsd
+	mov	[sectorsize],1024
+	ret
+endp	Disk1024
+	end

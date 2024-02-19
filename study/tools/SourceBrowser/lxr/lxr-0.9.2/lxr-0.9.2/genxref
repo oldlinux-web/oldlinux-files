@@ -1,0 +1,177 @@
+#!/usr/bin/perl
+# -*- tab-width: 4 -*-"
+
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+
+use strict;
+use lib 'lib';
+use Fcntl;
+use Getopt::Long;
+use IO::Handle;
+
+use LXR::Files;
+use LXR::Index;
+use LXR::Config;
+use LXR::Tagger;
+use LXR::Common;
+
+
+my %option;
+GetOptions(\%option, "help!", "url=s", "version=s", "allurls!", "allversions!");
+
+if ($option{'help'}) {
+  # this may not be the best way to implement this, but at least it's something
+  print <<END_HELP;
+Usage: genxref [option ...]
+
+The genxref program automatically generates LXR database cross-reference
+tokens for a set of URL configuration blocks and source code versions.  These
+are both defined in the lxr.conf configuration file.  Each "URL" is a separate
+source tree; LXR separates and identifies these by their URL.  Each "version" is
+a different version of the source tree being indexed.  See lxr.conf or
+lxr.conf.template for configuring URLs and versions.
+
+Valid options are:
+  --help             Print a summary of the options.
+  --url=URL          Generate tokens for the given URL configuration block.
+  --allurls          Generate tokens for all URL configuration blocks.
+  --version=VERSION  Generate tokens for the given version of the code.
+  --allversions      Generate tokens for all versions of the code (default).
+Report bugs at http://sourceforge.net/projects/lxr/.
+END_HELP
+  exit 0;
+}
+
+# TODO: implement --allurls
+die("Option --allurls not implemented.  Use --url instead.\n")
+    if $option{'allurls'};
+
+die("URL must be specified. Try \"genxref --help\".\n") 
+	unless $option{'url'};
+
+$config = new LXR::Config($option{'url'});
+
+die("No matching configuration") unless $config->sourceroot;
+
+$files = new LXR::Files($config->sourceroot);
+die "Can't create file access object ".$config->sourceroot if !defined($files);
+$index = new LXR::Index($config->dbname, O_RDWR|O_CREAT);
+die "Can't create Index ".$config->dbname if !defined($index);
+
+my @versions;
+
+if ($option{'allversions'} || !$option{'version'}) {
+    @versions = $config->varrange('v');
+} else {
+    @versions = $option{'version'};
+}
+
+foreach my $version (@versions) {
+  genindex('/', $version);
+  genrefs('/', $version);
+  gensearch($version);
+}
+
+
+sub genindex {
+    my ($pathname, $release) = @_;
+    
+    print(STDERR "*** $pathname $release \n");
+    
+    if ($pathname =~ m|/$|) {
+	map {
+	    genindex($pathname.$_, $release) 
+	    } $files->getdir($pathname, $release);
+    } else {
+	  &LXR::Tagger::processfile($pathname, $release,
+				      $config, $files, $index)
+    }
+}
+
+sub genrefs {
+    my ($pathname, $release) = @_;
+    
+    print(STDERR "### $pathname $release \n");
+    
+    if ($pathname =~ m|/$|) {
+	map {
+	    genrefs($pathname.$_, $release)
+	    } $files->getdir($pathname, $release);
+    } else {
+	  &LXR::Tagger::processrefs($pathname, $release,
+								$config, $files, $index)
+    }
+}
+
+sub feedswish {
+	my ($pathname, $release, $swish) = @_;
+
+    print(STDERR "&&& $pathname $release \n");
+    
+    if ($pathname =~ m|/$|) {
+	map {
+	    feedswish($pathname.$_, $release, $swish)
+	    } $files->getdir($pathname, $release);
+    } else {
+		my $contents = $files->getfile($pathname, $release);
+		$swish->print("Path-Name: $pathname\n",
+					  "Content-Length: ".length($contents)."\n",
+					  "Document-Type: TXT\n",
+					  "\n",
+					  $contents)
+			if length($contents) > 0;
+    }
+}
+
+sub gensearch {
+	my ($release) = @_;
+	my $string;
+
+	if ($config->glimpsebin and $config->glimpseindex) {
+		# Make sure the directory that the glimpse results go into
+		# already exists as glimpse won't work if the directory does
+		# not exist
+		$string = $config->glimpsedir."/".$release;
+		mkdir $string;
+		system("chmod 755 $string");
+		my $glimpse = new IO::Handle;
+		my $pid = open($glimpse, "|-");
+		if ($pid == 0) {
+			exec($config->glimpseindex,
+				 "-n", "-o", "-H", $config->glimpsedir."/$release",
+				 $config->sourceroot."/".$release);
+			print(STDERR "Couldn't exec ".$config->glimpseindex.": $!\n");
+			kill(9, $$);
+		}
+		$glimpse->close();
+		# Need to chmod the glimpse files so everybody can read them.
+		$string = $config->glimpsedir."/".$release."/.glimpse\*";
+		system("chmod 644 $string");
+	}
+
+	if ($config->swishdir and $config->swishindex) {
+		my $swish = new IO::Handle;
+		my $pid = open($swish, "|-");
+		if ($pid == 0) {
+			exec($config->swishindex,
+				 "-S", "prog", "-i", "/bin/cat", "-v", "1",
+				 "-f", $config->swishdir."/".$release.".index");
+			print(STDERR "Couldn't exec ".$config->swishindex.": $!\n");
+			kill(9, $$);
+		}
+		feedswish("/", $release, $swish);
+		$swish->close();
+	}
+}

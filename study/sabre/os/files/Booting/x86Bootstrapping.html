@@ -1,0 +1,1000 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2//EN">
+<HTML>
+<HEAD>
+<!-- Copyright (c) 1996, 1997, 1998 ALL RIGHTS RESERVED. -->
+<!-- $Id:$ -->
+<TITLE>Guide to x86 Bootstrapping</TITLE>
+<META name="description" content="Detailed overview of x86 boot procedures, partitioning, and related tools">
+<META name="keywords" content="hard drives, partitioning, booting, bootstrapping, partitioning software, disk partitioning, hard disks, storage, SCSI">
+<LINK rev="made" href="mailto:vax@linkdead.paranoia.com">
+<LINK rel="index" href="">
+</HEAD>
+
+<BODY>
+<H1>Guide to x86 Bootstrapping (and Partitioning)</H1>
+
+<P ALIGN=RIGHT><EM>``Behold ye scoffers,<BR>
+  For I will work wonders in your days,<BR>
+  Which ye will not believe.''<BR>
+  -- Book of Habakkuk</EM></P>
+
+<H2>Important Note</H2>
+
+The NetBSD information is probably out of date since around NetBSD-1.3
+they have started using a block-list to load the secondary bootstrap and
+a stand-alone library (libsa), and another program (installboot) to set
+it up.
+
+<H2>Preface</H2>
+
+This guide will attempt to describe partitioning, boot sequences, and the
+programs which manage them on the Intel 80x86 platform.  Perhaps the simplest
+way to explain partitions and the bootup sequence is to start with simple
+cases, and add complexity as needed.  We will start with a single-OS setup,
+and proceed to more complicated examples.  The author takes no responsibility
+for any damages caused by following these directions.  This is for
+informational purposes only.
+<P>
+I am in the process of writing a unified version of this document
+which will read sort of like a <CITE>choose your own adventure</CITE>
+book, in that you see how the computer gets to its final destination
+partition.  Let me know what you think of this idea.  I may keep these
+around as common case examples for the impatient.
+<P>
+I suppose I should start posting this regularly, but it isn't
+quite a FAQ.  It's also terribly organized.  Sorry.
+
+<H2>Processor Startup Sequence</H2>
+
+The processors in Intel's x86 clan begin life by performing a hardware
+reset, initializing all the little bits of cache, registers, and buffers
+to a known value.  It goes into <A HREF="#realmode">real mode</A>
+shortly.  The EIP register is initialized to <CODE>0000FFF0</CODE>H,
+and the CS register is a segment selector (value <CODE>F000</CODE>H)
+which points to a base address of <CODE>FFFF0000</CODE>H.  Thus,
+execution begins at address <CODE>FFFFFFF0</CODE>H, sixteen bytes
+from the top of physical memory, in an EPROM.  The EPROM is usually located
+at a much lower physical address, but is being remapped to a high address
+by the system chipset (e.g. Intel 430HX).  Note that the
+selector/base correspondence here is not the usual relationship
+when programming in real mode.
+Typically, in a PC this EPROM will set up a real-mode IDT and
+jump to the BIOS.
+
+<H2>Single OS, Single Disk</H2>
+
+The simplest setup is a single OS on a single disk.  For example, you might
+have <A HREF="http://www.netbsd.org/">NetBSD</A> on your first and only
+SCSI disk (you do use <A HREF="#SCSI">SCSI</A>, don't you?).
+
+<H3>Bootup Sequence</H3>
+
+<OL>
+<LI>
+	<A NAME="first_step"></A>
+	The <A HREF="#BIOS">BIOS</A> bootstrap routine generates an int 0x19
+	which usually loads the first <A HREF="#sector">sector</A> of the
+	floppy or hard disk (0:0:1 in CHS
+	<A HREF="#disk_addr">disk addressing</A> format)
+	in memory at <A HREF="#segment">segment address</A>
+	<CODE>0000:7C00</CODE>H.  The first sector (in this example) is the
+	<A HREF="#primary">primary bootstrap loader</A>.
+	<P>
+	The BIOS checks that the last two bytes of that sector are
+	<CODE>AA55</CODE>H.  If they are not, you will probably get a
+	BIOS-dependent message (maybe
+	<SAMP>Non-System or Non-Bootable Disk</SAMP>)
+	or a hang.
+</LI>
+<LI>
+	This primary or <DFN>first stage</DFN> bootstrap loader mainly has
+	the job of loading the <A HREF="#secondary">secondary bootstrap
+	loader</A>.  The code for the primary bootstrap is in
+	<CODE>/usr/mdec/<VAR>??</VAR>boot</CODE>,
+	<CODE>/usr/mdec/sdboot</CODE> in this case.
+	This is generated from code in a directory, in this case
+	<A HREF="ftp://ftp.netbsd.org/pub/NetBSD/NetBSD-current/src/sys/arch/i386/boot/"><CODE>/sys/arch/i386/boot/</CODE></A>.
+	<P>
+	The primary loader examines the first sector of the disk and looks at
+	something I call the <A HREF="#hard">hard partition table</A>.  It
+	examines this table for a
+	partition with the <A HREF="#system_id">system id</A> of 165
+	(Net/Free/Open/386BSD).  In our case, this
+	partition should start at the beginning (0:0:1) of the disk.
+	<P>
+	It would load the 1-14th sectors of the NetBSD hard partition it
+	found above.  In this case, it would load the sectors 0:0:1 through
+	0:0:14.  It loads this batch (which includes itself and the
+	secondary bootstrap loader) into the area <CODE>0000:1000</CODE>H
+	(FreeBSD and Mach load it much higher).
+	This number was chosen because the bottom 4k of memory is used as
+	a scratch area for the BIOS.
+	<P>
+	If the secondary bootstrap loader is absent, you may get the
+	following error messages from the NetBSD primary bootstrap:
+	<BR>
+	<UL>
+	    <LI><SAMP>No bootable partition</SAMP></LI>
+	    <LI><SAMP>Read Error</SAMP></LI>
+	</UL>
+	<P>
+	Assuming all goes well, it then jumps to a pre-determined location
+	in the code it just located -- the secondary bootstrap loader.
+</LI>
+<LI>
+	<A NAME="second_step"></A>
+	The NetBSD secondary bootstrap loader is recognizable because
+	it provides the user with a prompt.  It is represented by the file
+	<CODE>/usr/mdec/boot<VAR>??</VAR></CODE>,
+	<CODE>/usr/mdec/sdboot</CODE> in this case.
+	<P>
+	The typical prompt looks like:
+
+<PRE>
+&gt&gt NetBSD BOOT: <VAR>xxxx</VAR>/<VAR>yyyy</VAR> k []
+use hd(1,a)/netbsd to boot sd0 when wd0 is also installed
+Boot: [[[sd(0,a)]/netbsd][-adrs] :-
+</PRE>
+
+	The NetBSD secondary bootstrap is designed to load the kernel.
+	It has no device drivers, so that means you'll have to boot off
+	stuff your BIOS recognizes (i.e. the first two drives).
+	The stuff about <SAMP>hd</SAMP> is only relevant if you have
+	both SCSI and IDE controllers in your machine, and is a kluge to
+	compensate for the way the BIOS works.
+	<P>
+	The bootstrap looks for the kernel of your choice.
+	It would then load it into memory.
+	Since the kernel might be bigger than 512K or 640K, the
+	secondary bootstrap has to switch between real mode (so it can
+	use BIOS calls) and protected mode (so it can access lots of memory).
+	When you select a drive, or let it default, it goes and reads the
+	partition table from the disklabel on that drive.
+	That statement glosses over a lot of fine details, so let me
+	elaborate.  Suppose it defaults, and goes to boot
+	the file <SAMP>sd(0,a)/netbsd</SAMP>.
+	<P>
+	Using a procedure similar to the primary bootstrap, it finds a
+	hard partition on sd0 with a NetBSD system ID.  It then searches
+	this hard partition for the disklabel.  This contains an embedded
+	<A HREF="#unix">Unix partition table</A>.
+	<P>
+	The Unix partition table is just a list of "partitions" (called
+	slices by the FreeBSD people, but it's the same thing no matter
+	how you, uh, slice it (ouch)) and their disk address ranges.
+	It finds Unix partition a (the <SAMP>a</SAMP> in the
+	<SAMP>sd(0,a)</SAMP> above)
+	and finds the beginning of that Unix partition.
+	It then looks for the file <SAMP>netbsd</SAMP> within the root of
+	this filesystem (due to the leading slash).
+	<P>
+	It can respond with one of these error messages if something
+	goes wrong:
+	<BR>
+	<DL>
+    	<DT><SAMP>Can't find <VAR>KERNELFILE</VAR></SAMP>
+    	<DD>You specified a filename for the
+       	    kernel which doesn't exist in the drive/partition combination
+	    you specified.
+	<DT><SAMP>invalid format</SAMP>
+	<DD>The partition you selected does not have the proper
+	    <A HREF="#magic">magic number</A>
+	     (a special code used to identify formatted partitions).
+	    It could be damaged, unformatted, or not even a NetBSD partition.
+    	<DT><SAMP>Wangtek unsupported</SAMP>
+	<DD>I'm not sure what planet this came from
+    	<DT><SAMP>kernel too large</SAMP>
+	<DD>Your kernel exceeds 1MB or whatever the limit is.(TODO: what is it)
+    	<DT><SAMP>unknown device</SAMP>
+	<DD>You have to pick fd*,sd*,hd* or wd*
+	<DT><SAMP>bad unit</SAMP>
+	<DD>Give something like sd0, not sdq.
+	</DL>
+</LI>
+</OL>
+
+<H3>How to set your disk up this way</H3>
+
+<OL>
+<LI>
+    Run NetBSD's fdisk, and create a single hard partition that starts at 0:0:1
+    for NetBSD.  (TODO: This step may or may not be necessary (or possible))
+    See step three.
+</LI>
+<LI>
+    Use <KBD>disklabel -w -r sd0 <VAR>disktabentry</VAR>
+	<VAR>volumelabel</VAR></KBD>
+    to write a disklabel to the drive.  Note that
+    this (using -r) will overwrite the secondary and primary bootstrap loader
+    area.  In this situation, this means that it will overwrite the area from
+    0:0:1 to about 0:0:14 or so.  The "-r" option must be used when writing to
+    a disk that doesn't have a label already, unfortunately.
+    (TODO: I think I'm a bit fuzzy here.  What options _really_ blow away
+     what parts of the disk?)
+</LI>
+<LI>
+    Use <KBD>disklabel -B sd0</KBD>
+    to write primary and secondary bootstrap loaders to
+    the drive.  Note that this will overwrite the hard partition table, but it
+    has a "fake" compiled-in hard partition table that has a 386/NetBSD hard
+    partition starting at the beginning of the disk.  It will not overwrite the
+    Unix partition table.  (Note: you could simply have used the <KBD>-B</KBD>
+	option in the previous disklabel command, but I seperated them
+	here for clarity).
+</LI>
+<LI>
+    You can optionally go back and use NetBSD's fdisk to adjust the hard
+    partition table to accurately reflect the size of the partition, but
+    only the starting disk address is really necessary.  The starting address
+    is only really used when loading the secondary bootstrap,
+    <A HREF="#starting">step 2</A> above.
+</LI>
+</OL>
+
+<H2>Multiple OS, Single Disk</H2>
+
+<H3>Bootup Sequence</H3>
+Let's say (since it is very common) that you have set up MS-DOS and NetBSD
+on your only disk.  The bootup sequence is as follows:
+
+<OL>
+<LI>
+	Same as <A HREF="#first_step">first step</A> of
+	Single OS, Single Disk above.
+</LI>
+<LI>
+	On all the MS-DOS/NetBSD systems I have experience with (excepting
+	boot managers, see below), the MBR is the MS-DOS primary bootstrap
+	code placed there when it was initially formatted for MS-DOS.
+	Should the MS-DOS primary bootstrap be lost, the (once undocumented)
+	MS-DOS command "FDISK /MBR" can re-write it to the (first sector of
+	the) disk.  This hasn't blown away the embedded partition table on
+	the rare occasions I have done it.
+	<P>
+	The MS-DOS primary boot loader would then proceed to scan its
+	embedded hard partition table for an <A HREF="#active">active</A>
+	hard partition (TODO: what if there are more than one, or none?
+	is that ok?).
+	The primary loader then relocates itself and loads the first sector
+	from the active hard partition.  In a sense, this parallels step
+	one above.
+	<P>
+	If the first sector of the active hard partition doesn't have the
+	right magic number, it might say:
+	<P>
+	<PRE>
+	Non-System disk or disk error
+	Replace and press any key when ready
+	</PRE>
+</LI>
+<LI>
+	Let's assume the active hard partition was the MS-DOS partition.
+	Now we load the first sector of this partition, which could be a
+	full track into the disk (that is, address 0:1:1).
+	We then load the second and subsequent sectors until we have
+	bootstrapped ourselves into MS-DOS.  Some versions of MS-DOS
+	(6.x and up?) will print a message at this point similar to:
+	<P>
+	<SAMP>Starting MS-DOS</SAMP>.
+	<P>
+	On the other hand, let us assume the active hard partition was
+	the NetBSD partition.  Then it would proceed by loading the first
+	sector of the NetBSD partition, which we will assume is at
+	location (100:0:1).  This is the primary bootstrap as described
+	<A HREF="#first_step">above</A>.  This time, when it examines
+	the hard partition table, it will not be the one embedded within
+	itself.
+	Remember, the primary NetBSD bootstrap reads the hard partition
+	table from (0:0:1), even though it resides at some other location,
+	in this case (100:0:1).  It searches for the NetBSD partition, as
+	before, which starts at location (100:0:1).  It then loads the
+	1st-14th sectors from this location.
+</LI>
+<LI>
+	At this point, if the active partition was MS-DOS, your config file
+	and junk is parsed and run.  If NetBSD was your active partition, the
+	actions are the same as part 3 (secondary bootstrap)
+	<A HREF="#second_step">above</A>.
+</LI>
+</OL>
+
+<H2>How to set your disk up like this:</H2>
+<OL>
+<LI>
+  Use MS-DOS's <KBD>FDISK.EXE</KBD> program (usually run from floppy) to
+  create
+  a primary MS-DOS (hard) partition that does NOT fill the entire drive.  It
+  will usually start at (0:1:1) and end at some cylinder boundary, let's say
+  (100:0:1).  Since MS-DOS's FDISK.EXE is brain damaged and broken, you may
+  have to tell it in some other bizarre measurements (e.g. MBs rather than
+  cylinders).  It leaves a blank track at the beginning for the boot sector
+  and anything else (viruses, etc) that you may want to put there -- with
+  no way to override it.
+</LI>
+<LI>
+  Then, use NetBSD's fdisk program to create another partition that
+  spans the rest of the drive.  Make sure to give it a system id of 165, and
+  mark one of the two (hard) partitions as active.
+</LI>
+<LI>
+  <KBD>disklabel -B -w -r <VAR>sd0</VAR> <VAR>disktabentry</VAR></KBD><BR>
+  This command looks up the NetBSD partition and writes the primary and
+  secondary bootblocks for NetBSD into the first sectors of the NetBSD hard
+  partition (for example, they might be put in (100:0:1) through (100:0:14)).
+  The Unix partition table (the disklabel, as it is called) is stored
+  starting in the first sector of the NetBSD area of the disk (100:0:1).
+</LI>
+</OL>
+
+<H2>Multiple OS, Single Disk, Boot Manager</H2>
+
+<H3>Boot Sequence</H3>
+
+<OL>
+<LI>Same as above</LI>
+<LI>
+At this point, the boot manager's primary bootstrap will take over.
+Some may fit entirely in the first sector, but most will have a two-part
+procedure, where the first sector will load its secondary bootstrap in a
+manner reminiscent of OSes.  For example, OS-BS 2.0 Beta 8 loads several
+of the following sectors into memory, and presents a menu (which can be
+edited with an external utility).  This menu allows the user to pick
+any hard partition off the disk.  After the boot manager decided on a
+partition (either by user decision or timeout, etc) then it would start an
+OS by jumping to the first sector of that hard partition and executing it.  
+</LI>
+</OL>
+
+<H3>To set your disk up like this:</H3>
+
+Same as above; set up each OS, then install the boot manager last (or as per
+its instructions).
+
+<H2>Multiple OS, Multiple Disks, Boot Manager</H2>
+
+This procedure is essentially the same.  There appear to be two ways of
+booting of the second drive.  The first way, used by O/S Boot Select,
+is to directly load the first sector of the parition off the second drive.
+The other (slightly more indirect) way, taken by pboot, is to "cascade",
+loading the MBR of the second drive as though it were the first.  I think
+that O/S Boot Select can do this also.
+<P>
+The documentation that comes with OS-BS discusses some issues with booting
+from drives other than the first.  It appears that the main issue is
+that the OS must be prepared to load from another disk (i.e. not assume
+that it's on the first disk).  You can be reasonably sure that most
+Micro$oft OSes will not boot off the second disk.  I'm pretty sure NetBSD,
+FreeBSD, and Linux can.
+
+<H2>Tools</H2>
+
+This section is devoted to programs which will help you deal with boot
+sequences or partitioning.
+
+<H3>Boot Managers</H3>
+
+<DL>
+	<DT>	<A HREF="ftp://ftp.freebsd.org/pub/FreeBSD/tools/dist/bteasy17.zip">bteasy</A>
+	<DD>	I consider "boot easy" a fair boot manager.
+		Current version is 17.
+	<DT>	pboot.zip
+	<DD>	This is a good boot manager.
+	<DT>	<A HREF="ftp://ftp.prz.tu-berlin.de/pub/pc/os-bs/osbsBETA.exe">osbsBETA.exe (self extracting pkzip archive)</A>
+	<DD>	This is a very good boot manager.  Get more info on it from its
+		<A HREF="http://www.prz.tu-berlin.de/~wolf/os-bs.html">home
+		page</A>.
+		His README file has a detailed section of how your OS should
+		compute the partition to load from, etc.  Note that it has
+		been in beta for years, but it is quite stable.
+	<DT><A HREF="ftp://ftp.ee.und.ac.za/pub/msdos/yapboo10.zip">yapboot</A>
+	<DD>	This is the "Yet Another Partition Sector Boot Program" editor
+		and boot manager.  Get it from
+		<A HREF="ftp://ftp.ee.und.ac.za/pub/msdos/">ftp.ee.und.ac.za</A>.
+	<DT>	System Commander
+	<DD>	This is a commercial product which you can find out about from
+		<A HREF="http://www.v-com.com/">V Communications' web site</A>.
+		It allows you to boot any partition and doesn't require
+		reformatting when resizing partitions.  I haven't used it
+		personally.
+</DL>
+
+<H3>Partition Table Editors</H3>
+<DL>
+	<DT>	<A HREF="ftp://ftp.freebsd.org/pub/FreeBSD/tools/pfdisk.exe">PFDISK.EXE</A>
+	<DD>	An excellent MS-DOS program which gives you more control over
+		the hard partition table in the MBR than the native FDISK.EXE;
+		could be used in lieu of NetBSD fdisk.  Download it from the
+		<A HREF="ftp://ftp.freebsd.org/pub/FreeBSD/tools/pfdisk.exe">FreeBSD archives</A>.
+		However, read what the author has to say:
+		<BLOCKQUOTE>
+			The most recent version is 1.3 (from Oct. 1990).
+			That works OK.
+			Note that an incomplete distribution of pfdisk has
+			been propagated around, somewhat to my dissapointment,
+			because it omitted what I consider some of the more
+			clever parts of package.
+			The full release of pfdisk is available from
+			<A HREF="ftp://ftp.mc.com/pub/pfdisk-1.3.tar.Z">ftp.mc.com</A>.
+		</BLOCKQUOTE>
+	<DT><A HREF="ftp://ftp.ee.und.ac.za/pub/msdos/yapboo10.zip">yapboot</A>
+	<DD>	This is the "Yet Another Partition Sector Boot Program" editor
+		and boot manager.  Get it from
+		<A HREF="ftp://ftp.ee.und.ac.za/pub/msdos/">ftp.ee.und.ac.za</A>.
+	<DT>	Norton Diskedit
+	<DD>	You can't get it for free, but it is a swell program.  It comes
+		with the
+		<A HREF="http://www.symantec.com/nu/">Norton Utilities</A> set.
+		If you're trapped in a u$oft world, you should probably have
+		it.  You can probably get more information from
+		<A HREF="http://www.symantec.com/">Symantec's home page</A>.
+	<DT>	Partition Magic
+	<DD>	This is a commercial solution made by
+		<A HREF="http://www.powerquest.com">PowerQuest</A>.
+		This tool appears to let you resize partitions and do all
+		kinds of stuff.  I've never used it myself, but they asked
+		politely.
+		Go visit <A HREF="http://www.powerquest.com">their web site</A>
+		for more info.
+	<DT>	System Commander
+	<DD>	This is a commercial product which you can find out about from
+		<A HREF="http://www.v-com.com/">V Communications' web site</A>.
+		It allows you to boot any partition and doesn't require
+		reformatting when resizing partitions.
+		I haven't used it personally.
+</DL>
+
+<H3>Partition Resizers</H3>
+
+<DL>
+	<DT>	<A HREF="http://sunsite.unc.edu/pub/Linux/system/install/fips15.zip">FIPS</A>
+	<DD>	This appears to shrink MS-DOS FAT partitions.  You can FTP
+		fips11.zip from
+		<A HREF="ftp://ftp.freebsd.org/pub/FreeBSD/">the FreeBSD
+		archives</A>, or fips15.zip from
+		<A HREF="http://sunsite.unc.edu/pub/Linux/system/install/">the
+		Linux system/install archive</A>.
+		Supposedly there's a Linux HOWTO on it as well,
+		but it apparently isn't in the archives yet.
+	<DT>	Partition Magic
+	<DD>	Appears to be able to resize partitions.  Visit
+		<A HREF="http://www.powerquest.com">their web site</A>
+		for more info.
+	<DT>	System Commander
+	<DD>	This is a commercial product which you can find out about from
+		<A HREF="http://www.v-com.com/">V Communications' web site</A>.
+		It allows you to boot any partition and doesn't require
+		reformatting when resizing partitions.
+		I haven't used it personally.
+</DL>
+
+<H2>References and Other Information</H2>
+
+See also:
+<UL>
+	<LI>
+	The NetBSD source tree, especially the files in
+	<A HREF="ftp://ftp.netbsd.org/pub/NetBSD/NetBSD-current/src/sys/arch/i386/boot/">NetBSD /usr/src/sys/arch/i386/boot</A>
+	and <A HREF="ftp://ftp.netbsd.org/pub/NetBSD/NetBSD-current/src/sys/arch/i386/stand/">NetBSD /usr/src/sys/arch/i386/stand</A>.
+	</LI>
+
+	<LI>
+	OpenBSD's source tree, especially the files in
+	<A HREF="http://www.openbsd.org/cgi-bin/cvsweb/src/sys/arch/i386/stand/">libsa (standalone x86 boot code)</A>
+	</LI>
+
+	<LI>
+	<A HREF="ftp://ftp.freebsd.org/pub/FreeBSD/tools/">FreeBSD's
+	DOS based tools section</A>
+	</LI>
+
+	<LI>
+	<A HREF="ftp://ftp.netbsd.org/pub/NetBSD/NetBSD-1.3/i386/installation/misc">NetBSD's DOS utils section</A>
+	</LI>
+
+	<LI>
+	<A HREF="http://www.ualberta.ca/FTP/OpenBSD/2.2/tools/">OpenBSD's
+	DOS based tools section</A>
+	</LI>
+
+	<LI>
+	Erich Boleyn's 
+	<A HREF="http://www.uruk.org/grub/boot-proposal.html">multiboot
+	proposal</A>, which is a protocol between a bootstrap program and an
+	OS kernel.
+	</LI>
+
+	<LI>
+	<A HREF="http://www.gnu.org/software/grub/">GRUB</A>
+	could very well be the end-all be-all of kernel loaders, with a
+	nice interface and all kinds of powerful features (loading kernel
+	modules independently, etc).
+	It can chain-load things like MS-DOS, OS/2 and other OSes, as well
+	as interpreting many file systems and booting multiboot compliant
+	kernels as well as natively booting several OS kernels.
+	It's currently in beta-test.
+	</LI>
+
+	<LI>
+	<A HREF="http://www.csh.rit.edu/~shaggy/software.html">SOLO</A>,
+	the Shag/OS bootloader
+	</LI>
+
+	<LI>
+	<A NAME="howitworks"></A>
+	Hale Landis'
+	<A HREF="http://www.uruk.org/~erich/grub/PC_partitioning.txt">How
+	It Works</A> documents the exact structure of the hard/extended
+	partition table(s) which MS-DOS understands, and contains disassembly
+	of different bootstrap programs and a good section on geometry
+	translation.  This is a must-read (although it has a few errors).
+	</LI>
+
+	<LI>
+	<A NAME="inter">
+	Ralf Brown's
+	<A HREF="http://www.pobox.com/~ralf/files.html">interrupt list</A>
+	is a very extensive treatise on interrupts
+	which covers many topics including BIOS calls, MS-DOS/Win calls,
+	and calls to software-based drivers.  A copy of his web pages may
+	also be found at <A HREF="http://www-cgi.cs.cmu.edu/afs/cs.cmu.edu/user/ralf/pub/WWW/files.html">CMU</A>.
+	</A>
+	</LI>
+
+	<LI>
+	Robert Collins' <A HREF="http://www.x86.org/">x86.org</A>
+	is a web site devoted to giving you an, uh, alternative but
+	very detailed view of Intel's microprocessor line.
+	</LI>
+
+	<LI>
+	Seagate has a
+	<A HREF="http://www.seagate.com/support/disc/faq/faqlist.shtml">
+	FAQ list</A>, a very nice archive of various disk-related FAQs.
+	</LI>
+
+	<LI>
+	Evan's
+	<A HREF="http://eden-backend.rutgers.edu/~evanss/partition.html">
+	partitioning how-to</A> has a definite MS-* slant.
+	</LI>
+
+	<LI>
+	The Linux
+	<A HREF="http://www.linuxhq.com/HOWTO/Assembly-HOWTO.html">Assembly
+	HOWTO</A>; this document describes how to program in assembly
+	using FREE programming tools, focusing on development for or
+	from the Linux Operating System on i386 platforms, mostly 32-bit
+	mode.  You may wish to look at
+	<A HREF="http://www.eleves.ens.fr:8080/home/rideau/Assembly-HOWTO">the
+	most recent version of the Linux Assembly HOWTO</A>.
+	</LI>
+
+	<LI>
+	The Linux
+	<A HREF="http://www.linuxhq.com/LDP/HOWTO/Disk-HOWTO.html">Disk
+	HOWTO</A>
+	</LI>
+
+	<LI>
+	The Linux
+	<A HREF="http://www.linuxhq.com/LDP/HOWTO/Bootdisk-HOWTO.html">Bootdisk
+	HOWTO</A>
+	</LI>
+
+	<LI>
+	The Linux
+	<A HREF="http://www.linuxhq.com/LDP/HOWTO/Installation-HOWTO.html">Installation HOWTO</A>
+	</LI>
+
+	<LI>
+	The Linux
+	<A HREF="http://www.linuxhq.com/LDP/HOWTO/mini/Partition.html">Partitioning Mini-HOWTO</A>
+	</LI>
+
+	<LI>
+	The Linux
+	<A HREF="http://www.linuxhq.com/LDP/HOWTO/mini/LILO.html">LILO
+	Mini-HOWTO</A>
+	</LI>
+
+	<LI>
+	<A HREF="http://www2.dgsys.com/~raymoon/faq/gen1.html">comp.lang.asm.x86 FAQ (HTML)</A>, <A HREF="http://www2.dgsys.com/~raymoon/faq/asmfaq.zip">comp.lang.asm.x86 FAQ (zip)</A> for x86 assembler questions
+	</LI>
+
+	<LI>
+	The LILO (LInux LOader) documentation pages
+	<UL>
+		<LI><A HREF="ftp://sunsite.unc.edu/pub/Linux/system/boot/lilo/lilo-t-20.ps.gz">Technical Overview (postscript, gzipped)</A></LI>
+		<LI><A HREF="ftp://sunsite.unc.edu/pub/Linux/system/boot/lilo/lilo-u-20.ps.gz">Users Guide (postscript, gzipped)</A></LI>
+	</UL>
+	</LI>
+
+	<LI>
+	My stab at a <A HREF="stage1.shar">NetBSD stage 1 bootloader (shar)</A>
+	which is probably outdated or unnecessary.
+	</LI>
+
+	<LI>
+	<A NAME="Intel_manuals">
+	<A HREF="http://www.intel.com/">Intel</A>'s
+	<A HREF="http://www.intel.com/design/pro/manuals/">Pentium Pro
+	Family Developer's Manual</A>
+	<A HREF="http://www.intel.com/design/pro/manuals/242692.htm">Volume
+	3: Operating System Writer's Manual</A>,
+	especially Chapter 8 (Processor Management and Initialization).
+	You may also want Intel's
+	<A HREF="http://www.intel.com/design/pentium/manuals/">Pentium
+	Manuals</A>, particularly the
+	<A HREF="http://www.intel.com/design/pentium/manuals/243192.htm">Intel
+	Architecture Software Developer's Manual, Volume 3: System Programming
+	Guide</A>.
+	Note that they charge about US$25 for each printed volume,
+	whereas <A HREF="http://www.motorola.com/">Motorola</A> gives
+	their manuals away for free (unless you work for them).
+	Older manuals (even the 386) are probably fine.
+	Also see <A HREF="http://www.intel.com/design">Intel's developer
+	web site</A>.
+	</A>
+	</LI>
+
+	<LI>
+	The <A HREF="http://www.fys.ruu.nl/~faber/Amain.html">80x86 Assembly
+	Pages</A>, tons of links and information on Intel 80x86 assembly.
+	</LI>
+
+	<LI>
+	The <A HREF="http://www.uwsg.indiana.edu/usail/installation/boot-process.html">Unix Boot Process</A>,
+	covering what comes after the kernel gets loaded, but only vaguely.
+	</LI>
+
+	<LI>
+	The
+	<A HREF="http://www.redhat.com/support/docs/rhl/Boot-Process-Tips/">Red
+	Hat Linux Boot Process Tips</A>, covering Unix's init program.
+	You may also want to search for the /etc/default thread in
+	<A HREF="ftp://ftp.NetBSD.ORG/pub/NetBSD/mailing-lists/current-users/">the NetBSD-current mailing list archives</A>,
+	dates 19950724-19950819.
+	</LI>
+
+	<LI>
+	The
+	<A HREF="http://www.fokus.gmd.de/nthp/employees/schilling/man/sformat.html">sformat manual page</A> covers a SCSI disklabelling/fixing/diagnosing
+	program for SunOS/Solaris.  You may also
+	<A HREF="ftp://ftp.fokus.gmd.de/pub/unix/sformat">download sformat
+	itself</A>.
+	</LI>
+
+	<LI>
+	Donald Knuth's "The Art of Computer Programming Volume 1",
+	the best book I've ever seen from which to learn assembly
+	language programming (albeit in a generic sense).
+	It's like Drano for your mind.
+	</LI>
+
+	<LI>
+	"Plug-and-Play OPROMs and the BIOS Boot Specification",
+	by Tom Roden and Scott Townsend,
+	Dr. Dobbs Journal, #265, May 1997, pp 38-
+	</LI>
+</UL>
+
+<H2>Caveats and Warnings</H2>
+
+Beware, some products do not stick with the c:h:s numbering.
+For example, Norton's excellent diskedit utility has h:c:s in its
+partition table layout.
+<P>
+Make frequent backups.
+<P>
+Print out partition tables (of all types) when you make a change, and
+above all, KEEP GOOD RECORDS.  When stuff starts getting weird, take
+your time and document every change.  Always read first, then write.
+<P>
+NetBSD's disklabel is rampantly destructive.  Don't assume it won't destroy
+your data.  Remember, if you ASSUME, it... um, hm,... I know there's a trick
+in here somewhere...
+<P>
+No, really, I have been burned yet AGAIN by NetBSD's disklabel.
+I've got to tear apart that source one day and figure out how it
+really works.  If it can happen to me...
+<P>
+This bears repeating; make frequent backups.
+<P>
+The exact boot sequence of your OS may vary; FreeBSD and Mach will probably
+be very close to what I have described here, while Linux will be less so.
+
+<H2>Glossary</H2>
+
+<DL>
+	<DT>	<A NAME="active">Active Partition</A>
+	<DD>	One of the hard partitions on a disk should be marked as
+	the active partition, which designates the
+	<A HREF="#hard">hard partition</A> to boot.
+	<DT>	ATA
+	<DD>	AT attachment, the politically correct term for
+		<A HREF="#IDE">IDE</A>.
+	<DT>	Boot Blocks
+	<DD>	See <A HREF="#primary">Primary</A> and
+		<A HREF="#secondary">Secondary</A> Bootstrap Loaders.
+	<DT>	<A NAME="BIOS">BIOS</A>
+	<DD>	Basic Input/Output System, a slow and antiquated ROM which is
+		found in most x86 PCs and consists of 16-bit code.  It
+		is important because it is ubiquitous and because it is
+		a very easy way to get your kernel and device drivers
+		loaded in the first place.
+	<DT>	Cylinder
+	<DD>	A concentric area around the disk spindle, spanning multiple
+		<A HREF="#platter">platters</A> (fixed <EM>r</EM>).
+	<DT>	<A NAME="disk_addr">Disk Addressing</A>
+	<DD>	A sector of the disk is identified by an ordered triple,
+		consisting of cylinder, head, sector.  Traditionally,
+		cylinders and head numbering starts with zero, while
+		sectors start with one.  Most people think of the disk
+		as being laid out in "row-major order".  This means that the
+		numbering goes in the following order; 0:0:1, 0:0:2, 0:0:3,
+		and so on.
+		Although the disk is laid out in three dimensions, it may
+		help to think of it this way.
+		<P>
+		Another way of phrasing the order is that all the sectors
+		are in order, then you proceed to the next head.  After
+		every head's set of sectors is the next cylinder.
+		Physically, heads are aligned vertically, cylinders are
+		concentric cylinders about the axis of rotation, and
+		sectors are radial units that form a complete circle
+		about the axis of rotation.  My document uses
+		<A NAME="CHS"><EM>CHS</EM></A> numbering, so cylinders come
+		first, heads next, sectors last.
+	<DT>	Disklabel
+	<DD>	A bunch of data about a drive that tells Unix how to use the
+		drive.  In NetBSD, it is currently stored at the beginning
+		(but not the first sector) of your "a" or "c" partition --
+		I'm not sure which (TODO: find out).
+	<DT>	EIDE
+	<DD>	The more advanced form of <A HREF="#IDE">IDE</A>.
+	<DT>	<A NAME="extended">Extended Partition</A>
+	<DD>	Although I'd like to forget about these, M$-DOS had a technique
+		for getting around the four <A HREF="#hard">hard partition</A>
+		limitation.  Apparently, (only) one of the hard partitions can
+		be marked as an extended partition, and the "extended
+		partition table", essentially another hard partition table,
+		is stored somewhere as the first sector of the hard partition
+		which was marked extended.
+		For some reason, you can only make one of these four new
+		partitions point to an actual data-containing area.
+		However, you can also have one of these four new
+		partitions point to <EM>another</EM> extended
+		partition, so in effect this forms a linked list that you
+		can extend as much as you like.  Don't ask me why the other
+		two entries get wasted.
+		<P>
+		Linux respects these extra partitions, and can use them as
+		easily as hard partitions (NetBSD can not).  In fact, I have
+		heard Linux LILO <STRONG>must</STRONG> be installed in one
+		of these partitions (or on floppy).
+		I haven't looked at the LILO docs yet myself so I'll get
+		back to you when I do.
+		<P>
+		See also the <A HREF="#hard">hard partition table</A>.
+	<DT>	Filesystem
+	<DD>	A single Unix Partition.
+	<DT>	First Sector
+	<DD>	See <A HREF="#mbr">master boot record</A>.
+	<DT>	Geometry Translation
+	<DD>	Originally and still a kluge, this is a term for what is done
+	by a drive controller BIOS to allow you to use large disks (over
+	512MB) using old mainboard BIOS routines, which speak in terms of
+		CHS (see <A HREF="#disk_addr">disk addressing</A>).
+		What I mean is that originally there were BIOSes that read
+	from disk using supplied parameters which were packed into registers.
+	Unfortunately, they weren't very forward-looking and didn't leave
+	enough space for future drives.  When the number of bits required to
+	identify a cylinder (10) exceeded the number of bits provided by the
+	BIOS, something had to be done.  Well, there were 6 bits used to
+	identify the drive head, and it was well-nigh impossible to change
+	the BIOS interface at this point (curse backwards binary
+	compatibility!).  So the drive controller BIOS designers decided to
+	emulate a disk with less cylinders and more heads.  Thus, the
+	controller BIOS translates a disk address using this ficticious
+	geometry to the real drive geometry, usually using some quick bit
+	shifts.  As long as you ALWAYS use this ficticious geometry,
+	and never change controllers, no big deal.  See the
+	<A HREF="#howitworks">How It Works</A> document for more info about
+	this.
+	<P>
+	This is basically all pretty bogus since modern drives use variable
+	density bit packing on the cylinders to ensure maximum storage
+	capacity and low magnetic drift.  The Macintosh low-density floppy
+	drives did this in a rather crude manner (very cool of them).
+	The geometry they report is already disconnected from reality, so
+	don't put too much credibility in the whole mess.
+	<P>
+	Personally, I think the whole thing would be <EM>so</EM> much better
+	if everyone used <A HREF="#LBA">LBA</A> all the time.
+	Unfortunately, MS-DOG doesn't pay attention to the LBAs in the hard
+	partition table (as far as I know) so we're stuck with it.
+	Actually, while I'm ranting, a protected-mode BIOS and/or a hack to
+	start the machine in protected mode would be pretty cool.
+	<DT>	<A NAME="hard">Hard Partition Table</A>
+	<DD>	A listing of disk address ranges that is always stored
+		in the first sector of the disk (the <A HREF="#mbr">master
+		boot record</A>).  Limited in capacity to four partitions.
+		Sometimes called the old-style, standard, or MS-DOS
+		partition table.  Each partition table entry takes up 16
+		bytes.  It is this fundamental limitation which inspired the
+		<A HREF="#unix">Unix partition table</A>.
+		See also <A HREF="#extended">Extended Partitions</A>.
+		Note that floppy disks can't have partition tables.
+		Sorry.
+	<DT>	Head
+	<DD>	See <A HREF="#platter">Platter</A>.
+	<DT>	<A NAME="IDE">IDE</A>
+	<DD>	IDE stands for "Integrated Drive Electronics", and it's also
+		called ATA.  IDE is brain-damaged and lame.  A recent
+		extension to IDE, called EIDE or ATA-2, attempts to come
+		near the functionality that <A HREF="#SCSI">SCSI</A> has had
+		for years.  If you can't take my word for it, go read about
+		it in
+		<A HREF="http://www.seagate.com/support/disc/faq/atafaq/atafaq.shtml">Seagate's excellent ATA FAQ</A>.
+		I'll wait here; come back when your brain is full.
+		Be sure to thank the people at Seagate for being so
+		candid with us!
+		<P>
+		By the time IDE controller designers add all the features of
+		SCSI into (E)IDE (which they have already started doing),
+		it's going to be even <EM>more</EM> complicated than SCSI.
+		Besides all this, IDE has trouble coexisting with other drive
+		types, and it is x86 I/O bus specific, making it difficult
+		(but not impossible) to design other computer architectures
+		to use IDE drives.  One of its few advantages are that due to
+		its overall simplicity, the overhead of setting up a command
+		(controller latency) is much lower than SCSI, so you are
+		going to have better access times.  Oh yeah, they're also
+		cheap, in more ways than one.  On the downside, the on-disk
+		buffer to controller speed in the best EIDE setup doesn't
+		even come close to the bandwidth of Ultra-Wide SCSI.
+	<DT>	<A NAME="LBA">LBA</A>
+	<DD>	LBA is an acronym for "Linear Block Address[ing]".  This
+		acronym was invented by IDE drive manufacturers to describe
+		the method of addressing disk blocks that was independent of
+		the disk geometry.  SCSI has used LBA from the very beginning.
+		Note that in computing the LBA from a
+		CHS <A HREF="#disk_addr">disk address</A>, every
+		operating system I know of makes sure that sectors within a
+		track are numbered contiguously, then that tracks within a
+		cylinder are numbered contiguously.  This means that even if
+		two different software systems disagree about the geometry
+		of a disk, their LBAs are the same.
+	<DT>	<A NAME="magic">Magic Number</A>
+	<DD>	Forty-two.  Also, a special binary signature placed within
+	a file or partition (usually at a fixed place), used to identify such
+	a beast.  For example, the "#!" at the beginning of a Unix script
+	are a form of magic numbers.  Linux keeps magic numbers at the
+	beginning of most kernel data structures to detect corruption.
+	<DT>	<A NAME="mbr">Master Boot Record</A>
+	<DD>	The "first" sector of a disk (0:0:1).  See
+		<A HREF="#disk_addr">Disk Addressing</A>.
+	<DT>	MBR
+	<DD>	See <A HREF="#mbr">master boot record</A>.
+	<DT>	Physical Partitions
+	<DD>	See <A HREF="#hard">Hard Partitions</A>.
+	<DT>	Physical Partition Table
+	<DD>	See <A HREF="#hard">Hard Partition Table</A>.
+	<DT>	<A NAME="platter">Platter</A>
+	<DD>	Also called a side or head (fixed <EM>z</EM>).
+	<DT>	<A NAME="primary">Primary Bootstrap Loader</A>
+	<DD>	A piece of code generated by NetBSD, and stored in
+		(e.g.) /usr/mdec/sdboot.
+	<DT>	Protected Mode
+	<DD>	Intel's name for an internal state of the processor which
+		causes it to work in what is commonly referred to as
+		"32-bit mode".  The name refers to extra memory protection
+		mechanisms which are not enabled in
+		<A HREF="#realmode">real mode</A>.
+	<DT>	<A NAME="realmode">Real Mode</A>
+	<DD>	Whoo boy are you a curious one.  Real mode refers to an
+		essentially extinct form of backwards compatibility in the x86
+		architectures, and is sometimes called "16-bit mode".
+		If you want more information than this, you'll have to look at
+		some <A HREF="#Intel_manuals">Intel processor
+		reference manuals</A>.
+	<DT>	<A NAME="SCSI">SCSI</A>
+	<DD>	SCSI stands for Small Computer Systems Interface - the One
+		True Controller Type.  SCSI is a real peer-to-peer kind of
+		protocol, meaning you can do cool things like hook two
+		machines up to the same bus with six other devices (disk
+		drives, scanners, etc) shared between them.  Some people
+		and companies (Microbrain) claim SCSI is hard to set up.
+		Bullsh1t!!!  It's just that SCSI can sling a ton of data
+		around, and so it is usually set up to take advantage of
+		things like DMA, and the only reason this is hard is because
+		of the ISA bus.
+		If you're ever going to have more than one disk drive, or you
+		want high performance, get SCSI.
+		Know ye that the SCSI spec may take more than one hour to read.
+		:)
+		<UL>related info
+			<LI><A HREF="http://www.paranoia.com/~filipg/HTML/LINK/F_SCSI.html">FAQ, HTML, old</A></LI>
+			<LI><A HREF="http://www.faqs.org/faqs/scsi-faq/part1/">FAQ part 1, new</A></LI>
+			<LI><A HREF="http://www.ultranet.com/~gfield/gary/scsi.html">SCSI game rules (clever, useful)</A></LI>
+		</UL>
+	<DT>	<A NAME="secondary">Secondary Bootstrap Loader</A>
+	<DD>	A complement to the Primary Bootstrap Loader,
+		(e.g.) stored in /usr/mdec/bootsd.
+	<DT>	Side
+	<DD>	See <A HREF="#platter">Platter</A>.
+	<DT>	<A NAME="sector">Sector</A>
+	<DD>	A fixed place on a hard drive (fixed <EM>r</EM>,
+		<EM>theta</EM>, <EM>z</EM>).
+	<DT>	<A NAME="segment">Segment Notation</A>
+	<DD>	The x86 has a much-maligned property of being a
+		<DFN>segmented</DFN> architecture.
+		The <SAMP><VAR>xxxx</VAR>:<VAR>yyyy</VAR></SAMP>
+		notation means you multiply the <VAR>xxxx</VAR> by
+		a factor of 16, and add to the <VAR>yyyy</VAR> to get
+		the physical address, <EM>in certain modes</EM>.
+		Despite being dragged through the mud, segments can let
+		you do pretty neat things like per-segment protection
+		(rather than per-page), and checking array bounds in hardware.
+		Nevertheless, it takes a long time to load segment descriptor
+		registers (9 cycles, with potential hidden costs).
+	<DT>	Soft Partitions
+	<DD>	See <A HREF="#unix">Unix Partition Table</A>.
+	<DT>	<A NAME="system_id">System ID</A>
+	<DD>	A per-partition, one-byte code in the hard partition table
+		which identifies the OS/FS type of that partition.  NetBSD,
+		for example, has a system id of 165.  Linux has two types;
+		one for	Linux swap, one for Linux primary, since these must
+		occupy different hard partitions. See my (rather incomplete)
+		<A HREF="system_id_types.html">table</A> of known values.
+		A more complete set of web pages can be found on
+<A HREF="http://www.win.tue.nl/~aeb/linux/partitions/partition_types-1.html">A.E. Brouwer's site</A>.
+		<P>
+		There is another table (currently #549, under
+		INT 19) within Ralf Brown's
+		<A HREF="#inter">interrupt list</A>, which you <EM>might</EM>
+		be able to find at one of the following
+		locations.  Note that the table numbers move around, and so
+		do the URLs.
+		<UL>
+		<LI><A HREF="http://www.delorie.com/djgpp/doc/rbinter/it/49/5.html">DJ Delorie's conversion</A> for djgpp</LI>
+		<LI><A HREF="http://www.ctyme.com/intr/rb-2126.htm">Marc
+			Perkel's conversion</A>
+		</UL>
+	<DT>	Track
+	<DD>	A ring-shaped surface where a cylinder intersects the
+		side of a platter (fixed <EM>r</EM>, <EM>z</EM>).
+	<DT>	<A NAME="unix">Unix Partition Table</A>
+	<DD>	A listing of "partitions" (letters a-h) and their disk
+		address ranges, as well as some other information.  Part
+		of the disklabel.  NetBSD stores all of its partitions in
+		such a way that they usually exist contiguously within a
+		single hard partition, although they can point outside of
+		it if you so desire (not recommended for novices).  They
+		basically take the place of the <A HREF="#hard">hard
+		partition table</A>, although a trivial hard partition table
+		must be used to find one.  FreeBSD calls these "slices".
+		I have been told Linux can read them, too.
+		One cool thing is that a unix partition table can contain
+		the hard partition table, and be located on the
+		<A HREF="#mbr">master boot record</A>.
+</DL>
+
+<H2>Postamble</H2>
+
+Send any corrections, kudos, additions, or "needs clarification" to my
+email address below.
+Any additions about other OSes would be cool.
+Please submit this to relevant web indexes and search engines where it is
+not already listed.
+<HR>
+Go to this level's <A HREF="">index</A>
+<ADDRESS>
+<A HREF="http://www.paranoia.com/~vax">VaX#n8</A>
+<A HREF="mailto:vax@linkdead.paranoia.com">vax@linkdead.paranoia.com</A><BR>
+</ADDRESS>
+Original date: 20 July 1995<BR>
+Updated: Sun Jan 18 06:41:55 CST 1998<BR>
+Uploaded to Server: Thursday, 08-Feb-2001 20:41:39 CST<BR>
+</BODY>
+</HTML>

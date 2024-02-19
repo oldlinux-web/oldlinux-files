@@ -1,0 +1,231 @@
+
+
+The DPMI real mode callback mechanism allows a DPMI protected mode
+client to be called as a subroutine by real mode programs in a
+transparent manner.  That is, a real mode program can use a real mode
+callback to pass information to the DPMI client, or obtain services
+provided by the DPMI client, without necessarily being aware of
+protected mode or extended memory in any way.  The callback mechanism
+can be thought of as the converse of <a href="api/310300.html">DPMI
+Int 31H Functions 0300H</a>, <a href="api/310301.html">0301H</a>, and
+<a href="api/310302.html">0302H</a>, which allow a DPMI client to pass
+information to a real mode program, or obtain services from a real mode
+program, in a manner that is similarly transparent to the real mode
+program. <p>
+
+In order to make a real mode callback available, the DPMI client must
+first call <a href="api/310303.html">Int 31H Function 0303H</a> with
+the selector and offset of the protected mode routine which will
+receive control when the callback is entered, and the selector and
+offset of a real mode register data structure (in the same format as
+used for <a href="api/310300.html">Int 31H Functions 0300H</a>, <a
+href="api/310301.html">0301H</a>, and <a
+href="api/310302.html">0302H</a>).  <a href="api/310303.html">Function
+0303H</a> will return a real mode address (segment and offset) for the
+callback entry point that can be passed to a real mode program via a
+software interrupt or far call (<a href="api/310300.html">Int 31H
+Functions 0300H</a>, <a href="api/310301.html">0301H</a>, or <a
+href="api/310302.html">0302H</a>), a DOS memory block, or any other
+convenient mechanism. <p>
+
+When the real mode program executes a <tt>FAR CALL</tt> to the real
+mode callback address supplied to it by the DPMI client, the DPMI host
+saves the contents of all real mode registers into the DPMI client's
+real mode register data structure, switches the CPU into protected
+mode, and enters the DPMI client's callback routine with the following
+conditions:
+
+<ul>
+<li> Interrupts disabled
+<li> CS:(E)IP = selector:offset specified in the original call to
+<a href="api/310303.html">Int 31H Function 0303H</a>
+<li> DS:(E)SI = selector:offset corresponding to real mode SS:SP
+<li> ES:(E)DI = selector:offset of real mode register data structure
+<li> SS:(E)SP = locked protected mode stack provided by DPMI host
+<li> All other registers undefined
+</ul>
+
+The format of the real mode register data structure is as follows:
+(Note that the content of the 32H bytes data structure are undefined
+at the time of the original <a href="api/310303.html">Int 31H Function
+0303H</a> call.) <p>
+
+<blockquote><table border=1 cellspacing=0 cellpadding=4>
+<tr><th>Offset</th><th>Length</th><th>Contents</th></tr>
+<tr><td align=center>00H</td><td align=center>4</td><td align=left>DI or EDI</td></tr>
+<tr><td align=center>04H</td><td align=center>4</td><td align=left>SI or ESI</td></tr>
+<tr><td align=center>08H</td><td align=center>4</td><td align=left>BP or EBP</td></tr>
+<tr><td align=center>0CH</td><td align=center>4</td><td align=left>reserved, should be zero</td></tr>
+<tr><td align=center>10H</td><td align=center>4</td><td align=left>BX or EBX</td></tr>
+<tr><td align=center>14H</td><td align=center>4</td><td align=left>DX or EDX</td></tr>
+<tr><td align=center>18H</td><td align=center>4</td><td align=left>CX or ECX</td></tr>
+<tr><td align=center>1CH</td><td align=center>4</td><td align=left>AX or EAX</td></tr>
+<tr><td align=center>20H</td><td align=center>2</td><td align=left>CPU status flags</td></tr>
+<tr><td align=center>22H</td><td align=center>2</td><td align=left>ES</td></tr>
+<tr><td align=center>24H</td><td align=center>2</td><td align=left>DS</td></tr>
+<tr><td align=center>26H</td><td align=center>2</td><td align=left>FS</td></tr>
+<tr><td align=center>28H</td><td align=center>2</td><td align=left>GS</td></tr>
+<tr><td align=center>2AH</td><td align=center>2</td><td align=left>IP</td></tr>
+<tr><td align=center>2CH</td><td align=center>2</td><td align=left>CS</td></tr>
+<tr><td align=center>2EH</td><td align=center>2</td><td align=left>SP</td></tr>
+<tr><td align=center>30H</td><td align=center>2</td><td align=left>SS</td></tr>
+</table></blockquote>
+
+The callback procedure can then extract its parameters from the real
+mode register data structure and/or copy parameters from the real mode
+stack to the protected mode stack.  Recall that the segment register
+fields of the real mode register data structure contain segment or
+paragraph addresses that are not valid in protected mode.  Far
+pointers passed in the real mode register data structure must be
+translated to virtual addresses before they can be used.  The
+recommended procedure is for the DPMI client to allocate a selector
+for this purpose during its initialization, then use <a
+href="api/310007.html">Int 31H Function 0007H</a> within the callback
+procedure to set the segment base to 16 times the value found in the
+real mode segment register.  The DPMI client should <i>not</i> use <a
+href="api/310002.html">Int 31H Function 0002</a> for this purpose,
+because selectors allocated by <a href="api/310002.html">Function
+0002</a> can never be freed. <p>
+
+The callback procedure exits by executing an <tt>IRET</tt> with the
+address of the real mode register data structure in ES:(E)DI, passing
+information back to the real mode caller by modifying the contents of
+the real mode register data structure and/or manipulating the contents
+of the real mode stack. The callback procedure is responsible for
+setting the proper address for resumption of real mode execution into
+the real mode register data structure; typically, this is accomplished
+by extracting the return address from the real mode stack and placing
+it into the CS:IP fields of the real mode register data structure.
+After the <tt>IRET</tt>, the DPMI host switches the CPU back into real
+mode, loads all registers (including CS:IP) with the contents of the
+real mode register data structure, and finally returns control to the
+real mode program.<p>
+
+Since the real mode call structure and the selector used for the real
+mode SS are static, care must be taken when writing DPMI client
+callback procedures that may be reentered (for example, by a real mode
+program that services hardware interrupt).  The simplest method of
+avoiding reentrancy is to leave interrupts disabled throughout the
+entire callback procedure.  However, if the amount of code executed by
+the callback is large, the client may find it more desirable to copy
+the real mode register data structure into a dynamically allocated
+buffer and then re-enable interrupts and not use the incoming DS any
+more.  The real mode register data structure pointed to by ES:(E)DI
+upon return from the callback procedure is <i>not</i> required to be
+at the same address as the original real mode register data
+structure.<p>
+
+DPMI hosts must provide a minimum of 16 callback addresses per virtual
+machine.  Real mode callbacks are a limited system resource.  A DPMI
+client should always use <a href="api/310304.html">Int 31H Function
+0304H</a> to free any callbacks that it is no longer using. <p>
+
+<b>Example:</b> The following code is an example of a real mode
+interrupt hook.  It hooks the DOS Int 21h and returns an error for the
+delete file function (AH=41H).  Other calls are passed through to DOS.
+This example demonstrates the techniques used to hook a real mode
+interrupt.  Note that since DOS calls are reflected from protected
+mode to real mode, the following code will intercept all DOS calls
+from both real mode and protected mode.
+
+<pre>
+;******************************************************
+;
+; This procedure gets the current Int 21H real mode
+; Seg:Offset, allocates a real mode call-back address,
+; and sets the real mode Int 21h vector to the call-
+; back address.
+;
+;******************************************************
+
+Initialization_Code:
+			; Create a code segment alias to save data in
+			;
+	mov ax, 000Ah
+	mov	bx, cs
+	<a href="api/31000a.html">int	31h</a>
+	jc	ERROR
+	mov	ds, ax
+
+	assume ds:_TEXT
+			; Get current Int 21h real mode SEG:OFFSET
+			;
+	mov	ax, 0200h
+	mov	bl, 21h
+	<a href="api/310200.html">int	31h</a>
+	jc	ERROR
+	mov	[Orig_Real_Seg], cx
+	mov	[Orig_Real_Offset], dx
+
+			; Allocate a real mode call-back
+			;
+	mov	ax, 0303h
+	push	ds
+	mov	bx, cs
+	mov	ds, bx
+	mov	si, OFFSET My_Int_21_Hook
+	pop	es
+	mov	di, OFFSET My_Real_Mode_Call_Struc
+	<a href="api/310303.html">int	31h</a>
+	jc	ERROR
+
+			; Hook real mode int 21h with the call-back
+			; address
+			;
+	mov	ax, 0201h
+	mov	bl, 21h
+	int	21h
+	jc	ERROR
+
+;******************************************************
+;
+; This is the actual Int 21h hook code.  It will return
+; an "access denied" error for all calls made in real
+; mode to delete a file.  Other calls will be passed
+; through to DOS.
+;
+; ENTRY:
+;    DS:SI -> Real mode SS:SP
+;    ES:DI -> Real mode call structure
+;    Interrupts disabled
+;
+; EXIT:
+;    ES:DI -> Real mode call structure
+;
+******************************************************
+
+My_Int_21_Hook:
+	cmp	es:	[di.RealMode_AH], 41h
+	jne	Chain_To_DOS
+			;
+			; This is a delete file call (AH=41h).  Simulate
+			; an iret on the real mode stack, set the real
+			; mode carry flag, and set the real mode AX to 5
+			; to indicate an access denied error.
+			;
+	cld
+	lodsw		; Get real mode ret IP
+	mov	es:[di.RealMode_IP], ax
+	lodsw		; Get real mode ret CS
+	mov	es:[di.RealMode_CS], ax
+	lodsw		; Get real mode flags
+	or	ax,1	; St carry flag
+	mov	es:[di.RealMode_Flags], ax
+	add	es:[di.RealMode_SP], 6
+	mov	es:[di.RealMode_AX], 5
+	jmp	My_Hook_Exit
+			;
+			; Chain to original Int 21h vector by replacing
+			; the real mode CS;IP with the original Seg:Offset.
+			;
+Chain_To_Dos:
+	mov	ax, cs:[Orig_Real_Seg]
+	mov	es:[di.RealMode_CS], ax
+	mov	ax, cs:[Orig_Real_Offset]
+	mov	es:[di.RealMode_IP], ax
+
+My_Hook_Exit:
+	iret
+</pre>
+
+

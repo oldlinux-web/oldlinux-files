@@ -1,0 +1,100 @@
+
+
+A DPMI client that provides resident protected mode services (also
+called a "protected mode TSR") must install itself using <a
+href="api/310c00.html">Int 31H Functions 0C00H</a> and <a
+href="api/310c01.html">0C01H</a>.  The protected mode TSR first
+declares its intent to remain resident by calling <a
+href="api/310c00.html">Function 0C00H</a>, providing the DPMI host
+with the code and data descriptors and callback entry points for
+16-bit and/or 32-bit protected mode.  If the TSR does not wish to
+provide services in a particular mode, it provides a code descriptor
+for that mode containing all zero bytes.  The protected mode TSR then
+terminates and stays resident by calling <a href="api/310c01.html">Int
+31H Function 0C01H</a>.  Note that after this function call, the TSR's
+original addressing context is destroyed; its LDT and IDT no longer
+exist, although any extended memory blocks it owned at the time of
+termination remain allocated. <p>
+
+Whenever another DPMI client <i>in the same virtual machine</i> loads
+or terminates, the DPMI host will inspect its list of protected mode
+TSRs.  If a particular TSR has indicated that it can execute in the
+active client's mode, the DPMI host will automatically allocate two
+LDT descriptors in the active client's context, initialize them to the
+values specified in the protected mode TSR's original <a
+href="api/310c00.html">Function 0C00H</a> call, and enter the TSR via
+a <tt>FAR CALL</tt> at the offset appropriate to the current mode,
+passing the following values:<p>
+
+<table border=1 cellspacing=0 cellpadding=4>
+
+<tr><td>CS</td><td align=left>executable selector which maps the same
+memory as the code descriptor in the <a href="api/310c00.html">Int 31H
+Function 0C00H</a> data structure for the current mode (16-bit or
+32-bit)</td></tr>
+
+<tr><td>(E)IP</td><td align=left>Offset specified in the <a
+href="api/310c00.html">Int 31H Function 0C00H</a> data structure for
+the current mode (16-bit or 32-bit)</td></tr>
+
+<tr><td>DS</td><td align=left>read/write data selector which maps the
+same memory as the data descriptor specified in the <a
+href="api/310c00.html">Int 31H Function 0C00H</a> data structure for
+the current mode (16-bit or 32-bit)</td></tr>
+
+<tr><td>ES</td><td align=left>0</td></tr>
+<tr><td>FS</td><td align=left>0</td></tr>
+<tr><td>GS</td><td align=left>0</td></tr>
+
+<tr><td>AX</td><td align=left>Reason for callback: 0=DPMI client
+loading, 1=DPMI client terminating</td></tr>
+
+<tr><td>BX</td><td align=left>unique handle for the client within the
+virtual machine</td></tr>
+
+</table><p>
+
+When a new DPMI client is loaded and executes the initial switch to
+protected mode, the appropriate callback procedure in the protected
+mode TSR will be entered by a <tt>FAR CALL</tt> with AX=0
+<i>before</i> the DPMI host returns to the new program.  The TSR may
+then hook interrupts, create descriptors, or allocate memory blocks in
+the new client's context prior to the client's access to such
+protected mode resources.  For example, the initialization callback
+gives the TSR an opportunity to insert itself in the chain of handlers
+for any arbitrary interrupt or exception.  The TSRs are invoked in the
+order of their installation but are removed in the reverse order.  The
+TSR may also need to construct per-client data structures in its own
+memory, and can use the value supplied to it in BX as a "handle" for
+the client.  The TSR must exit from the initialization callback with a
+<tt>RETF</tt>.
+
+Similarly, when a DPMI client terminates using Int 21H Function 4CH or
+<a href="api/310c01.html">Int 31H Function 0C01H</a>, the TSR's
+callback procedure will be entered by a <tt>FAR CALL</tt> with AX=1
+<i>before</i> the active client's LDT or IDT has been destroyed.  The
+protected mode TSR can then perform any client termination
+responsibilities of which the client is unaware (e.g. unmapping of
+physical memory), release any protected mode resources which it has
+acquired on behalf of the client (e.g. ownership of shared memory),
+and deallocate any per-client data structures of its own.  The
+termination callback must exit with a <tt>RETF</tt> and indicate an
+action to the DPMI host as follows:
+
+<ul>
+Carry = clear to keep resident services in memory, or<br>
+Carry = set to remove resident services from memory.
+</ul>
+
+A resident service provider should only be removed from memory of the
+last client of the virtual machine they are servicing.<p>
+
+<a href="api/310c00.html">Int 31H Functions 0C00H</a> and <a
+href="api/310c01.html">0C01H</a> should only be used by DPMI clients
+which intend to provide resident services to other protected mode
+clients.  If the objective is only to provide resident services to
+real mode programs, the client should use the DPMI translation service
+<a href="api/310300.html">Int 31H Function 0300H</a> to invoke DOS's
+Int 31H Function 31H directly. <p>
+
+

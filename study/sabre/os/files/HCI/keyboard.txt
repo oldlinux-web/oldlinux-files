@@ -1,0 +1,234 @@
+
+                     ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+                     ³ Programming the Keyboard ³
+                     ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+
+ÚÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+³ Disclaimer ³
+ÀÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+I assume no responsibility whatsoever for any effect that this file, the
+information contained therein or the use thereof has on you, your sanity,
+computer, spouse, children, pets or anything else related to you or your
+existance. No warranty is provided nor implied with this information.
+
+ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+³ Overview ³
+ÀÄÄÄÄÄÄÄÄÄÄÙ
+
+The operation of the keyboard is really quite simple. Every time a key
+is pressed or released an interrupt 9 is generated, and reading the value
+from port 60h tells you what happened.
+
+ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+³ Decoding the Keyboard Byte ³
+ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+So let's say you've installed an interrupt handler to handle all keyboard
+events and when an interrupt is generated your handler reads the byte from
+port 60h. What now?
+
+Well..each key on the keyboard has an associated scan code which is contained
+in the lower 7 bits of the byte. The most significant bit (ie bit 7) tells
+you what was actually done, 0 = key was just pressed, 1 = key was just
+released. If someone had just pressed the ESC key for instance, the port will
+show a value of 1 (1 is the ESC key's scan code). If they hold their finger
+on the button the keyboard will keep generating interrupt 9's and each
+time the port will still show a value of 1. When the person releases the key
+a final interrupt will be generated and the port will return 129 (1 + 128,
+since the high bit will be set indicating the person has released the key).
+
+Well...it's almost this simple. Some keys are "extended" keys. When an
+extended key is pressed an interrupt is generated and the keyboard port
+will return a value of 224 (E0h). This means that an extended key was pressed
+and it's *extended* scan code will be available during the *next* interrupt.
+Note that the left control key has a scan code of 29, while the *right*
+control key has an *extended* scan code of 29. The same applies to the alt
+keys and the arrow keys (keypad arrows vs the other ones).
+
+It would be nice if all keys were created equal and we could just throw away
+the 224 extended bytes and handle all the other bytes normally. Unfortunately
+there are two buttons which on my machine at least (and others I have tested)
+do some really weird stuff:
+
+PrtScn
+ÄÄÄÄÄÄ
+Pressing this button will send *2* extended characters to the handler, 42
+and 55, so the actual byte sequence will be 224, 42, 224, 55. (Also note
+that the left shift key has a regular scan code of 42, so there goes our
+idea of just throwing 224's away). Only the extended 55's are sent during
+auto-repeat. When the key is released, the two are sent again with the high
+bits set (224, 170, 224, and 183). If any of the shift or control keys are
+being held down when the PrtScn button is pressed then only the (224, 55) is
+sent when the key is pressed and only the (224, 183) is sent when it's
+released. If the alt key is being held down (System Request) then the key
+behaves like an ordinary key with scan code 84. The practical upshot of all
+this is that the handlers you write to handle normal keys and extended keys
+will work fine with all the different PrtScn combinations (although a program
+would have to check normal key 84 *AND* extended key 55 in order to determine
+if the key is currently being pressed).
+
+Pause/Break
+ÄÄÄÄÄÄÄÄÄÄÄ
+Welcome to hell. If you press this key while either of the the control keys
+are being held down, it will behave like extended key 70, at all other times
+it will send the following bytes: (225, 29, 69, 225, 157, 197). Holding the
+key down does not result in autorepeat. Taking your finger off the key does
+not send any extra bytes, they appear to be sent after the "key down" bytes
+when you first press the key. Notice that 225 isn't 224, so our normal
+extended character handler will not take care of this. My personal theory is
+that while a scan code of 224 (E0h) means there is 1 more character
+following, a scan code of 225 (E1h) means there are *2* more following. I've
+seen a number of keyboard handler libraries and they all seem to overlook
+this key. So why not be the first kid on your block to have a keyboard
+handler which properly supports the Pause/Break key? CHECK IT OUT!!
+
+ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+³ Writing a Handler ³
+ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+Writing a keyboard handler is fairly straightforward. This section will
+show how to do it in Pascal (you C and asm programmers would probably already
+know this stuff anyway).
+
+First we'll declare a few things we'll need:
+
+const KEYBOARDINTR = 9;
+      KEYBOARDPORT = $60;
+
+var BIOSKeyboardHandler : procedure;
+    CallBIOSHandler : boolean;
+
+The CallBIOSHandler variable will be initialised by the calling program. If
+we also want the BIOS handler to process all keystrokes then this variable
+must be set to true.
+
+Next we need to store the value of the current handler and set up own our
+own one. We'll use a procedure called KeyboardHandler to handle the actual
+interrupt.
+
+CallBIOSHandler := false; { ...or set it to true if you want. }
+GetIntVec(KEYBOARDINTR, @BIOSKeyboardHandler);
+SetIntVec(KEYBOARDINTR, Addr(KeyboardHandler));
+
+Ok, so everything is now set up and our handler will now be able to process
+all keyboard events. The actual interrupt handler could look like this:
+
+{$F+}
+procedure KeyboardHandler(Flags, CS, IP, AX, BX, CX, DX,
+                          SI, DI, DS, ES, BP: Word);
+interrupt;
+var key : byte;
+begin
+
+  key := Port[KEYBOARDPORT];
+
+  { PROCESS THE KEYSTROKE HERE }
+
+  if CallBIOSHandler then
+
+  { Call the BIOS keyboard handler if the calling program wants us to }
+    begin
+      asm pushf end;
+      BIOSKeyboardHandler;
+    end
+
+  { Otherwise just acknowledge the interrupt }
+  else Port[$20] := $20;
+end;
+{$F-}
+
+
+When the program is finished we can set the old keyboard handler again:
+
+SetIntVec(KEYBOARDINTR, @BIOSKeyboardHandler);
+
+ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+³ A Word of Warning ³
+ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+When I was writing a simple handler to test the info in this file I did
+something REALLY stoopid which I would like to share with the world. I
+thought that my program was stuffing the keyboard up because when I exited
+the program my editor (Borland Pascal 7.0) would act as though the control
+button was being held down (I'm sure some of you have already started
+laughing by now). I had to press it after each time I ran the program
+just to sort it out. After spending a few hours looking all over the place
+for info on what could possibly be wrong I realised what I was doing. I was
+pressing CTRL-F9 to compile the program which would also immediately make it
+run and I was releasing the control key when my program was running, ie the
+regular BIOS handler was not getting the control key's "key up" command and
+still thought it was being held down when my program returned control to
+it. Moron.....
+
+ÚÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+³ Scan Codes ³
+ÀÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+The following is a list of all the regular key scan codes in numerical
+order:
+
+Scan                                   Scan
+Code Key                               Code Key
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ             ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+ 1   ESC                               44   Z
+ 2   1                                 45   X
+ 3   2                                 46   C
+ 4   3                                 47   V
+ 5   4                                 48   B
+ 6   5                                 49   N
+ 7   6                                 50   M
+ 8   7                                 51   , <
+ 9   8                                 52   . >
+10   9                                 53   / ?
+11   0                                 54   RIGHT SHIFT
+12   - _                               55   *            (KEYPAD)
+13   = +                               56   LEFT ALT
+14   BACKSPACE                         57   SPACEBAR
+15   TAB                               58   CAPSLOCK
+16   Q                                 59   F1
+17   W                                 60   F2
+18   E                                 61   F3
+19   R                                 62   F4
+20   T                                 63   F5
+21   Y                                 64   F6
+22   U                                 65   F7
+23   I                                 66   F8
+24   O                                 67   F9
+25   P                                 68   F10
+26   [ {                               69   NUMLOCK      (KEYPAD)
+27   ] }                               70   SCROLL LOCK
+28   ENTER (RETURN)                    71   7 HOME       (KEYPAD)
+29   LEFT CONTROL                      72   8 UP         (KEYPAD)
+30   A                                 73   9 PGUP       (KEYPAD)
+31   S                                 74   -            (KEYPAD)
+32   D                                 75   4 LEFT       (KEYPAD)
+33   F                                 76   5            (KEYPAD)
+34   G                                 77   6 RIGHT      (KEYPAD)
+35   H                                 78   +            (KEYPAD)
+36   J                                 79   1 END        (KEYPAD)
+37   K                                 80   2 DOWN       (KEYPAD)
+38   L                                 81   3 PGDN       (KEYPAD)
+39   ; :                               82   0 INSERT     (KEYPAD)
+40   ' "                               83   . DEL        (KEYPAD)
+41   ` ~                               87   F11
+42   LEFT SHIFT                        88   F12
+
+
+The following is a list of all the extended key scan codes in numerical
+order:
+
+Scan                                   Scan
+Code Key                               Code Key
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ        ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+28   ENTER        (KEYPAD)              75   LEFT         (NOT KEYPAD)
+29   RIGHT CONTROL                      77   RIGHT        (NOT KEYPAD)
+42   PRINT SCREEN (SEE TEXT)            79   END          (NOT KEYPAD)
+53   /            (KEYPAD)              80   DOWN         (NOT KEYPAD)
+55   PRINT SCREEN (SEE TEXT)            81   PAGE DOWN    (NOT KEYPAD)
+56   RIGHT ALT                          82   INSERT       (NOT KEYPAD)
+71   HOME         (NOT KEYPAD)          83   DELETE       (NOT KEYPAD)
+72   UP           (NOT KEYPAD)         111   MACRO
+73   PAGE UP      (NOT KEYPAD)
+

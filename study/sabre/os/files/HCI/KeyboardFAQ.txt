@@ -1,0 +1,296 @@
+                      The Keyboard Interface Tutorial
+Preface:
+
+The Keyboard on the IBM PC and compatible is connected to the PPI -
+Programmable Peripheral Interface, which generally takes care of Keyboard
+functions, equipment information and timer functions. The PPI is addressable
+via port reads and writes, to addresses 060h thru 063h.
+
+There are several type of keyboards available. The main difference between the
+various types is the key count. Existing sizez are:
+
+83  Key (Original PC)
+84  Key (XT and clones)
+101 Key (Usually on AT's and up, called Enhanced Keyboard)
+
+In addition to those standard types, there are numerous non-standard types,
+which varry from manufacturer to manufacturer. There are 102 Key keyboards,
+keyboards with two F-Key sets (upper and left), keyboards with weird
+hardly-used keys like 'Macro' and 'Turbo' (which DO have a scan code, though)
+etcetera.
+
+The IBM AT and up provides a better way of negotiating the keyboard, by
+allowing the user to directly access and command the keyboard, as it will be
+demonstrated later.
+
+Using assembly language, there are two major ways to handle the keyboard and
+keystrokes:
+
+1. Using DOS functions:
+
+   DOS provides a useful set of functions to use in context with the keyboard.
+   This includes one-key-input and string input.
+
+2. Using BIOS interrupts:
+
+   The IBM PC BIOS (Basic Input Output System) provides an interrupt to handle
+   the keyboard - Interrupt 016h (022d). These functions, titles KEYBOARD I/O,
+   are an efficient medium level way of using the keyboard
+
+   In addition to the Interrupt 016h interface, there is the Keyboard
+   Interrupt, Interrupt 009h. As opposed to the other interrupt, Interrupt
+   009h is an IRQ - Interrupt Request, which means that it is never called by
+   software. Only hardware, when certain conditions are met, calls IRQ
+   interrupts. Naturally, the user is able to invoke them himself, but that is
+   not commonly done.
+
+3. Direct port access:
+
+   It is possible to access the keyboard using direct port reads and writes.
+   As mentioned before, this is usually done by addressing the PPI. On AT's
+   and up, however, it is possible to directly access the keyboard itself.
+
+
+The BIOS also supplies a certain amount of information about the keyboard
+within it's BDA - BIOS Data Area, aka BDS - BIOS Data Segment - which is the
+segment that lies at paragraph 040h (0040h:XXXXh or 0000h:04XXh):
+
+Address Size Contents
+------- ---- --------
+0:0412    1  Errors in PCjr InfraRed keyboard link
+
+0:0417    2  Keyboard status bits. See Keyboard Flags
+0:0419    1  Current (accumulating) value of Alt+numpad pseudo-key input.
+             Normally 0.  When [Alt] is released, value is stored in kbd buf.
+0:041A    2  Address of keyboard buffer head (keystroke at that addr is next)
+0:041C    2  Address of keyboard buffer tail
+0:041E   32  Keyboard buffer.  BIOS stores keystrokes here (head and tail
+             point to addresses from 041Eh to 043Dh inclusive).
+
+0:0480    2  AT PS/2 Keyboard buffer offset start address (usually 01Eh)
+0:0482    2                                        end address (usually 03Eh)
+
+0:0496    1  AT Keyboard flag bit 4=1 (10h) if 101-key keyboard is attached
+0:0497    1  AT Keyboard flag for LED 'key lock' display
+                  bits 0-2 are ScrollLock, NumLock, CapsLock respectively
+
+******************************************************************************
+
+Using DOS functions:
+--------------------
+
+DOS provides a set of 7 functions to handle the keyboard:
+
+01h Keyboard Input
+06h Console I/O
+07h No Echo Unfiltered Input
+08h No Echo Filtered Input
+0Ah Buffered Input
+0Bh Input Status
+0Ch Clear Keyboard Buffer & Input
+
+In addition to these functions, it is also possible to read a selected amount
+of characters from the keyboard, using DOS's File Handle functions, as the
+Keyboard, aka Standard Input, has a pre-set handle of 0000h:
+
+                    DOS Fn 3Fh: Read from keyboard via Handle
+------------------------------------------------------------------------------
+/-----------------------------------------------------------------\
+| Expects | AH    | 3Fh                                           |
+\---------| BX    | 0000h - Handle for Standard Input (Keyboard)  |
+          | DS:DX | Address of buffer to receive data             |
+          | CX    | Number of bytes to read                       |
+/---------|-------|-----------------------------------------------|
+| Returns | AX    | Error code if CF is set to CY                 |
+\---------| AX    | Number of bytes actually read                 |
+          \-------------------------------------------------------/
+
+Description: CX bytes of data are read from the keyboard. The data is placed
+             into the caller's buffer pointed to by DS:DX.
+
+Notes:       It is handy to use this function for reading default handles
+             such as the Standard I/O handles, instead of the buffered input
+             or character-by-character input functions.
+
+             When you read from a device, AX returns the length of the line
+             up to and including the termination CR (ASCII 13h).
+
+******************************************************************************
+
+Using BIOS Interrupts:
+----------------------
+
+As mentioned before, there are two ways to use interrupts to access the
+keyboard.
+
+The first is Interrupt 016h - Keyboard I/O.
+
+                          INT 16h: Keyboard Services
+------------------------------------------------------------------------------
+ This is the application-level interface to the keyboard.  Keystrokes are
+ actually processed asynchronously in the background.  As each keystroke is
+ received from the keyboard, it is processed by INT 09h and placed into a
+ circular queue.
+
+
+The second is Interrupt 009h - Keyboard Interrupt, IRQ 1
+
+                         INT 09h: Keyboard Interrupt
+------------------------------------------------------------------------------
+ This hardware-generated interrupt (IRQ 1) is executed upon each press and
+ release of a key.  The ROM-BIOS code interprets the keystroke, storing values
+ into the keyboard buffer at 40:1Eh.  It also handles the special cases of the
+ PrtSc and SysReq keys, and tracks the status of the shift and case-lock keys.
+
+See:  INT 16h .......... BIOS service to access the keys stored in the buffer
+                         and obtain status of the certain shift keys.
+      Scan Codes ....... a list of the values of each possible keystroke as
+                         it is received by INT 09h.
+      Extended ASCII ... for a summary of the values that BIOS stores into the
+                         the keyboard buffer after it translates a scan code.
+      Keyboard Flags ... for a summary of how to obtain, test for, and modify
+                         the bit-settings of shift and case-lock flags.
+
+ TSRs (RAM-resident programs) that have a hot-key to trigger a popup usually
+ intercept INT 09h and test for a certain key with a sequence such as this:
+
+         push    ax
+         in      al,60h             ; Read the key
+         cmp     al,POP_KEY         ; Is this the hot key?
+         je      do_pop             ; Yes, trigger the popup
+                                    ;  No, drop through to original driver
+         pop     ax
+         jmp     cs:[int9_vect]     ; Just hop out to original int handler
+
+do_pop:  ;------ the following housekeeping is needed to satisfy the hdwr int
+
+         in      al,61h             ; Get value of keyboard control lines
+         mov     ah,al              ;  Save it
+         or      al,80h             ; Set the "enable kbd" bit
+         out     61h,al             ;  And write it out the control port
+         xchg    ah,al              ; Fetch the original control port value
+         out     61h,al             ;  And write it back
+
+         mov     al,20h             ; Send End-Of-Interrupt signal
+         out     20h,al             ;  to the 8259 Interrupt Controller
+
+         ;------ other code handles other tests and finally the popup code
+
+******************************************************************************
+
+Direct port access:
+-------------------
+
+The keyboard is addressable in two manners.
+
+The first, available on all IBM PCs of all types, is by addressing the PPI -
+Programmable Peripheral Interface.
+
+Port  Description
+----  -----------
+060h  PC/XT  PPI port A.  Read keyboard scan code:
+
+      IN   al,60h  ; Fetche most recent scan code.  See INT 09h and Scan Code
+
+      AT keyboard data register.                     See AT Keyboard
+
+061h  PC/XT PPI (Programmable Peripheral Interface) port B.
+
+       7 6 5 4 3 2 1 0
+       | | | | | | | |  
+       | | | | | | | \-> 0: Timer 2 gate (speaker) --/--> OR 03h=speaker ON
+       | | | | | | \---> 1: Timer 2 data  ---------/    AND 0FCh=speaker OFF
+       | | | | | \-----> 2: Always 0
+       | | | | \-------> 3: 1=Read high switches; 0=read low switches(see 62h)
+       | | | \---------> 4: 0=Enable RAM parity checking; 1=disable
+       | | \-----------> 5: 0=Enable I/O channel check
+       | \-------------> 6: 0=Hold keyboard clock low
+       \---------------> 7: 0=Enable keyboard; 1=disable keyboard
+
+------------------------------------------------------------------------------
+
+The second, available only on IBM PC/ATs and up, is by directly commanding the
+keyboard itself. -= This is for the AT keyboard only. =-
+
+Port  Description
+----  -----------
+064h  AT keyboard command register.  This port communicates with the 8042
+      which runs an on-chip control program for the keyboard.  It accepts
+      command codes and data bytes.
+
+ The keyboard of the AT (and its Intel 8042 microcomputer interface) is
+ programmable and a lot more interesting than the old-style PC keyboards.
+ Using the information below, you can set the key repeat speed and play
+ games with the "lock" key LED display.
+
+ Note: This is not a comprehensive coverage of the details of keyboard and
+       8042 operation, but it should provide some food for thought.
+
+ Port 60h is for writing data and is maintained for compatibility with
+ earlier models.  If the examples using port 64h don't work, try using 60h.
+
+ Port 64h is for writing commands and data and for reading keyboard status.
+ Before sending a command to the keyboard, the BIOS tests its status
+ (IN al,64h) and makes sure a key isn't being pressed or the internal buffer
+ isn't full, etc.  There's a small risk if you just go ahead and send the
+ command:
+
+       mov   al,cmd_code
+       out   64h,al
+
+ For a two-part command such as setting the typeamatic rate, it's wise to
+ delay a little while between OUTs:
+
+       mov   al,cmd_code
+       out   64h,al
+       mov   cx,2000h  ;arbitrary ÷ 10ms+
+delay: loop  delay
+       mov   al,data_value
+       out   64h,al
+
+Cmd  Description
+---  -----------
+0FFh Reset the keyboard and start internal diagnostics
+0FEh Resend the last transmission
+0FDh-0F7h (NOP)
+0F6h Set keyboard to defaults and continue scanning
+0F5h Set keyboard to defaults and disable keyboard scanning
+0F4h Enable the keyboard. Kybd sends 'ACK', clears buffer, and starts scanning
+
+0F3h Set typeamatic rate and delay.  First send 0F3h, then send data byte:
+
+		 -7-6-5-4-3-2-1-0-
+		 |0|dly|rept rate|
+		 -----------------
+                  | | | \---------> bits 0-4 set the repeat rate (see below)
+                  | \-------------> bits 5-6 set initial delay before first repeat:
+                  |                          00=250ms; 01=500ms; 10=750ms; 11=1000ms
+                  \---------------> bit 7 is always 0
+                                                    Value Rate    Value Rate
+     This chart is a partial guide for the repeat    0  = 30.0    0Ah = 10.0
+     rate (bits 0-4).  You can interpolate for       1  = 26.7    0Dh =  9.2
+     values not shown, but let's face it, you're     2  = 24.0    10h =  7.5
+     only interested in the fastest rates.           4  = 20.0    14h =  5.0
+                                                     8  = 15.0    1Fh =  2.0
+
+     The keyboard is initially set to begin repeating after 1/2-second and
+     repeat at a rate of 10 repeats per second.  This is much too slow.  A
+     data byte of 01h sets the delay to 1/4-second with 26 repeats per second.
+
+0F2h-0EFh (NOP)
+0EEh Echo.  Diagnostics aid.  Simply sends 0EEh right back.
+
+0EDh Turn LED 'lock key' lights on or off. First send 0EDh, then send byte:
+
+		 -7-6-5-4-3-2-1-0-
+		 | not used|c|n|s|
+		 -----------|-|-|-
+                            | | \-> ScrollLock light 01h=turn on
+                            | \---> NumLock light    02h=turn on
+                            \-----> CapsLock light   04h=turn on
+
+     The bit positions 0-3 correspond to bits 4-6 of the keyboard flags
+     variable in the BIOS Data area.  You should make an effort to keep the
+     flags in sync with the lights.  For instance, if you do a big favor for
+     the user and set his ten-key pad into NumLock mode (by setting bit 5 of
+     0:0417h) then be sure to turn on the corresponding LED (eg, bit 1).

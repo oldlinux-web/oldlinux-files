@@ -1,0 +1,181 @@
+<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML//EN">
+<title>Using the CMOS Timer</title>
+
+<body bgcolor="#FFFFFF" text="#000000">
+
+<p align="center"><font size="6"><b>Using the 1024Hz CMOS Timer Interrupt</b></font></p>
+
+<p align="center"><b>Copyright &copy; 1997 by </b><a
+href="mailto:pcgpe@geocities.com"><b>Mark
+Feldman</b></a></p>
+
+<hr>
+
+<p><font color="#FF0000"><b>Important Note:</b> I've recently
+received a few e-mails from people claiming that the information
+in this file doesn't work for them. I'm still trying to track
+down the exact cause of the problems, until I&nbsp;do the
+information in this file should be considered incomplete. It will
+<i>not</i> work on all machines.</font></p>
+
+<p><b>Introduction</b></p>
+
+<p>I&nbsp;was originally going to write an article for the
+ill-fated PCGPE&nbsp;2 on using the CMOS timer interrupt, but
+since I no longer support MS-DOS that article will not be
+written. Instead, I've written this short HTML page showing how
+to enable and use it for anyone who's interested.</p>
+
+<p><b>What is It?</b></p>
+
+<p>The CMOS timer is a chip on the motherboard responsible for
+keeping track of the time. It's connected to the motherboard
+battery, which is why your computer keeps the correct time even
+when you unplug it from the wall (unless of course you disconnect
+the battery). When the computer is first booted the appropriate
+BIOS function reads the time from the CMOS chip and sets the
+appropriate variables in system memory. BIOS&nbsp;also
+initializes the PIT&nbsp;chip, which then periodically (ie 18.2
+times a second)&nbsp;generates an interrupt to update the time
+variables. Messing with the PIT&nbsp;chip's frequency will affect
+the computer's time, but it will automatically be set again the
+next time the user boots and BIOS reads the CMOS chip again. You
+can also read the time from the CMOS chip directly if you want to
+set the correct time afterwards (details on how to do this are in
+<a
+href="ftp://x2ftp.oulu.fi/pub/msdos/programming/docs/helppc21.zip">HelpPC</a>).</p>
+
+<p>One very useful feature of the CMOS timer is that it's capable
+of generating regular interrupts. The frequency is fixed at
+1024Hz, but that's is more than enough for most applications, and
+in my experiments it has a negligable affect on overall system
+performance. Best of all, it leaves the PIT chip free to do other
+stuff. In fact, if you develop your application carefully you
+probably won't have to use the PIT chip at all (unless you need
+an extremely high resolution timer such as that required for
+CPU&nbsp;instruction timing)! I've found the CMOS timer to be
+safer, easier to implement and more reliable that PIT
+(particularly when running under a Win95 DOS&nbsp;shell).</p>
+
+<p><b>Ok, So How Do I&nbsp;Enable It?</b></p>
+
+<p>The following code will enable the interrupts:</p>
+
+<p><font color="#008080"><b><tt>outp(0x70, 0x0B); </tt></b></font></p>
+
+<p><font color="#008080"><b><tt>outp(0x71, inp(0x71) | 0x40);</tt></b></font></p>
+
+<p>The following code will disable the interrupts:</p>
+
+<p><font color="#008080"><b><tt>outp(0x70, 0x0B); </tt></b></font></p>
+
+<p><font color="#008080"><b><tt>outp(0x71, inp(0x71) &amp;0xBF);</tt></b></font></p>
+
+<p>When the timer is enabled it will trigger interrupt 0x70 at a
+rate of 1024Hz. Place a custom interrupt handler there to trap
+it. As always, make sure you install your custom handler before
+enabling the interrupt, get the old handler beforehand and be
+sure to call it in your own, and make sure you clean up after
+yourself when you're done.</p>
+
+<p>(Details on what the above registers actually do can be found
+in <a
+href="ftp://x2ftp.oulu.fi/pub/msdos/programming/docs/helppc21.zip">HelpPC</a>).</p>
+
+<p><b>How Would I&nbsp;Use This in a Real Application?</b></p>
+
+<p>I'm sure there are many ways to use this, here is one I would
+suggest. I'll assume that your application is doing real-time
+sound mixing and needs accurate timing for animation control.</p>
+
+<p>First of all I'd declare the following two variables:</p>
+
+<pre><font color="#008080"><b><tt>volatile unsigned LONG&nbsp;time; // indicates elapsed time</tt></b></font></pre>
+
+<pre><font color="#008080"><b><tt>int mixing=0;                // a boolean variable</tt></b></font></pre>
+
+<p>The <b>volatile</b> keyword is used to indicate to the
+compiler that it should <i>always</i> read the contents of the
+variable before using it (Most compilers often cache variables in
+registers in order to improve performance. This is unacceptable
+since the interrupt handler may change the value of the variable
+at any time).</p>
+
+<p>Next I&nbsp;would write an interrupt handler which looked
+something like this:</p>
+
+<pre><font color="#008080"><b>void interrupt handler(...) </b></font></pre>
+
+<pre><font color="#008080"><b>{</b></font></pre>
+
+<pre><font color="#008080"><b> time++;               // Update time value</b></font></pre>
+
+<pre><font color="#008080"><b> oldhandler();         // call the old handler</b></font></pre>
+
+<pre><font color="#008080"><b> // If we are not already mixing then we should try and mix some more</b></font></pre>
+
+<pre><font color="#008080"><b> if (!mixing)</b></font></pre>
+
+<pre><font color="#008080"><b> {</b></font></pre>
+
+<pre><font color="#008080"><b>  mixing = 1;    // Indicate that we are now mixing</b></font></pre>
+
+<pre><font color="#008080"><b>  _asm sti;      // Enable interrupts</b></font></pre>
+
+<pre><font color="#008080"><b>  MixSound();    // Go mix</b></font></pre>
+
+<pre><font color="#008080"><b>  mixing = 0;    // No longer mixing</b></font></pre>
+
+<pre><font color="#008080"><b> }</b></font></pre>
+
+<pre><font color="#008080"><b>}</b></font></pre>
+
+<p>This code starts by incrementing the <b>time</b> variable.
+Thus, the main application can simply read this variable at any
+time and divide by 1024 to get the number of seconds elapsed (or
+divide by 1.024 to get he number of milliseconds). The handler
+should then calls the old handler so that the interrupt is
+acknowledged (can also be accomplished with the
+outp(0x20,0x20)&nbsp;instruction). The handler then does sound
+mixing.</p>
+
+<p>You can see that the interrupt handler I've designed calls a
+function called MixSound(). I assume that this function
+determines whether there is any sound to be mixed into the
+playback buffer, and if so does whatever it needs to do. Now if
+this function mixes 1/2 a second of sound (say)&nbsp;at a time,
+then quite a few int 0x70's may be triggered while it is mixing.
+Normally our handler wouldn't be called for these, and we'd see a
+slight &quot;glitch&quot;&nbsp;in animation&quot; since the <b>time</b>
+variable would have skipped over a few interrupts.. For this
+purpose it is important that interrupts are enabled while the
+mixing is in progress, so that further int 0x70's interrupt the
+sound mixing function and are still processed (hence the <b>_asm
+sti</b> statement). The problem though is that this will cause
+the MixSound()&nbsp;function to be called again when it's already
+in the middle of mixing sound - the result of which is
+potentially disastrous. For this reason I&nbsp;maintain the <b>mixing</b>
+variable, so that while mixing is in progress the variable is set
+and the handler doesn't try to call the mixing routine again.</p>
+
+<p>I&nbsp;haven't actually tried using the CMOS timer for tripple
+buffering, but I&nbsp;imagine it would be pretty straightforward.
+If you are in a 60Hz display mode then retraces would occurr
+every 1024/60=17.0666 ticks or so (make sure you stay synched to
+the retrace, I'd probably start polling the VGA card after about
+15 ticks or so just to be safe). I'd use a loop similar to the
+MixSound() loop above, which would instead poll the vertical
+retrace bit waiting for the retrace to start. It should then read
+the current time value, calculate when the next retrace is due to
+start (current time +&nbsp;15)&nbsp;and then go do whatever it
+has to do.</p>
+
+<p>One last thing I'd like to point out is that the <b>time</b>
+variable I&nbsp;use is a 32-bit unsigned long. This means that
+it's value would wrap around to 0 after 4294967296 ticks, which
+is about once every seven weeks. I&nbsp;can't imagine very many
+programs which would be left running for this long, but it's best
+to keep it in mind anyway.</p>
+
+</body>
+</html>

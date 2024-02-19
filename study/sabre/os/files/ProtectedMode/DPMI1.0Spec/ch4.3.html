@@ -1,0 +1,209 @@
+
+
+At one point in its execution or another, every DPMI client runs on
+four different stacks: an application stack, a locked protected mode
+stack, a real mode stack, and a DPMI host stack. It is important to
+understand how the host maintains these stacks to fully understand the
+protected mode environment.<p>
+
+The <i>application stack</i> is the primary stack that the DPMI client
+executes on.  It is initially the real mode stack that the client was
+on when it switched into protected mode, although nothing prevents the
+client from switching protected mode stacks at any point after the
+initial mode switch.  Th application stack can be unlocked if desired.
+Software interrupts executed in protected mode are reflected on this
+stack.<p>
+
+The <i>locked protected mode stack</i> is provided by the DPMI host.
+The host automatically switches to this stack during servicing of
+hardware interrupts, software interrupts 1CH, 23H, and 24H, all
+exceptions, and during the execution of real mode callbacks.
+Subsequent nested interrupts or calls will not cause a stack switch.
+If the client switches off this stack, the new stack must also be
+locked and will become the protected mode stack until it switches
+back.  When the interrupt or call returns, the host switches back to
+the original protected mode stack.  Note that the host must provide a
+minimum of one 4 KB locked stack, and that software interrupts other
+than 1CH, 23H, and 24H do <i>not</i> use this stack.  (Refer Appendix
+D for descriptor usage rule of locked stack.)<p>
+
+The <i>real mode stack</i> is also provided by the DPMI host, and is
+usually located in the DPMI host data area allocated by the client
+prior to its initial switch into protected mode.  The real mode stack
+is at least 200H bytes in size and is always located in locked memory.
+Interrupts that are reflected to real mode, as well as calls to real
+mode interrupt handlers or procedures via <a
+href="api/310300.html">Int 31H Functions 0300H</a>, <a
+href="api/310301.html">0301H</a>, or <a
+href="api/310302.html">0302H</a>, will use this stack.<p>
+
+A <i>DPMI host stack</i> is only accessible to the DPMI host;  it is
+used by the host to handle interrupts and exceptions that occur while
+the host is executing on behalf of the client.  For example, when the
+client requests a mode switch, the original SS:(E)SP of the protected
+mode program can be saved on the host stack while the DPMI host
+switches onto the locked protected mode stack.<p>
+
+There are four different ways that a client can force a mode switch
+between protected and real mode:
+
+<ul>
+
+<li>  Execute the default interrupt reflection handler (all interrupts
+other than Int 31H and Int 21H Function 4CH are initialized by the
+DPMI host to point to a handler that reflects the interrupt to real
+mode);<p>
+
+<li> Use the DPMI translation services (<a href="api/310303.html">Int
+31H Function 0303H</a>, <a href="api/310301.html">0301H</a>, and <a
+href="api/310302.html">0302H</a>) to call a real mode interrupt
+handler or procedure;<p>
+
+<li> Allocate a real mode callback address with <a
+href="api/310303.html">Int 31H Function 0303H</a>; when a real mode
+program transfer control to the callback address, the DPMI host will
+switch the CPU from real mode into protected mode;<p>
+
+<li> Use the DPMI raw mode switch functions, whose addresses are
+obtained with <a href="api/310306.html">Int 31H Function 0306H</a>.<p>
+
+</ul>
+
+All of these mode switches except for the raw mode switches may save
+some information on the DPMI host's stack.  This means that clients
+should not terminate within nested mode switches unless they are using
+the raw mode switching services.  However, even clients that use raw
+mode switches should not attempt to terminate from a hardware
+interrupt or exception handler or real mode callback because the DPMI
+host performs automatic mode and stack switching during these
+events.<p>
+
+Clients that use the raw mode switch services and perform nested mode
+switches must use the DPMI state save/restore functions (whose
+addresses may be obtained with <a href="api/310305.html">Int 31H
+Function 0305H</a>), causing the host to maintain information on the
+"other" mode's current state.  This information includes the CS:(E)IP,
+SS:(E)SP, and other segment register contents; values that the client
+has no way to access directly.  For example, during the service of a
+hardware interrupt that occurs in real mode, the DPMI host may
+preserve the real mode CS:(E)IP, SS:(E)SP, and segment registers on
+the host stack, causing a return to the wrong address when the handler
+finally executes the IRET.<p>
+
+<b>Example:</b>  This example illustrates code that saves the state of
+the real mode registers using the DPMI save/restore function, switches
+to real mode using the raw mode switch service, issues a DOS call to
+open a file, switches back to protected mode using the raw mode switch
+service, and restores the state of the real mode registers using the
+save/restore function.  The protected mode registers are saved by
+pushing them on the stack in the usual fashion.  The example is
+intended only to show the logical sequence of execution; in a real
+program, the real mode and protection mode variables and functions
+would likely reside in separate segments.
+
+<pre>
+
+savsiz	dw	0			; size of state information
+realsrs	dd	0			; far pointer to real mode
+					; save/restore state entry point
+protsrs	dd	0			; far pointer to protected mode
+					; save/restore state entry point
+realrms	dd	0			; far pointer to real mode
+					; raw mode switch entry point
+protrms	dd	0			; far pointer to protected mode
+					; raw mode switch entry point
+
+protdw	dw	0			; placeholder for protected mode DS
+protip	dw	0			; placeholder for protected mode IP
+protcs	dw	0			; placeholder for protected mode CS
+protsp	dw	0			; placeholder for protected mode SP
+protss	dw	0			; placeholder for protected mode SS
+	.
+	.
+	.
+
+					; this code is executed during
+					; application initialization
+
+	mov	ax,305h			; get addresses of DPMI host's
+	<a href="api/310305.html">int	31h</a>			; state save/restore entry points
+	mov	savsiz,ax		; save state info buffer size
+	mov	word ptr realsrs,cx	; BX:CX = state save/restore
+	mov	word ptr realsrs+2,bx	; entry point for real mode
+	mov	word ptr protsrs,di	; SI:DI = state save/restore
+	mov	word ptr protsrs+2,si	; entry point for protected mode
+
+	mov	ax,306h			; get address of DPMI host's
+	<a href="api/310306.html">int	31h</a>			; raw mode switch entry points
+	mov	savsiz,ax		; save state info buffer size
+	mov	word ptr realrms,cx	; BX:CX = raw mode switch
+	mov	word ptr realrms+2,bx	; entry piont for real mode
+	mov	word ptr protrms,di	; SI:DI = raw mode switch
+	mov	word ptr protrms+2,si	; entry point for protected mode
+					; must also initialize the
+					; sp and realss variables
+	.
+	.
+	.
+
+					; this code is executed during
+					; program execution
+callopenfile proc
+	pusha				; save protected mode registers
+	push	es
+
+	sub	sp,savsiz		; allocate space on current stack
+	mov	di,sp			; to save real mode state
+	mov	ax,ss			; set ES:DI = address of buffer
+	mov	es,ax			; to receive state information
+	xor	al,al			; AL=0 for save state request
+	call	protsrs			; call state save/restore routine
+
+	mov	protds,ds		; save current DS for switch back
+	mov	protss,ss		; save current SS
+	mov	protsp,sp		; save current SP
+	mov	protip,offset returnfromreal ; save return IP
+	mov	protcs,cs		; save return CS
+
+	mov	ax,seg filename		; load real mode DS
+	mov	ds,realss		; load real mode SS
+	mov	bx,realsp		; load real mode SP
+	mov	si,seg openfile		; load real mode CS
+	mov	di,offset openfile	; load real mode IP
+	
+	jmp	protrms			; go to openfile
+
+returnfromreal:
+	mov	ax,ss			; let ES:DI = address of buffer
+	mov	es,ax			; holding state information
+	mov	di,sp
+	mov	al,1			; AL=1 to restore state
+	call	protsrs			; call state restore routine
+	add	sp,savsiz		; discard state info buffer
+	pop	es
+	popa				; restore protected mode registers
+	ret
+callopenfile endp
+
+	.
+	.
+	.
+	
+					; this code is executed in real mode
+openfile proc
+	mov	dx,offset filename
+	mov	ah,3dh			; issue Open File DOS call
+	int	21h
+	jc	openerr			; check for error (not shown here)
+	mov	filehandle,bx		; save file handle
+	mov	ax,protds		; load protected mode DS
+	mov	dx,protss		; load protected mode SS
+	mov	bx,protsp		; load protected mode SP
+	mov	si,protcs		; load protected mode CS
+	mov	di,protip		; load protected mode IP
+	jmp	realrms
+
+openfile endp
+</pre>
+
+

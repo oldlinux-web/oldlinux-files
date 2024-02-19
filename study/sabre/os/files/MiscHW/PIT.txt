@@ -1,0 +1,291 @@
+         ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+         ³ Programming the Intel 8253 Programmable Interval Timer ³
+         ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+              Written for the PC-GPE by Mark Feldman
+              e-mail address : u914097@student.canberra.edu.au
+                               myndale@cairo.anu.edu.au
+
+ÚÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+³ Disclaimer ³
+ÀÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+I assume no responsibility whatsoever for any effect that this file, the
+information contained therein or the use thereof has on you, your sanity,
+computer, spouse, children, pets or anything else related to you or your
+existance. No warranty is provided nor implied with this information.
+
+ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+³ Introduction ³
+ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+The PIT chip has 3 channels, each of which are responsible for a different
+task on the PC:
+
+Channel 0 is responsible for updating the system clock. It is usually
+programmed to generate around 18.2 clock ticks a second. An interrupt 8 is
+generated for every clock tick.
+
+Channel 1 controls DMA memory refreshing. DRAM is cheap, but it's memory
+cells must be periodically refreshed or they quickly lose their charge. The
+PIT chip is responsible for sending signals to the DMA chip to refresh
+memory. Most machines are refreshed at a higher rate than neccesary, and
+reprogramming channel 1 to refresh memory at a slower rate can sometime speed
+up system performance. I got a 2.5 MHz speed-up when I did it to my 286, but
+it didn't seem to work on my 486SUX33.
+
+Channel 2 is connected to the speaker. It's normally programmed to generate
+a square wave so a continuous tone is heard. Reprogramming it for "Interrupt
+on Terminal Count" mode is a nifty trick which can be used to play 8-bit
+samples from the PC speaker.
+
+Each channel has a counter which counts down. The PIT input frequency is
+1193181 ($1234DD) Hz. Each counter decrements once for every input clock
+cycle. "Terminal Count", mentioned several times below, is when the counter
+reaches 0.
+
+Loading the counters with 0 has the same effect as loading them with 10000h,
+and is the highest count possible (approx 18.2 Hz).
+
+ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+³ The PIT Ports ³
+ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+The PIT chip is hooked up to the Intel CPU through the following ports:
+
+                ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+                ³ Port   Description                    ³
+                ÃÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´
+                ³ 40h    Channel 0 counter (read/write) ³
+                ³ 41h    Channel 1 counter (read/write) ³
+                ³ 42h    Channel 2 counter (read/write) ³
+                ³ 43h    Control Word (write only)      ³
+                ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+³ The Control Word ³
+ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+              ÚÄÄÄÂÄÄÄÂÄÄÄÂÄÄÄÂÄÄÄÂÄÄÄÂÄÄÄÂÄÄÄ¿
+              ³ 7 ³ 6 ³ 5 ³ 4 ³ 3 ³ 2 ³ 1 ³ 0 ³
+              ÀÄÄÄÁÄÄÄÁÄÄÄÁÄÄÄÁÄÄÄÁÄÄÄÁÄÄÄÁÄÄÄÙ
+                ÀÄÂÄÙ   ÀÄÂÄÙ   ÀÄÄÄÂÄÄÄÙ   ÀÄÄ BCD 0 - Binary 16 bit
+                  ³       ³         ³               1 - BCD 4 decades
+ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄ¿  ³         ³
+³ Select Counter       ³  ³         ÀÄÄÄÄÄÄÄÄÄÄ Mode Number 0 - 5
+³ 0 - Select Counter 0 ³  ³
+³ 1 - Select Counter 1 ³  ³         ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+³ 2 - Select Counter 2 ³  ³         ³ Read/Load                  ³
+ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ  ³         ³ 0 - Counter Latching       ³
+                          ÀÄÄÄÄÄÄÄÄÄ´ 1 - Read/Load LSB only     ³
+                                    ³ 2 - Read/Load MSB only     ³
+                                    ³ 3 - Read/Load LSB then MSB ³
+                                    ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+³ The PIT Modes ³
+ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+The PIT is capable of operating in 6 different modes:
+
+MODE 0 - Interrupt on Terminal Count
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+When this mode is set the output will be low. Loading the count register
+with a value will cause the output to remain low and the counter will start
+counting down. When the counter reaches 0 the output will go high and remain
+high until the counter is reprogrammed. The counter will continue to count
+down after terminal count is reached. Writing a value to the count register
+during counting will stop the counter, writing a second byte starts the
+new count.
+
+MODE 1 - Programmable One-Shot
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+The output will go low once the counter has been loaded, and will go high
+once terminal count has been reached. Once terminal count has been reached
+it can be triggered again.
+
+MODE 2 - Rate Generator
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+A standard divide-by-N counter. The output will be low for one period of the
+input clock then it will remain high for the time in the counter. This cycle
+will keep repeating.
+
+MODE 3 - Square Wave Rate Generator
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+Similar to mode 2, except the ouput will remain high until one half of the
+count has been completed and then low for the other half.
+
+MODE 4 - Software Triggered Strobe
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+After the mode is set the output will be high. Once the count is loaded it
+will start counting, and will go low once terminal count is reached.
+
+MODE 5 - Hardware Triggered Strobe
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+Hardware triggered strobe. Similar to mode 5, but it waits for a hardware
+trigger signal before starting to count.
+
+Modes 1 and 5 require the PIT gate pin to go high in order to start
+counting. I'm not sure if this has been implemented in the PC.
+
+ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+³ Counter Latching ³
+ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+Setting the Read/Load field in the Control Word to 0 (Counter Latch) causes
+the appropriate channel to go into a sort of "lap" mode, the counter keeps
+counting down internally but it appears to have stopped if you read it's
+values through the channel's counter port. In this way you get a stable count
+value when you read the counter. Once you send a counter latch command you
+*must* then read the counter.
+
+ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+³ Doing Something Useful ³
+ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+Ok, so let's say we are writing a game and we need to have a certain
+routine called 100 times a second and we want to use channel 0 to do all
+this timing in the background while the main program is busy doing other
+stuff.
+
+The first thing we have to realise is that BIOS usually uses channel 0 to
+keep track of the time, so we have 3 options:
+
+1) Have our own routine handle all timer interrupts. This will effectively
+   stop the PC clock and the system time will be wrong from that point on.
+   The clock will be reset to the proper time the next time the computer
+   is turned off and on again, but it's not a nice thing to do to someone
+   unless you really have to.
+
+2) Have our routine do whatever it has to do and then call the BIOS handler.
+   This would be fine if our program was receiving the usual 18.2 ticks
+   a second, but we need 100 a second and calling the BIOS handler for every
+   tick will speed up the system time. Same net result as case 1.
+
+3) Have our routine do the interrupt handling and call the BIOS handler only
+   when it needs to be updated! BINGO!
+
+The PIT chip runs at a freqency of 1234DDh Hz, and normally the BIOS timer 
+interrupt handler is called for every 10000h cycles of this clock. First we 
+need to reprogram channel 0 to generate an interrupt 100 times a second, ie 
+every 1234DDh / 100 = 11931 cycles. The best thing to do is keep a running 
+total of the number of clock ticks which have occurred. For every interrupt 
+generated we will add 11931 to this total. When it reaches 10000h our handler 
+will know it's time to tell BIOS about it and do so.
+
+So let's get into some good old Pascal code. First we'll define a few
+constants and variables our program will need:
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+Uses Crt, Dos;
+
+{$F+} { Force far mode, a good idea when mucking around with interrupts }
+
+const TIMERINTR = 8;
+       PIT_FREQ = $1234DD;
+
+var BIOSTimerHandler : procedure;
+    clock_ticks, counter : longint;
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+The clock_ticks variable will keep track of how many cycles the PIT has
+had, it'll be intialised to 0. The counter variable will hold the new
+channel 0 counter value. We'll also be adding this number to clock_ticks
+every time our handler is called.
+
+Next we need to do some initialization:
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+procedure SetTimer(TimerHandler : pointer; frequency : word);
+begin
+
+  { Do some initialization }
+  clock_ticks := 0;
+  counter := $1234DD div frequency;
+
+  { Store the current BIOS handler and set up our own }
+  GetIntVec(TIMERINTR, @BIOSTimerHandler);
+  SetIntVec(TIMERINTR, TimerHandler);
+
+  { Set the PIT channel 0 frequency }
+  Port[$43] := $34;
+  Port[$40] := counter mod 256;
+  Port[$40] := counter div 256;
+end;
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+Pretty straightforward stuff. We save the address of the BIOS handler,
+install our own, set up the variables we'll use and program PIT channel 0
+for the divide-by-N mode at the frequency we need.
+
+This next bit is what we need to do once our program is finished. It just
+resets everything back to normal.
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+procedure CleanUpTimer;
+begin
+  { Restore the normal clock frequency }
+  Port[$43] := $34;
+  Port[$40] := 0;
+  Port[$40] := 0;
+
+  { Restore the normal ticker handler }
+  SetIntVec(TIMERINTR, @BIOSTimerHandler);
+end;
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+
+Ok, here's our actual handler. This particular handler just writes an
+asterix (*) to the screen. Then it does the checks to see if the BIOS
+handler should be called. If so it calls it, if not it acknowledges the
+interrupt itself.
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+
+procedure Handler; Interrupt;
+begin
+
+  { DO WHATEVER WE WANT TO DO IN HERE }
+  Write('*');
+
+  { Adjust the count of clock ticks }
+  clock_ticks := clock_ticks + counter;
+
+  { Is it time for the BIOS handler to do it's thang? }
+  if clock_ticks >= $10000 then
+    begin
+
+      { Yep! So adjust the count and call the BIOS handler }
+      clock_ticks := clock_ticks - $10000;
+
+      asm pushf end;
+      BIOSTimerHandler;
+    end
+
+  { If not then just acknowledge the interrupt }
+  else
+    Port[$20] := $20;
+end;
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+And finally our calling program. What follows is just an example program
+which sets everything up, waits for us to press a key and then cleans up
+after itself.
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+begin
+  SetTimer(Addr(Handler), 100);
+  ReadKey;
+  CleanUpTimer;
+end.
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+
+ÚÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+³ References ³
+ÀÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+Title : "Peripheral Components"
+Publisher : Intel Corporation
+ISBN : 1-55512-127-6

@@ -1,0 +1,1110 @@
+<HTML>
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<!-- Created on October, 26  2002 by texi2html 1.64 -->
+<!-- 
+Written by: Lionel Cons <Lionel.Cons@cern.ch> (original author)
+            Karl Berry  <karl@freefriends.org>
+            Olaf Bachmann <obachman@mathematik.uni-kl.de>
+            and many others.
+Maintained by: Olaf Bachmann <obachman@mathematik.uni-kl.de>
+Send bugs and suggestions to <texi2html@mathematik.uni-kl.de>
+ 
+-->
+<HEAD>
+<TITLE>GDB Internals: Coding</TITLE>
+
+<META NAME="description" CONTENT="GDB Internals: Coding">
+<META NAME="keywords" CONTENT="GDB Internals: Coding">
+<META NAME="resource-type" CONTENT="document">
+<META NAME="distribution" CONTENT="global">
+<META NAME="Generator" CONTENT="texi2html 1.64">
+
+</HEAD>
+
+<BODY LANG="" BGCOLOR="#FFFFFF" TEXT="#000000" LINK="#0000FF" VLINK="#800080" ALINK="#FF0000">
+
+<A NAME="SEC110"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_12.html#SEC109"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC111"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_2.html#SEC2"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_14.html#SEC126"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H1> 13. Coding </H1>
+<!--docid::SEC110::-->
+<P>
+
+This chapter covers topics that are lower-level than the major
+algorithms of GDB.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC111"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC110"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC112"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC110"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC110"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_14.html#SEC126"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H2> 13.1 Cleanups </H2>
+<!--docid::SEC111::-->
+<P>
+
+Cleanups are a structured way to deal with things that need to be done
+later.
+</P><P>
+
+When your code does something (e.g., <CODE>xmalloc</CODE> some memory, or
+<CODE>open</CODE> a file) that needs to be undone later (e.g., <CODE>xfree</CODE>
+the memory or <CODE>close</CODE> the file), it can make a cleanup.  The
+cleanup will be done at some future point: when the command is finished
+and control returns to the top level; when an error occurs and the stack
+is unwound; or when your code decides it's time to explicitly perform
+cleanups.  Alternatively you can elect to discard the cleanups you
+created.
+</P><P>
+
+Syntax:
+</P><P>
+
+<DL COMPACT>
+<DT><CODE>struct cleanup *<VAR>old_chain</VAR>;</CODE>
+<DD>Declare a variable which will hold a cleanup chain handle.
+<P>
+
+<A NAME="IDX496"></A>
+<DT><CODE><VAR>old_chain</VAR> = make_cleanup (<VAR>function</VAR>, <VAR>arg</VAR>);</CODE>
+<DD>Make a cleanup which will cause <VAR>function</VAR> to be called with
+<VAR>arg</VAR> (a <CODE>char *</CODE>) later.  The result, <VAR>old_chain</VAR>, is a
+handle that can later be passed to <CODE>do_cleanups</CODE> or
+<CODE>discard_cleanups</CODE>.  Unless you are going to call
+<CODE>do_cleanups</CODE> or <CODE>discard_cleanups</CODE>, you can ignore the result
+from <CODE>make_cleanup</CODE>.
+<P>
+
+<A NAME="IDX497"></A>
+<DT><CODE>do_cleanups (<VAR>old_chain</VAR>);</CODE>
+<DD>Do all cleanups added to the chain since the corresponding
+<CODE>make_cleanup</CODE> call was made.
+<P>
+
+<A NAME="IDX498"></A>
+<DT><CODE>discard_cleanups (<VAR>old_chain</VAR>);</CODE>
+<DD>Same as <CODE>do_cleanups</CODE> except that it just removes the cleanups from
+the chain and does not call the specified functions.
+</DL>
+<P>
+
+Cleanups are implemented as a chain.  The handle returned by
+<CODE>make_cleanups</CODE> includes the cleanup passed to the call and any
+later cleanups appended to the chain (but not yet discarded or
+performed).  E.g.:
+</P><P>
+
+<TABLE><tr><td>&nbsp;</td><td class=smallexample><FONT SIZE=-1><pre>make_cleanup (a, 0); 
+{
+  struct cleanup *old = make_cleanup (b, 0); 
+  make_cleanup (c, 0)
+  ...
+  do_cleanups (old);
+}
+</FONT></pre></td></tr></table></P><P>
+
+will call <CODE>c()</CODE> and <CODE>b()</CODE> but will not call <CODE>a()</CODE>.  The
+cleanup that calls <CODE>a()</CODE> will remain in the cleanup chain, and will
+be done later unless otherwise discarded.</P><P>
+
+Your function should explicitly do or discard the cleanups it creates.
+Failing to do this leads to non-deterministic behavior since the caller
+will arbitrarily do or discard your functions cleanups.  This need leads
+to two common cleanup styles.
+</P><P>
+
+The first style is try/finally.  Before it exits, your code-block calls
+<CODE>do_cleanups</CODE> with the old cleanup chain and thus ensures that your
+code-block's cleanups are always performed.  For instance, the following
+code-segment avoids a memory leak problem (even when <CODE>error</CODE> is
+called and a forced stack unwind occurs) by ensuring that the
+<CODE>xfree</CODE> will always be called:
+</P><P>
+
+<TABLE><tr><td>&nbsp;</td><td class=smallexample><FONT SIZE=-1><pre>struct cleanup *old = make_cleanup (null_cleanup, 0);
+data = xmalloc (sizeof blah);
+make_cleanup (xfree, data);
+... blah blah ...
+do_cleanups (old);
+</FONT></pre></td></tr></table></P><P>
+
+The second style is try/except.  Before it exits, your code-block calls
+<CODE>discard_cleanups</CODE> with the old cleanup chain and thus ensures that
+any created cleanups are not performed.  For instance, the following
+code segment, ensures that the file will be closed but only if there is
+an error:
+</P><P>
+
+<TABLE><tr><td>&nbsp;</td><td class=smallexample><FONT SIZE=-1><pre>FILE *file = fopen ("afile", "r");
+struct cleanup *old = make_cleanup (close_file, file);
+... blah blah ...
+discard_cleanups (old);
+return file;
+</FONT></pre></td></tr></table></P><P>
+
+Some functions, e.g. <CODE>fputs_filtered()</CODE> or <CODE>error()</CODE>, specify
+that they "should not be called when cleanups are not in place".  This
+means that any actions you need to reverse in the case of an error or
+interruption must be on the cleanup chain before you call these
+functions, since they might never return to your code (they
+<SAMP>`longjmp'</SAMP> instead).
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC112"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC111"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC113"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC113"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC110"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_14.html#SEC126"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H2> 13.2 Per-architecture module data </H2>
+<!--docid::SEC112::-->
+<P>
+
+The multi-arch framework includes a mechanism for adding module specific
+per-architecture data-pointers to the <CODE>struct gdbarch</CODE> architecture
+object.
+</P><P>
+
+A module registers one or more per-architecture data-pointers using the
+function <CODE>register_gdbarch_data</CODE>:
+</P><P>
+
+<A NAME="IDX499"></A>
+<DL>
+<DT><U>Function:</U> struct <B>gdbarch_data</B> <I>*register_gdbarch_data (gdbarch_data_init_ftype *<VAR>init</VAR>, gdbarch_data_free_ftype *<VAR>free</VAR>)</I>
+<DD></P><P>
+
+The <VAR>init</VAR> function is used to obtain an initial value for a
+per-architecture data-pointer.  The function is called, after the
+architecture has been created, when the data-pointer is still
+uninitialized (<CODE>NULL</CODE>) and its value has been requested via a call
+to <CODE>gdbarch_data</CODE>.  A data-pointer can also be initialize
+explicitly using <CODE>set_gdbarch_data</CODE>.
+</P><P>
+
+The <VAR>free</VAR> function is called when a data-pointer needs to be
+destroyed.  This occurs when either the corresponding <CODE>struct
+gdbarch</CODE> object is being destroyed or when <CODE>set_gdbarch_data</CODE> is
+overriding a non-<CODE>NULL</CODE> data-pointer value.
+</P><P>
+
+The function <CODE>register_gdbarch_data</CODE> returns a <CODE>struct
+gdbarch_data</CODE> that is used to identify the data-pointer that was added
+to the module.
+</P><P>
+
+</DL>
+</P><P>
+
+A typical module has <CODE>init</CODE> and <CODE>free</CODE> functions of the form:
+</P><P>
+
+<TABLE><tr><td>&nbsp;</td><td class=smallexample><FONT SIZE=-1><pre>static struct gdbarch_data *nozel_handle;
+static void *
+nozel_init (struct gdbarch *gdbarch)
+{
+  struct nozel *data = XMALLOC (struct nozel);
+  <small>...</small>
+  return data;
+}
+<small>...</small>
+static void
+nozel_free (struct gdbarch *gdbarch, void *data)
+{
+  xfree (data);
+}
+</FONT></pre></td></tr></table></P><P>
+
+Since uninitialized (<CODE>NULL</CODE>) data-pointers are initialized
+on-demand, an <CODE>init</CODE> function is free to call other modules that
+use data-pointers.  Those modules data-pointers will be initialized as
+needed.  Care should be taken to ensure that the <CODE>init</CODE> call graph
+does not contain cycles.
+</P><P>
+
+The data-pointer is registered with the call:
+</P><P>
+
+<TABLE><tr><td>&nbsp;</td><td class=smallexample><FONT SIZE=-1><pre>void
+_initialize_nozel (void)
+{
+  nozel_handle = register_gdbarch_data (nozel_init, nozel_free);
+<small>...</small>
+</FONT></pre></td></tr></table></P><P>
+
+The per-architecture data-pointer is accessed using the function:
+</P><P>
+
+<A NAME="IDX500"></A>
+<DL>
+<DT><U>Function:</U> void <B>*gdbarch_data</B> <I>(struct gdbarch *<VAR>gdbarch</VAR>, struct gdbarch_data *<VAR>data_handle</VAR>)</I>
+<DD>Given the architecture <VAR>arch</VAR> and module data handle
+<VAR>data_handle</VAR> (returned by <CODE>register_gdbarch_data</CODE>, this
+function returns the current value of the per-architecture data-pointer.
+</DL>
+</P><P>
+
+The non-<CODE>NULL</CODE> data-pointer returned by <CODE>gdbarch_data</CODE> should
+be saved in a local variable and then used directly:
+</P><P>
+
+<TABLE><tr><td>&nbsp;</td><td class=smallexample><FONT SIZE=-1><pre>int
+nozel_total (struct gdbarch *gdbarch)
+{
+  int total;
+  struct nozel *data = gdbarch_data (gdbarch, nozel_handle);
+  <small>...</small>
+  return total;
+}
+</FONT></pre></td></tr></table></P><P>
+
+It is also possible to directly initialize the data-pointer using:
+</P><P>
+
+<A NAME="IDX501"></A>
+<DL>
+<DT><U>Function:</U> void <B>set_gdbarch_data</B> <I>(struct gdbarch *<VAR>gdbarch</VAR>, struct gdbarch_data *handle, void *<VAR>pointer</VAR>)</I>
+<DD>Update the data-pointer corresponding to <VAR>handle</VAR> with the value of
+<VAR>pointer</VAR>.  If the previous data-pointer value is non-NULL, then it
+is freed using data-pointers <VAR>free</VAR> function.
+</DL>
+</P><P>
+
+This function is used by modules that require a mechanism for explicitly
+setting the per-architecture data-pointer during architecture creation:
+</P><P>
+
+<TABLE><tr><td>&nbsp;</td><td class=smallexample><FONT SIZE=-1><pre>/* Called during architecture creation.  */
+extern void
+set_gdbarch_nozel (struct gdbarch *gdbarch,
+                   int total)
+{
+  struct nozel *data = XMALLOC (struct nozel);
+  <small>...</small>
+  set_gdbarch_data (gdbarch, nozel_handle, nozel);
+}
+</FONT></pre></td></tr></table></P><P>
+
+<TABLE><tr><td>&nbsp;</td><td class=smallexample><FONT SIZE=-1><pre>/* Default, called when nozel not set by set_gdbarch_nozel().  */
+static void *
+nozel_init (struct gdbarch *gdbarch)
+{
+  struct nozel *default_nozel = XMALLOC (struc nozel);
+  <small>...</small>
+  return default_nozel;
+}
+</FONT></pre></td></tr></table></P><P>
+
+<TABLE><tr><td>&nbsp;</td><td class=smallexample><FONT SIZE=-1><pre>void
+_initialize_nozel (void)
+{
+  nozel_handle = register_gdbarch_data (nozel_init, NULL);
+  <small>...</small>
+</FONT></pre></td></tr></table></P><P>
+
+Note that an <CODE>init</CODE> function still needs to be registered.  It is
+used to initialize the data-pointer when the architecture creation phase
+fail to set an initial value.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC113"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC112"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC114"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC114"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC110"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_14.html#SEC126"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H2> 13.3 Wrapping Output Lines </H2>
+<!--docid::SEC113::-->
+<P>
+
+<A NAME="IDX502"></A>
+Output that goes through <CODE>printf_filtered</CODE> or <CODE>fputs_filtered</CODE>
+or <CODE>fputs_demangled</CODE> needs only to have calls to <CODE>wrap_here</CODE>
+added in places that would be good breaking points.  The utility
+routines will take care of actually wrapping if the line width is
+exceeded.
+</P><P>
+
+The argument to <CODE>wrap_here</CODE> is an indentation string which is
+printed <EM>only</EM> if the line breaks there.  This argument is saved
+away and used later.  It must remain valid until the next call to
+<CODE>wrap_here</CODE> or until a newline has been printed through the
+<CODE>*_filtered</CODE> functions.  Don't pass in a local variable and then
+return!
+</P><P>
+
+It is usually best to call <CODE>wrap_here</CODE> after printing a comma or
+space.  If you call it before printing a space, make sure that your
+indentation properly accounts for the leading space that will print if
+the line wraps there.
+</P><P>
+
+Any function or set of functions that produce filtered output must
+finish by printing a newline, to flush the wrap buffer, before switching
+to unfiltered (<CODE>printf</CODE>) output.  Symbol reading routines that
+print warnings are a good example.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC114"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC113"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC115"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC110"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC110"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_14.html#SEC126"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H2> 13.4 GDB Coding Standards </H2>
+<!--docid::SEC114::-->
+<P>
+
+GDB follows the GNU coding standards, as described in
+<TT>`etc/standards.texi'</TT>.  This file is also available for anonymous
+FTP from GNU archive sites.  GDB takes a strict interpretation
+of the standard; in general, when the GNU standard recommends a practice
+but does not require it, GDB requires it.
+</P><P>
+
+GDB follows an additional set of coding standards specific to
+GDB, as described in the following sections.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC115"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC114"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC116"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC110"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC114"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_14.html#SEC126"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 13.4.1 ISO C </H3>
+<!--docid::SEC115::-->
+<P>
+
+GDB assumes an ISO/IEC 9899:1990 (a.k.a. ISO C90) compliant
+compiler.
+</P><P>
+
+GDB does not assume an ISO C or POSIX compliant C library.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC116"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC115"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC117"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC117"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC114"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_14.html#SEC126"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 13.4.2 Memory Management </H3>
+<!--docid::SEC116::-->
+<P>
+
+GDB does not use the functions <CODE>malloc</CODE>, <CODE>realloc</CODE>,
+<CODE>calloc</CODE>, <CODE>free</CODE> and <CODE>asprintf</CODE>.
+</P><P>
+
+GDB uses the functions <CODE>xmalloc</CODE>, <CODE>xrealloc</CODE> and
+<CODE>xcalloc</CODE> when allocating memory.  Unlike <CODE>malloc</CODE> et.al.
+these functions do not return when the memory pool is empty.  Instead,
+they unwind the stack using cleanups.  These functions return
+<CODE>NULL</CODE> when requested to allocate a chunk of memory of size zero.
+</P><P>
+
+<EM>Pragmatics: By using these functions, the need to check every
+memory allocation is removed.  These functions provide portable
+behavior.</EM>
+</P><P>
+
+GDB does not use the function <CODE>free</CODE>.
+</P><P>
+
+GDB uses the function <CODE>xfree</CODE> to return memory to the
+memory pool.  Consistent with ISO-C, this function ignores a request to
+free a <CODE>NULL</CODE> pointer.
+</P><P>
+
+<EM>Pragmatics: On some systems <CODE>free</CODE> fails when passed a
+<CODE>NULL</CODE> pointer.</EM>
+</P><P>
+
+GDB can use the non-portable function <CODE>alloca</CODE> for the
+allocation of small temporary values (such as strings).
+</P><P>
+
+<EM>Pragmatics: This function is very non-portable.  Some systems
+restrict the memory being allocated to no more than a few kilobytes.</EM>
+</P><P>
+
+GDB uses the string function <CODE>xstrdup</CODE> and the print
+function <CODE>xasprintf</CODE>.
+</P><P>
+
+<EM>Pragmatics: <CODE>asprintf</CODE> and <CODE>strdup</CODE> can fail.  Print
+functions such as <CODE>sprintf</CODE> are very prone to buffer overflow
+errors.</EM>
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC117"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC116"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC118"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC118"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC114"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_14.html#SEC126"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 13.4.3 Compiler Warnings </H3>
+<!--docid::SEC117::-->
+<P>
+
+With few exceptions, developers should include the configuration option
+<SAMP>`--enable-gdb-build-warnings=,-Werror'</SAMP> when building GDB.
+The exceptions are listed in the file <TT>`gdb/MAINTAINERS'</TT>.
+</P><P>
+
+This option causes GDB (when built using GCC) to be compiled
+with a carefully selected list of compiler warning flags.  Any warnings
+from those flags being treated as errors.
+</P><P>
+
+The current list of warning flags includes:
+</P><P>
+
+<DL COMPACT>
+<DT><SAMP>`-Wimplicit'</SAMP>
+<DD>Since GDB coding standard requires all functions to be declared
+using a prototype, the flag has the side effect of ensuring that
+prototyped functions are always visible with out resorting to
+<SAMP>`-Wstrict-prototypes'</SAMP>.
+<P>
+
+<DT><SAMP>`-Wreturn-type'</SAMP>
+<DD>Such code often appears to work except on instruction set architectures
+that use register windows.
+<P>
+
+<DT><SAMP>`-Wcomment'</SAMP>
+<DD><P>
+
+<DT><SAMP>`-Wtrigraphs'</SAMP>
+<DD><P>
+
+<DT><SAMP>`-Wformat'</SAMP>
+<DD>Since GDB uses the <CODE>format printf</CODE> attribute on all
+<CODE>printf</CODE> like functions this checks not just <CODE>printf</CODE> calls
+but also calls to functions such as <CODE>fprintf_unfiltered</CODE>.
+<P>
+
+<DT><SAMP>`-Wparentheses'</SAMP>
+<DD>This warning includes uses of the assignment operator within an
+<CODE>if</CODE> statement.
+<P>
+
+<DT><SAMP>`-Wpointer-arith'</SAMP>
+<DD><P>
+
+<DT><SAMP>`-Wuninitialized'</SAMP>
+<DD></DL>
+<P>
+
+<EM>Pragmatics: Due to the way that GDB is implemented most
+functions have unused parameters.  Consequently the warning
+<SAMP>`-Wunused-parameter'</SAMP> is precluded from the list.  The macro
+<CODE>ATTRIBUTE_UNUSED</CODE> is not used as it leads to false negatives ---
+it is not an error to have <CODE>ATTRIBUTE_UNUSED</CODE> on a parameter that
+is being used.  The options <SAMP>`-Wall'</SAMP> and <SAMP>`-Wunused'</SAMP> are also
+precluded because they both include <SAMP>`-Wunused-parameter'</SAMP>.</EM>
+</P><P>
+
+<EM>Pragmatics: GDB has not simply accepted the warnings
+enabled by <SAMP>`-Wall -Werror -W...'</SAMP>.  Instead it is selecting warnings
+when and where their benefits can be demonstrated.</EM>
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC118"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC117"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC119"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC119"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC114"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_14.html#SEC126"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 13.4.4 Formatting </H3>
+<!--docid::SEC118::-->
+<P>
+
+<A NAME="IDX503"></A>
+The standard GNU recommendations for formatting must be followed
+strictly.
+</P><P>
+
+A function declaration should not have its name in column zero.  A
+function definition should have its name in column zero.
+</P><P>
+
+<TABLE><tr><td>&nbsp;</td><td class=smallexample><FONT SIZE=-1><pre>/* Declaration */
+static void foo (void);
+/* Definition */
+void
+foo (void)
+{
+}
+</FONT></pre></td></tr></table></P><P>
+
+<EM>Pragmatics: This simplifies scripting.  Function definitions can
+be found using <SAMP>`^function-name'</SAMP>.</EM>
+</P><P>
+
+There must be a space between a function or macro name and the opening
+parenthesis of its argument list (except for macro definitions, as
+required by C).  There must not be a space after an open paren/bracket
+or before a close paren/bracket.
+</P><P>
+
+While additional whitespace is generally helpful for reading, do not use
+more than one blank line to separate blocks, and avoid adding whitespace
+after the end of a program line (as of 1/99, some 600 lines had
+whitespace after the semicolon).  Excess whitespace causes difficulties
+for <CODE>diff</CODE> and <CODE>patch</CODE> utilities.
+</P><P>
+
+Pointers are declared using the traditional K&#38;R C style:
+</P><P>
+
+<TABLE><tr><td>&nbsp;</td><td class=smallexample><FONT SIZE=-1><pre>void *foo;
+</FONT></pre></td></tr></table></P><P>
+
+and not:
+</P><P>
+
+<TABLE><tr><td>&nbsp;</td><td class=smallexample><FONT SIZE=-1><pre>void * foo;
+void* foo;
+</FONT></pre></td></tr></table></P><P>
+
+<HR SIZE="6">
+<A NAME="SEC119"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC118"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC120"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC120"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC114"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_14.html#SEC126"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 13.4.5 Comments </H3>
+<!--docid::SEC119::-->
+<P>
+
+<A NAME="IDX504"></A>
+The standard GNU requirements on comments must be followed strictly.
+</P><P>
+
+Block comments must appear in the following form, with no <CODE>/*</CODE>- or
+<CODE>*/</CODE>-only lines, and no leading <CODE>*</CODE>:
+</P><P>
+
+<TABLE><tr><td>&nbsp;</td><td class=smallexample><FONT SIZE=-1><pre>/* Wait for control to return from inferior to debugger.  If inferior
+   gets a signal, we may decide to start it up again instead of
+   returning.  That is why there is a loop in this function.  When
+   this function actually returns it means the inferior should be left
+   stopped and GDB should read more commands.  */
+</FONT></pre></td></tr></table></P><P>
+
+(Note that this format is encouraged by Emacs; tabbing for a multi-line
+comment works correctly, and <KBD>M-q</KBD> fills the block consistently.)
+</P><P>
+
+Put a blank line between the block comments preceding function or
+variable definitions, and the definition itself.
+</P><P>
+
+In general, put function-body comments on lines by themselves, rather
+than trying to fit them into the 20 characters left at the end of a
+line, since either the comment or the code will inevitably get longer
+than will fit, and then somebody will have to move it anyhow.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC120"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC119"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC121"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC121"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC114"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_14.html#SEC126"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 13.4.6 C Usage </H3>
+<!--docid::SEC120::-->
+<P>
+
+<A NAME="IDX505"></A>
+Code must not depend on the sizes of C data types, the format of the
+host's floating point numbers, the alignment of anything, or the order
+of evaluation of expressions.
+</P><P>
+
+<A NAME="IDX506"></A>
+Use functions freely.  There are only a handful of compute-bound areas
+in GDB that might be affected by the overhead of a function
+call, mainly in symbol reading.  Most of GDB's performance is
+limited by the target interface (whether serial line or system call).
+</P><P>
+
+However, use functions with moderation.  A thousand one-line functions
+are just as hard to understand as a single thousand-line function.
+</P><P>
+
+<EM>Macros are bad, M'kay.</EM>
+(But if you have to use a macro, make sure that the macro arguments are
+protected with parentheses.)
+</P><P>
+
+<A NAME="IDX507"></A>
+</P><P>
+
+Declarations like <SAMP>`struct foo *'</SAMP> should be used in preference to
+declarations like <SAMP>`typedef struct foo { <small>...</small> } *foo_ptr'</SAMP>.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC121"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC120"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC122"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC122"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC114"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_14.html#SEC126"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 13.4.7 Function Prototypes </H3>
+<!--docid::SEC121::-->
+<P>
+
+Prototypes must be used when both <EM>declaring</EM> and <EM>defining</EM>
+a function.  Prototypes for GDB functions must include both the
+argument type and name, with the name matching that used in the actual
+function definition.
+</P><P>
+
+All external functions should have a declaration in a header file that
+callers include, except for <CODE>_initialize_*</CODE> functions, which must
+be external so that <TT>`init.c'</TT> construction works, but shouldn't be
+visible to random source files.
+</P><P>
+
+Where a source file needs a forward declaration of a static function,
+that declaration must appear in a block near the top of the source file.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC122"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC121"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC123"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC123"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC114"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_14.html#SEC126"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 13.4.8 Internal Error Recovery </H3>
+<!--docid::SEC122::-->
+<P>
+
+During its execution, GDB can encounter two types of errors.
+User errors and internal errors.  User errors include not only a user
+entering an incorrect command but also problems arising from corrupt
+object files and system errors when interacting with the target.
+Internal errors include situations where GDB has detected, at
+run time, a corrupt or erroneous situation.
+</P><P>
+
+When reporting an internal error, GDB uses
+<CODE>internal_error</CODE> and <CODE>gdb_assert</CODE>.
+</P><P>
+
+GDB must not call <CODE>abort</CODE> or <CODE>assert</CODE>.
+</P><P>
+
+<EM>Pragmatics: There is no <CODE>internal_warning</CODE> function.  Either
+the code detected a user error, recovered from it and issued a
+<CODE>warning</CODE> or the code failed to correctly recover from the user
+error and issued an <CODE>internal_error</CODE>.</EM>
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC123"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC122"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC124"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC110"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC114"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_14.html#SEC126"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 13.4.9 File Names </H3>
+<!--docid::SEC123::-->
+<P>
+
+Any file used when building the core of GDB must be in lower
+case. Any file used when building the core of GDB must be 8.3
+unique.  These requirements apply to both source and generated files.
+</P><P>
+
+<EM>Pragmatics: The core of GDB must be buildable on many
+platforms including DJGPP and MacOS/HFS.  Every time an unfriendly file
+is introduced to the build process both <TT>`Makefile.in'</TT> and
+<TT>`configure.in'</TT> need to be modified accordingly.  Compare the
+convoluted conversion process needed to transform <TT>`COPYING'</TT> into
+<TT>`copying.c'</TT> with the conversion needed to transform
+<TT>`version.in'</TT> into <TT>`version.c'</TT>.</EM>
+</P><P>
+
+Any file non 8.3 compliant file (that is not used when building the core
+of GDB) must be added to <TT>`gdb/config/djgpp/fnchange.lst'</TT>.
+</P><P>
+
+<EM>Pragmatics: This is clearly a compromise.</EM>
+</P><P>
+
+When GDB has a local version of a system header file (ex
+<TT>`string.h'</TT>) the file name based on the POSIX header prefixed with
+<TT>`gdb_'</TT> (<TT>`gdb_string.h'</TT>).
+</P><P>
+
+For other files <SAMP>`-'</SAMP> is used as the separator.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC124"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC123"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC125"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC116"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC114"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_14.html#SEC126"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 13.4.10 Include Files </H3>
+<!--docid::SEC124::-->
+<P>
+
+A <TT>`.c'</TT> file should include <TT>`defs.h'</TT> first.
+</P><P>
+
+A <TT>`.c'</TT> file should directly include the <CODE>.h</CODE> file of every
+declaration and/or definition it directly refers to.  It cannot rely on
+indirect inclusion.
+</P><P>
+
+A <TT>`.h'</TT> file should directly include the <CODE>.h</CODE> file of every
+declaration and/or definition it directly refers to.  It cannot rely on
+indirect inclusion.  Exception: The file <TT>`defs.h'</TT> does not need to
+be directly included.
+</P><P>
+
+An external declaration should only appear in one include file.
+</P><P>
+
+An external declaration should never appear in a <CODE>.c</CODE> file.
+Exception: a declaration for the <CODE>_initialize</CODE> function that
+pacifies <SAMP>`-Wmissing-declaration'</SAMP>.
+</P><P>
+
+A <CODE>typedef</CODE> definition should only appear in one include file.
+</P><P>
+
+An opaque <CODE>struct</CODE> declaration can appear in multiple <TT>`.h'</TT>
+files.  Where possible, a <TT>`.h'</TT> file should use an opaque
+<CODE>struct</CODE> declaration instead of an include.
+</P><P>
+
+All <TT>`.h'</TT> files should be wrapped in:
+</P><P>
+
+<TABLE><tr><td>&nbsp;</td><td class=smallexample><FONT SIZE=-1><pre>#ifndef INCLUDE_FILE_NAME_H
+#define INCLUDE_FILE_NAME_H
+header body
+#endif
+</FONT></pre></td></tr></table></P><P>
+
+<HR SIZE="6">
+<A NAME="SEC125"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC124"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_14.html#SEC126"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC116"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC114"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_14.html#SEC126"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 13.4.11 Clean Design and Portable Implementation </H3>
+<!--docid::SEC125::-->
+<P>
+
+<A NAME="IDX508"></A>
+In addition to getting the syntax right, there's the little question of
+semantics.  Some things are done in certain ways in GDB because long
+experience has shown that the more obvious ways caused various kinds of
+trouble.
+</P><P>
+
+<A NAME="IDX509"></A>
+You can't assume the byte order of anything that comes from a target
+(including <VAR>value</VAR>s, object files, and instructions).  Such things
+must be byte-swapped using <CODE>SWAP_TARGET_AND_HOST</CODE> in
+GDB, or one of the swap routines defined in <TT>`bfd.h'</TT>,
+such as <CODE>bfd_get_32</CODE>.
+</P><P>
+
+You can't assume that you know what interface is being used to talk to
+the target system.  All references to the target must go through the
+current <CODE>target_ops</CODE> vector.
+</P><P>
+
+You can't assume that the host and target machines are the same machine
+(except in the "native" support modules).  In particular, you can't
+assume that the target machine's header files will be available on the
+host machine.  Target code must bring along its own header files --
+written from scratch or explicitly donated by their owner, to avoid
+copyright problems.
+</P><P>
+
+<A NAME="IDX510"></A>
+Insertion of new <CODE>#ifdef</CODE>'s will be frowned upon.  It's much better
+to write the code portably than to conditionalize it for various
+systems.
+</P><P>
+
+<A NAME="IDX511"></A>
+New <CODE>#ifdef</CODE>'s which test for specific compilers or manufacturers
+or operating systems are unacceptable.  All <CODE>#ifdef</CODE>'s should test
+for features.  The information about which configurations contain which
+features should be segregated into the configuration files.  Experience
+has proven far too often that a feature unique to one particular system
+often creeps into other systems; and that a conditional based on some
+predefined macro for your current system will become worthless over
+time, as new versions of your system come out that behave differently
+with regard to this feature.
+</P><P>
+
+Adding code that handles specific architectures, operating systems,
+target interfaces, or hosts, is not acceptable in generic code.
+</P><P>
+
+<A NAME="IDX512"></A>
+<A NAME="IDX513"></A>
+One particularly notorious area where system dependencies tend to
+creep in is handling of file names.  The mainline GDB code
+assumes Posix semantics of file names: absolute file names begin with
+a forward slash <TT>`/'</TT>, slashes are used to separate leading
+directories, case-sensitive file names.  These assumptions are not
+necessarily true on non-Posix systems such as MS-Windows.  To avoid
+system-dependent code where you need to take apart or construct a file
+name, use the following portable macros:
+</P><P>
+
+<DL COMPACT>
+<A NAME="IDX514"></A>
+<DT><CODE>HAVE_DOS_BASED_FILE_SYSTEM</CODE>
+<DD>This preprocessing symbol is defined to a non-zero value on hosts
+whose filesystems belong to the MS-DOS/MS-Windows family.  Use this
+symbol to write conditional code which should only be compiled for
+such hosts.
+<P>
+
+<A NAME="IDX515"></A>
+<DT><CODE>IS_DIR_SEPARATOR (<VAR>c</VAR>)</CODE>
+<DD>Evaluates to a non-zero value if <VAR>c</VAR> is a directory separator
+character.  On Unix and GNU/Linux systems, only a slash <TT>`/'</TT> is
+such a character, but on Windows, both <TT>`/'</TT> and <TT>`\'</TT> will
+pass.
+<P>
+
+<A NAME="IDX516"></A>
+<DT><CODE>IS_ABSOLUTE_PATH (<VAR>file</VAR>)</CODE>
+<DD>Evaluates to a non-zero value if <VAR>file</VAR> is an absolute file name.
+For Unix and GNU/Linux hosts, a name which begins with a slash
+<TT>`/'</TT> is absolute.  On DOS and Windows, <TT>`d:/foo'</TT> and
+<TT>`x:\bar'</TT> are also absolute file names.
+<P>
+
+<A NAME="IDX517"></A>
+<DT><CODE>FILENAME_CMP (<VAR>f1</VAR>, <VAR>f2</VAR>)</CODE>
+<DD>Calls a function which compares file names <VAR>f1</VAR> and <VAR>f2</VAR> as
+appropriate for the underlying host filesystem.  For Posix systems,
+this simply calls <CODE>strcmp</CODE>; on case-insensitive filesystems it
+will call <CODE>strcasecmp</CODE> instead.
+<P>
+
+<A NAME="IDX518"></A>
+<DT><CODE>DIRNAME_SEPARATOR</CODE>
+<DD>Evaluates to a character which separates directories in
+<CODE>PATH</CODE>-style lists, typically held in environment variables.
+This character is <SAMP>`:'</SAMP> on Unix, <SAMP>`;'</SAMP> on DOS and Windows.
+<P>
+
+<A NAME="IDX519"></A>
+<DT><CODE>SLASH_STRING</CODE>
+<DD>This evaluates to a constant string you should use to produce an
+absolute filename from leading directories and the file's basename.
+<CODE>SLASH_STRING</CODE> is <CODE>"/"</CODE> on most systems, but might be
+<CODE>"\\"</CODE> for some Windows-based ports.
+</DL>
+<P>
+
+In addition to using these macros, be sure to use portable library
+functions whenever possible.  For example, to extract a directory or a
+basename part from a file name, use the <CODE>dirname</CODE> and
+<CODE>basename</CODE> library functions (available in <CODE>libiberty</CODE> for
+platforms which don't provide them), instead of searching for a slash
+with <CODE>strrchr</CODE>.
+</P><P>
+
+Another way to generalize GDB along a particular interface is with an
+attribute struct.  For example, GDB has been generalized to handle
+multiple kinds of remote interfaces--not by <CODE>#ifdef</CODE>s everywhere, but
+by defining the <CODE>target_ops</CODE> structure and having a current target (as
+well as a stack of targets below it, for memory references).  Whenever
+something needs to be done that depends on which remote interface we are
+using, a flag in the current target_ops structure is tested (e.g.,
+<CODE>target_has_stack</CODE>), or a function is called through a pointer in the
+current target_ops structure.  In this way, when a new remote interface
+is added, only one module needs to be touched--the one that actually
+implements the new remote interface.  Other examples of
+attribute-structs are BFD access to multiple kinds of object file
+formats, or GDB's access to multiple source languages.
+</P><P>
+
+Please avoid duplicating code.  For example, in GDB 3.x all
+the code interfacing between <CODE>ptrace</CODE> and the rest of
+GDB was duplicated in <TT>`*-dep.c'</TT>, and so changing
+something was very painful.  In GDB 4.x, these have all been
+consolidated into <TT>`infptrace.c'</TT>.  <TT>`infptrace.c'</TT> can deal
+with variations between systems the same way any system-independent
+file would (hooks, <CODE>#if defined</CODE>, etc.), and machines which are
+radically different don't need to use <TT>`infptrace.c'</TT> at all.
+</P><P>
+
+All debugging code must be controllable using the <SAMP>`set debug
+<VAR>module</VAR>'</SAMP> command.  Do not use <CODE>printf</CODE> to print trace
+messages.  Use <CODE>fprintf_unfiltered(gdb_stdlog, ...</CODE>.  Do not use
+<CODE>#ifdef DEBUG</CODE>.
+</P><P>
+
+<A NAME="Porting GDB"></A>
+</P><P>
+
+<HR SIZE="6">
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_13.html#SEC116"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_14.html#SEC126"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<BR>  
+<FONT SIZE="-1">
+
+<address>
+
+<p>Please send FSF &amp; GNU inquiries &amp; questions to <a
+href="mailto:gnu@gnu.org">gnu@gnu.org</a>.  There are also <a
+href="http://www.gnu.org/home.html#ContactInfo">other ways to
+contact</a> the FSF.</p>
+
+<p>These pages are maintained by <a
+href="http://www.gnu.org/software/gdb/">the GDB developers</a>.</p>
+
+<p>Copyright Free Software Foundation, Inc., 59 Temple Place - Suite
+330, Boston, MA 02111, USA.</p>
+
+<p>Verbatim copying and distribution of this entire article is
+permitted in any medium, provided this notice is preserved.</p>
+
+</address>
+
+This document was generated
+by <I>GDB Administrator</I> on <I>October, 26  2002</I>
+using <A HREF="http://www.mathematik.uni-kl.de/~obachman/Texi2html
+"><I>texi2html</I></A>
+
+</BODY>
+</HTML>

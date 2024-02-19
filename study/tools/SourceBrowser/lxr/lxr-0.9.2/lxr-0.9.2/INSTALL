@@ -1,0 +1,256 @@
+Installation
+------------
+The current version of the lxr depends on three things:
+
+1) A recent version of the exuberant ctags program.  Available from
+   http://sf.net/projects/ctags
+
+2) A relational database - MySQL (http://www.mysql.com), Postgresql
+   (http://www.postgresql.org) and Oracle are supported.
+   You will also need the right Perl DBI drivers for your particular database,
+   usually available from CPAN.
+
+3) Apache with mod_perl - http://www.apache.org
+
+4) For freetext searching, either Glimpse (http://glimpse.cs.arizona.edu) or
+   Swish-e (http://swish-e.org).  You need the development version of
+   swish-e (i.e. 2.1.x or later).
+   Swish-e is fully GPL'ed, while Glimpse is only free for
+   non-commercial use.
+
+Installing the database
+-----------------------
+You will need to create a database for lxr, and possibly create a user
+as well.  If you are unsure how to do this, or don't have admin rights
+to the database, consult the documentation or your sysadmin
+respectively.  The steps below assume you know what you're doing.
+
+For Postgresql:
+Create a user for lxr and give the user permission to create databases:
+	   createuser lxr
+Create a database for lxr:
+	   createdb -U lxr lxr
+Initialise the database:
+	   psql -U lxr lxr
+	   \i initdb-postgres
+Just ignore the errors about unimplemented functions.
+
+
+For MySQL:
+
+Run 'mysql' and then read in the initdb-mysql file using
+'\. initdb-mysql'.  This will create the database and a user called
+lxr with access rights to the database.
+
+For Oracle
+
+Start script in sqlplus with:
+
+@/[pathTo]/initdb-oracle.sql;
+
+
+Create lxr installation directory
+---------------------------------
+Expand the tarball in the LXR distribution into a directory of your
+choice. A good choice could be /usr/local/lxr so you would do
+
+ cd /usr/local/
+ tar -zxf /path/to/lxr/lxr-x.x.tgz (as root or with appropriate permissions)
+
+Now you have to put the perl modules that LXR uses into a directory on
+your system that will be searched by mod_perl when the LXR scripts are
+executed. Execute:
+
+ cp /usr/local/lxr/Local.pm /usr/lib/perl5/site_perl/
+ cp -r /usr/local/lxr/lib/LXR /usr/lib/perl5/site_perl
+
+Now you should copy the template files for LXR to your installation
+
+ mv /usr/local/lxr/templates/* /usr/local/lxr/
+
+Edit the lxr config file
+------------------------
+Go through the config file and fill in the relevant values.
+If you have glimpse installed, you should set
+
+ 'glimpsebin' => '/path/to/your/glimpse/executable'
+
+Now remember you copied the perl modules for Glimpse to a directory
+in your perl module search path ? The example path I used was 
+/usr/lib/perl5/site_perl which is also needed in lxr.conf
+
+ 'genericconf' => '/usr/lib/perl5/site_perl/LXR/Lang/generic.conf'
+
+Next set your base URL and virtual root for LXR by setting
+
+ 'baseurl' => 'http://your.host.name/your_lxr_virtual_root
+ 'virtroot' => '/your_lxr_virtual_root'
+
+Fill in the dbname, dbpass and dbuser variable to the right values for
+the database you created above.
+
+The 'v' (Version) variable needs to have the list of versions of your
+sourcecode that you want to index.  This list can be in the lxr.conf
+file, read from a file or calculated at runtime.  Select the right
+method for your setup in the lxr.conf file.
+
+Set the 'sourceroot' variable to point to the source code that you
+want to index and browse.
+
+You may also want to configure the 'graphicfile', 'filetype' and
+'incprefix' variables, but the defaults should be reasonable for most setups.
+
+Getting lxr to work with CVS
+----------------------------
+If you want lxr to work on files that are located in a CVS repository, edit
+lxr.conf and set the range variable so that it uses a subroutine instead
+of the default setting that reads the src/cvsversions file.
+
+  'range' => sub { return
+                  ($files->allreleases($LXR::Common::pathname),
+                   $files->allrevisions($LXR::Common::pathname))
+               }, # deferred function call.
+
+You should also set the default version retrieved to a version that really
+does exist otherwise you will receive errors when generating your index.
+
+A good value for the default version is head.
+
+  'default' => 'head'
+
+Next, set the source root variable to point to the directory containing
+the versions of your project in CVS. If your cvs repository in stored
+in /path/to/cvs/repository and your cvs module is called lxr then set
+
+  'sourceroot' => 'cvs:/path/to/cvs/repository/lxr'
+  'sourcerootname' => 'A Friendly Name For Your Repository'
+
+Using Swish-e with LXR
+----------------------
+
+This is simple:
+
+1) Put the paths to swish-e and swish-search in the 'swishindex' and
+   'swishsearch' variables in lxr.conf.  If there is no swish-search
+   executable on your system, use the path to swish-e as the
+   'swishsearch' value.
+
+2) Create a directory for the swish index files to go in, and put the
+   path of this directory in the 'swishdir' variable.
+
+3) Comment out the 'glimpsebin' variable
+
+Now re-run genxref and it should build the swish indexes for you and
+you're done.
+
+Getting Glimpse to work with LXR
+--------------------------------
+Create a directory in your LXR directory called glimpse
+
+  mkdir /usr/local/lxr/glimpse
+
+If you are using CVS, checkout a copy of your project in the
+LXR directory, for example
+
+  cd /usr/local/lxr
+  cvs checkout my_project
+
+otherwise just use the path to your project instead in the
+example below
+
+  find /usr/local/lxr/my_project/ -name *.java | 
+    glimpseindex -H /usr/local/lxr/glimpse -o -F
+
+Be sure that the glimpse indexes are readable by the user
+that Apache is running as. You can do
+
+  chmod a+x /usr/local/lxr/glimpse/.*
+
+Now edit lxr.conf again and add the following variable for
+the URL section that you configured earlier
+
+  'strip' => '/usr/local/lxr/sikasem'
+
+This munges the output of glimpse so that you can go straight
+to the file that contains a match for a search term.
+
+Generate index.
+---------------
+
+It is now time to generate the index. This is done using the program
+"genxref". genxref takes two arguments --url= and --version= where is
+the url where the lxr cgi scripts are found.
+
+Version is a tag from cvs if you are using the cvs backend or the name
+of a directory in your "sourceroot" directory. It is worth noting that
+one lxr.conf file can be used for several different
+configurations. Which config block to use is selected according to the
+url argument.
+
+If you are setting up LXR to use files in a CVS repository, genxref
+will most likely run without printing out any error messages. This is
+*not* what you want. You have to explicitly state a version to use.
+
+  genxref --url=/path/to/lxr --version=head
+
+You can also use the --allversions argument to automatically index all
+the versions defined in the versions variable.
+
+Note that genxref can be a very slow process the first time it is run,
+for example on a 4Gb source tree a full run can take several
+days. However, on future runs it will only index changed files, thus
+speeding the process.
+
+Set up webserver
+----------------
+The browsing scripts currently supplied depend on mod_perl to execute
+properly, although it should be easy to modify them to work as plain
+CGI scripts.  Since mod_perl is an Apache add-on, this means using
+Apache at the moment.
+
+You may need to edit httpd.conf to point to the lxr files, for example
+if you have installed the lxr files in /usr/local/lxr and you want to
+have your URL be http://mysite/lxr then you would add:
+
+Alias /lxr /usr/local/lxr
+<Directory /usr/local/lxr>
+   AllowOverride All		
+</Directory>
+
+The distribution contains a .htaccess file set up to ensure that lxr
+will work. Edit it if you have special local policies.
+
+That's it - lxr should now work. Fire up your webbrowser and go to
+http://yoursite/lxr/source and you should see the listing for the top
+of your source tree.
+
+Getting help if it doesn't work:
+--------------------------------
+
+If you can't get LXR to work then you can try asking on the mailing
+list or the support forums.  Do check the archives of both first
+though - your question may already have been answered.
+
+By web:	   http://sourceforge.net/forum/forum.php?forum_id=86145
+By email:  Send a mail to lxr-general@lists.sf.net
+
+
+
+Troubleshooting:
+---------------
+
+** Fatal: Can't find database
+
+This message comes from the DB backend. The likely cause is that the
+webserver url passed to the browsing scripts does not match the url in
+lxr.conf.  This means the configuration will not be found, and thus
+the database will not be found
+
+HTTP headers appearing in the html, or output not being interpreted as HTML
+
+This can be caused by warning messages output before the script
+outputs the right headers to tell the browser that the output is
+HTML.  This can normally be solved by changing the value of $wwwdebug
+to 0 in Common.pm.  But please report the warning message as a bug at
+http://sf.net/projects/lxr first!
+

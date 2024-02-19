@@ -1,0 +1,527 @@
+                        ú Advanced Linking Techniques      
+                        ³           Part 1                 
+                        ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿    
+                           How to put everything into ú    
+                              - ONE BIG EXE FILE -         
+                                      
+In  the  good  old  days  most  of the programs had  many files.   That was a
+simple  and convenient way for storing the necessary data. But the time quic-
+kly  ran  forth  and  a  new  tendency appeared: the single EXE method.  This
+is more difficult  to deal with  (from the coders' point  of view),  but it's
+also more  elegant.  So  this  article discusses some system coding, which is
+important  in a demo,  but quite invisible.                                
+                                      
+I.   Capabilities of EXE files
+II.  Link data to the executable file
+III. Overlays
+IV.  Link EXEs together (chaining)
+V.   Virtual file systems
+
+
+                            I. Concerning EXE files        
+                            ÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ        
+                                      
+An  EXE  file consists of three parts: header, body and overlay.   The header
+contains  info  about  the  body  (the executable part). The rest of the file
+is  the overlay:   it can be  any data copied  to the end  of  the body.  For
+example,  the debug info.  The body is 512-byte  aligned   in  the  file   by
+default,  but it may be put to 16-byte boundary to save some space. (Actually
+the loading of  512-aligned executable parts is faster in DOS.)
+
+!USEFUL!  For  source-level  debugging assemble   with  the  /zi  switch  and
+link with /v.   Then in Turbo Debugger select    View/module    and    You're
+debugging  in your source  code.  Also You may take a look  at the end of the
+file  - how the debug info looks like. (Extremely interesing  ;-)   Plus  one
+thing:  Pklite doesn't kill overlays - compressed  files  remain  wonderfully
+debuggable!                           
+                                      
+Now  I wouldn't like  to discuss  over the structure  of the EXE header - its
+description   may  be  found  in  many places  (DosRef, IntrList, TechHelp) -
+just to point to some funny things.   
+
+
+                        Some facts about the EXE header    
+                        ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ    
+                                      
+Signature: Can be either 'MZ' or 'ZM'. If a file  to be executed starts  with
+'MZ' or 'ZM',  it will  be treated  as EXE  file,  otherwise .COM file.  (The
+extension (EXE/COM)  doesn't matter at all.)                                 
+                                      
+Partial  Page:  Equals  the length  of the  executable part  +  length of the
+header mod 512. (I'll refer to 'Length of  the file without overlays' as 'EXE
+Length'  in  the  followings,  so this field is EXE Length mod 512.)         
+                                      
+PageCounter :  This is  NOT EXE Length div 512  and also NOT EXE Length  div
+512 +1 as some docs claims. It's  exactly  the upper whole part (UpRound) of
+EXE Length / 512.    Practically,   if PartialPage  = 0, it's EXELength div  
+512, else EXE Length div 512 + 1.
+
+Checksum: Nobody cares it. 
+Originally  it's a pad  word  that the sum of the words in  an EXE file would
+be 0. No info on what should happen if the file is odd-length... So this word
+can be anything.
+
+Start of the relocation table :  Tlink sets it to 3eh,  but it can  be placed
+elsewhere.
+                                      
+Overlay number :  Another unused area. To save  space,  the relocation  table
+can  start  here.   According  to some documentations   this  doesn't  belong
+to the  EXE  header.  So  the shortest EXE file  in  the world  is  26  bytes
+long,  and consists  of only a header. Its entry  point is the 'int 20h' ins-
+truction in the PSP.  Executable files under 26 byte are all  .COM files even
+if they start with 'MZ'...
+And the shortest .COM file is a single 'retn' instruction ;-)
+                                      
+!TRICK!  It's funny  to add  some text to the beginning  to the EXE file with
+a  message   "Ripping  is  lame!"   or something...   Here's  the  technique:
+a  postprocessor  program  places  the relocation table elsewhere  and copies
+a message after the header.           
+                                      
+A freshly compiled EXE file looks like this:                                 
+                                      
+"MZ"                    <-   signature
+<header data>
+"û0jr"                  <-   Tasm crap 
+<relocation table (if any)>           
+<Numerous pad bytes>    <- Body is 512
+<Body>                         aligned
+                                      
+This can be modified/compressed into: 
+                                      
+"MZ"                    <-     Remains
+<header data>           <-  New reloc.
+                          table start!
+"Ripping is lame!"      <-     Message
+<relocation table>                    
+<Max. 12 pad bytes>     <-Body will be
+<Body>               paragraph aligned
+                                      
+So if an inquistive dude  looks to the EXE file, he immediately confronts    
+the message :-)                       
+                                
+                                      
+       Now some general things        
+       ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ        
+                                      
+- You may copy any data to your EXE file, e.g.                            
+
+'copy /b demoEXE+piccy.raw demo2EXE'  
+
+This won't affect the execution of the EXE file.  It's  Your problem  how  to
+access the data... see chapter 3.
+
+- .COM to EXE  conversion :  All to be done is to insert a 32-byte header be-
+fore the .COM file.  The  only  interesting  thing  is how  to calculate  the
+entry point.   DOS loads  the body  to PSP+10h:0, and adds it to the Relative
+initial CS.  This  value  will be  the program's CS.   The problem is that at
+.COM files  the initial CS  equals the PSP's segment...  So the Rel. init. CS
+in this case must be fff0.  It's added to PSP+10h  will be exactly  the PSP's
+segment ;-)  Some programs  don't  recognize this technique  (Like F-Prot and
+Hacker's View), but  it works anyway. The appropriate header looks like this:
+
+"MZ"               <-      Ususal sign
+PartPage = (COM's length+32) mod 512
+PageCnt = UpRound((COM's length+32) / 512)
+Checksum           <-         Anything
+Size of header=2   <-   (2 paragraphs)
+Minimal Memory=(ffff - COM's length) / 16 
+Maximal Memory=ffff
+Initial IP=100h    <-    .COM property
+Rel. init CS=fff0  <- It will overflow
+Initial SP=fffe    <-    .COM property
+Rel. init SS=fff0  <-       Same as CS
+Number of relocations=0   <-  No relos
+Start of relocation table <-  Anything
+Overlay number            <-  Anything
+4 pad bytes               <-  Anything
+Now the most important topic  comes in
+this article:                         
+                                      
+      How to kick out Windows from a demo nicely and intelligently       
+ ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+The  Windows  EXE  file  format  is  a superset of the DOS EXE format.    How
+Windows starts executing a program?
+
+1. Checks the 1st word of the file. If it's not 'MZ' treates it as a DOS prg.
+2. if it's 'MZ', gets a word  from the file at offset 003dh  (let's call this
+word  New  EXE  Header Offset (NEHO)), then checks  the word at NEHO. If it's
+'NE',  then it's  a Windows EXE  file, otherwise not.                        
+                                      
+Also every Windows  EXE contains  a little   DOS EXE   (called  STUB)   which
+will run when somebody tries  to start the program from DOS. Usually it shows
+up  a message like  'This program requires  Microsoft  Windows'.  (Gosh! Some
+evil stubs start  Windows if they find it :-(   What is our goal?   We want a
+program  which runs  perfectly in DOS, and under  Windows shows up  a message
+box:   'This program requires NO Microsoft  Windows.',  then  kills  Windoze,
+executes itself under DOS and restarts Windoze.  The  main idea  is  that  we
+change the 'stub' program of a Windooz application.                          
+                                      
+Here's the C code of the Windows      
+program:                              
+                                      
+#include <windows.h>                  
+                                      
+int PASCAL WinMain(HWND hInstance,    
+                   HWND hPrevInstance,
+                   LPSTR lpCmdLine,   
+                   int  nCmdShow){    
+char MyName[128];
+
+  MessageBox(0,"This program"         
+    "requires NO Microsoft Windows.", 
+    "Windooz suks", 0);
+
+  GetModuleFileName(hInstance, MyName,
+                    128);
+
+  ExitWindowsExec(MyName, lpCmdLine); 
+
+  return 0;
+}
+
+In the module-definition (.DEF) file the 'STUB' entry must be changed from
+winstub.exe to demo.exe :-)
+
+One  thing  must  be  maintaned :  the relocation  table  of  the 'stub' file
+must start AFTER 003dh.  This is not a problem for freshly assembled or PKLI-
+TEd files.
+
+Problem that the 'stub' proggy must be less than 64k. This is enough for pro-
+tecting intros  -  for big demos  some postprocessing is required.
+
+ II. Link data to the executable file 
+ ÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ 
+
+Here come  few tips  how  to put  data to the program  at  compile  and link-
+time.  I  assume  the  using  of  full segment declarations,  NOT the simpli-
+fied version like .model and .data.
+
+
+                               1. Include method           
+                               ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ           
+
+Let's assume we want to insert a bunch of  bytes   to  the  program   (a  raw
+picture,  for  example,  'piccy.bin'). First convert it to ASCII form:
+                                      
+BIN2ASM piccy.bin piccy.inc
+                                      
+Piccy.inc  will  be  approximately 3-4 times large than the binary file.  Now
+insert  the  following  lines  to  the source code (e.g. demo.asm):          
+
+piccy label byte
+include piccy.inc
+                                      
+Wow. We've done it.  The data will get into the program at compile-time. This
+is  the most simple and most slow way. Why  to compile  the whole data  again
+when only the code changes? And why to store  the huge  include  file  on the
+expensive harddisk?
+
+
+                                 2. Link method            
+                                 ÄÄÄÄÄÄÄÄÄÄÄÄÄÄ            
+
+Now the data will get  into the proggy at link-time.  We'll use object (.obj)
+files.  First  we  have  to  make  the object   files   from   binary  files.
+There's  a  utility (binobj)  but it's quite unusable (it doesn't handle seg-
+ment names).  For a moment  we'll have to use include files... Make piccy.inc
+from  the binary file!   Then create a source file named piccy.asm:          
+                                      
+main    segment use16                 
+                                      
+public  piccy                         
+piccy   label byte                    
+include piccy.inc                     
+                                      
+main    ends                          
+end                                   
+
+and  compile  it.  (The  segment  name should match  one  of the main  source
+module's  segment  names.)  Now  let's  have  a  look  at  the   main  module
+(demo.asm):
+
+o equ offset
+main   segment use16
+
+extrn piccy:byte
+
+;Here can be anything...              
+;For example,                         
+        mov     si, o piccy           
+        xor     di,di                 
+        rep     movsd                 
+
+main ends                             
+
+And finally put the things together:  
+tasm demo /m9                         
+tasm piccy                            
+tlink demo piccy                      
+                                      
+Basically these  are the steps  of the object-level linking. Some extensions:
+                                      
+- When  You want  to link  independent segments  (such segments which don't
+  occur  in the  main module),  enough to use segment names only.  This may
+  be needed  when big data arrays  are in  use,  e.g.  bitmaps,   and  it's
+  unnecessary  to fool with identifier names like 'piccy'. In this case You
+  don't have  to add the 'public'  and 'extrn' directives, just declare the
+  segment:                            
+                                      
+piccy.asm:                            
+picture segment use16                 
+include piccy.inc                     
+picture ends                          
+end                                   
+                                      
+demo.asm:                             
+main segment                          
+                                      
+        mov     ax,picture            
+        mov     ds,ax                 
+        xor     si,si                 
+        xor     di,di                 
+        rep     movsd                 
+                                      
+main ends                             
+                                      
+picture segment ;Just declare segment 
+picture ends                          
+                                      
+- Link more than 64k arrays           
+  One  way is  to cut  the data to 64k segments...  but it's better to link
+  it  in  one  step.   Simply   change piccy.asm:                          
+                                      
+.386                                  
+picture segment use32                 
+include piccy.inc                     
+picture ends                          
+end                                   
+                                      
+  and the 'picture' segment can be refered as a 'normal' segment in    
+  real mode too. In this case, link with the /3 switch.
+
+- Never forget to delete the temporary include files. They're kinda long.  
+                                      
+- Use  makefiles   instead  of   batch files.  Makefiles handle time-depen-
+  dencies, so only those parts will be compiled  which were modified  since
+  the last compilation.  (Working time can be heavily reduced) Imagine what
+  would happen if at every compilation the include files were in use :-(   
+  If the makefile's name is 'makefile' then enough  to type  'make'  at the
+  command prompt, else
+  'make -fdemo.mak'.   If the dates of the  source files  are  not correct,
+  use the 'touch' utility. It's useful when You want  to compile  something
+  even if it wasn't changed.          
+                                      
+   3. Advantages and disadvantages    
+   ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ    
+                                      
+- When  compressing the  EXE  file the linked data will be compressed too. 
+- Doesn't require postprocessing.     
+- Data  is available  when the program starts.                             
+                                  
+- The  amount  of  linkable   data  is limited.                            
+- Structure of the source code is more complex.
+
+
+            III. Overlays
+            ÄÄÄÄÄÄÄÄÄÄÄÄÄ             
+                                      
+The advantage  of the previous  method is  that  all data  You've  linked are
+available when the program starts - no need  for additional reading  from the
+disk.  The disadvantage  is  that  the amount of the linkable data  is fairly
+limited  because  of  the lovely  real mode  640k  barrier.   Overlays  allow
+unlimited quantity  of aditional data. How overlay works?  As I mentioned be-
+fore,  we can copy  anything  after an EXE file,  that won't be loaded to the
+memory.  It's our problem how to reach that data.  Let's make an overlaid EXE
+file:                                 
+                                      
+'copy /b demo.exe+piccy.bin demo2.exe'
+                                      
+The  method  is  very  simple  :   the demo2EXE opens  itself,  seeks  to the
+beginning  of  the  overlay data,  and reads it to the memory.   This reqires
+some plus administration:  we have  to know the length of the overlay file(s)
+in advance.   The  demo.exe  alone  of course is unusable without the overlay
+data.
+
+(Now  let's assume  we want  to show a simple  picture  on the screen - 64000
+bytes)                                
+                                      
+Borland Pascal version:               
+                                      
+Var F:File;                           
+                                      
+Assume   (F, paramstr(0));            
+Reset    (F, 1);                      
+Seek     (F, Filesize(F)-64000);      
+BlockRead(F, Mem[$a000:0], 64000);    
+                                      
+Assembly version (Provided that DS points to the PSP):
+                                      
+        mov     es,[2ch] ; Get env str
+        xor     di,di                 
+        mov     cx,0ffffh             
+        mov     al,0                  
+                                      
+get_argv0:                            
+        repne   scasb                 
+        scasb                         
+        jne     get_argv0             
+                                      
+        push    es         ; Open file
+        pop     ds                    
+        mov     dx,di                 
+        mov     ax,3d20h              
+        int     21h                   
+                                      
+        xchg    bx,ax    ; Seek to ovr
+        mov     ax,4202h              
+        mov     cx,0ffffh             
+        mov     dx,-64000             
+        int     21h                   
+                                      
+        push    0a000h  ; Read picture
+        pop     ds                    
+        mov     ah,3fh                
+        mov     cx,64000              
+        xor     dx,dx                 
+        int     21h                   
+                                      
+This is the 'backward' method:        
+
+We seek from the end of the file. It's good because we don't have to know the
+size of the main EXE file.            
+
+
+             IV. Chaining             
+             ÍÍÍÍÍÍÍÍÍÍÍÍ             
+
+Perhaps  this is  the most interesting topic  in  this  article...  The  base
+problem :  we  have  a  couple  of EXE files  (...a demo's parts...)  and  we
+want  ONE NICE BIG EXE file.  The most convenient way is renaming these files
+to *.DAT and writing a 'master' proggy which sequentially executes them.  But
+then there are many files  which isn't so elegant...  The solution :  an  EXE
+loader  must be written  which  stores the independent  EXE  files  in itself
+(as  overlays),   and  executes  them. Unfortunately  DOS doesn't have such a
+service :-(                           
+                                      
+1. Simple EXE loader                  
+                                      
+This works for non-overlayed EXE files only.  The files  to be  executed must
+NOT open themselves for reading or writing.                              
+                                      
+Structure of this big EXE file:       
+                                      
+ÚÄÄÄÄÄÄÒÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄ 
+³Loaderº 1st EXE  ³ 2nd EXE  ³...
+³      º(Overlay1)³(Overlay2)³
+ÀÄÄÄÄÄÄĞÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÁÄ
+                                      
+The loader's task to process each 'file':
+- Load the header to get info on the proggy
+- Load the body
+- Load relocation table and process it
+- Jump to the beginning of the program
+                                      
+The detailed process:                 
+- Reduce the loader's occupied memory to minimal                          
+- Open the loader file, seek to the start of the next program           
+- Read the header (1ah bytes)
+- Create a PSP (there's a DOS function, but copying loader's PSP will do too)
+- Seek to the body's start            
+- Read the body to the memory (Page Counter*512 bytes right after the
+  newly created PSP - You can ignore the Partial Page field)             
+- Seek to the relocation table's beginning                           
+- Load the relocation table and relocate the body (the table can be 
+  loaded in 4-byte steps to save space). One relocation item consists
+  of two words: ReloSeg and ReloOffset. Process for one item:   
+  Add the body's segment address to ReloSeg (This will be a segment     
+  address, let's call it ReloSeg2), then add the body's segment to the  
+  word at ReloSeg2:ReloOffset.
+- Make the new PSP active
+- Redirect DOS exit function 4c that it could catch the terminating process                             
+- Set DS & ES to the new PSP, FS & GS to 0, SS to new PSP+Relative Initial
+  SS, SP to Initial SP, other registers to 0                      
+- Jump to new PSP + Initial Relative CS:Initial IP                       
+                                      
+Of course these steps  can be extended with safety  and convenience services.
+For example,  handling  the  TSR  exit (27h) function.  Let's say  we have  a
+resident modplayer,  but  normally  it can't  be killed  from  the  memory...
+What  should  the  loader  do  when  a program  wants  to exit  as TSR?  It's
+enough  to reserve the required memory for it, then create the next program's
+PSP after that.  And  when  the loader exits,  it should  restore  the  whole
+interrupt table  (which  was  saved in the beginning of the whole process ;-)
+                                      
+2. More complex EXE loader
+                                      
+This  method   allows  self-overlaying files to run.  The individual programs
+can  read/write   themselves   without noticing that they're not alone on the
+disk  but  in  the overlay  area  of a loader!   Of course,  it requires very
+much work... The file structure:
+
+ÚÄÄÄÄÄÄÒÄÄÄÄÂÄÄÄÄÄÄÄÒÄÄÄÄÂÄÄÄÄÄÄÄÒÄÄÄÄ
+³LoaderºEXE1³EXE1's ºEXE2³EXE2's º    
+³      ºbody³overlayºbody³overlayº... 
+³      ÈÍÍÍÍÏÍÍÍÍÍÍÍÊÍÍÍÍÏÍÍÍÍÍÍÍÊÍÍÍÍ
+³      ³  Overlay I ³ Overlay II ³... 
+ÀÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄ
+                                      
+The  'soul'  of this kind of loader is the redirected set  of DOS  functions.
+Among others, the 'File open' function (3dh) must  be revised.  If  a running
+program   wants  to  open  itself,  an appropriate file handle  must be given
+back  (... which  should  be  a  real, valid file handle; it initially points
+in  the loader's  overlay area  to the beginning of the current process'  EXE
+header...)   Other functions  to  take over:                                 
+seek (42h), close (3e), read (3f),
+write (40h), TSR exit (27h),          
+normal exit (4c), and the exec.       
+Most of these  must check  whether the call refers to the  EXE  itself  or an
+external file.  How  to notice  that a program wants to open itself? At least
+two ways must be maintained:
+
+1. Check by the original filename
+2. Check by the enironment string
+
+Actually  I developed this system  for putting HUGE demo parts together,  not
+simple routines...                    
+                                      
+My chainer program  is able  to handle self-overlaying files. It can put into
+one file, for example, the followings: Verses, Hell,  Timeless, No!, Epsilon,
+Doom, Face, and Scream Tracker.   Also it was able  to make a single EXE from
+the  Project Angel  unlinked version's EXE files. (Well, with a minor modifi-
+cation  -  right,  Walken?  :-)    The reasons  that  I didn't include it  to
+Imphobia:                             
+a) the source is too ugly at the moment and partially uncommented,     
+b) the exapmle program for Imphobia (in my opinion) should be a nice demo 
+effect, or at least something visible, not some creepy system code. If You   
+want it, mail me, I will send it with the source.
+
+       V. Virtual file systems        
+       ÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ        
+                                      
+What  to do  when a lot of data  files are in use? Imagine a 'master' program
+which copies these into one file, then hooks DOS services  (open, read, etc.)
+that other programs  believe  they use the original  files  -  actually  they
+will use  this  big  file!  It's  very familiar  with the complicated version
+of the EXE loader.   Let's have a look at the problems  of this method (these
+apply  for  the  2nd type  EXE  loader too):                                 
+- Every file  handle  must  be administrated by the 'kernel'.            
+- The same  file  can  be opened  more than once.                          
+- It should be impossible to read when the   'virtual file handle'  reached
+  the end of the appropriate  'virtual file',  although  the  big  file  is
+  longer...
+
+
+   Compressed virtual file systems
+   ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+It looks like  a simplified version of Stacker. (You know, modrn diskk comprs
+soin sftwarez  ar nearli foOlproOf...) The  'master'  program  compresses the
+necessary data files and when the demo wants to open one,  uncompresses it to
+the memory,  and until  the 'file'  is opened, keeps it uncompressed.  If the
+demo reads the file, the kernel simply copies  the required  amount  of data.
+This system is not useful for handling big files because  its memory require-
+ment.
+
+                                Ervin/Abaddon
+                                      
+

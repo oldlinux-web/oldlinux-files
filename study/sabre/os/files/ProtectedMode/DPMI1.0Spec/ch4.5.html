@@ -1,0 +1,308 @@
+
+
+Exceptions are interrupts that are generated internally by the CPU
+when certain conditions are detected during the execution of a
+program.  Examples of such conditions are: use of an invalid selector,
+use of a selector for which the program has insufficient privileges,
+use of an offset outside the limits of a segment, execution of an
+illegal opcode, or division by zero.  The DPMI host distinguishes
+between exceptions and external hardware interrupts or software
+interrupts. <p>
+
+Handlers for exceptions can only be installed with <a
+href="api/310203.html">Int 31H Functions 0203H</a>, <a
+href="api/310212.html">0212H</a>, or <a
+href="api/310213.html">0213H</a>.  If the client does not install a
+handler for a particular exception, or installs a handler but chains
+to the host's default handler, the host reflects the exception as a
+real mode interrupt for exceptions 0,1,2,3,4,5, and 7.  The default
+behavior of exceptions 6 and 8-1FH is to terminate the client (some
+hosts may decide that they have to terminate the VM because the fault
+came from real mode code or it is in a non-terminatable state).<p>
+
+<a href="api/310203.html">Function 0203H</a> was defined in DPMI version 0.9 and continues to be
+supported in DPMI version 1.0 for compatibility reasons.  Exception
+handlers installed with <a href="api/310203.html">Function 0203H</a> are only called for exceptions
+that occur in protected mode.  All exceptions are examined by the DPMI
+host.  The host processes any exception that it is responsible for,
+such as page fault for virtual memory management.  These <i>transparent
+exceptions</i> are never passed to the client exception handlers.  All
+other exceptions become <i>visible exceptions</i> to a client and are
+passed to the client exception handler (if any) from the DPMI host.
+The client exception handlers must return with a <tt>FAR RETURN</tt>,
+with interrupts disabled on a locked stack, and with SS, (E)SP, CS,
+and (E)IP registers at the point of exception pushed on the stack.
+All other registers are unchanged from their contents at the point of
+exception.  The stack frame for 16-bit handlers installed with
+Function 0203H has the following format:
+
+<pre>
+	15		0
+	+---------------+
+	|	SS	|
+	|---------------|  0EH
+	|	SP	|
+	|---------------|  0CH
+	|     Flags	|
+	|---------------|  0AH
+	|	CS	|
+	|---------------|  08H
+	|	IP	|
+	|---------------|  06H
+	|   Error Code	|
+	|---------------|  04H
+	|   Return CS	|
+	|---------------|  02H
+	|   Return IP	|
+	|---------------|  00H <-- SS:SP
+</pre>
+
+The stack frame for 32-bit handlers installed with <a
+href="api/310203.html">Function 0203H</a> has the following format:
+
+<pre>
+	31		15		0
+	+---------------+---------------|
+	|    Reserved	|	SS	|
+	+---------------+---------------| 1CH
+	|	       ESP		|
+	|-------------------------------| 18H
+	|	     EFLAGS		|
+	|---------------+---------------| 14H
+	|    Reserved   |	CS	|
+	|---------------+---------------| 10H
+	|	       EIP		|
+	|-------------------------------| 0CH
+	|	   Error Code		|
+	|---------------+---------------| 08H
+	|		|   Return CS	|
+	|---------------+---------------| 04H
+	|	   Return EIP		|
+	|-------------------------------| 00H <-- SS:ESP
+</pre>
+
+The error code in the stack frame is only valid for the following
+exceptions:
+
+<table>
+<tr><td align=center>08H</td><td align=left>Double fault</td></tr>
+<tr><td align=center>0AH</td><td align=left>Invalid TSS</td></tr>
+<tr><td align=center>0BH</td><td align=left>Segment not present</td></tr>
+<tr><td align=center>0CH</td><td align=left>Stack fault</td></tr>
+<tr><td align=center>0DH</td><td align=left>General protection fault</td></tr>
+<tr><td align=center>0EH</td><td align=left>Page Fault</td></tr>
+</table>
+
+In the case of other exceptions and faults, the value of the error
+code is undefined.  The fields marked <tt>Return CS</tt>, <tt>Return
+(E)IP</tt>, and <tt>Reserved</tt> in the stack frame should should not
+be modified, but anything else in the stack frame can be altered by
+the client before returning from the exception handler. <p>
+
+The exception handler must preserve and restore all registers, and
+must either jump to the next handler in the chain or terminate with a
+<tt>RETF</tt> (far return) instruction.  In the latter case, the
+original SS:(E)SP, CS:(E)IP and flags on the stack, including the
+interrupt flag, will be restored.  The exception handler can arrange
+to transfer control to a more general error-handling routine within
+the application by modifying the CS:(E)IP that is stored in the stack
+frame above the Return CS:(E)IP. <p>
+
+DPMI version 1.0 supports an expanded stack frame for exception
+handlers, and the ability to install separate handlers for exceptions
+which occur in real mode and in protected mode with <a
+href="api/310210.html">Functions 0212H</a> and <a
+href="api/310213.html">0213H</a>.  The expanded frame is defined on
+the stack <i>above</i> the frame previously described for handlers
+installed with <a href="api/310203.html">Function 0203H</a>.  This
+allows DPMI 0.9-compatible handlers and DPMI 1.0-compatible handlers
+to coexist in the same handler chain; old handlers will be oblivious
+to the additional information available beyond the old stack frame,
+while new handlers can ignore the old frame and use only the expanded
+frame higher up on the stack. <p>
+
+The format of the expanded stack frame for both 16-bit and 32-bit
+handlers installed with <a href="api/310212.html">Functions 0212H</a>
+and <a href="api/310213.html">0213H</a> is as follows:
+
+<pre>
+31				15				0
++---------------------------------------------------------------+ 58H
+|				PTE				|
+|---------------------------------------------------------------| 54H
+|				CR2				|
+|---------------------------------------------------------------| 50H
+|	Reserved		|		GS		|
+|---------------------------------------------------------------| 4CH
+|	Reserved		|		FS		|
+|---------------------------------------------------------------| 48H
+|	Reserved		|		DS		|
+|---------------------------------------------------------------| 44H
+|	Reserved		|		ES		|
+|---------------------------------------------------------------| 40H
+|	Reserved		|		SS		|
+|---------------------------------------------------------------| 3CH
+|				ESP				|
+|---------------------------------------------------------------| 38H
+|			      EFLAGS				|
+|-------------------------------+-------------------------------| 34H
+|   Exception information bits	|		CS		|
+|-------------------------------+-------------------------------| 30H
+|				EIP				|
+|-------------------------------+-------------------------------| 2CH
+|			    Error Code				|
+|-------------------------------+-------------------------------| 28H
+|	Reserved		|    Return CS (32-bit) or 0	|
+|-------------------------------+-------------------------------| 24H
+|	Return EIP (32-bit) or CS:IP (16-bit)			|
+|-------------------------------+-------------------------------| 20H+SS:(E)SP
+</pre>
+
+A 32-bit stack frame image is always presented, even for 16-bit
+handlers, and the offset from SS:(E)SP to the expanded stack frame is
+always 20H (32) regardless of the handler type.  The DS, ES, FS, and
+GS registers are saved for both real and protected mode.  The client
+can inspect the VM bit in EFLAGS to determine the mode at the point of
+exception.  The CS field at SS:(E)SP+24H is zero if the handler is
+running in 16-bit protected mode. <p>
+
+The exception information bits at SS:(E)SP+32H have the following
+meanings: <p>
+
+<table border=1 cellspacing=0 cellpadding=4>
+
+<tr> <th>Bit</th> <th colspan=2>Significance</th> </tr>
+
+<tr> <td align=center rowspan=2>0</td>
+
+<td align=center>0</td> <td align=left>exception occurred in the
+client</td></tr>
+
+<td align=center>1</td> <td align=left>exception occurred in the host
+(most likely due to page fault or invalid selector passed to host in
+an Int 31H call)</td></tr>
+
+<tr> <td align=center rowspan=2>1</td>
+
+<td align=center>0</td> <td align=left>exception can be retried</td></tr>
+
+<td align=center>1</td> <td align=left>Exception cannot be retried,
+handler should perform whatever cleanup is possible</td></tr>
+
+<tr> <td align=center rowspan=2>2</td>
+
+<td align=center>0</td> <td align=left>host exception should be
+retried (invalid selector or page causing fault corrected by exception
+handler, this is the default)</td></tr>
+
+<td align=center>1</td> <td align=left>host exception is being
+redirected somewhere other than a retry address</td></tr>
+
+<tr> <td align=center>3</td><td colspan=2
+align=left>reserved</td></tr>
+
+</table><p>
+
+Bits 0 through 2 of the exception information bits are relevant on
+hosts which support the Exceptions Restartability capability (see <a
+href="api/310401.html">Int 31H Function 0401H</a>).  Bits 0 and 1 of
+the exception information bits are supplied to the client by the host.
+The default state of bit 2 as set by the host is zero, and the client
+may st the bit to 1 before returning from the exception handler.<p>
+
+Bit 0-14 of the error code at SS:(E)SP+28H are the "virtual" DR6 on
+debug (Int 1) exceptions, and correspond to debug breakpoint 0-14.  In
+other words, if bits 0 and 2 are set in the error code field on an Int
+1 exception, then debug watchpoints 0 and 2 have fired.  The handle
+returned by the Set Debug Watchpoint (<a
+href="api/310b00.html">Function 0B00H</a>) corresponds to the bit
+number in the virtual DR6.  Bit 15 of the virtual DR6 is set (1) if
+the Int 1 is due to the trap flag.  Breakpoints may be virtualized,
+and there is no guarantee of correspondence with the actual hardware.
+The provision for up to 15 breakpoints is made for future CPUs or
+external debugging hardware (80386 and 80486 CPUs support only four
+hardware breakpoints). <p>
+
+The PTE and CR2 fields of the expanded stack frame at SS:(E)SP+50H and
+54H respectively are only valid for page faults (Int 0EH).  Bits 0-7
+of the PTE (page table entry) field are from the actual PTE and may be
+virtualized by the host; the remaining bits of the PTE field are
+undefined.  The CR2 field contains the linear address that caused the
+fault. <p>
+
+Exception handlers installed with <a href="api/310212.html">Functions
+0212H</a> and <a href="api/310213.html">0213H</a> may terminate in any
+of the following three ways:
+
+<ul>
+
+<li> <tt>RETF</tt> from the old-style stack frame (only modifications
+to the old-style stack frame will be recognized and a client may not
+use this type of return for real-mode exceptions);<p>
+
+<li> Discard the old-style stack frame by adding 20H (32) to (E)SP,
+then <tt>RETF</tt> from the new-style (expanded) stack frame);<p>
+
+<li> <tt>FAR JUMP</tt> to previous owner of the exception (the previous
+owner should never be <tt>CALL</tt>ed).<p>
+
+</ul>
+
+The fields at offsets 2CH through 4FH in the expanded stack frame may
+be modified by an exception handler.  Note that the handler should
+only modify the values in the particular frame (SS:(E)SP)+0 or
+SS:(E)SP+20H) that it will use for the <tt>RETF</tt>.  Altered values
+in the other frame are ignored by the DPMI host.  Real mode exceptions
+do not have valid data in the old-style frame.  A real mode exception
+handler must discard the old-style stack frame if it returns.<p>
+
+<b>Example:</b> The following code illustrates how a client would
+install its own exception handler for general protection (GP) faults.
+The actual handler does nothing more than reach into the stack frame
+and alter the return address, so that control within the application
+restarts at a different point after the exception handler exits.
+
+<pre>
+prevgp	dd	0			; address of previous
+					; GP fault handler
+
+	.
+	.				; this code is executed during
+	.				; application initialization...
+	mov	ax,0210h		; get address of previous
+	mov	bl,13			; owner of GP fault vector
+	<a href="api/310210.html">int	31h</a>
+	mov	word ptr prevgp,dx	; save as far pointer
+	mov	word ptr prevgp+2,cx
+
+	mov	ax,0212h		; install our GP fault handler
+	mov	bl,13
+	mov	cx,cs			; CX:DX = handler address
+	mov	dx,offset _TEXT:gpfisr
+	<a href="api/310212.html">int	31h</a>
+	jc	init9			; jump, couldn't install
+	.				; continue with initialization
+	.
+	.
+
+gpfisr proc far				; this is the actual exception
+					; handler for GP faults
+	add	sp,20h			; discard "old" stack frame
+	push	bp			; point CS:IP in stack frmae to
+	mov	bp,sp			; GP fault error message routine
+	mov	word ptr [bp+0eh],offset _TEXT:	gpferr
+	mov	word ptr [bp+12h],cs
+	pop	bp
+	ret				; now return from exception
+gpfisr endp
+
+gpferr proc near			; this routine executes after
+					; GPFISR returns to DPMI host
+	
+	mov	ax,4c01h		; terminate DPMI client with
+	int	21h			; nonzero return code
+
+gpferr endp
+</pre>
+
+

@@ -1,0 +1,169 @@
+By: Inbar Raz
+--------------------------------------------------------------------
+
+ The FAT is a linked-list table that DOS uses to keep track of the physical
+ position of data on a disk and for locating free space for storing new files.
+
+ The word at offset 1aH in a directory entry is a cluster number of the first
+ cluster in an allocation chain.  If you locate that cell in the FAT, it will
+ either indicate the end of the chain or the next cell, etc.  Observe:
+
+                                    starting cluster number --|
+Directory +-------------------+-+-------------------+---+---+-+-+-------+
+Entry -- |M Y F I L E   T X T|a|                   |tim|dat|08 | size  |
+          +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-|-+-+-+-+-+
+                                    +-------------------------+
+    00  01  02  03  04  05  06  07  |8  09  0a  0b  0c  0d  0e  0f
+   +--++--++--++--++--++--++--++--++-++--++--++--++--++--++--++--+
+00 |ID||ff||03-04-05-ff||00||00||09-0a-0b-15||00||00||00||00|
+   +--++--++--++--++--++--++--++--++--++--++--++|-++--++--++--++--+
+                        +-----------------------+
+   +--++--++--++--++--++-++--++--++--++--++--++--++--++--++--++--+
+10 |00||00||00||00||00||16-17-19||f7||1a-1b-ff||00||00||00||00|
+   +--++--++--++--++--++--++--++|-++--++-++--++--++--++--++--++--+
+                                +-------+
+This diagram illustrates the main concepts of reading the FAT.  In it:
+þ The file MYFILE.TXT is 10 clusters long.  The first byte is in cluster 08
+  and the last is in cluster 1bH.  The chain is 8,9,0a,0b,15,16,17,19,1a,1b.
+  Each entry indicates the next entry in the chain, with a special code in
+  the last entry.
+þ Cluster 18H is marked bad and is not part of any allocation chain.
+þ Clusters 6,7, 0cH-14H, and 1cH-1fH are empty and available for allocation.
+þ Another chain starts at cluster 2 and ends at cluster 5.
+
++-----------+
+| FAT Facts | The FAT normally starts at logical sector 1 in the DOS partition
++-----------+ (eg, you can read it with INT 25H with DX=1).  The only way to
+ be sure is to read the boot sector (DX=0), and examine offset 0eH.  This
+ tells how many boot and reserved sectors come before the FAT.  Use that
+ number (usually 1) in DX to read the FAT via INT 25H.
+
+ There may be more than one copy of the FAT.  There are usually two complete
+ copies.  If there are two or more, they will all be adjacent (the second FAT
+ directly follows the first).
+
+ You have the following services available to help you determine information
+ about the FAT:
+
+   þ Use INT 25H to read the Boot Sector and examine the data fields therein
+   þ Use DOS Fn 36H or 1cH to determine total disk sectors and clusters
+   þ Use DOS Fn 44H (if the device driver supports Generic IOCTL)  DOS 3.2
+   þ Use DOS Fn 32H to get all kinds of useful information.   UNDOCUMENTED
+
+ Note: The boot sector of non-booting disks (such as network block devices
+       and very old hard disks) may contain nothing but garbage.
+
++---------------+
+| 12-bit/16-bit | The FAT can be laid out in 12-bit or 16-bit entries. 12-bit
++---------------+ entries are very efficient for media less than 384K--the
+ entire FAT can fit in a single 512-byte disk sector.  For larger media, each
+ FAT entry must map to a larger and larger cluster size--to the point where a
+ 20M hard disk would need to allocate in units of 16 sectors in order to use
+ the 12-bit format (in other words, a 1-byte file would take up a full 8K
+ cluster of a disk).
+
+ 16-bit FAT entries were introduced with DOS 3.0 with the necessity of
+ efficient handling the AT's 20-Megabyte hard disk.  However, floppy disks
+ and 10M hard disks continue to use the 12-bit layout.  You can determine if
+ the FAT is laid out with 12-bit or 16-bit elements:
+
+  DOS 3.0 says: If a disk has more than 4086 (0ff6H) clusters, it uses 16 bits
+                (4096 is max value for a 12-bit number and >0ff6H is reserved)
+  DOS 3.2 says: If a disk has more than 20740 (5104H) SECTORS, it uses 16 bits
+                (in other words, any disk over 10 Megabytes uses a 16-bit FAT
+                 and all others--including large RAM disks--use 12-bits).
+
+Note: It's a common misconception that the 16-bit FAT allows DOS to work with
+      disks larger than 32 Megabytes.  In fact, the limiting factor is that
+      INT 25H/26H (through which DOS performs its disk I/O) in unable to
+      access a SECTOR number higher than 65535.  Normally, sectors are 512
+      bytes («-K), so that sets the 32M limit.
+
+      In DOS 4.0, INT 25H/26H supports a technique for accessing sector
+      numbers
+      higher than 65535, and thus supports trans-32M DOS partitions.  This
+      has no effect on the layout of the FAT itself.  Using 16-bit FAT
+      entries and 4-sector clusters, DOS now supports partitions up to 134M
+      (twice that for 8-sector clusters, etc.).
+
++-----------------+
+| Reading the FAT | To read the value of any entry in a FAT (as when following
++-----------------+ a FAT chain), first read the entire FAT into memory and
+ obtain a starting cluster number from a directory.  Then, for 12-bit entries:
+                                                               ==============
+þ Multiply the cluster number by 3 =|
+þ Divide the result by 2   =========+= (each entry is 1.5 (3/2) bytes long)
+þ Read the WORD at the resulting address (as offset from the start of the FAT)
+þ If the cluster was even, mask the value by 0fffH (keep the low 12 bits)
+  If the cluster number was odd, shift the value right by 4 bits (keep the
+  upper 12 bits)
+þ The result is the entry for the next cluster in the chain (0fffH=the end).
+
+Note: A 12-bit entry can cross over a sector boundary, so be careful with
+      1-sector FAT buffering schemes.
+
+ 16-bit entries are simpler--each entry contains the 16-bit offset (from the
+ start of the FAT) of the next entry in the chain (0ffffH indicates the end).
+
++-------------+
+| FAT Content | The first byte of the FAT is called the Media Descriptor or
++-------------+ FAT ID byte.  The next 5 bytes (12-bit FATs) or 7 bytes
+ (16-bit FATs) are 0ffH.  The rest of the FAT is composed of 12-bit or 16-bit
+ cells that each represent one disk cluster.  These cells will contain one of
+ the following values:
+
+    þ (0)000H ................... an available cluster
+    þ (f)ff0H through (f)ff7H ... a reserved cluster
+    þ (f)ff7H ................... a bad cluster
+    þ (f)ff8H through (f)fffH ... the end of an allocation chain
+    þ (0)002H through (f)fefH ... the number of the next cluster in a chain
+
+Note: the high nibble of the value is used only in 16-bit FATs; eg, a bad
+      cluster is marked with 0ff7H in 12-bit FATs, and fff7H with 16-bit FATs.
+
++------------------------------------------------+
+| Converting a Cluster Number to a Sector Number | After you obtain a file's
++------------------------------------------------+ starting cluster number
+ from a directory entry you will want to locate to actual disk sector that
+ holds the file (or subdirectory) data.
+
+ A diskette (or a DOS partition of a hard disk) is laid out like so:
+
+ þ Boot and reserved sector(s)
+ þ FAT #1
+ þ FAT #2 (optional -- not used on RAM disks)
+ þ root directory
+ þ data area (all file data reside here, including files for directories)
+
+ Every section of this layout is variable and the sizes of each section must
+ be known in order to perform a correct cluster-to-sector conversion.  The
+ following formulae represent the only documented method of determining a DOS
+ logical sector number from a cluster number:
+
+       RootDirSectors = sectorBytes / (rootDirEntries * 32)
+       FatSectors     = fatCount * sectorsPerFat
+       DataStart      = reservedSectors + fatSectors + rootDirSectors
+
+  INT 25h/26h Sector  = DataStart + ((AnyClusterNumber-2) * sectorsPerCluster)
+
+Where the variables:
+
+       sectorBytes      sectorsPerFat      fatCount
+       rootDirEntries   reservedSectors    sectorsPerCluster
+
+ are obtained from the Boot Sector or from a BPB (if you can get access).  The
+ resulting sector number can be used in DX for INT 25H/26H DOS absolute disk
+ access.
+
+ If you are a daring sort of person, you can save trouble by using the
+ undocumented DOS Fn 32H (Get Disk Info) which provides a package of pre-
+ calculated data, including the sector number of the start of file data (it
+ gives you "DataStart", in the above equation).
+
+ Author's note:  The best use I've found for all this information is in
+ directory scanning; ie, to bypass the DOS file-searching services and read
+ directory sectors directly.  For a program that must obtain a list of all
+ files and directories, direct access of directory sectors will work roughly
+ twice as fast as DOS Fns 4eH and 4fH.
+
+

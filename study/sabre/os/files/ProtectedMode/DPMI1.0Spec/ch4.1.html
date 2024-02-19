@@ -1,0 +1,125 @@
+
+
+DPMI clients are loaded in real mode.  In order to enter protected
+mode, the client must first call <a href="api/2f1687.html">Int 2FH
+Function 1687H</a> to test for the presence of a DPMI host and obtain
+the address of the real-to-protected mode switch entry point.  <a
+href="api/2f1687.html">Function 1687H</a> also returns information
+about the DPMI host's capabilities and the size of a private data area
+which will be used by the host to hold client-specific data
+structures.  After allocating the required private data area via the
+normal real mode memory allocation interface (DOS Int 21H Function
+48H), the client makes a <tt>FAR CALL</tt> to the mode switch entry
+point with the following parameters: <p>
+
+<table border=1 cellspacing=0 cellpadding=4>
+<tr><td rowspan=5 align=center>AX</td><td colspan=2>flags</td></tr>
+<tr><th align=center>Bit</th><th>Significance</th></tr>
+<tr><td align=center rowspan=2>0</td><td align=left>0 = 16-bit application</td></tr>
+<tr><td align=left>1 = 32-bit application</td></tr>
+<tr><td align=center rowspan=1>1-15</td><td align=left>Reserved, should be zero</td></tr>
+
+<tr><td align=center>ES</td><td colspan=2>real mode segment of DPMI
+host private data area (must be at least as large as the size returned
+in SI by <a href="api/2f1687.html">Int 2FH Function 1687H</a>; ES is
+ignored if the size was zero.</td></tr>
+
+</table><p>
+
+
+If the Carry flag is set upon return, the mode switch was
+unsuccessful, the client is still running in real mode, and register
+AX contains one of the following error codes: <p>
+
+<table border=1 cellspacing=0 cellpadding=4>
+
+<tr><td align=center>8011H</td><td align=left>descriptor unavailable
+(cannot allocate descriptors for CS, DS, ES, SS, PSP, and environment
+pointer)</td></tr>
+
+<tr><td align=center>8021H</td><td align=left>invalid value (32-bit
+program specified but not supported)</td></tr>
+
+</table><p>
+
+If the mode switch was successful, the mode switch routine returns to
+the call in protected mode with the Carry flag clear and the following
+results:<p>
+
+<table border=1 cellspacing=0 cellpadding=4>
+
+<tr><td align=center>CS</td><td align=left>16-bit selector with base
+of real mode CS and a 64KB limit</td></tr>
+
+<tr><td align=center>SS</td><td align=left>selector with base of real
+mode SS and a 64 KB limit</td></tr>
+
+<tr><td align=center>DS</td><td align=left>selector with base of real
+mode DS and a 64 KB limit</td></tr>
+
+<tr><td align=center>ES</td><td align=left>selector to program's PSP
+with a 100H byte limit</td></tr>
+
+<tr><td align=center>FS</td><td align=left>0 (if running on an 80386
+or later)</td></tr>
+
+<tr><td align=center>GS</td><td align=left>0 (if running on an 80386
+or later)</td></tr>
+
+</table><p>
+
+All other registers are preserved, except that for 32-bit clients the
+high word of ESP will be forced to zero.  32-bit clients will
+initially run with a 16-bit code segment, but all Int 31H calls will
+still require 48-bit pointers, and the stack and data descriptors will
+be 32-bit (the Big bit will be set in the descriptors).  Note that if
+DS+SS at the time of the mode switch call, only one descriptor may be
+allocated, and the same selector may be returned in DS and SS.  The
+client is allowed to modify or free the CS, DS and SS descriptors
+allocated by the mode switch routine. <p>
+
+The environment pointer in the client program's PSP is automatically
+converted to a selector during the mode switch.  If the client wishes
+to free the memory occupied by the environment, it should do so <i>
+before </i> entering protected mode and zero the word at PSP:2CH
+(segment address of the environment>.  The client may change the
+environment point in the PSP after entering protected mode but it must
+restore it to the selector created by the DPMI host before
+terminating.  The client should <i>not</I> modify or free the PSP or
+environment descriptors supplied by the DPMI host.<p>
+
+<b> Example:</b>  The following code illustrates how a DPMI client
+would obtain the address of the mode switch entry point, allocate the
+DPMI host private data area, and enter protected mode.
+
+<pre>
+modesw	dd	0			; far pointer to DPMI host's
+					; mode switch entry point
+	.
+	.
+	.
+	mov	ax,1687h		; get address of DPMI host's
+	<a href="api/2f1687.html">int	2fh</a>			; mode switch entry point
+	or	ax,ax			; exit if no DPMI host
+	jnz	error
+	mov	word ptr modesw,di	; save far pointer to host's
+	mov	word ptr modesw+2,es	; mode switch entry point
+	or	si,si			; check private data area size
+	jz	@@1			; jump if no private data area
+
+	mov	bx,si			; allocate DPMI private area
+	mov	ah,48h			; allocate memory
+	int	21h			; transfer to DOS
+	jc	error			; jump, allocation failed
+	mov	es,ax			; let ES=segment of data area
+
+@@1:	mov	ax,0			; bit 0=0 indicates 16-bit app
+	call	modesw			; switch to protected mode
+	jc	error			; jump if mode switch failed
+					; else we're in prot. mode now
+	.
+	.
+	.
+</pre>
+
+

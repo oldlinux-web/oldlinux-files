@@ -1,0 +1,324 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN">
+<!-- saved from url=(0044)http://www.uruk.org/orig-grub/technical.html -->
+<HTML><HEAD><TITLE>GRUB Technical Info</TITLE>
+<META http-equiv=Content-Type content="text/html; charset=gb2312">
+<META content="MSHTML 6.00.2600.0" name=GENERATOR></HEAD>
+<BODY>
+<CENTER>
+<H1>GRUB Technical Info</H1></CENTER>
+<CENTER>
+<H3>by <A href="http://www.uruk.org/~erich/">Erich Boleyn</A></H3></CENTER>
+<HR>
+
+<H2>Contents</H2>
+<UL>
+  <LI><A 
+  href="http://www.uruk.org/orig-grub/technical.html#challenges">Challenges/Issues</A> 
+
+  <LI><A 
+  href="http://www.uruk.org/orig-grub/technical.html#specs">Specifications and 
+  other Goals</A> 
+  <LI><A 
+  href="http://www.uruk.org/orig-grub/technical.html#features">Features</A> 
+  <LI><A href="http://www.uruk.org/orig-grub/technical.html#other">Other 
+  Implementation Details</A> </LI></UL>
+<HR>
+
+<H2><A name=challenges>Challenges/Issues</A></H2>Several major issues have 
+plagued bootloaders for IBM PC compatibles for a long time, mostly related to 
+compatibility.
+<P>For more detail about the operation of standard floppy and hard disk 
+bootloaders, I have a 100K text document version of <A 
+href="http://www.uruk.org/orig-grub/PC_partitioning.txt">Hale Landis' How It 
+Works Series</A>, which is about the BIOS, booting, etc., and is very 
+informative, though mildly outdated, and with what seem to be a few errors. I'm 
+looking into getting updated information for flushing it out myself into a real 
+HTML document.
+<P>The worst problems and the general way they are solved in GRUB are listed 
+here (some of these have to be cooperatively solved with the OS):
+<P>
+<H3>Bootloader Size Limits</H3>Bootloaders have to be very small, typically 
+limited to one or more very small areas on the media in question.
+<P>At the start of the process, the BIOS loads the first block off of the boot 
+disk (floppy or hard drive), 512 bytes in size. This one block must be capable 
+of performing all the functions necessary to start up the system, or handing off 
+to another program. On a hard disk, at least 64 bytes are reserved for a 
+partition table, therefore unusable.
+<P>Traditionally, if the first block is not enough, at the start of the 
+partition with the OS being booted (or, for a floppy, just at the beginning) is 
+a fixed area, the size (generally from 512 bytes to 8 Kbytes) of which is 
+dependent on the filesystem variety in question.
+<P>Most bootloaders are written to fit within this limitation, giving them only 
+room for a very sparse functionality.
+<P>GRUB is very large compared to other bootloaders (typically 20 to 30 K). A 
+mechanism is in place which can load all of it's components for different <A 
+href="http://www.uruk.org/orig-grub/install.html">installal methods</A>. The 
+feeling from the author is that this will not be a problem since most of the 
+features pay for themselves both in terms of space (certainly the generic 
+decompression code, for example) and flexibilty to both end-users and experts.
+<P>
+<H3>Partitioning Issues</H3>The traditional layout of a floppy on a PC is with 
+the first block being the boot-controller, and the rest of the disk being 
+formatted to some filesystem type.
+<P>The traditional layout of a hard disk on a PC is with the first block being 
+the boot-controller, referred to as the MBR (Master Boot Record), with the rest 
+of the disk subdivided into 4 sections (called "partitions"), each of which look 
+either like a logical floppy (boot block + filsystem), or a full hard disk (sort 
+of a recursive definition here, though only one of the partitions can be one of 
+these). Inside one of the recursive hard disk definitions, only one of the 4 
+partitions can have a filesystem. The pratical result is that an arbitrary 
+number of partitions can be represented. The biggest problem here is that 
+generally only one of the 4 partitions listed directly in the main MBR can be 
+the "active" one, which is the one where any subsidary boot blocks are pulled 
+from.
+<P>Most bootloaders don't deal with the "active partition" marker in a very 
+intelligent manner.
+<P>GRUB can both PC style partitions (normal and extended DOS-style) and 
+386BSD/Mach style BSD sub-partitions in a consistent manner, plus it can set the 
+"active partition" marker as desired (he "active partition" marker is currently 
+irrelevant to GRUBs actual behavior, this still needs some work related to 
+default device notations).
+<P>
+<H3>Geometry Translation</H3>There are several methods of using the BIOS to 
+access a disk before any kind of driver is active. The only consistent one is 
+the INT 13h interface, which uses an addressing scheme based on the Cylinder, 
+Head, and Sector positions of a block, packed into a value consisting of 10 
+bits, 8 bits, and 6 bits, respectively.
+<P>To attempt to get around this issue, and in the case of SCSI disks, to allow 
+a differential number of sectors in different physical cylinders without 
+confusing the heck out of the software, the concept of Geometry Translation was 
+introduced. Geometry Translation produces a transparent virtual mapping from 
+some phantom number of Cylinders, Sectors and Heads onto the real hardware of 
+the disk, generally trying to increase the space of the disk accessible via the 
+INT 13h interface.
+<P>Another problem created from the above is that different controller/BIOS 
+combinations (and possibly even different particular installations of software) 
+can use different geometry translations, and since the bootloaders on the disk 
+depend on the particular numbers, they either have to be carefully updated, or, 
+in some cases, the whole OS must be re-installed when moving the disk to another 
+controller/BIOS combination.
+<P>The essential issue is that pretty much all bootloaders prior to GRUB use 
+Cylinder/Head/Sector numbers for the first stage of booting, so if that mapping 
+should change, your OS can't boot, even though the linear mapping is the same, 
+and if you could get it booted somehow, everything work would fine.
+<P>GRUB solves this by translating from/to a linear block-number <B>AT ALL 
+TIMES</B>. This turns out to be OK, as the major OS used to test a BIOS 
+translation mechanism, DOS, uses exactly the same mappings.
+<P>
+<H3>512MB - 8GB BIOS Translation Size Limits</H3>Related to the Gemetry 
+Translation problem is the problem that in standard INT 13h BIOS interface has a 
+maximum of 24 bits to access the disk with.
+<P>The problem is that even presuming a perfectly spanned space, 24 bits is only 
+16 M blocks, and at 512 bytes each, this is a maximum disk size of 8 GB. Most 
+real systems have limitations of either 512 MB (this is where the IDE limit of 
+508 MB comes from, I'm pretty sure, as the top 4 bits of the "head" number can't 
+be used in most BIOS IDE interfaces), or 1 GB, though this is changing, moving 
+toward the 8 GB maximum size.
+<P>GRUB can't universally solve this problem, as there is no new interface which 
+is used in all machines. At least one newer interface which is present on some 
+machines ("LBA", which is in more and more new ones, supposedly) may be able to 
+be used transparently in place of INT 13h when available. This is still being 
+investigated.
+<P>
+<H3>Memory size determination</H3>Various OS's do this differently. Some rely on 
+their bootloader, and some perform the probe themselves. Most are limited to 
+detecting a maximum of 64MB on a PC, in any case. Kludges where a hard-coded 
+portion telling the machine how much RAM is installed, or even compiling it in, 
+have been made for many OSes.
+<P>Since this is both once-only code and only involves the BIOS, the solution 
+which Multiboot and GRUB uses is to perform the probe in the bootloader. Look at 
+the bulleted item "Detects all Installed RAM" in the section <A 
+href="http://www.uruk.org/orig-grub/technical.html#features">Features</A> below.
+<P>
+<HR>
+
+<H2><A name=specs>Specifications and other Goals</A></H2>The primary requirement 
+for GRUB is that it be compliant with the <A 
+href="http://www.uruk.org/orig-grub/boot-proposal.html">Multiboot Standard</A>.
+<P>The other goals, listed in approximate order of importance, are:
+<P>
+<UL>
+  <LI>Basic functions must be easy for an end-user to use.
+  <P></P>
+  <LI>Rich functionality for OS experts/designers.
+  <P></P>
+  <LI>Compatibility for booting FreeBSD, NetBSD, and Linux. Proprietary OS's 
+  such as DOS, Windows NT, and OS/2 are supported via a chain-loading function.
+  <P></P></LI></UL>Except for specific compatibility modes (chain-loading and the 
+Linux 'piggyback' format), all kernels will be started in much the same state as 
+in the Multiboot Standard listed above. Only kernels being loaded at 1 megabyte 
+or above are presently supported. Any attempt to load below that boundary will 
+simply result in immediate failure and an error message reporting the problem.
+<P>
+<HR>
+
+<H2><A name=features>Features</A></H2>In addition to the requirements in the 
+previous section, GRUB has the following features (note that the Multiboot 
+Standard doesn't explicitly require everything listed in it, but GRUB will 
+support all options):
+<P>
+<UL>
+  <LI><B>Multiple Executable Formats</B>: Supports many of the <B>a.out</B> 
+  variants plus <B>ELF</B>. Any symbol table present is also loaded.
+  <P></P>
+  <LI><B>Supports Non-Multiboot OS's</B>: Supports many of the various free 
+  32-bit OS's prior to any Multiboot compliance. Chiefly FreeBSD, NetBSD, and 
+  Linux. Chain-loading is also supported.
+  <P></P>
+  <LI><B>Loads Multiple Modules</B>: Multiboot feature of loading multiple 
+  modules is fully supported.
+  <P></P>
+  <LI><B>Configuration File</B>: Supports a human-readable text configuration 
+  file with preset boot commands. The <A 
+  href="http://www.uruk.org/orig-grub/commands.txt">list of commands</A> are a 
+  superset of those supported on the command-line. An <A 
+  href="http://www.uruk.org/orig-grub/menu.lst">example command-file</A> is 
+  provided.
+  <P></P>
+  <LI><B>Menu Interface</B>: A menu-interface listing the preset boot commands, 
+  with a programmable timeout, is available. There is no fixed limit on the 
+  number of boot command-set entries, and should have space for several hundred.
+  <P></P>
+  <LI><B>Flexible Command-Line Interface</B>: A fairly flexible command-line 
+  interface, accessible from the menu, is available to edit any preset commands, 
+  or simply start a new command-set from scratch. The <A 
+  href="http://www.uruk.org/orig-grub/commands.txt">list of commands</A> are a 
+  subset of those supported for command-files. Editing commands closely resemble 
+  the BASH shell command-line, with TAB-completion-listing (it doesn't perform 
+  the completion, just lists the possibilities) of commands, devices, 
+  partitions, and files in a directory depending on context. If no config file 
+  is present, it goes into the command-line.
+  <P></P>
+  <LI><B>Multiple Filesystem Types</B>: Supports multiple filesystem types 
+  transparently, plus an explicitly usable block-list notation. The currently 
+  supported filesystem types are <B>BSD FFS</B>, <B>DOS FAT</B>, and <B>Linux 
+  ext2fs</B>. There is also a page describing the <A 
+  href="http://www.uruk.org/orig-grub/filesystem.txt">GRUB filesystems and 
+  interfaces</A>.
+  <P></P>
+  <LI><B>Decompression Support</B>: Can decompress files which were compressed 
+  with using "gzip". This function is both automatic and transparent to the user 
+  (i.e. all functions operate normally upon the uncompressed contents of the 
+  files in question). This is a win on 2 fronts, as it both greatly reduces file 
+  size and loading time (there are a few pathological cases where loading a very 
+  badly organized ELF kernel might make it take longer, but IMO you'll never see 
+  this in practice), a particularly major win for floppies. It is conceivable 
+  that some kernel modules should be loaded in a compressed state, so a variant 
+  of the module loading command which doesn't uncompress them can be used.
+  <P></P>
+  <LI><B>Access Data on Any Installed Device</B>: Supports reading data from any 
+  or all floppy or hard disk(s) recognized by the BIOS, independent of the 
+  setting for the root partition.
+  <P></P>
+  <LI><B>Geometry Translation-Idependent</B>: Subject to the constraint that it 
+  cannot go past the end of the geometry-translated area of a drive, the 
+  particular translation used is generally irrelevant. This implies a drive 
+  installed and running on a controller with one translation in use may in 
+  general be moved to another controller with a different translation (or the 
+  translation settings on the first controller, if configurable, may be changed) 
+  with no adverse effects and no other changes necessary.
+  <P></P>
+  <LI><B>Detects All Installed RAM</B>: GRUB can generally find all the 
+  installed RAM on a PC-compatible machine. It uses the BIOS query technique 
+  described on the <A href="http://www.uruk.org/orig-grub/mem64mb.html">INT 15h, 
+  AX=E820h - Query System Address Map</A> web page. As described on the 
+  Multiboot Standard web page listed above, OS's which only use the lower and 
+  upper memory values (whose presence is determined by bit 0 of the flags word 
+  passed to the OS) may not be capable of receiving information on all of 
+  installed memory. On most machines, upper memory is contiguous, so the problem 
+  does not arise.
+  <P></P></LI></UL>Future directions might include an internal programming 
+language for supporting richer sets of boot options with control statements (it 
+becomes a boot-script at that point), and possibly support for non-IBM 
+PC-compatible machines.
+<P>One definite path for future work is how to fairly transparently get around 
+the 8 GB geometry translation limitation.
+<P>
+<HR>
+
+<H2><A name=other>Other Implementation Details</A></H2>GRUB can completely 
+replace the primary bootloader on a hard disk or floppy disk. On a hard disk, it 
+can also be run after some other bootloader capable of chain-loading.
+<P>GRUB is broken into 2 distinct components, or stages, which are loaded at 
+different times in the boot process. The Stage 1 has to know where to find Stage 
+2, and the Stage 2 has to know where to find it's configuration file (if Stage 2 
+doesn't have a config file, it drops into the command-line interface and waits 
+for a user command).
+<P>Here is a memory map of the various components:
+<P><PRE>
+      0       to    4K-1 :   Interrupt &amp; BIOS area.
+
+      down  from    8K-1 :   16-bit stack area.
+
+      8K   to  (ebss1.5) :   Stage-1.5 (optionally) loaded here by Stage-1.
+
+      0x7c00  to  0x7dff :   Stage-1 loaded here by the BIOS.
+      0x7e00  to  0x7e08 :   scratch space used by Stage-1.
+
+      32K    to  (ebss2) :   Stage-2 loaded here by Stage-1.5 or Stage-1.
+
+        (middle area)    :   heap used for random memory allocation.
+
+      down  from  416K-1 :   32-bit stack area.
+
+      416K    to  448K-1 :   Filesystem info buffer (when reading a filesys).
+      448K  to  479.5K-1 :   BIOS track read buffer.
+      479.5K  to  480K-1 :   512 byte fixed SCRATCH area.
+
+      480K    to  511K-1 :   general storage heap.
+
+</PRE>Description of GRUB's major components (and some of the boot sequence):
+<P>
+<H3>Stage 1</H3>Stage 1 is only used to load Stage 2. If Stage 2 can be loaded 
+in some other manner in a compatible fashion, then Stage 1 is unnecessary, and 
+doesn't need to be used.
+<P>
+<UL>
+  <LI>On a floppy, there is generally only one possible boot area, the first 
+  boot sector. The Stage 1 portion would go there.
+  <P></P>
+  <LI>On a hard disk, Stage 1 can be part of the MBR block or part of the first 
+  block of some partition.
+  <P></P></LI></UL>Stage 1 "knows" where Stage 2 is by entries in a block-list 
+loading table embedded in it. It loads the lists of blocks off of the booting 
+drive, then jumps to a specified CS:IP in 16-bit real mode. These are described 
+in the page on <A 
+href="http://www.uruk.org/orig-grub/embedded_data.txt">embedded data</A>. It 
+queries the BIOS for the disk geometry, and maps the linear block numbers there 
+to C:H:S addresses used by the INT 13h BIOS interface.
+<P>See the <A href="http://www.uruk.org/orig-grub/install.html">Installation 
+Guide</A> for details on how to set up loading Stage 2 from Stage 1.
+<P>
+<H3>OPTIONAL Stage 1.5</H3>Since the Stage 2 is so large (typically 30K or 
+larger in size), a special stripped down version of the Stage 2 code, sort of a 
+Stage 1.5, can be used because it might fit into one of the fixed areas of the 
+disk. The idea is to have the Stage 1.5 look for a certain file and attempt to 
+execute it as a Stage 2 (this allows changing Stage 2 easily, while leaving it a 
+normal file in the filesystem).
+<P>This is actually the case for the BSD FFS filesystem. There is a fixed area 
+7K in size at the beginning of the partition which is reserved for the 
+bootloader. The Stage 1.5 with BSD FFS filesystem support is about 6.5 K in size 
+when compiled in a.out format, and fits nicely, allowing the Stage 2 to be a 
+normal file in the "/boot/grub" directory of the install partition.
+<P>This same technique can in principle be applied to other filesystems, but the 
+problem here is that the fixed area available to bootloaders is generally quite 
+small (0.5 to 3 K), and a Stage 1.5 wouldn't fit.
+<P>It contains <A 
+href="http://www.uruk.org/orig-grub/embedded_data.txt">embedded data</A> on 
+where to look for the install partition and the Stage 2 (it uses what would be 
+the "configuration file" entry in the Stage 2 for this purpose).
+<P>
+<H3>Stage 2</H3>This component is the GRUB proper.
+<P>It gets most of the information about the machine and the boot state from the 
+BIOS and information passed into it at starting time, except that it contains <A 
+href="http://www.uruk.org/orig-grub/embedded_data.txt">embedded data</A> on 
+where to look for the install partition and the configuration file.
+<P>The first action of the Stage 2 is to look for it's configuration file. If 
+one is not found, then it drops into the command-line interface. If one is 
+found, the full menu interface is activated containing whatever entries were 
+found in the file (the command-line is still available via a command from the 
+menu interface).
+<P>
+<HR>
+<A href="mailto:erich@uruk.org"><I>erich@uruk.org</I></A>
+<P></P></BODY></HTML>

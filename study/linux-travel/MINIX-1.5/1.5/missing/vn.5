@@ -1,0 +1,2672 @@
+Path: tut!sunic!mcsun!uunet!cs.utexas.edu!samsung!munnari.oz.au!basser!ultima!nick
+From: nick@ultima.cs.uts.oz (Nick Andrew)
+Newsgroups: comp.os.minix
+Subject: Vn for Minix, part 5 of 5 (sorry)
+Keywords: vn news usenet
+Message-ID: <16672@ultima.cs.uts.oz>
+Date: 27 Nov 89 21:27:37 GMT
+Organization: Comp Sci, NSWIT, Australia
+Lines: 2662
+
+
+	Geez I'm stupid ... neatly segregate the files into appropriately
+sized shars, then forget to create and post one!  Here is the remaining
+sharfile.
+
+Sorry, Nick.
+
+
+#! /bin/sh
+# This is a shell archive.  Remove anything before this line, then unpack
+# it by saving it into a file and typing "sh file".  To overwrite existing
+# files, type "sh file -c".  You can also feed this as standard input via
+# unshar, or by typing "sh <file", e.g..  If this archive is complete, you
+# will see the following message at the end:
+#		"End of shell archive."
+# Contents:  stat.c std.c std.h storage.c strings.c strtok.c svart.c
+#   term_set.c tmpnam.c tty.h tty_set.c tune.h
+# Wrapped by nick@nswitgould on Tue Nov 28 07:59:57 1989
+PATH=/bin:/usr/bin:/usr/ucb ; export PATH
+if test -f 'stat.c' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'stat.c'\"
+else
+echo shar: Extracting \"'stat.c'\" \(4301 characters\)
+sed "s/^X//" >'stat.c' <<'END_OF_FILE'
+X/*
+X** vn news reader.
+X**
+X** stat.c - stat and log file collection
+X**
+X** see copyright disclaimer / history in vn.c source file
+X*/
+X#include <stdio.h>
+X#include <sys/types.h>
+X#ifdef SYSV
+X#include <fcntl.h>
+X#endif
+X
+X#ifndef	MINIX
+X/* Minix doesn't have sys/file.h for some reason */
+X#include <sys/file.h>
+X#endif
+X
+X#include <sys/stat.h>
+X#include <pwd.h>
+X#include "config.h"
+X#include "node.h"
+X
+Xextern NODE *hashfind();
+Xextern char *strtok();
+Xextern int Ncount;
+Xextern NODE **Newsorder;
+X
+X#ifdef VNLOGFILE
+Xstatic char Start[80];
+X#endif
+X
+Xstat_start()
+X{
+X#ifdef VNLOGFILE
+X	char *ctime();
+X	long now;
+X
+X	time(&now);
+X	strcpy(Start,ctime(&now));
+X#endif
+X}
+X
+X/*
+X** flag = 0, "NO NEWS" type session.
+X**      = 1, regular session.
+X**	= -1, aborted session
+X**
+X** CAUTION: routine CALLED from within printex() - do NOT
+X** call printex().  Simply do message to stderr on fail.
+X*/
+Xstat_end(flag)
+Xint flag;
+X{
+X	NODE *nd;
+X	char *nl,*index();
+X	char *how;
+X	struct passwd *ptr, *getpwuid();
+X	struct stat buf;
+X	long now;
+X	char bufr[80];
+X	char name[60];
+X	FILE *fp;
+X	int fd;
+X	long chk, rd, pg;
+X	int i;
+X
+X#ifdef VNLOGFILE
+X	if (stat(VNLOGFILE,&buf) == 0 && (fp = fopen(VNLOGFILE,"a")) != NULL)
+X	{
+X		time(&now);
+X		strcpy(bufr,ctime(&now));
+X		if ((nl = index(bufr,'\n')) != NULL)
+X			*nl = '\0';
+X		if ((nl = index(Start,'\n')) != NULL)
+X			*nl = '\0';
+X		if (flag == 0)
+X			how = "NO NEWS";
+X		else
+X		{
+X			if (flag > 0)
+X				how = "OK";
+X			else
+X				how = "ABORTED";
+X		}
+X		ptr = getpwuid (getuid());
+X		fprintf(fp, "%s\t%s - %s %s\n", ptr->pw_name, Start, bufr, how);
+X		fclose (fp);
+X	}
+X#endif
+X
+X#ifdef VNSTATFILE
+X	/*
+X	** Stat file is done with a fixed record size, and maintaining the
+X	** existing record order exactly so that concurrent users will do
+X	** the least damage.  If two users actually read & update a single
+X	** record simultaneously, we should just lose one user's counts.
+X	** Short of implementing a locking scheme, we probably won't do
+X	** much better.  Disadvantages are that deleted newsgroups never
+X	** get cleaned out, order is set by the first user whose
+X	** statistics are collected, it will break if anyone modifies it,
+X	** and the file is a bit larger than it needs to be.
+X	**
+X	** record format:
+X	**
+X	** CCCCCC PPPPPP RRRRRR newsgroup name ....  \n
+X	** ^      ^      ^      ^                    ^
+X	** 0      7      14     21              char 79
+X	**
+X	** CCCCCC - count of sessions searching group
+X	** PPPPPP - count of sessions actually finding pages for group
+X	** RRRRRR - count of sessions actually accessing articles in group
+X	*/
+X	if ((fd = open(VNSTATFILE,O_RDWR)) > 0)
+X	{
+X		bufr[80] = '\0';
+X
+X		/*
+X		** read a record, find the newsgroup, update counts.
+X		** If changed, seek back & overwrite.  By using fixed
+X		** length records, we should only lose something on
+X		** concurrent writes of the same record, and by writing
+X		** the ENTIRE record, we keep it consistent
+X		*/
+X		while ((i = read(fd,bufr,80)) == 80 && bufr[79] == '\n')
+X		{
+X			chk = atoi(bufr);
+X			pg = atoi(bufr+7);
+X			rd = atoi(bufr+14);
+X			strcpy(name,bufr+21);
+X			nl = strtok(name," \n");
+X			if (nl == NULL || (nd = hashfind(nl)) == NULL)
+X				continue;
+X			nd->flags |= FLG_STAT;
+X			if ((nd->flags & (FLG_SEARCH|FLG_ACC|FLG_PAGE)) == 0)
+X				continue;
+X			if ((nd->flags & FLG_SEARCH) != 0)
+X				++chk;
+X			if ((nd->flags & FLG_PAGE) != 0)
+X				++pg;
+X			if ((nd->flags & FLG_ACC) != 0)
+X				++rd;
+X			if (chk > 999999L)
+X				chk = 999999L;
+X			if (pg > 999999L)
+X				pg = 999999L;
+X			if (rd > 999999L)
+X				rd = 999999L;
+X			sprintf(bufr,"%6ld",chk);
+X			bufr[6] = ' ';
+X			sprintf(bufr+7,"%6ld",pg);
+X			bufr[13] = ' ';
+X			sprintf(bufr+14,"%6ld",rd);
+X			bufr[20] = ' ';
+X			lseek(fd,-80L,1);
+X			write(fd,bufr,80);
+X		}
+X
+X		/* format screwed up ? */
+X		if (i != 0)
+X		{
+X			lseek(fd,(long) -i,1);
+X			fprintf(stderr,"bad data in %s\n",VNSTATFILE);
+X		}
+X
+X		/* may have aborted during vns_news() */
+X		if (Newsorder == NULL)
+X			Ncount = 0;
+X
+X		/* now append any groups not in file yet */
+X		for (i = 0; i < Ncount; ++i)
+X		{
+X			nd = Newsorder[i];
+X			if ((nd->flags & FLG_STAT) != 0)
+X				continue;
+X			chk = rd = pg = 0;
+X			if ((nd->flags & FLG_SEARCH) != 0)
+X				chk = 1;
+X			if ((nd->flags & FLG_PAGE) != 0)
+X				pg = 1;
+X			if ((nd->flags & FLG_ACC) != 0)
+X				rd = 1;
+X			sprintf(bufr,"%6ld %6ld %6ld %-58s\n",
+X					chk, pg, rd, nd->nd_name);
+X			write(fd,bufr,80);
+X		}
+X		close(fd);
+X	}
+X#endif
+X}
+END_OF_FILE
+if test 4301 -ne `wc -c <'stat.c'`; then
+    echo shar: \"'stat.c'\" unpacked with wrong size!
+fi
+# end of 'stat.c'
+fi
+if test -f 'std.c' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'std.c'\"
+else
+echo shar: Extracting \"'std.c'\" \(24307 characters\)
+sed "s/^X//" >'std.c' <<'END_OF_FILE'
+X#include <stdio.h>
+X#include <pwd.h>
+X#include <ctype.h>
+X
+X#ifndef	MINIX
+X/* Minix is missing it */
+X#include <sys/param.h>
+X#endif
+X
+X#include "server.h"
+X#include "config_std.h"
+X#include "std.h"
+X
+X#ifdef	MINIX
+X#define clearerr(p) (((p)->_flags) &= ~_ERR)
+X#endif
+X
+X#ifndef MAXPATHLEN
+X#define MAXPATHLEN 240
+X#endif
+X
+Xextern NODE *hashfind();
+Xextern FILE *fopen();
+Xextern char *index(), *rindex();
+Xextern char *malloc();
+Xextern char *str_tstore(), *str_tpool(), *str_store();
+Xextern char *strtok(), *strpbrk();
+Xextern char *regex(), *regcmp();
+X
+X#ifdef MAILCHOOSE
+Xextern int (*Massage)();
+X#endif
+X
+X/*
+X	global flags signifying options set
+X*/
+X#define GF_ALL 1	/* -x option - scan everything */
+X#define GF_SPEC 2	/* -n option(s) - user specified groups */
+X#define GF_OVER 4	/* command line specification - overide marks */
+X
+Xchar *Vns_version = "res1.1";
+X
+Xstatic char *Onews, *Newsrc;
+Xstatic int Ntopt, Nntopt, Nwopt, Nnwopt;
+X
+Xstatic char *Wopt[NUMFILTER];		/* regular expressions for -w options */
+Xstatic char *Topt[NUMFILTER];		/* for -t options */
+Xstatic char *Negwopt[NUMFILTER];	/* for negated -w options */
+Xstatic char *Negtopt[NUMFILTER];	/* for negated -t options */
+X
+Xstatic char *Options[OPTLINES];
+Xstatic int Max_name, Optlines;
+Xstatic unsigned Gflags = 0;
+Xstatic char **Active;
+Xstatic int Actnum;
+Xstatic char *Mailer, *Poster;
+X
+Xstatic char *RT_head = RTHEAD;
+Xstatic char *P_head = PHEAD;
+Xstatic char *M_head = MHEAD;
+Xstatic char *R_head = RHEAD;
+Xstatic char *TO_head = TOHEAD;
+Xstatic char *F_head = FHEAD;
+Xstatic char *FT_head = FTHEAD;
+Xstatic char *T_head = THEAD;
+Xstatic char *DIS_head = DISHEAD;
+Xstatic char *L_head = LHEAD;
+Xstatic char *N_head = NHEAD;
+X
+Xstatic char *Fpfix = FPFIX;
+X
+X/*
+X**	environment setup.
+X*/
+Xvns_envir()
+X{
+X 	char dbuf[MAXPATHLEN], *rcname;
+X	char *vn_env();
+X	struct passwd *ptr, *getpwuid();
+X#ifdef MAILCHOOSE
+X	int mail_prompt();
+X
+X	Massage = mail_prompt;
+X#endif
+X
+X	ptr = getpwuid (getuid());
+X
+X	rcname = vn_env("MAILER",DEF_MAIL);
+X#ifdef INLETTER
+X	sprintf(dbuf,"cat %%s | %s",rcname);
+X#else
+X	/* used as a format string TWICE (%%%% -> %% -> %) */
+X	sprintf(dbuf,"cat %%%%s | %s %%s",rcname);
+X#endif
+X	Mailer = str_store(dbuf);
+X	rcname = vn_env("VNPOSTER",DEF_POST);
+X	sprintf(dbuf,"%s %%s",rcname);
+X	Poster = str_store(dbuf);
+X	rcname = vn_env("NEWSRC",DEF_NEWSRC);
+X	if (*rcname != '/')
+X	{
+X		sprintf (dbuf, "%s/%s",ptr->pw_dir,rcname);
+X		Newsrc = str_store (dbuf);
+X	}
+X	else
+X		Newsrc = str_store (rcname);
+X
+X	/* above logic guarantees that Newsrc contains a '/' */
+X 	strcpy(dbuf,Newsrc);
+X 	strcpy(rindex(dbuf,'/')+1,".vnXXXXXX");
+X	mktemp(dbuf);
+X	Onews = str_store (dbuf);
+X
+X	if (access (Newsrc,0) != 0)
+X		creat (Newsrc,0666);
+X}
+X
+X/*
+X	change directory to group
+X*/
+Xvns_gset(grp)
+Xchar *grp;
+X{
+X	char dbuf [RECLEN];
+X	g_dir (grp,dbuf);
+X	if (chdir(dbuf) < 0)
+X		printex("can't change to newsgroup directory");
+X}
+X
+X/*
+X	g_dir converts newsgroup name to directory string
+X*/
+Xstatic
+Xg_dir(s,t)
+Xchar *s,*t;
+X{
+X	char *ptr;
+X	sprintf (t,"%s/%s",SPOOLDIR,s);
+X	for (ptr=t+strlen(SPOOLDIR)+1; (ptr = index(ptr,'.')) != NULL; *ptr = '/')
+X		;
+X}
+X
+X/*
+X** myfind is used for hashfind() calls which aren't supposed to fail.
+X*/
+Xstatic NODE *
+Xmyfind(name)
+Xchar *name;
+X{
+X	NODE *n;
+X
+X	n = hashfind(name);
+X	if (n == NULL)
+X		printex("Unexpected table lookup failure");
+X	return (n);
+X}
+X
+Xvns_news(argc,argv,lfirst,nun)
+Xint argc;
+Xchar **argv;
+Xint *lfirst, *nun;
+X{
+X	FILE *fp;
+X	static char marks[] =
+X	{ 
+X		NEWS_ON, NEWS_OFF, '\0' 
+X	};
+X	int line, len, num;
+X	char buf [RECLEN], trail, optpflag, submark, *fret, *ptr;
+X
+X	++argv;
+X	--argc;
+X
+X	/* fill table with active newsgroups */
+X	fill_active ();
+X
+X	if (argc > 0)
+X	{
+X		Gflags |= GF_OVER;
+X		arg_opt(argc,argv,lfirst,nun);
+X		optpflag = 'y';
+X	}
+X	else
+X		optpflag = 'n';
+X
+X	if ((fp = fopen (Newsrc,"r")) == NULL)
+X		printex ("can't open %s for reading",Newsrc);
+X
+X	Optlines = 0;
+X
+X	for (line = 1; (fret = fgets(buf,RECLEN-1,fp)) != NULL && emptyline(buf) == 1; ++line)
+X		;
+X	if (fret != NULL && strncmp (buf,"options",7) == 0)
+X	{
+X		Options[0] = str_store(buf);
+X		Optlines = 1;
+X		trail = buf [strlen(buf)-2];
+X		for ( ; (fret = fgets(buf,RECLEN-1,fp)) != NULL; ++line)
+X		{
+X			if (trail != '\\' && buf[0] != ' ' && buf[0] != '\t')
+X				break;
+X			if (Optlines >= OPTLINES)
+X				printex ("%s - too many option lines (%d allowed)",Newsrc,OPTLINES);
+X			Options[Optlines] = str_store(buf);
+X			++Optlines;
+X			if ((len = strlen(buf)) >= 2 && buf[len-2] != '\\')
+X				trail = buf[len-2];
+X			else
+X				trail = '\0';
+X		}
+X	}
+X
+X	/* do the options from the newsrc file if there weren't command line args */
+X	if (Optlines > 0 && optpflag == 'n')
+X		newsrc_opt (lfirst,nun);
+X
+X	for ( ; fret != NULL; ++line, fret = fgets(buf,RECLEN-1,fp))
+X	{
+X		if (emptyline(buf) == 1)
+X			continue;
+X		if ((ptr = strpbrk(buf,marks)) == NULL)
+X		{
+X			fprintf (stderr,"\nwarning: line %d of %s (%s) - bad syntax\n",
+X			line,Newsrc,buf);
+X			continue;
+X		}
+X		submark = *ptr;
+X		*ptr = '\0';
+X		++ptr;
+X		num = 0;
+X		for (ptr = strtok(ptr," ,-\n"); ptr != NULL; ptr = strtok(NULL," ,-\n"))
+X		{
+X			len = atoi (ptr);
+X			for ( ; *ptr >= '0' && *ptr <= '9'; ++ptr)
+X				;
+X			if (*ptr != '\0' || len < num)
+X			{
+X				num = -1;
+X				fprintf (stderr,"\nwarning: line %d of %s (%s) - bad syntax\n",
+X				line,Newsrc,buf);
+X				break;
+X			}
+X			num = len;
+X		}
+X		if (num < 0)
+X			continue;
+X		chkgroup (buf,submark,num,0);
+X	}
+X	fclose (fp);
+X
+X	/* now take care of groups not specified in .newsrc */
+X	art_active();
+X
+X	/* free up the option string storage */
+X	for (num=0; num < Ntopt; ++num)
+X		regfree (Topt[num]);
+X	for (num=0; num < Nwopt; ++num)
+X		regfree (Wopt[num]);
+X	for (num=0; num < Nntopt; ++num)
+X		regfree (Negtopt[num]);
+X	for (num=0; num < Nnwopt; ++num)
+X		regfree (Negwopt[num]);
+X	Ntopt = Nwopt = Nntopt = Nnwopt = 0;
+X
+X	/* free the active list */
+X	free ((char *) Active);
+X}
+X
+Xstatic
+Xemptyline(s)
+Xchar *s;
+X{
+X	while (isspace(*s))
+X		++s;
+X	if (*s == '\0')
+X		return (1);
+X	return (0);
+X}
+X
+X/*
+X	fill hash table from active news group list
+X	This is needed to be able to process options
+X	before scanning user order.  Constructs an array
+X	of active newsgroup names for the rest of vns_nws().
+X*/
+Xstatic
+Xfill_active ()
+X{
+X	FILE *f;
+X	char *nread, act_rec[RECLEN];
+X	int num,lownum,rcount;
+X
+X	Max_name = 0;
+X	if ((f = fopen (ACTFILE,"r")) == NULL)
+X		printex ("couldn't open %s\n",ACTFILE);
+X
+X	/*
+X	** we do things this way so that we only examine active records
+X	** once, minimizing the window where changes could screw us up
+X	** at the cost of possibly alloc'ing a few extra bytes.  We start
+X	** with a count of one to have a positive rcount for alloc.
+X	*/
+X	for(rcount=1; fgets(act_rec, RECLEN-1, f) != NULL; ++rcount)
+X		;
+X	if ((Active = (char **) malloc(rcount*sizeof(char *))) == NULL)
+X		printex("Memory allocation failure");
+X
+X	rewind(f);
+X
+X	Actnum = 0;
+X	while (Actnum < rcount && fgets(act_rec, RECLEN-1, f) != NULL)
+X	{
+X		if (strtok (act_rec," \n") == NULL)
+X			continue;
+X		nread = strtok (NULL, " \n");
+X		if (nread != NULL)
+X			num = atoi(nread);
+X		else
+X			num = 0;
+X		nread = strtok (NULL, " \n");
+X		if (nread != NULL)
+X			lownum = atoi(nread);
+X		else
+X			lownum = 0;
+X		if (lownum > 0)
+X			--lownum;
+X		if (strlen(act_rec) > Max_name)
+X			Max_name = strlen(act_rec);
+X
+X		/* enter newsgroup, point to permanent copy of name */
+X		hashenter (act_rec, num, lownum);
+X		Active[Actnum] = (myfind(act_rec))->nd_name;
+X		++Actnum;
+X	}
+X
+X	fclose (f);
+X}
+X
+X/*
+X	check active newsgroups not mentioned in NEWSRC file
+X	(SFLG_SCAN not set)
+X*/
+Xstatic
+Xart_active ()
+X{
+X	int i;
+X	NODE *ptr;
+X
+X	for( i=0; i < Actnum; ++i)
+X	{
+X		ptr = myfind(Active[i]);
+X		if ((ptr->state & SFLG_SCAN) == 0)
+X			chkgroup (ptr->nd_name, NEWS_ON, 0, 1);
+X	}
+X}
+X
+X/*
+X	check group for new articles:
+X	s - group
+X	c - subscription indicator from NEWSRC
+X	n - number read
+X	new - new newsgroup flag
+X*/
+Xstatic
+Xchkgroup (s,c,n,new)
+Xchar *s,c;
+Xint n;
+Xint new;
+X{
+X	NODE *ptr;
+X	char sub;
+X	int nrd;
+X	int lowart;
+X	int st;
+X
+X	if ((ptr = hashfind(s)) != NULL && (ptr->state & SFLG_SCAN) == 0)
+X	{
+X		ptr->state |= SFLG_SCAN;
+X
+X#ifdef SYN_CHECK
+X		/* if "read" more than exist, reset */
+X		if (n > ptr->highnum)
+X		{
+X			n = ptr->highnum - SYN_SETBACK;
+X			fgprintf("%s: .newsrc out of synch, resetting\n",s);
+X		}
+X#endif
+X		lowart = ptr->lownum;
+X		if (n < ptr->lownum)
+X			n = ptr->lownum;
+X
+X		nrd = n;
+X		sub = c;
+X
+X		/*
+X		** scan decision is rather complex, since GF_ALL setting
+X		** overides "n" value, GF_SPEC indicates SFLG_SPEC flag used.
+X		** if GF_OVER set, SFLG_SPEC overides subscription mark, else
+X		** SFLG_SPEC AND subscribed is neccesary.
+X		*/
+X		if ((Gflags & GF_SPEC) != 0)
+X		{
+X			if ((ptr->state & SFLG_SPEC) == 0)
+X				c = NEWS_OFF;
+X			else
+X			{
+X				if ((Gflags & GF_OVER) != 0)
+X					c = NEWS_ON;
+X			}
+X		}
+X		if ((Gflags & GF_ALL) != 0)
+X			n = lowart;
+X		fw_group(s, new, sub == NEWS_ON, nrd, c == NEWS_ON);
+X		if (c == NEWS_ON && ptr->highnum > n)
+X		{
+X			st = outgroup (s,n,ptr->highnum);
+X			if (st > nrd)
+X				fw_chg(new, sub == NEWS_ON, st, c == NEWS_ON);
+X		}
+X	}
+X}
+X
+X/*
+X	vns_write writes the .newsrc file
+X*/
+Xvns_write(news,ncount)
+XNODE **news;
+Xint ncount;
+X{
+X	FILE *fp;
+X	NODE *p;
+X	char c;
+X	int i,rc;
+X
+X	if (link(Newsrc,Onews) < 0)
+X		printex ("can't backup %s to %s before writing",Newsrc,Onews);
+X
+X	if (unlink(Newsrc) < 0 || (fp = fopen(Newsrc,"w")) == NULL)
+X		printex ("can't open %s for writing (backed up in %s)",Newsrc,Onews);
+X	else
+X	{
+X		clearerr(fp);
+X		for (i=0; (rc = ferror(fp)) == 0 && i < Optlines; ++i)
+X			fprintf (fp,"%s",Options[i]);
+X		for (i=0; rc == 0 && i < ncount; ++i)
+X		{
+X			p = news[i];
+X			if ((p->flags & FLG_SUB) == 0)
+X				c = NEWS_OFF;
+X			else
+X				c = NEWS_ON;
+X#ifdef OLDRC
+X			fprintf (fp,"%s%c %d\n",p->nd_name,c,p->rdnum);
+X#else
+X			if (p->rdnum > 0)
+X				fprintf(fp,"%s%c 1-%d\n",p->nd_name,c,p->rdnum);
+X			else
+X				fprintf(fp,"%s%c 0\n",p->nd_name,c);
+X#endif
+X			rc = ferror(fp);
+X		}
+X		fclose (fp);
+X		if (rc != 0)
+X			printex ("write of %s failed, old copy stored in %s",Newsrc,Onews);
+X		else
+X			unlink (Onews);
+X	}
+X}
+X
+X/*
+X	arg_opt must be called prior to option scanning, since
+X	it uses the options array.  This is a bit of a kludge,
+X	but it saves a bunch of work.  NOTE - no command name argument
+X*/
+Xstatic
+Xarg_opt (argc,argv,lfirst,nun)
+Xint argc;
+Xchar **argv;
+Xint *lfirst, *nun;
+X{
+X	if (argc > OPTLINES)
+X		printex ("too many command line options (%d allowed)\n",OPTLINES);
+X	for (Optlines=0; Optlines < argc; ++Optlines)
+X	{
+X		Options[Optlines] = *argv;
+X		++argv;
+X	}
+X	newsrc_opt(lfirst,nun);
+X}
+X
+X/*
+X	option setting routine:
+X	sets global flags: GF_ALL for -x option GF_SPEC for -n.
+X	sets up filter array for article scanning
+X*/
+Xstatic
+Xnewsrc_opt(lfirst,nun)
+Xint *lfirst, *nun;
+X{
+X	int i;
+X	char curopt,tmp[RECLEN],*tok;
+X
+X	*nun = *lfirst = 0;
+X	Ntopt = Nwopt = Nnwopt = Nntopt = 0;
+X	curopt = '\0';
+X	for (i=0; i < Optlines; ++i)
+X	{
+X		strcpy(tmp,Options[i]);
+X		for (tok = strtok(tmp,",\\ \t\n"); tok != NULL; tok = strtok(NULL,",\\ \t\n"))
+X		{
+X			if (*tok != '-')
+X				do_opt (curopt,tok);
+X			else
+X			{
+X				for (++tok; index("nwt",*tok) == NULL; ++tok)
+X				{
+X					/* options with no strings */
+X					switch(*tok)
+X					{
+X					case 'S':
+X						Gflags &= ~GF_OVER;
+X						break;
+X					case '%':
+X						*lfirst = 1;
+X						break;
+X					case 'U':
+X						*nun = 1;
+X						break;
+X#ifdef OLDRC
+X					case 'i':
+X					/* Treat "-i" as synonym for "-x" */
+X#endif
+X					case 'x':
+X						Gflags |= GF_ALL;
+X					default:
+X						break;
+X					}
+X				}
+X				curopt = *tok;
+X				if (*(++tok) != '\0')
+X					do_opt (curopt,tok);
+X			}
+X		}
+X	}
+X}
+X
+X/* do_opt is for options with strings attached */
+Xstatic
+Xdo_opt (opt,str)
+Xchar opt, *str;
+X{
+X	switch (opt)
+X	{
+X	case 'n':
+X		Gflags |= GF_SPEC;
+X		specmark(str);
+X		break;
+X	case 'w':
+X		specfilter (FIL_AUTHOR,str);
+X		break;
+X	case 't':
+X		specfilter (FIL_TITLE,str);
+X		break;
+X	default:
+X#ifdef OLDRC
+X		Gflags |= GF_SPEC;	/* Assume anything else is newsgroup */
+X		specmark(str);
+X#endif
+X		break;
+X	}
+X}
+X
+Xstatic
+Xspecfilter (comp,str)
+Xchar comp,*str;
+X{
+X	int *count;
+X	char **rex;
+X
+X	/*
+X	** we may set rex one past end of array.  we will error before
+X	** referencing it if that's the case, however.
+X	*/
+X	if (*str == '!')
+X	{
+X		if (comp == FIL_TITLE)
+X		{
+X			count = &Nntopt;
+X			rex = Negtopt + *count;
+X		}
+X		else
+X		{
+X			count = &Nnwopt;
+X			rex = Negwopt + *count;
+X		}
+X		++str;
+X	}
+X	else
+X	{
+X		if (comp == FIL_TITLE)
+X		{
+X			count = &Ntopt;
+X			rex = Topt + *count;
+X		}
+X		else
+X		{
+X			count = &Nwopt;
+X			rex = Wopt + *count;
+X		}
+X	}
+X	if (*count >= NUMFILTER)
+X		printex ("too many %c options, %d allowed",comp,NUMFILTER);
+X	if ((*rex = regcmp(str,(char *) 0)) == NULL)
+X		printex ("%c option regular expression syntax: %s",comp,str);
+X	++(*count);
+X}
+X
+X/*
+X	handle the newsgroup specification string.
+X	("all" convention - braack!!!)
+X*/
+Xstatic
+Xspecmark (s)
+Xchar *s;
+X{
+X	unsigned ormask,andmask;
+X	int i,len;
+X	char *ptr,*re,pattern[RECLEN];
+X	NODE *nptr;
+X
+X	if (*s == '!')
+X	{
+X		++s;
+X		ormask = 0;
+X		andmask = ~SFLG_SPEC;
+X		if (*s == '\0')
+X			return;
+X	}
+X	else
+X	{
+X		ormask = SFLG_SPEC;
+X		andmask = 0xffff;
+X	}
+X
+X	/* convert "all" not bounded by alphanumerics to ".*". ".all" becomes ".*" */
+X	for (ptr = s; (len = findall(ptr)) >= 0; ptr += len+1)
+X	{
+X		if (len > 0 && isalnum (s[len-1]))
+X			continue;
+X		if (isalnum (s[len+3]))
+X			continue;
+X		if (len > 0 && s[len-1] == '.')
+X		{
+X			--len;
+X			strcpy (s+len,s+len+1);
+X		}
+X		s[len] = '.';
+X		s[len+1] = '*';
+X		strcpy (s+len+2,s+len+3);
+X	}
+X
+X	/* now use regular expressions */
+X	sprintf (pattern,"^%s$",s);
+X	if ((re = regcmp(pattern,(char *) 0)) == NULL)
+X		printex ("n option regular expression syntax: %s",s);
+X	for (i=0; i < Actnum; ++i)
+X	{
+X		nptr = myfind(Active[i]);
+X		if (regex(re,nptr->nd_name) != NULL)
+X		{
+X			nptr->state |= ormask;
+X			nptr->state &= andmask;
+X		}
+X	}
+X	regfree (re);
+X}
+X
+Xstatic
+Xfindall (s)
+Xchar *s;
+X{
+X	int len;
+X	for (len=0; *s != '\0'; ++s,++len)
+X	{
+X		if (*s == 'a' && strncmp(s,"all",3) == 0)
+X			return (len);
+X	}
+X	return (-1);
+X}
+X
+Xstatic
+Xgrp_indic (s,ok)
+Xchar *s;
+Xint ok;
+X{
+X	if (ok)
+X		fgprintf("    %s\n",s);
+X	else
+X		fgprintf("    %s - Can't access spool directory\n",s);
+X}
+X
+X/*
+X	enter newsgroup articles.
+X	all articles between low and hi are to be included.
+X
+X	Returns the highest number less than an OPENED (not neccesarily
+X	accepted) article to allow caller to revise "articles read"
+X	number beyond non-existent articles.
+X*/
+Xoutgroup (s,low,hi)
+Xchar *s;
+Xint low,hi;
+X{
+X	int i;
+X	char subj[RECLEN], lines[RECLEN], auth[RECLEN], gd[RECLEN];
+X	int ret,op;
+X
+X	if ((hi-low) > MAXARTRANGE)
+X		low = hi - MAXARTRANGE;
+X
+X	ret = low;
+X	op = 1;
+X
+X	g_dir(s,gd);
+X	if (chdir(gd) < 0)
+X	{
+X		grp_indic(s,0);
+X		return (ret);
+X	}
+X	grp_indic(s,1);
+X	for (i=low+1; i <= hi; ++i)
+X	{
+X		if (digname(i,subj,lines,auth,&op) >= 0)
+X		{
+X			fw_art(i,subj,lines,auth);
+X		}
+X		else
+X		{
+X			if (op)
+X				ret = i;
+X		}
+X	}
+X
+X	return(ret);
+X}
+X
+X/*
+X** open article and interpret options, if any.  The op parameter is set
+X** to ZERO if and only if an article is opened.  Used above as a flag to
+X** indicate no articles opened yet.
+X*/
+Xstatic digname (n, subj, lines, auth, op)
+Xint n;
+Xchar *subj, *lines, *auth;
+Xint *op;
+X{
+X	int i,j;
+X	FILE *fp;
+X	char t[RECLEN];
+X	char *nfgets();
+X
+X	/* open article */
+X	sprintf (t,"%d", n);
+X	if ((fp = fopen(t,"r")) == NULL)
+X		return (-1);
+X	*op = 0;
+X
+X	/* get subject, from and lines by reading article */
+X	subj[0] = lines[0] = auth[0] = '?';
+X	subj[1] = lines[1] = auth[1] = '\0';
+X	for (i = 0; i < HDR_LINES && nfgets(t,RECLEN-1,fp) != NULL; ++i)
+X	{
+X		if (index(CHFIRST,t[0]) == NULL)
+X			continue;
+X		t[strlen(t) - 1] = '\0';
+X		if (strncmp(T_head,t,THDLEN) == 0)
+X		{
+X			for (j=0; j < Nntopt; ++j)
+X			{
+X				if (regex(Negtopt[j],t+THDLEN) != NULL)
+X				{
+X					fclose(fp);
+X					return(-1);
+X				}
+X			}
+X			if (Ntopt > 0)
+X			{
+X				for (j=0; j < Ntopt; ++j)
+X				{
+X					if (regex(Topt[j],t+THDLEN) != NULL)
+X						break;
+X				}
+X				if (j >= Ntopt)
+X				{
+X					fclose(fp);
+X					return(-1);
+X				}
+X			}
+X			strcpy(subj,t+THDLEN);
+X			continue;
+X		}
+X		if (strncmp(F_head,t,FHDLEN) == 0)
+X		{
+X			for (j=0; j < Nnwopt; ++j)
+X			{
+X				if (regex(Negwopt[j],t+FHDLEN) != NULL)
+X				{
+X					fclose(fp);
+X					return(-1);
+X				}
+X			}
+X			if (Nwopt > 0)
+X			{
+X				for (j=0; j < Nwopt; ++j)
+X				{
+X					if (regex(Wopt[j],t+FHDLEN) != NULL)
+X						break;
+X				}
+X				if (j >= Nwopt)
+X				{
+X					fclose(fp);
+X					return(-1);
+X				}
+X			}
+X			strcpy(auth,t+FHDLEN);
+X			continue;
+X		}
+X		if (strncmp(L_head,t,LHDLEN) == 0)
+X		{
+X			strcpy(lines,t+LHDLEN);
+X			break;
+X		}
+X	}
+X
+X	fclose (fp);
+X
+X	/* reject empty or 1 line files */
+X	if (i < 2)
+X		return (-1);
+X
+X	return (0);
+X}
+X
+X/*
+X** special fgets for reading header lines, which unfolds continued lines
+X** and throws away trailing stuff on buffer overflow.
+X*/
+Xstatic char *
+Xnfgets(buf, size, fp)
+Xchar	*buf;
+Xint	size;
+XFILE	*fp;
+X{
+X	register int c;
+X
+X	while (!feof(fp))
+X	{
+X		if ((c = getc(fp)) == '\n')
+X		{
+X			if ((c = getc(fp)) == '\t' || c == ' ')
+X				continue;
+X			ungetc(c, fp);
+X			*buf = '\n';
+X			++buf;
+X			*buf = '\0';
+X			++buf;
+X			return (buf);
+X		}
+X
+X		/* prevent "terminal bombs" */
+X		if (c < ' ' || c == '\177')
+X		{
+X			switch(c)
+X			{
+X			case '\r':
+X			case '\010':
+X			case '\07':
+X				break;
+X			case '\177':
+X				c = '~';
+X				break;
+X			case '\t':
+X				c = ' ';
+X				break;
+X			default:
+X				if (size > 1)
+X				{
+X					*buf = '^';
+X					++buf;
+X					--size;
+X				}
+X				c += 'A' - 1;
+X				break;
+X			}
+X		}
+X
+X		if (size > 0)
+X		{
+X			*buf = c;
+X			++buf;
+X			--size;
+X		}
+X		if (c == '\r')
+X		{
+X			if ((c = getc(fp)) != '\n')
+X			{
+X				ungetc(c, fp);
+X				continue;
+X			}
+X			if ((c = getc(fp)) != ' ' && c != '\t')
+X			{
+X				*buf = '\0';
+X				++buf;
+X				ungetc(c, fp);
+X				return (buf);
+X			}
+X			--buf;
+X			++size;
+X			continue;
+X		}
+X	}
+X
+X	*buf = '\0';
+X	++buf;
+X	return (NULL);
+X}
+X
+Xstatic char *Mail[2], *Show[6], *Post[4];
+Xstatic char *Priv[8];
+Xstatic char *Pool = NULL;
+X
+XFILE *
+Xvns_aopen(art,hdr)
+Xint art;
+XARTHEADER *hdr;
+X{
+X	char buf[RECLEN];
+X	char *dist, *reply, *from, *ngrp, *flto, *path, *resubj;
+X	FILE *fp;
+X	int n;
+X	char *mail_trim();
+X
+X	dist = resubj = path = reply = from = ngrp = flto = NULL;
+X
+X	sprintf(buf,"%d",art);
+X	if ((fp = fopen(buf,"r")) == NULL)
+X		return(NULL);
+X
+X	/*
+X	** we only really need a lot extra if MAILCHOOSE, but allocating
+X	** a temporary array of pointers isn't that much.  Similarly, a
+X	** few assignments, and the "Priv" declaration are only needed
+X	** with some define settings.  Not worth ifdef'ing.
+X	*/
+X	Pool = str_tpool(100);
+X
+X	hdr->artid = "<some article>";
+X	hdr->from = "<somebody>";
+X	hdr->priv = Priv;
+X	hdr->postcmd = Poster;
+X	hdr->mail = Mail;
+X	hdr->show = Show;
+X	hdr->post = Post;
+X	hdr->priv_num = hdr->show_num = hdr->post_num = hdr->mail_num = 0;
+X
+X	/* for conditional is abnormal - expected exit is break */
+X	for (n=0; n < HDR_LINES && fgets(buf,RECLEN-1,fp) != NULL; ++n)
+X	{
+X		/* bail out at first non-header line */
+X		if (buf[0] == '\n')
+X			break;
+X		if (strncmp(buf,RT_head,RTHDLEN) == 0)
+X		{
+X			buf [strlen(buf)-1] = '\0';
+X			reply = str_tstore(Pool,buf+RTHDLEN);
+X			continue;
+X		}
+X		if (strncmp(buf,P_head,PHDLEN) == 0)
+X		{
+X			buf [strlen(buf)-1] = '\0';
+X			path = str_tstore(Pool,buf+PHDLEN);
+X			continue;
+X		}
+X		if (strncmp(buf,DIS_head,DISHDLEN) == 0)
+X		{
+X			buf [strlen(buf)-1] = '\0';
+X			dist = str_tstore(Pool,buf);
+X			continue;
+X		}
+X		if (strncmp(buf,M_head,MHDLEN) == 0)
+X		{
+X			buf [strlen(buf)-1] = '\0';
+X			hdr->artid = str_tstore(Pool,buf+MHDLEN);
+X			continue;
+X		}
+X		if (strncmp(buf,F_head,FHDLEN) == 0)
+X		{
+X			buf [strlen(buf)-1] = '\0';
+X			(hdr->show)[hdr->show_num] = str_tstore(Pool,buf);
+X			from = hdr->from = (hdr->show)[hdr->show_num]+FHDLEN;
+X			++(hdr->show_num);
+X			continue;
+X		}
+X		if (strncmp(buf,T_head,THDLEN) == 0)
+X		{
+X			buf [strlen(buf)-1] = '\0';
+X			(hdr->show)[hdr->show_num] = str_tstore(Pool,buf);
+X			if (strncmp(buf+THDLEN,Fpfix,FPFLEN) != 0)
+X			{
+X				sprintf(buf,"%s%s%s",T_head,Fpfix,
+X					((hdr->show)[hdr->show_num])+THDLEN);
+X				resubj = str_tstore(Pool,buf);
+X			}
+X			else
+X				resubj = (hdr->show)[hdr->show_num];
+X			++(hdr->show_num);
+X			continue;
+X		}
+X		if (strncmp(buf,N_head,NHDLEN) == 0)
+X		{
+X			buf [strlen(buf)-1] = '\0';
+X
+X			/* if multiple newsgroups, include in "show" */
+X			if (index(buf,',') != NULL)
+X			{
+X				(hdr->show)[hdr->show_num] = str_tstore(Pool,buf);
+X				ngrp = (hdr->show)[hdr->show_num] + NHDLEN;
+X				++(hdr->show_num);
+X			}
+X			else
+X				ngrp = str_tstore(Pool,buf+NHDLEN);
+X			continue;
+X		}
+X		if (strncmp(buf,FT_head,FTHDLEN) == 0)
+X		{
+X			buf [strlen(buf)-1] = '\0';
+X			(hdr->show)[hdr->show_num] = str_tstore(Pool,buf);
+X			flto = (hdr->show)[hdr->show_num] + FTHDLEN;
+X			++(hdr->show_num);
+X			continue;
+X		}
+X		if (strncmp(buf,L_head,LHDLEN) == 0)
+X		{
+X			buf [strlen(buf)-1] = '\0';
+X			hdr->lines = atoi(buf+LHDLEN);
+X			(hdr->show)[hdr->show_num] = str_tstore(Pool,buf);
+X			++(hdr->show_num);
+X			continue;
+X		}
+X	}
+X
+X	hdr->hlines = n;
+X
+X#ifdef MAILCHOOSE
+X	(hdr->priv)[hdr->priv_num] = resubj;
+X	++(hdr->priv_num);
+X	if (reply != NULL)
+X	{
+X		(hdr->priv)[hdr->priv_num] = mail_trim(reply);
+X		++(hdr->priv_num);
+X	}
+X	if (from != NULL)
+X	{
+X		(hdr->priv)[hdr->priv_num] = mail_trim(from);
+X		++(hdr->priv_num);
+X	}
+X	if (path != NULL)
+X	{
+X		(hdr->priv)[hdr->priv_num] = mail_trim(path);
+X		++(hdr->priv_num);
+X	}
+X#else
+X#ifdef MAILSMART
+X	if (reply == NULL)
+X		if (from != NULL)
+X			reply = from;
+X		else
+X		{
+X			if (path != NULL)
+X				reply = path;
+X		}
+X#else
+X	if (path != NULL)
+X		reply = path;
+X#endif
+X	if (reply != NULL)
+X		reply =  mail_trim(reply);
+X	mail_cmd(hdr,reply,resubj);
+X#endif /* MAILCHOOSE */
+X
+X	if (flto == NULL)
+X	{
+X		if ((flto = ngrp) == NULL)
+X			flto = "group.unknown";
+X	}
+X	ngrp = rindex(flto,'.');
+X
+X	if (strncmp("mod.",flto,4) == 0 ||
+X			(ngrp != NULL && strcmp(".announce",ngrp) == 0))
+X	{
+X		sprintf(buf,"Cannot post a follow-up to \"%s\", reply with mail to moderator",flto);
+X		hdr->post_err = str_tstore(Pool,buf);
+X		return (fp);
+X	}
+X
+X	if (ngrp != NULL && strcmp(ngrp,".general") == 0)
+X	{
+X		*ngrp = '\0';
+X		sprintf(buf,"%s%s.followup",N_head,flto);
+X	}
+X	else
+X		sprintf(buf,"%s%s",N_head,flto);
+X	flto = str_tstore(Pool,buf);
+X
+X	hdr->post_err = NULL;
+X
+X	if (resubj != NULL)
+X	{
+X		(hdr->post)[hdr->post_num] = resubj;
+X		++(hdr->post_num);
+X	}
+X
+X	(hdr->post)[hdr->post_num] = flto;
+X	++(hdr->post_num);
+X
+X	sprintf(buf,"%s%s",R_head,hdr->artid);
+X	(hdr->post)[hdr->post_num] = str_tstore(Pool,buf);
+X	++(hdr->post_num);
+X
+X	if (dist != NULL)
+X	{
+X		(hdr->post)[hdr->post_num] = dist;
+X		++(hdr->post_num);
+X	}
+X
+X	return (fp);
+X}
+X
+X#ifdef MAILCHOOSE
+X/*
+X** routine to prompt user for mail path approval
+X*/
+Xstatic
+Xmail_prompt(hdr)
+XARTHEADER *hdr;
+X{
+X	int i;
+X	char buf[RECLEN],*ptr;
+X
+X	tty_set(SAVEMODE);
+X	for (i=1; i < hdr->priv_num; ++i)
+X	{
+X		printf("%d - %s\n",i,(hdr->priv)[i]);
+X	}
+X	printf("\nType number to choose one of the above, or input address: ");
+X	fgets(buf,RECLEN-1,stdin);
+X	tty_set(RESTORE);
+X
+X	ptr = strtok(buf," \t\n");
+X	if (ptr == NULL)
+X		ptr = "";
+X
+X	i = strlen(ptr);
+X	if (i == 1)
+X	{
+X		i = atoi(ptr);
+X		if (i > 0 && i <= hdr->priv_num)
+X			ptr = (hdr->priv)[i];
+X		i = 1;
+X	}
+X
+X	/*
+X	** If the user keeps cycling through here on the same article,
+X	** we will eventually run out of strings.  We made Pool large
+X	** enough to make it unlikely (user will have to retry about 80
+X	** times without switching articles).  Hardly elegant, but should
+X	** be sufficient.
+X	*/
+X	if (i > 1 && hdr->priv_num < 8)
+X	{
+X		(hdr->priv)[hdr->priv_num] = str_tstore(Pool,ptr);
+X		++(hdr->priv_num);
+X	}
+X	mail_cmd(hdr,ptr,(hdr->priv)[0]);
+X}
+X#endif
+X
+X/*
+X** trim () off potential mail address, and make copy if needed.
+X** addr must be allocated string.
+X*/
+Xstatic char *
+Xmail_trim(addr)
+Xchar *addr;
+X{
+X	char buf[RECLEN];
+X	char *ptr;
+X
+X	if (index(addr,'(') == NULL)
+X		return(addr);
+X
+X	strcpy(buf,addr);
+X	ptr = index(buf,'(');
+X	for (--ptr; *ptr == ' ' || *ptr == '\t'; --ptr)
+X		;
+X	++ptr;
+X	*ptr = '\0';
+X	return (str_tstore(Pool,buf));
+X}
+X
+X/*
+X** format mail command.  Subj must point to allocated string.
+X*/
+Xstatic
+Xmail_cmd(hdr,addr,subj)
+XARTHEADER *hdr;
+Xchar *addr, *subj;
+X{
+X	char buf[RECLEN];
+X
+X	if (addr == NULL || *addr == '\0')
+X	{
+X		hdr->mail_err = "No address";
+X		return;
+X	}
+X
+X	hdr->mail_err = NULL;
+X			;
+X
+X#ifdef INLETTER
+X	hdr->mailcmd = Mailer;
+X	sprintf(buf,"%s%s",TO_head,addr);
+X	(hdr->mail)[0] = str_tstore(Pool,buf);
+X	hdr->mail_num = 1;
+X#else
+X	sprintf(buf,Mailer,addr);
+X	hdr->mailcmd = str_tstore(Pool,buf);
+X	hdr->mail_num = 0;
+X#endif
+X	if (subj != NULL)
+X	{
+X		(hdr->mail)[hdr->mail_num] = subj;
+X		++(hdr->mail_num);
+X	}
+X}
+X
+Xvns_aclose(fp)
+XFILE *fp;
+X{
+X 	if (Pool != NULL)
+X 		str_tfree(Pool);
+X 	Pool = NULL;
+X	fclose(fp);
+X}
+X
+X/*
+X** we don't use the count / name / mode arguments because this doesn't
+X** implement any fancy article massaging
+X*/
+Xvns_asave(art,fp)
+Xint art;
+XFILE *fp;
+X{
+X	char buf[RECLEN];
+X	FILE *fin;
+X
+X	sprintf(buf,"%d",art);
+X	if ((fin = fopen(buf,"r")) == NULL)
+X		return;
+X
+X	while (fgets(buf,RECLEN-1,fin) != NULL)
+X		fputs(buf,fp);
+X	fclose(fin);
+X}
+X
+Xvns_exit()
+X{
+X}
+END_OF_FILE
+if test 24307 -ne `wc -c <'std.c'`; then
+    echo shar: \"'std.c'\" unpacked with wrong size!
+fi
+# end of 'std.c'
+fi
+if test -f 'std.h' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'std.h'\"
+else
+echo shar: Extracting \"'std.h'\" \(886 characters\)
+sed "s/^X//" >'std.h' <<'END_OF_FILE'
+X/*
+X	newsrc states
+X*/
+X#define NEWS_ON ':'
+X#define NEWS_OFF '!'
+X
+X#define SFLG_SCAN 1
+X#define SFLG_SPEC 2
+X
+X#define FPFIX "Re: "
+X#define FPFLEN 4
+X
+X#define FIL_AUTHOR 'w'
+X#define FIL_TITLE 't'
+X
+X/*
+X	header lines and associated lengths.  Strings should
+X	actually be used only once.
+X*/ 
+X#define RHEAD "References: "
+X#define RHDLEN 12
+X#define MHEAD "Message-ID: "
+X#define MHDLEN 12
+X#define PHEAD "Path: "
+X#define PHDLEN 6
+X#define DHEAD "Date: "
+X#define DHDLEN 6
+X#define RTHEAD "Reply-To: "
+X#define RTHDLEN 10
+X#define TOHEAD "To: "
+X#define TOHDLEN 4
+X#define FHEAD "From: "
+X#define FHDLEN 6
+X#define FTHEAD "Followup-To: "
+X#define FTHDLEN 13
+X#define DISHEAD "Distribution: "
+X#define DISHDLEN 14
+X#define THEAD "Subject: "
+X#define THDLEN 9
+X#define LHEAD "Lines: "
+X#define LHDLEN 7
+X#define NHEAD "Newsgroups: "
+X#define NHDLEN 12
+X
+X#define CHFIRST "FSL"	/* first char's of those used in page display */
+END_OF_FILE
+if test 886 -ne `wc -c <'std.h'`; then
+    echo shar: \"'std.h'\" unpacked with wrong size!
+fi
+# end of 'std.h'
+fi
+if test -f 'storage.c' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'storage.c'\"
+else
+echo shar: Extracting \"'storage.c'\" \(2261 characters\)
+sed "s/^X//" >'storage.c' <<'END_OF_FILE'
+X/*
+X** vn news reader.
+X**
+X** storage.c - storage allocation routines
+X**
+X** see copyright disclaimer / history in vn.c source file
+X*/
+X
+X#include <stdio.h>
+X#include "tune.h"
+X#include "node.h"
+X#include "page.h"
+X
+Xextern char *malloc();
+X
+Xextern int L_allow;
+X
+Xextern PAGE Page;
+X/*
+X	Storage allocaters.
+X*/
+X
+Xchar *str_store (s)
+Xchar *s;
+X{
+X	static unsigned av_len = 0;	/* current storage available */
+X	static char *avail;
+X	int len;
+X
+X	if (s == NULL)
+X		s = "";
+X
+X	if ((len = strlen(s)+1) > av_len)
+X	{
+X		if (len > STRBLKSIZE)
+X			av_len = len;
+X		else
+X			av_len = STRBLKSIZE;
+X		if ((avail = malloc(av_len)) == NULL)
+X			printex ("can't allocate memory for string storage");
+X	}
+X	strcpy (avail,s);
+X	s = avail;
+X	avail += len;
+X	av_len -= len;
+X	return (s);
+X}
+X
+X/*
+X** called after number of terminal lines (L_allow) is known, to set
+X** up storage for Page.
+X*/
+Xpage_alloc ()
+X{
+X	char *body;
+X
+X	if ((body = malloc(L_allow*sizeof(BODY))) == NULL)
+X		printex ("can't allocate memory for display storage");
+X
+X	Page.b = (BODY *) body;
+X}
+X
+XNODE
+X*node_store()
+X{
+X	static int nd_avail = 0;
+X	static NODE *nd;
+X	NODE *ret;
+X
+X	if (nd_avail <= 0)
+X	{
+X		if ((nd = (NODE *) malloc(sizeof(NODE)*NDBLKSIZE)) == NULL)
+X			printex ("can't allocate memory for newsgroup table");
+X		nd_avail = NDBLKSIZE;
+X	}
+X	--nd_avail;
+X	ret = nd;
+X	++nd;
+X	return(ret);
+X}
+X
+X/*
+X** temp string storage
+X*/
+X
+Xtypedef struct
+X{
+X	int len;
+X	int idx;
+X	char **ptr;
+X} STRINGPOOL;
+X
+Xchar *
+Xstr_tpool(n)
+Xint n;
+X{
+X	int size;
+X	STRINGPOOL *p;
+X
+X	size = sizeof(STRINGPOOL) + n * sizeof(char **);
+X
+X	if ((p = (STRINGPOOL *) malloc(size)) == NULL)
+X		printex("Cannot allocate temporary string storage");
+X
+X	p->ptr = (char **)(p+1);
+X	p->len = n;
+X	p->idx = 0;
+X
+X	return((char *) p);
+X}
+X
+Xchar *
+Xstr_tstore(cp,s)
+Xchar *cp;
+Xchar *s;
+X{
+X	STRINGPOOL *p;
+X	int len;
+X
+X	p = (STRINGPOOL *) cp;
+X	if (p->idx >= p->len)
+X		printex("Temporary string storage overflow");
+X	len = strlen(s)+1;
+X	if ((cp = malloc(len)) == NULL)
+X		printex("Cannot allocate copy of string");
+X	strcpy(cp,s);
+X	(p->ptr)[p->idx] = cp;
+X	++(p->idx);
+X
+X	return(cp);
+X}
+X
+Xchar **
+Xstr_taptr(cp)
+Xchar *cp;
+X{
+X	STRINGPOOL *p;
+X
+X	p = (STRINGPOOL *) cp;
+X
+X	return (p->ptr + p->idx);
+X}
+X
+Xstr_tfree(cp)
+Xchar *cp;
+X{
+X	STRINGPOOL *p;
+X	int i;
+X
+X	p = (STRINGPOOL *) cp;
+X	for (i=0; i < p->idx; ++i)
+X		free((p->ptr)[i]);
+X	free (cp);
+X}
+END_OF_FILE
+if test 2261 -ne `wc -c <'storage.c'`; then
+    echo shar: \"'storage.c'\" unpacked with wrong size!
+fi
+# end of 'storage.c'
+fi
+if test -f 'strings.c' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'strings.c'\"
+else
+echo shar: Extracting \"'strings.c'\" \(537 characters\)
+sed "s/^X//" >'strings.c' <<'END_OF_FILE'
+X/*
+X** vn news reader.
+X**
+X** strings.c - read only character strings
+X**
+X** see copyright disclaimer / history in vn.c source file
+X*/
+X
+X#include "tune.h"
+X#include "node.h"
+X#include "page.h"
+X
+Xchar *Version = "4/88";
+X
+Xchar *No_msg = "No articles";
+Xchar *Hdon_msg = "Headers being printed";
+Xchar *Hdoff_msg = "Headers being suppressed";
+Xchar *Roton_msg = "ROT 13";
+Xchar *Rotoff_msg = "NO ROT";
+X
+Xchar *Aformat = AFORMAT;
+X
+Xchar *Contstr = "  ******** any key to continue ********";
+X
+Xchar *Brk_fmt = "QUIT (signal %d)";
+X
+Xchar *List_sep = " \t,";
+END_OF_FILE
+if test 537 -ne `wc -c <'strings.c'`; then
+    echo shar: \"'strings.c'\" unpacked with wrong size!
+fi
+# end of 'strings.c'
+fi
+if test -f 'strtok.c' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'strtok.c'\"
+else
+echo shar: Extracting \"'strtok.c'\" \(1082 characters\)
+sed "s/^X//" >'strtok.c' <<'END_OF_FILE'
+X/*
+X** vn news reader.
+X**
+X** strtok.c - strtok() and strpbrk() string routines using UCB index().
+X**
+X** see copyright disclaimer / history in vn.c source file
+X*/
+X
+X#include <stdio.h>
+X
+Xchar *strpbrk (s,del)
+Xchar *s, *del;
+X{
+X	char *ptr,*index();
+X	if (s == NULL)
+X		return (NULL);
+X	for (; *del != '\0'; ++del)
+X		if ((ptr = index(s,*del)) != NULL)
+X			return (ptr);
+X	return (NULL);
+X}
+X
+Xchar *strtok(str,delim)
+Xchar *str, *delim;
+X{
+X	char *tokstart, *tokend, *first_ch (), *last_ch();
+X	static char *save=NULL;
+X
+X	if (str != NULL)
+X		save = str;
+X
+X	if (save == NULL)
+X		return (NULL);
+X
+X	tokstart = first_ch (save, delim);
+X	tokend = last_ch (tokstart, delim);
+X	save = first_ch (tokend, delim);
+X	*tokend = '\0';
+X
+X	if (*tokstart == '\0')
+X		return (NULL);
+X
+X	return (tokstart);
+X}
+X
+Xstatic char *first_ch (str,delim)
+Xchar *str,*delim;
+X{
+X	char *index ();
+X	char *f;
+X
+X	for (f = str; *f != '\0' && index(delim,*f) != NULL; ++f)
+X		;
+X
+X	return (f);
+X}
+X
+Xstatic char *last_ch (str,delim)
+Xchar *str,*delim;
+X{
+X	char *index ();
+X	char *f;
+X
+X	for (f = str; *f != '\0' && index(delim,*f) == NULL; ++f)
+X		;
+X
+X	return (f);
+X}
+END_OF_FILE
+if test 1082 -ne `wc -c <'strtok.c'`; then
+    echo shar: \"'strtok.c'\" unpacked with wrong size!
+fi
+# end of 'strtok.c'
+fi
+if test -f 'svart.c' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'svart.c'\"
+else
+echo shar: Extracting \"'svart.c'\" \(4834 characters\)
+sed "s/^X//" >'svart.c' <<'END_OF_FILE'
+X/*
+X** vn news reader.
+X**
+X** svart.c - article save routine
+X**
+X** see copyright disclaimer / history in vn.c source file
+X*/
+X#include <stdio.h>
+X#include <pwd.h>
+X#include <sys/types.h>
+X#include <sys/stat.h>
+X#include "config.h"
+X#include "tty.h"
+X#include "tune.h"
+X#include "node.h"
+X#include "page.h"
+X
+Xextern PAGE Page;
+Xextern int Digest;
+Xextern char *List_sep;
+Xextern char *Home;
+Xextern char *Savedir;
+Xextern FILE *(*Saveopen)();
+Xextern int (*Digsaver)();
+X
+X/*
+X** save article in file.  Called from reader and session both.
+X** handles "|" pipe convention.  Caller passes in return message buffer.
+X*/
+Xsave_art(art,idest,msg)
+Xchar *art;
+Xchar *idest;
+Xchar *msg;
+X{
+X	char fn[L_tmpnam+1];
+X	char cmd[RECLEN];
+X	char *mode;
+X	char *dest, dstore[RECLEN];
+X	struct stat sbuf;
+X	int rstat;
+X	char *colon;
+X	char *pcnt;
+X	char *index();
+X
+X	/* temporary copy so we don't overwrite saved string */
+X	strcpy((dest = dstore),idest);
+X
+X	if (*dest == '|')
+X	{
+X		tmpnam(fn);
+X		if (art_xfer(fn,art,"w",NULL) != 0)
+X		{
+X			strcpy(msg,"Can't open temporary file");
+X			return (-1);
+X		}
+X		sprintf(cmd,"cat %s %s",fn,dest);
+X		tty_set (SAVEMODE);
+X		rstat = system (cmd);
+X		tty_set (RESTORE);
+X		sprintf(msg,"Command returns %d",rstat);
+X		return (rstat);
+X	}
+X
+X	if (Saveopen != NULL)
+X		return (art_xfer(dest,art,"a",msg));
+X
+X	if ((colon = index(dest,':')) != NULL)
+X	{
+X		mode = dest;
+X		*colon = '\0';
+X		dest = colon+1;
+X	}
+X	else
+X		mode = "a";
+X
+X	if (*dest == '~')
+X	{
+X		if (twiddle(dest,msg) < 0)
+X			return (-1);
+X	}
+X
+X	if (*dest == '\0')
+X		strcpy(dest,"%d");
+X
+X	if (*dest != '/')
+X	{
+X		if (noslash(dest,msg) < 0)
+X			return (-1);
+X	}
+X
+X	if ((pcnt = index(dest,'%')) != NULL && pcnt[1] == 'd')
+X	{
+X		if (Digest)
+X			sprintf(cmd,dest,Digest);
+X		else
+X			sprintf(cmd,dest,atoi(art));
+X		dest = cmd;
+X	}
+X
+X	rstat = stat(dest,&sbuf);
+X
+X	if (art_xfer(dest,art,mode,msg) != 0)
+X	{
+X		sprintf(msg,"Can't open %s with mode %s",dest,mode);
+X		return(-1);
+X	}
+X
+X	if (rstat != 0)
+X	{
+X		sprintf(msg,"Created %s",dest);
+X		return(0);
+X	}
+X
+X	if (strcmp(mode,"a") == 0)
+X	{
+X		sprintf(msg,"Appended %s",dest);
+X		return(0);
+X	}
+X
+X	sprintf(msg,"Wrote (mode %s) %s",mode,dest);
+X	return(0);
+X}
+X
+Xstatic
+Xnoslash(dest,msg)
+Xchar *dest;
+Xchar *msg;
+X{
+X	char *pcnt;
+X	char buf[RECLEN];
+X	char dir[RECLEN];
+X	struct stat sbuf;
+X
+X	strcpy(buf,Page.h.name);
+X#ifdef SYSV
+X	buf[14] = '\0';
+X#endif
+X	if ((pcnt = index(Savedir,'%')) != NULL && pcnt[1] == 's')
+X		sprintf(dir,Savedir,buf);
+X	else
+X		strcpy(dir,Savedir);
+X	if (dir[0] == '~')
+X	{
+X		if (twiddle(dir,msg) < 0)
+X			return (-1);
+X	}
+X	if (stat(dir,&sbuf) != 0)
+X	{
+X#ifdef SYSV
+X		/*
+X		** late enough releases of SYSV may have a mkdir() call, but
+X		** this is an obscure feature anyway.  We'll accept the fork.
+X		*/
+X		sprintf(buf,"mkdir %s",dir);
+X		if (system(buf) != 0)
+X#else
+X		if (mkdir(dir,0755) != 0)
+X#endif
+X		{
+X			sprintf(msg,"Cannot make directory %s",dir);
+X			return (-1);
+X		}
+X	}
+X	sprintf(buf,"%s/%s",dir,dest);
+X	strcpy(dest,buf);
+X	return (0);
+X}
+X
+Xstatic
+Xtwiddle(dest,msg)
+Xchar *dest, *msg;
+X{
+X	char *tail;
+X	char *name;
+X	char tmp;
+X	char buf[RECLEN];
+X	struct passwd *ptr, *getpwnam();
+X
+X	for (tail=name=dest+1; *tail != '/' && *tail != '\0'; ++tail)
+X		;
+X
+X	if (*name == '\0' || *name == '/')
+X		sprintf(buf,"%s%s",Home,tail);
+X	else
+X	{
+X		tmp = *tail;
+X		*tail = '\0';
+X		ptr = getpwnam(name);
+X		*tail = tmp;
+X		if (ptr == NULL)
+X		{
+X			sprintf(msg,"Can't interpret ~%s",name);
+X			return(-1);
+X		}
+X		sprintf(buf,"%s%s",ptr->pw_dir,tail);
+X	}
+X
+X	strcpy(dest,buf);
+X	return (0);
+X}
+X
+X/*
+X** transfer contents of a list of articles to a file.  If Digest, this
+X** is simply a list of files.  If not, it is a list of articles to be
+X** saved with vns_asave.  Parses list destructively with
+X** strtok().  Return 0 for success, -1 for failure to open file.
+X**
+X** Called directly to copy a list of articles to a temp. file to
+X** direct to printer.
+X**
+X** NOTE:
+X**	The msg argument only matters if Saveopen is not NULL.  If so, it
+X**	is non-NULL if *Saveopen is to be called, and points to the message
+X**	buffer.  Will be called with msg = NULL to fill temp. files rather
+X**	than user named files.  If *Saveopen is called, mode argument is
+X**	actually returned by it, and only matters for vns_asave call.
+X*/
+Xart_xfer(fn,list,mode,msg)
+Xchar *fn, *list, *mode, *msg;
+X{
+X	char *p;
+X	FILE *fout, *fin;
+X	int count;
+X	char buf[RECLEN];
+X	char *strtok();
+X
+X	if (Saveopen != NULL && msg != NULL)
+X		fout = (*Saveopen)(fn,msg,&mode);
+X	else
+X		fout = fopen(fn,mode);
+X	if (fout == NULL)
+X		return (-1);
+X
+X	count = 0;
+X	for (p = strtok(list,List_sep); p != NULL; p = strtok(NULL,List_sep))
+X	{
+X		if (Digest)
+X		{
+X			if (Digsaver != NULL)
+X			{
+X				(*Digsaver)(p,fout,count,fn,mode);
+X				++count;
+X				continue;
+X			}
+X			fin = fopen(p,"r");
+X			if (fin == NULL)
+X				continue;
+X			while (fgets(buf,RECLEN-1,fin) != NULL)
+X				fputs(buf,fout);
+X			fclose(fin);
+X			continue;
+X		}
+X		vns_asave(atoi(p),fout,count,fn,mode);
+X		++count;
+X	}
+X	fclose(fout);
+X	return(0);
+X}
+END_OF_FILE
+if test 4834 -ne `wc -c <'svart.c'`; then
+    echo shar: \"'svart.c'\" unpacked with wrong size!
+fi
+# end of 'svart.c'
+fi
+if test -f 'term_set.c' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'term_set.c'\"
+else
+echo shar: Extracting \"'term_set.c'\" \(4953 characters\)
+sed "s/^X//" >'term_set.c' <<'END_OF_FILE'
+X/*
+X** vn news reader.
+X**
+X** term_set.c - terminal control, hides termcap interface
+X**
+X** see copyright disclaimer / history in vn.c source file
+X*/
+X
+X#include <stdio.h>
+X#include "tty.h"
+X#include "config.h"
+X#include "tune.h"
+X#include "node.h"
+X#include "page.h"
+X
+Xextern int L_allow, C_allow;
+Xextern char *Ku, *Kd, *Kl, *Kr;	
+X
+Xstatic outc (c)
+Xchar c;
+X{
+X	putchar (c);
+X}
+X
+X/*
+X	term_set controls terminal through termcap
+X	START sets global parameters related to terminal also,
+X	as well as allocating display buffer which depends on
+X	terminal lines, and allocating escape strings.  RESTART
+X	simply re-issues the initialization - used following system
+X	calls that could have goofed up the terminal state.
+X*/
+X
+X/*
+X** Escape strings.
+X*/
+X
+Xstatic char *Cm,*Cl,*So,*Se,*Te,*Bc,*Ce,*Ti,*Ks,*Ke;
+X#ifdef USEVS
+Xstatic char *Vs,*Ve;
+X#endif
+X
+Xstatic int Backspace;		/* backspace works */
+Xstatic int Overstrike;		/* terminal overstrikes */
+X
+Xstatic t_setup()
+X{
+X	char *tgetstr(), *vn_env(), *str_store();
+X	char *c, tc_buf[2048],optstr[2048];
+X	char *tvar;
+X
+X	tvar = vn_env("TERM",DEF_TERM);
+X
+X	c = optstr;
+X	if (tgetent(tc_buf,tvar) != 1)
+X		printex ("%s - unknown terminal",tvar);
+X
+X	/* get needed capabilities */
+X	Cm = str_store(tgetstr("cm",&c));
+X	Cl = str_store(tgetstr("cl",&c));
+X	So = str_store(tgetstr("so",&c));
+X	Se = str_store(tgetstr("se",&c));
+X	Te = str_store(tgetstr("te",&c));
+X	Ti = str_store(tgetstr("ti",&c));
+X	Bc = str_store(tgetstr("bc",&c));
+X	Ce = str_store(tgetstr("ce",&c));
+X	Kd = str_store(tgetstr("kd",&c));
+X	Ke = str_store(tgetstr("ke",&c));
+X	Kl = str_store(tgetstr("kl",&c));
+X	Kr = str_store(tgetstr("kr",&c));
+X	Ks = str_store(tgetstr("ks",&c));
+X	Ku = str_store(tgetstr("ku",&c));
+X#ifdef USEVS
+X	Vs = str_store(tgetstr("vs",&c));
+X	Ve = str_store(tgetstr("ve",&c));
+X#endif
+X	Backspace = tgetflag("bs");
+X	Overstrike = tgetflag("os");
+X
+X	if ( *Cm == '\0' || *Cl == '\0')
+X	{
+X		printex ("cursor control and erase capability needed");
+X	}
+X
+X	/*
+X	** Checks for arrow keys which don't issue something beginning
+X	** with <ESC>.  This is more paranoid than we need to be, strictly
+X	** speaking - we could get away with any string which didn't
+X	** conflict with controls used for commands.  However, that would
+X	** be a maintenance headache - we will simply reserve <ESC> as the
+X	** only char not to be used for commands, and punt on terminals
+X	** which don't send reasonable arrow keys.  It would be confusing
+X	** to have keys work partially, also.  I know of no terminal with
+X	** one arrow key beginning with an escape, and another beginning
+X	** with something else, but let's be safe.  This also insists on
+X	** definitions for all 4 arrows, which seems reasonable.
+X	*/
+X
+X	if ((*Ku != '\0' && *Ku != '\033') || *Kl != *Ku || *Kr != *Ku || *Kd != *Ku)
+X	{
+X		fgprintf("WARNING: arrow keys will not work for this terminal");
+X		Ku = Kd = Kl = Kr = Kd = Ke = "";
+X	}
+X
+X	if (Overstrike)
+X		fgprintf ("WARNING: terminal overstrikes - can't update display without erase\n");
+X
+X	if ((L_allow = tgetnum("li")) < REQLINES)
+X	{
+X		if (L_allow < 0)
+X			printex ("can't determine number of lines on terminal");
+X		printex ("too few lines for display - %d needed", REQLINES);
+X	}
+X
+X	/*
+X	** C_allow set so as to not use extreme right column.
+X	** Avoids "bad wraparound" problems - we're deciding it's best
+X	** to ALWAYS assume no automargin, and take care of it ourselves
+X	*/
+X	if((C_allow = tgetnum("co")) > MAX_C)
+X		C_allow = MAX_C;
+X	else
+X		--C_allow;
+X	if (C_allow < MIN_C)
+X	{
+X		if (C_allow < 0)
+X			printex("can't determine number of columns on terminal.");
+X		printex ("too few columns for display - %d needed",MIN_C);
+X	}
+X
+X	L_allow -= RECBIAS;
+X	page_alloc();
+X	tputs(Ti,1,outc);
+X	tputs(Ks,1,outc);
+X#ifdef USEVS
+X	tputs(Vs,1,outc);
+X#endif
+X}
+X
+X/* VARARGS */
+Xterm_set(cmd,x,y)
+Xint cmd,x,y;
+X{
+X	char *tgoto();
+X	int i;
+X	switch (cmd)
+X	{
+X	case MOVE:
+X		tputs (tgoto(Cm,x,y),1,outc);
+X		break;
+X	case ERASE:
+X		tputs(Cl,1,outc);
+X		break;
+X	case ONREVERSE:
+X		tputs(So,1,outc);
+X		break;
+X	case OFFREVERSE:
+X		tputs(Se,1,outc);
+X		break;
+X	case START:
+X		t_setup();
+X		break;
+X	case RESTART:
+X		tputs(Ti,1,outc);
+X		tputs(Ks,1,outc);
+X#ifdef USEVS
+X		tputs(Vs,1,outc);
+X#endif
+X		break;
+X	case STOP:
+X		term_set (MOVE,0,L_allow+RECBIAS-1);
+X		printf ("\n");
+X		tputs(Ke,1,outc);
+X		tputs(Te,1,outc);
+X#ifdef USEVS
+X		tputs(Ve,1,outc);
+X#endif
+X		break;
+X	case RUBSEQ:
+X		if (Overstrike)
+X		{
+X			/* space overprint is futile */
+X			if (Backspace)
+X				putchar('\010');
+X			else
+X				tputs(Bc,1,outc);
+X			break;
+X		}
+X		if (Backspace)
+X			printf("%c %c",'\010','\010');
+X		else
+X		{
+X			tputs(Bc,1,outc);  
+X			putchar(' ');  
+X			tputs(Bc,1,outc);
+X		}
+X		break;
+X	case ZAP:
+X		if (Ce != NULL && *Ce != '\0')
+X			tputs(Ce,1,outc);
+X		else
+X		{
+X			if (Overstrike)
+X				break;		/* punt */
+X			for (i=x; i < y; ++i)
+X				putchar(' ');
+X			if (Backspace)
+X			{
+X				for (i=x; i < y; ++i)
+X					putchar('\010');
+X			}
+X			else
+X			{
+X				for (i=x; i < y; ++i)
+X					tputs(Bc,1,outc);
+X			}
+X		}
+X		break;
+X	default:
+X		printex ("term_set unknown code (%d)",cmd);
+X		break;
+X	}
+X	return (0);
+X}
+END_OF_FILE
+if test 4953 -ne `wc -c <'term_set.c'`; then
+    echo shar: \"'term_set.c'\" unpacked with wrong size!
+fi
+# end of 'term_set.c'
+fi
+if test -f 'tmpnam.c' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'tmpnam.c'\"
+else
+echo shar: Extracting \"'tmpnam.c'\" \(420 characters\)
+sed "s/^X//" >'tmpnam.c' <<'END_OF_FILE'
+X/*
+X** vn news reader.
+X**
+X** tmpnam.c - tmpnam() replacement for UCB, also uses non-generic name.
+X**
+X** see copyright disclaimer / history in vn.c source file
+X*/
+X
+X#include <stdio.h>
+X#include "config.h"
+X
+Xchar *tmpnam (buf)
+Xchar *buf;
+X{
+X	static char *ptr = VNTEMPNAME;
+X
+X	/* depends on string initialized above */
+X	sprintf (ptr+TMP_XOFFSET,"XXXXXX");
+X
+X	mktemp (ptr);
+X
+X	if (buf != NULL)
+X		strcpy (buf,ptr);
+X
+X	return (ptr);
+X}
+END_OF_FILE
+if test 420 -ne `wc -c <'tmpnam.c'`; then
+    echo shar: \"'tmpnam.c'\" unpacked with wrong size!
+fi
+# end of 'tmpnam.c'
+fi
+if test -f 'tty.h' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'tty.h'\"
+else
+echo shar: Extracting \"'tty.h'\" \(451 characters\)
+sed "s/^X//" >'tty.h' <<'END_OF_FILE'
+X/*
+X** vn news reader.
+X**
+X** tty.h - codes for tty_set and term_set
+X**
+X** see copyright disclaimer / history in vn.c source file
+X*/
+X
+X#define MOVE 100
+X#define ERASE 101
+X#define START 102
+X#define STOP 103
+X#define RUBSEQ 104
+X#define ZAP 105
+X#define ONREVERSE 106
+X#define OFFREVERSE 107
+X#define RESTART 108
+X
+X#define RAWMODE 200
+X#ifndef	MINIX
+X#define COOKED 201
+X#else
+X#define XCOOKED 201
+X#endif
+X#define SAVEMODE 202
+X#define RESTORE 203
+X#define BACKSTOP 204
+END_OF_FILE
+if test 451 -ne `wc -c <'tty.h'`; then
+    echo shar: \"'tty.h'\" unpacked with wrong size!
+fi
+# end of 'tty.h'
+fi
+if test -f 'tty_set.c' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'tty_set.c'\"
+else
+echo shar: Extracting \"'tty_set.c'\" \(2713 characters\)
+sed "s/^X//" >'tty_set.c' <<'END_OF_FILE'
+X/*
+X** vn news reader.
+X**
+X** tty_set.c - interface to ioctl (system tty interface)
+X**
+X** see copyright disclaimer / history in vn.c source file
+X*/
+X
+X#ifdef	MINIX
+X/* Minix uses non-SysV type ioctls */
+X#undef	SYSV
+X#endif
+X
+X#ifdef SYSV
+X#include <termio.h>
+X#else
+X#include <sgtty.h>
+X#endif
+X
+X#include "tty.h"
+X
+Xextern char Erasekey,Killkey;
+X
+X#ifdef SYSV
+Xstatic struct termio C_tp, O_tp;
+X#else
+Xstatic struct sgttyb C_tp;
+Xstatic unsigned short O_lflag;
+X#endif
+X
+Xstatic unsigned S_flag=0;
+Xstatic int R_ignore=0;		/* up/down counter of reset calls to ignore */
+X
+X#define IO_GOT 1	/* have polled for original terminal mode */
+X#define IO_RAW 2	/* in RAW (CBREAK actually) mode */
+X
+X/*
+X	tty_set handles ioctl calls.  SAVEMODE, RESTORE are used around
+X	system calls and interrupts to assure cooked mode, and restore
+X	raw if raw on SAVEMODE.  The pair results in no calls to ioctl
+X	if we are cooked already when SAVEMODE is called, and may be nested,
+X	provided we desire no "restore" of cooked mode after restoring raw.
+X
+X	When we get the original terminal mode, we also save erase and kill.
+X
+X	sig_set makes an ioctl call to get process group leader.  Otherwise
+X	ioctl calls should come through here.
+X*/
+Xtty_set(cmd)
+Xint cmd;
+X{
+X	int rc;
+X	unsigned mask;
+X
+X	switch (cmd)
+X	{
+X	case BACKSTOP:
+X#ifdef JOBCONTROL
+X		if ((rc = ioctl(1,TIOCLGET,&mask)) != 0)
+X			break;
+X		mask |= LTOSTOP;
+X		rc = ioctl(1,TIOCLSET,&mask);
+X#else
+X		rc = 0;
+X#endif
+X		break;
+X	case RAWMODE:
+X		if ((S_flag & IO_RAW) != 0)
+X		{
+X			rc = 0;
+X			break;
+X		}
+X		if ((S_flag & IO_GOT) == 0)
+X		{
+X			/* Save original modes, get erase / kill */
+X#ifdef SYSV
+X			rc = ioctl(0,TCGETA,&C_tp);
+X			O_tp = C_tp;
+X			Erasekey = C_tp.c_cc[VERASE];
+X			Killkey = C_tp.c_cc[VKILL];
+X#else
+X			rc = ioctl(0,TIOCGETP,&C_tp);
+X			O_lflag = C_tp.sg_flags;
+X			Erasekey = C_tp.sg_erase;
+X			Killkey = C_tp.sg_kill;
+X#endif
+X		}
+X#ifdef SYSV
+X		C_tp.c_lflag &= ~(ECHO | ICANON);
+X		C_tp.c_cc[VMIN] = 1;
+X		rc = ioctl(0,TCSETAW,&C_tp);
+X#else
+X		C_tp.sg_flags |= CBREAK;
+X		C_tp.sg_flags &= ~ECHO;
+X		rc = ioctl(0,TIOCSETP,&C_tp);
+X#endif
+X		S_flag = IO_GOT|IO_RAW;
+X		break;
+X#ifndef	MINIX
+X	case COOKED:
+X#else
+X	case XCOOKED:
+X#endif
+X		if ((S_flag & IO_RAW) != 0)
+X		{
+X#ifdef SYSV
+X			C_tp = O_tp;
+X			rc = ioctl(0,TCSETAW,&C_tp);
+X#else
+X			C_tp.sg_flags = O_lflag;
+X			rc = ioctl(0,TIOCSETP,&C_tp);
+X#endif
+X			S_flag &= ~IO_RAW;
+X		}
+X		else
+X			rc = 0;
+X		break;
+X	case SAVEMODE:
+X		if ((S_flag & IO_RAW) != 0)
+X		{
+X#ifndef	MINIX
+X			tty_set(COOKED);
+X#else
+X			tty_set(XCOOKED);
+X#endif
+X			R_ignore = 0;
+X		}
+X		else
+X			++R_ignore;
+X		rc = 0;
+X		break;
+X	case RESTORE:
+X		if (R_ignore <= 0)
+X		{
+X			tty_set(RAWMODE);
+X		}
+X		else
+X			--R_ignore;
+X		rc = 0;
+X		break;
+X	default:
+X		rc = -1;
+X	}
+X	if (rc < 0)
+X		printex ("ioctl failure, tty_set: %d",cmd);
+X}
+END_OF_FILE
+if test 2713 -ne `wc -c <'tty_set.c'`; then
+    echo shar: \"'tty_set.c'\" unpacked with wrong size!
+fi
+# end of 'tty_set.c'
+fi
+if test -f 'tune.h' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'tune.h'\"
+else
+echo shar: Extracting \"'tune.h'\" \(2198 characters\)
+sed "s/^X//" >'tune.h' <<'END_OF_FILE'
+X/*
+X** vn news reader.
+X**
+X** tune.h - system tuning parameters
+X**
+X** see copyright disclaimer / history in vn.c source file
+X*/
+X
+X/*
+X**	buffer size needed for tmpnam()
+X*/
+X#ifndef L_tmpnam
+X#define L_tmpnam 48
+X#endif
+X
+X/*
+X** hash table size.  linked list type of table which can expand to
+X** arbitrary density, including densities > 100%.  Number of entries
+X** will be number of newsgroups in active list.  This should be a prime
+X** number ("long division" of string modulo table size hash function).
+X*/
+X#define HASHSIZE 809
+X
+X/*
+X**	maximum number of columns on terminal.  If made smaller, there
+X**	will be a savings in the size of the temporary file used
+X**	for holding displays, at the penalty of not being able to use
+X**	the entire screen width on terminals actually possessing more
+X**	columns than this.  A block roughly on the order of this value
+X**	times the number of lines the terminal has is maintained per page in
+X**	the temp file, and read / written as displays are interacted
+X**	with.  MIN_C put here because MAX_C > MIN_C.  MIN_C is the minumum
+X**	number of columns for which a "reasonable" display can be produced.
+X**	before making it smaller, look at all uses of C_allow and variable
+X**	to see that a setting that small won't screw up array bounds.
+X*/
+X#define MAX_C 132
+X#define MIN_C 36
+X
+X/*
+X**	large size for general purpose local buffers.  only used in automatic
+X**	variable declarations.  Used with fgets for buffer size when reading
+X**	file records, to hold pathnames, commands, etc.  Reduce if you blow
+X**	out stack storage.  If reduced too far, may eventually show up
+X**	as syntax errors on interacting with vns_ routines, or command line
+X**	botches.
+X*/
+X#define RECLEN 1200
+X
+X/* block sizes for allocation routines */
+X#define STRBLKSIZE 1800	/* string storage allocation block */
+X#define NDBLKSIZE 50	/* NODE structures to allocate at a time */
+X
+X/*
+X** maximum number of articles to allow for processing in a single user
+X** list.  Used only to declare an array of pointers on the stack, so it
+X** can be fair sized without much problem.  In practicality, there is
+X** no use for it being larger than the greatest line length available
+X** on the CRT's being used.
+X*/
+X#define MAXARTLIST 200
+END_OF_FILE
+if test 2198 -ne `wc -c <'tune.h'`; then
+    echo shar: \"'tune.h'\" unpacked with wrong size!
+fi
+# end of 'tune.h'
+fi
+echo shar: End of shell archive.
+exit 0
+-- 
+		"Zeta Microcomputer Software"
+ACSnet:    nick@ultima.cs.uts.oz
+UUCP:      ...!uunet!munnari!ultima.cs.uts.oz!nick
+Fidonet:   Nick Andrew on 3:713/602 (Zeta)

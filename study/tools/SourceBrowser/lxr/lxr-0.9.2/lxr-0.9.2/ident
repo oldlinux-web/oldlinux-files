@@ -1,0 +1,150 @@
+#!/usr/bin/perl
+# $Id: ident,v 1.15 2002/03/18 14:55:43 mbox Exp $
+
+# ident --	Look up identifiers
+#
+#	Arne Georg Gleditsch <argggh@ifi.uio.no>
+#	Per Kristian Gjermshus <pergj@ifi.uio.no>
+#
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+
+######################################################################
+
+$CVSID = '$Id: ident,v 1.15 2002/03/18 14:55:43 mbox Exp $ ';
+
+use strict;
+use lib do { $0 =~ m{(.*)/} ? "$1/lib" : "lib" };
+
+use LXR::Common qw(:html);
+use Local;
+
+
+sub varinputs {
+    my $ret = '';
+    foreach ($config->allvariables) {
+	if ($config->variable($_) ne $config->vardefault($_)) {
+	    $ret .= "<input type=\"hidden\" name=\"$_\" value=\"" .
+	      $config->variable($_) . "\">\n";
+	}
+    }
+    return $ret;
+}
+
+sub refexpand {
+    my $templ = shift;
+    my $ret = '';
+
+    my @refs = $index->getindex($identifier, $release);
+
+    my $def;
+    foreach my $def (@refs) {
+	my ($file, $line, $type, $rel) = @$def;
+	$rel &&= "(member of ".idref($rel, "search-member", $rel).")";
+	$ret .= expandtemplate($templ,
+			       (file => sub { $file },
+				line => sub { $line },
+				type => sub { $type },
+				rel  => sub { $rel },
+				fileref  => sub {
+				    fileref("$file, line $line", 
+					    "search-decl",
+					    $file, $line);
+				}
+			       ));
+	
+# 	print("<span class=\"search-li1\"> $type_names{$type} in ".
+# 	      fileref("$file, line $line", "search-decl",
+# 		      $file, $line).
+# 	      " $rel</span>\n");
+    }
+    
+    return $ret;
+}
+
+sub usesexpand {
+    my $templ = shift;
+    my $ret = '';
+
+    my @uses = $index->getreference($identifier, $release);
+    foreach my $ref (sort { $$a[0] cmp $$b[0] } @uses) {
+	my ($file, $line) = @$ref;
+	$ret .= expandtemplate($templ,
+			       (
+				file => sub { $file },
+				line => sub { $line },
+				fileref => sub {
+				    fileref("$file, line $line", "search-ref",
+					    $file, $line);
+				}
+			       ));
+    }
+    
+    return $ret;
+}
+
+sub printident {
+    my $dir = shift;
+    my ($templ, $templ_refs);
+    
+    #$templ = "<ul>\n\$files{\n<li>\$iconlink \$namelink\n}</ul>\n";
+    if ($config->htmlident) {
+		unless (open(TEMPL, $config->htmlident)) {
+			warning("Template ".$config->htmlident." does not exist.");
+		} else {
+			local($/) = undef;
+			$templ = <TEMPL>;
+			close(TEMPL);
+		}
+    } else {
+		die "Ident template not configured";
+	}
+	
+	
+	if ($config->htmlident_refs) {
+		unless (open(TEMPL, $config->htmlident_refs)) {
+			warning("Template ".$config->htmlident_refs." does not exist.");
+		} else {
+			local($/) = undef;
+			$templ_refs = <TEMPL>;
+			close(TEMPL);
+		}
+    } else {
+		die "Ident refs template not configured";
+	}
+	
+    
+    # print the description of the current directory
+    #dirdesc($dir);
+    
+    # print the listing itself
+    print(expandtemplate($templ,
+						 (variables => \&varinputs,
+						  identifier => sub { return $identifier },
+						  refs => sub { refexpand(@_) },
+						 )));
+	print(expandtemplate($templ_refs,
+						 (uses => sub { usesexpand(@_) },
+						 )));
+}
+
+
+httpinit;
+
+makeheader('ident');
+printident;
+makefooter('ident');
+httpclean;
+

@@ -1,0 +1,530 @@
+<Picture>
+<Picture: Logo>AboutAdvertisingAwardsContact usNewsMessageboards<Picture>
+Back to messagelist 
+
+Re: Disk access... 
+
+Posted by ports on February 22, 2000 at 12:10:14 PM
+
+TITLE Freehafer's use ports to read floppy disk A: sectors program
+;
+; Bibliography
+;
+; 1. Help with DMA programming is found in The Indespensable PC Hardware
+; Book, Messmer, Addison-Wesley Longman Limited, ©1997, page 721.
+;
+; 2. Help with port programming is found in The Undocumented PC,
+; Gilluwe, Addison-Wesley Developers Press, ©1997, pages 525, 1057.
+;
+;........................................................................
+msg MACRO msgout ; 
+mov AH, 09h ; function 09h
+lea DX, msgout ; DX holds message
+int 21h ; display string interupt
+ENDM ; 
+;........................................................................
+.MODEL small ; directive placing all memory in one segment
+;........................................................................
+.stack 2000h ; 
+.data ; 
+Message DB 0Ah,0Dh," This program uses ports to read a sector of A:",0Ah,0Dh,'$'
+CW DB 10,13,10,13," (C)1999 Inniea Publishing Company! R",153,142,"K NOG!",0Ah,0Dh," Freehafer's Read Sector With Ports Program Is Terminated! ",0Ah,0Dh,0Ah,0Dh,'$'
+msgENT DB 10,13,10,13," Enter a 'y' or 'Y' if you want to display",10,13," sector contents on screen: ",'$'
+CRLF DB 10,13,'$'
+msgLine DB 10,13," **************SECTOR CONTENTS***************",10,13,'$'
+msgSECTOR DB 10,13," Enter sector number 1 to 18: ",'$'
+msgTRACK DB 10,13," Enter track number 0 to 79: ",'$'
+msgSIDE DB 10,13," Enter side number 0 to 1: ",'$'
+NUM DW 0
+counter DW 0
+buffer DB 512 dup('t')
+buffy DB 512 dup(?)
+on_off_switch EQU 1Ch ; motor_on
+compare_s DB 0 ; send_controller
+compare_r DB 0 ; receive_controller
+compare_x DB 0 ; recalibrate_a
+compare_t DB 0 ; seek_track_side
+command_byte DB ? ; 
+result_byte DB ? ; 
+side DB 0 ; 
+track DB 0 ; 
+sector DB 0 ; 
+INPNUM DW 0 ;
+dma_access_opperation_code DB ? 
+dma_low_order_count_byte DB ? 
+dma_high_order_count_byte DB ?
+;........................................................................
+.code ; 
+;........................................................................ 
+start: ; begin algorithm
+;........................................................................
+; ; move data segment into DS
+;........................................................................
+mov AX, @data ; base address
+mov DS, AX ; of data segment
+;........................................................................
+; ; get inputs
+;........................................................................
+msg Message ; describe what program does
+;........................................................................
+msg msgSECTOR ; sector
+CALL InputInt ; 
+mov AL, byte ptr NUM ; 
+mov sector, AL ; 
+msg msgTRACK ; track
+CALL InputInt ; 
+mov AL, byte ptr NUM ; 
+mov track, AL ; 
+msg msgSIDE ; side 
+CALL InputInt ; 
+mov AL, byte ptr NUM ; 
+mov side, AL ; 
+;........................................................................
+; ; read media id of A:
+;........................................................................
+mov AL, 00h ; drive A:
+LEA BX, buffy ; ES:BX 
+mov CX, 01h ; number of sectors to read
+mov DX, 00h ; boot sector 
+int 25h ; absolute read interrupt
+;........................................................................
+; ; delay
+;........................................................................
+mov AX, 0 ; 
+mov counter, AX ; 
+first_loop: ; beep delay
+mov AH, 02h ; 
+mov DL, 07h ; 
+int 21h ; 
+.IF(counter < 15) ;
+;........................................................................ 
+mov AH, 86h ; system wait function
+mov CX, 02h ; CX = 1E DX = 8480h for 2 seconds
+mov DX, 00h ; 131.072 milliseconds
+int 15h ; added dealy
+;........................................................................
+inc counter ; 
+jmp first_loop ; 
+.ENDIF ; 
+;........................................................................
+; ; ES:BX
+;........................................................................
+mov BX, seg buffer ; 
+mov ES, BX ; 
+mov BX, offset buffer ; 
+;........................................................................
+;***********************************; DIRECT MEMORY ACCESS
+mov AL, 56h ; 
+mov dma_access_opperation_code, AL 
+mov AL, 0FFh ; 
+mov dma_low_order_count_byte, AL 
+mov AL, 1h ; 
+mov dma_high_order_count_byte, AL
+call dma_access ; 
+;........................................................................
+CALL motor_on ; 
+CALL recalibrate_a ; retract head to track 0
+CALL seek_track_side ; seek desired track and side
+CALL read_sector_id ; verify side
+;........................................................................
+;***********************************; WRITE TO CONTROLLER
+;........................................................................
+; ; Send Byte 0 Command To Port
+;........................................................................
+mov AL, 46h ; 70d = 46h = 0100 0110b read sector command 
+mov command_byte, AL ; 
+CALL send_controller ; send command to port
+;........................................................................
+; ; Send Byte 1
+;........................................................................
+mov CL, 4 ; 
+mov AL, side ; alternate between 0x00 and 0x04
+mul CL ; 0000 0(head = 0 or 1)(drive a: = 0 0)
+mov command_byte, AL ; 
+CALL send_controller ; send command to port
+;........................................................................
+; ; Send Byte 2
+;........................................................................
+mov AL, track ; 
+mov command_byte, AL ; cylinder
+CALL send_controller ; 
+;........................................................................
+; ; Send Byte 3
+;........................................................................
+mov AL, side ; head
+mov command_byte, AL ; 
+CALL send_controller ; send command to port
+;........................................................................
+; ; Send Byte 4
+;........................................................................
+mov AL, sector ; sector # up to 37 max
+mov command_byte, AL ; 
+CALL send_controller ; 
+;........................................................................
+; ; Send Byte 5
+;........................................................................
+mov AL, 2 ; Byte 5 = 2 for 512 bytes per sector
+mov command_byte, AL ; 
+CALL send_controller ; 
+;........................................................................
+; ; Send Byte 6
+;........................................................................
+mov AL, 12h ; 18d = last sector on track
+mov command_byte, AL ; 
+CALL send_controller ; 
+;........................................................................
+; ; Send Byte 7
+;........................................................................
+mov AL, 1Bh ; 3 1/2" write or read = 1Bh = 27d = 0001 1011b
+mov command_byte, AL ; gap
+CALL send_controller ; 
+;........................................................................
+; ; Send Byte 8
+;........................................................................
+mov AL, 0h ; 0 or 0FFh = 255d unused = 01111111b
+mov command_byte, AL ; 
+CALL send_controller ; 
+;........................................................................
+;***********************************; READ FROM CONTROLLER
+;........................................................................
+CALL receive_controller ; 
+CALL receive_controller ; 
+CALL receive_controller ; 
+CALL receive_controller ; 
+CALL receive_controller ; 
+CALL receive_controller ; 
+CALL receive_controller ; 
+;........................................................................
+CALL motor_off
+;........................................................................
+;***********************************; DISPLAY SECTOR CONTENTS
+;........................................................................
+; ; display sector contents
+;........................................................................
+msg msgENT ; do you want boot sector contents displayed
+mov AH, 01h ; read character function
+int 21h ; call interrupt
+.IF(AL != 89 && AL != 121) ; if 'Y' of 'y' not entered skip display
+jmp skipper ; 
+.ENDIF ; 
+msg CRLF ; 
+;........................................................................
+msg msgLine ; display line of stars
+disloop: ; beginning of loop
+mov BX, counter ; counter
+mov AL, buffer[BX] ; buffer array
+int 29h ; display character in AL
+inc counter ; increment counter
+.IF(counter jmp disloop ; end of loop
+.ENDIF ; end of counter test
+msg CRLF ; new line
+msg msgLine ; display line of stars
+skipper:
+;........................................................................
+msg CW ; display copyright 
+;........................................................................
+; ; end 
+;........................................................................
+mov AX,4C00h ; termination function
+int 21h ; termination interupt
+;........................................................................
+; PROCEDURES*************************************************************
+;........................................................................
+; PROCEDURE TO INPUT NUMBER**********************************************
+;........................................................................
+InputInt proc ; 
+push CX ; 
+push BX ; 
+mov BX, 0 ; 
+mov CX, 0 ; 
+mov NUM, 0 ; 
+READ: ; 
+mov AH, 1 ; 
+int 21h ; 
+mov DL, AL ; 
+cmp AL, '0' ; 
+jl ExitProc ; 
+cmp AL, '9' ; 
+jg ExitProc ; 
+Number: ; 
+mov AH, 0 ; 
+sub AL, '0' ; 
+mov CX, AX ; 
+mov AX, 10 ; 
+mul BX ; 
+add AX, CX ; 
+mov BX, AX ; 
+jmp Read ; 
+ExitProc: ; 
+mov AX, BX ; 
+pop BX ; 
+pop CX ; 
+mov NUM, AX ; 
+ret ; 
+InputInt endp ; 
+;........................................................................
+; PROCEDURE TO DELAY*****************************************************
+;........................................................................
+delay_1 proc ;
+mov AH, 86h ; system wait function
+mov CX, 00h ; CX = 1E DX = 8480h for 2 seconds
+mov DX, 5000h ; 5000h = 20480d = 
+int 15h ; 20.480 milliseconds
+ret ;
+delay_1 endp ; 
+;........................................................................
+; PROCEDURE TO TURN ON FLOPPY DIRVE MOTOR********************************
+;........................................................................
+motor_on proc ; 
+mov DX, 3F2h ; 
+mov AL, on_off_switch ; 
+OUT DX, AL ; 
+ret ; 
+motor_on endp ; 
+;........................................................................
+; PROCEDURE TO TURN OFF FLOPPY DIRVE MOTOR*******************************
+;........................................................................
+motor_off proc ; 
+mov DX, 3F2h ; 
+mov AL, 0h ; 
+OUT DX, AL ; 
+ret ; 
+motor_off endp ; 
+;........................................................................
+; PROCEDURE TO SEND CONTROLLER COMMAND BYTE******************************
+;........................................................................
+send_controller proc ; 
+send_check_again: ; 
+CALL delay_1 ; 
+mov DX, 3F4h ;
+IN AL, DX ;
+mov compare_s, AL ; 
+AND compare_s, 80h ; 
+.IF (compare_s != 80h) ; 128d = 80h = 1000 0000b
+jmp send_check_again ; *****
+.ENDIF ; 
+CALL delay_1 ; 
+mov DX, 3F5h ;
+mov AL, command_byte ; 
+OUT DX, AL ; 
+ret ; 
+send_controller endp ; 
+;........................................................................
+; PROCEDURE TO RECEIVE BYTES FROM CONTROLLER*****************************
+;........................................................................
+receive_controller proc ; 
+receive_check_again: ; 
+CALL delay_1 ; 
+mov DX, 3F4h ;
+IN AL, DX ; 
+mov compare_r, AL ;
+AND compare_r, 80h ; 
+.IF (compare_r != 80h) ; 128d = 80h = 1000 0000b
+jmp receive_check_again ; *****
+.ENDIF ; 
+CALL delay_1 ; 
+mov DX, 3F5h ; 
+IN AL, DX ; 
+mov result_byte, AL ; 
+ret ; 
+receive_controller endp ; 
+;........................................................................
+; PROCEDURE TO RECALIBRATE OR RETRACT TRACK TO 0*************************
+;........................................................................
+recalibrate_a proc ; 
+recalibrate_it_again: ;
+mov AL, 7 ; recalibrate command byte
+mov command_byte, AL ; 
+CALL send_controller ; 
+mov AL, 0h ; DRIVE A:
+mov command_byte, AL ; 
+CALL send_controller ; 
+; ; sense interrupt
+mov AL, 08h ; sense command byte = 08h
+mov command_byte, AL ; 
+CALL send_controller ; 
+CALL receive_controller ; result_byte 1 = status
+mov AL, result_byte ; 
+mov compare_x, AL ;
+AND compare_x, 80h ; 
+.IF (compare_x == 80h) ; 128d = 80h = 1000 0000b
+jmp recalibrate_it_again ; *****
+.ENDIF ; 
+CALL receive_controller ; result_byte 2 = track
+.IF(result_byte != 0) ; 
+jmp recalibrate_it_again ; *****
+.ENDIF ; 
+ret ; 
+recalibrate_a endp ;
+;........................................................................
+; PROCEDURE TO SEEK TRACK AND SIDE***************************************
+;........................................................................
+seek_track_side proc ; 
+go_and_seek_it_again: ; 
+mov AL, 0Fh ; seek command byte = 0Fh
+mov command_byte, AL ; 
+CALL send_controller ; 
+mov CL, 4 ; 
+mov AL, side ; INPUT = alternate between 0x00 and 0x04
+mul CL ; 0000 0(head = 0 or 1)(drive a: = 0 0)
+mov command_byte, AL ; 
+CALL send_controller ; send command to port
+mov AL, track ; INPUT = track
+mov command_byte, AL ; 
+CALL send_controller ;
+;...................................; sense interrupt
+mov AL, 08h ; sense command byte = 08h
+mov command_byte, AL ; 
+CALL send_controller ; 
+CALL receive_controller ;
+mov AL, result_byte ; result_byte 1 = status
+mov compare_t, AL ; 
+AND compare_t, 80h ; 
+.IF (compare_t == 80h) ; 128d = 80h = 1000 0000b
+jmp go_and_seek_it_again ; *****
+.ENDIF ;
+CALL receive_controller ; result_byte 2 = track
+mov AL, track ; 
+.IF (result_byte != AL) ; 
+jmp go_and_seek_it_again ; ***** 
+.ENDIF ;....
+ret ; 
+seek_track_side endp ; 
+;.......................................................................
+; PROCEDURE TO READ SECTOR ID*******************************************
+;.......................................................................
+read_sector_id proc ;
+mov AL, 4Ah ; command byte 
+mov command_byte, AL ; 
+CALL send_controller ; 
+mov CL, 4 ; 
+mov AL, side ; INPUT = alternate between 0x00 and 0x04
+mul CL ; 0000 0(head = 0 or 1)(drive a: = 0 0)
+mov command_byte, AL ; 
+CALL send_controller ; send command to port
+CALL receive_controller ; 
+CALL receive_controller ; 
+CALL receive_controller ; 
+CALL receive_controller ; 
+CALL receive_controller ; result_byte = side
+mov AL, side ;
+.IF (result_byte != AL) ; 
+CALL receive_controller ; 
+CALL receive_controller ; 
+jmp go_and_seek_it_again ; *****
+.ENDIF ;....
+CALL receive_controller ; 
+CALL receive_controller ; 
+ret ; 
+read_sector_id endp ; 
+;........................................................................
+; DIRECT MEMORY ACCESS PROCEDURE*****************************************
+;........................................................................
+dma_access proc ; 
+;........................................................................
+cli ; disable interrupts
+;........................................................................
+; ; disable dma1
+;........................................................................
+MOV AL, 14h ; 
+OUT 08h, AL ; DMA-1 Command Register port 8h
+; command 20d = 14h = 0001 0100b
+; rotating priority
+; disable disabled 
+; memory to memory transfer
+;........................................................................
+; ; mode
+;........................................................................
+MOV AL, dma_access_opperation_code
+OUT 0Bh, AL ; DMA-1 Mode Register port 0Bh
+; single mode; auto; write; channel 2
+;.....................................................................
+; ; split address
+;.....................................................................
+MOV AX, ES ; 
+MOV CL, 04h ; 
+SHL AX, CL ; 
+ADD AX, BX ; 
+JC carry ; 
+;.....................................................................
+; ; no carry
+;.....................................................................
+MOV BX, ES ; 
+MOV CL, 04h ; 
+SHR BH, CL ; 
+JMP buffer_address ; 
+carry: ; 
+MOV BX, ES ; 
+MOV CL, 04h ; 
+SHR BH, CL ; 
+ADC BH, 0h ; 
+buffer_address: ; 
+OUT 0Ch, AL ; DMA-1 Clear Byte Flip-Flop
+; reset flip-flop
+OUT 04h, AL ; DMA-1 Channel 2 Output
+; Low Order Address Byte
+MOV AL, AH ; 
+OUT 04h, AL ; DMA-1 Channel 2 Output
+; High Order Address Byte
+MOV AL, BH ; page address
+OUT 81h, AL ; page value = 11d = 0Bh = 0000 1011
+; address bits A16 to A19
+; for DMA transfers 
+;........................................................................
+; ; count value
+;........................................................................
+OUT 0Ch, AL ; DMA-1 Clear Byte Flip-Flop
+; reset flip-flop
+;........................................................................
+; ; BUFFER SIZE = 84 BYTES
+;........................................................................
+MOV AL, dma_low_order_count_byte
+OUT 05h, AL ; DMA-1 Count Port
+; load low order count byte
+MOV AL, dma_high_order_count_byte
+OUT 05h, AL ; load high order count byte
+;.......................................................................
+; ; unmask channel
+;.......................................................................
+MOV AL, 02h ; release channel 2
+OUT 0Ah, AL ; DMA-1 Mask Register Bit
+; command 2d = 2h = 0000 0010b
+; clear mask channel 2
+;.......................................................................
+; ; enable dma1
+;.......................................................................
+MOV AL, 10h ; 
+OUT 08h, AL ; DMA-1 Command Register Port
+; 10d = 0Ah = 0001 0000b
+; enable DMA
+sti ; enable interrupts
+ret ; 
+dma_access endp ; 
+;........................................................................
+end start ; end program
+
+
+
+
+
+
+------------------------------------------------------------------------
+
+Follow Ups:
+ Disk access... - Jeffrey 2000-02-16 (0)
+ Re: Disk access... - ports 2000-02-22 (0)
+ Re: Disk access... - ////// 2000-02-17 (0)
+ You could try... - Bikram 2000-02-17 (0)
+  Hard Drive I/O isn't hard at all - Untitled 2000-02-17 (0)
+   Wha ?? Read... - Bikram 2000-02-17 (0)
+    Ports Info - Darius 2000-02-19 (0)
+     Re: Ports Info - Bikram 2000-02-20 (0)
+      Just rambling mostly - Darius 2000-02-20 (0)
+
+
+------------------------------------------------------------------------
+click here to post a reply to this message 
+
+If you find that this message does NOT belong in this forum,
+please report it to the webmaster by clicking HERE. 
+<Picture>FAQSearchDisclaimer/Privacy StatementSubmit/update file or linkDesign by Björn Fogelberg©2000 Synchron DataAll rights reservedModified 2000-02-24<Picture: Infomagic_logo>

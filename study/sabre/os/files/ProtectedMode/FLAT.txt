@@ -1,0 +1,100 @@
+FLAT REAL / REAL BIG / UNREAL MODE (v1.2)
+
+Flat Real mode, Real Big mode and UnReal mode are three names with the very same meaning, I will call it FLAT in this text.
+
+Since the first PC-XT, people have searched for methods to get access to more and more memory for their DOS programs: EMS, UMBs, XMS, DPMI. With the i386, Intel has given 32-bit power to the PC's. Here's an example to take advantage of the 32-bit capabilities of the i386 and compatibles without the need of protected mode, DOS-extenders and/or special interfaces like VCPI & DPMI.
+
+FLAT simply allows you to use 32-bit access on top of the normal 16-bit addressing. 32-bit access is possible as the well-known 64KB limits are just registers on the i386 and can be altered to almost any value up to 4GB. FLAT is not new, Microsoft's HIMEM.SYS already uses it since 1988 for its 'Move Extended Memory Block' service.
+
+To understand how FLAT works, you have to understand how the i386 works. The i386 is not made as one but several seperate units; an ALU, an INSTRUCTION PREFETCHER, a SEGMENTATION UNIT, a PAGING UNIT, etc. Most of these units have no clue about the state of the CPU; Real or Protected Mode.
+
+The SEGMENTATION UNIT only holds the BASE, the LIMIT and some attributes of the segment registers. These values are used for addressing rather than the value of the segment registers. When a segment register is assigned a value, in Real Mode and in a V86 task the BASE is loaded with 16 times this value so the addressing is compatible with the 8086. Most of the other fields, including LIMIT, are unaffected. In normal Protected Mode operation this value is used as an index for the GLOBAL/LOCAL DESCRIPTOR TABLE from where all fields BASE, LIMIT and attributes are fetched. So, to alter the LIMITs, we have to be in Protected Mode.
+
+The SEGMENTATION UNIT will report a fault when an instruction is trying to address beyond a LIMIT, or when an instruction is trying to do an illegal access like writing to a read-only segment. This fault will raise interrupt number 13. In Protected Mode there's an exception handler that will handle this. In normal DOS operation (Real Mode), there is _no_ exception handler. In fact, in the PC design interrupt #13 is used for handling IRQ number 5. This is the reason DOS will hang the system when 32-bit access is used. While the IRQ #5 handler expects the address of the _next_ instruction is pushed onto the stack, exception #13 will push the instruction which caused the exception. When the IRQ #5 handler does an IRET, the CPU tries to execute the very same instruction, resulting in an exception #13 (again), etc, etc..
+
+After a RESET or a switch to a V86 task, all segment LIMITs have a value of 64KB, this to be compatible with the 8086 and the 80286. As the LIMITs can't be altered from within a V86 task, FLAT will never work here. FLAT is thus incompatible with environments/programs where a V86 task is used to simulate DOS, including:
+ - MS-Windows 3.x in 'Enhanced Mode'
+ - MS-Windows NT
+ - OS/2 2.x, Warp
+ - Emm386, Qemm, etc.. simulating UMBs
+
+Some environments/programs have an option to disable the DOS simulation:
+ - MS-Windows'95; check the 'MS-DOS Mode' option
+ - Emm386 simulating EMS; enter 'Emm386 OFF' at the DOS prompt
+
+Due to a bug in Qemm (7.02), its simulation cannot be disabled after being enabled. As long Qemm stays disabled FLAT will work. I do not have experience with other EMS simulators (e.g 386max)
+
+FLAT is fully compatible with:
+ - DOS 2.0 and above
+ - MS-Windows 3.x in 'Real Mode' and 'Standard Mode'
+ - DesqView
+ - Himem/XMS/UMB drivers
+ - EMS drivers
+
+All FLAT actually does it jump to Protected Mode, alter the segment LIMITs using a DESCRIPTOR with a 4GB LIMIT, and jump back to Real Mode. As other programs/TSRs may enter Protected Mode, there's the possibility that the LIMITs are altered to 64KB again. This is why I have implemented FLAT as an exception handler. To allow IRQ #5 to be handled, the exception handler first checks the Interrupt Controller if IRQ #5 is 'In Service'. If so, it calls the IRQ #5 handler. FLAT will terminate the program if it detects an instruction that is causing an exception #13, even when the LIMITs are (re)set to 4GB.
+
+To activate FLAT, just call the FLAT_install routine, to remove/deactive it, call FLAT_destall. As FLAT must be installed on top of the interrupt #13 handler, FLAT has to be deactivated first before any changes to this interrupt vector can take place. As said above, interrupt #13 is normally used for IRQ #5.
+
+FLAT is called FLAT because with 32-bit access the whole 4GB address space of the 386 can be accessed with only using offsets. But as the addressing mechanism needs a segment the format [0000:<32-bit offset>] is used.
+
+Using XMS, when an EMB is locked, the physical base address of the EMB is returned. This base address can be used as base for access to the EMB:
+
+	mov ah,09h                      ; Allocate EMB
+	mov dx,256                      ; 256KB
+	call XMS_driver                 ; Do it!
+	test ax,ax                      ; Error?
+	jz alloc_error
+	mov ah,0Ch                      ; Lock EMB
+	call XMS_driver                 ; Do it!
+	test ax,ax                      ; Error?
+	jz lock_error
+	mov di,dx                       ; DX has high word of 256KB chunk
+	shl edi,16
+	mov di,bx                       ; BX has low word of 256KB chunk
+	xor eax,eax                     ; Clear EAX
+	mov es,ax                       ; ES:EDI now points to first address of 256KB chunk
+	mov ecx,10000h                  ; 256KB equals 64K dwords
+	rep stos dword ptr es:[edi]     ; Clear 256KB chunk
+
+32-bit access is not specially meant for extended memory, it can be used for conventional memory as well. DOS allows memory allocations larger than 64KB which now is addressable as one big chunk rather than separate chunks of 64KB and/or less:
+
+	mov ah,48h                      ; Allocate Memory
+	mov bx,4000h                    ; 256KB (16K paragraphs)
+	int 21h                         ; Do it!
+	jc alloc_error                  ; Out of memory?
+	mov es,ax                       ; 256KB can be accessed using es:00000000 through es:0003FFFFh
+	xor eax,eax                     ; Clear EAX
+	xor edi,edi                     ; ES:EDI now points to first address of 256KB chunk
+	mov ecx,10000h                  ; 256KB equals 64K dwords
+	rep stos dword ptr es:[edi]     ; Clear 256KB chunk
+
+With the new VESA VBE Core Standard 2.0, the entire video memory of a SVGA or other video adapter that support linear/flat addressing can be accessed as one large chunk of memory somewhere in the 4GB(/16MB) address space of the 386(sx):
+
+	mov ax,4F01h                    ; Get VBE Mode Information
+	mov cx,100h                     ; Mode : 640x400, 256 colours
+	les di,ModeInfoBlockPtr         ; ES:DI now points to ModeInfoBlock structure
+	int 10h                         ; Do it!
+	cmp ax,4Fh                      ; Error?
+	jne VBE_error
+	mov ax,4F02h                    ; Set VBE Mode
+	mov bx,0C100h                   ; Mode : 640x400, 256 colours, linear/flat, don't clear display
+	int 10h                         ; Do it!
+	cmp ax,4Fh                      ; Error?
+	jne VBE_error
+	xor eax,eax                     ; Clear EAX
+	mov edi,dword ptr es:di[28h]    ; ModeInfoBlock[28h] = 'PhysBasePtr'
+	mov es,ax                       ; ES:EDI now points to first address of 256KB video buffer
+	mov ecx,10000h                  ; 640 x 400 bytes equals 256000 bytes equals about 64K dwords
+	rep stos dword ptr es:[edi]     ; Clear 256KB video buffer
+
+Accessing video memory without the need of bankswitching really speeds up video performance. In terms of pixels per second, drawing lines in the 1600x1200,256 colours graphics mode is now faster than in the 320x200, 256 colours mode.
+
+The only limitation of FLAT is your imagination. And you'll need that as no high-level language DOS compiler I've seen (yet) supports 32-bit addressing without the need of some kind of DOS-extender. However, FLAT will link smoothly with almost any 16-bit DOS compiler. I use Turbo Pascal 5.5 and 6.0 myself for the body of the programs I'm writing, and use some assembly at the places I need the 32-bit addressing. See EX2 for a very nice example.
+
+
+	Herman Dullink
+	Groningen (the emulator city; CPC, MSX, ZX :-)
+	the Netherlands
+	+31-50-132829
+	csg669@wing.rug.nl (fast)
+	herman.dullink@prgbbs.idn.nl (1 day slower)

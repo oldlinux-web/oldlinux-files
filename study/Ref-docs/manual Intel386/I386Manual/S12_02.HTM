@@ -1,0 +1,88 @@
+<html><!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">
+<html>
+
+	<head>
+		<title>80386 Programmer's Reference Manual -- Section 12.2</title>
+	</head>
+
+	<body>
+		<b>up:</b> <a href="C12.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/C12.HTM">Chapter 12 -- Debugging</a><br>
+		<b>prev:</b> <a href="S12_01.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/S12_01.HTM">12.1 Debugging Features of the Architecture</a><br>
+		<b>next:</b> <a href="S12_03.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/S12_03.HTM">12.3 Debug Exceptions</a>
+		<p>
+		<hr>
+		<p>
+		<h1>12.2 Debug Registers</h1>
+		Six 80386 registers are used to control debug features. These registers are accessed by variants of the <a href="MOVRS.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/MOVRS.HTM">MOV</a> instruction. A debug register may be either the source operand or destination operand. The debug registers are privileged resources; the <a href="MOVRS.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/MOVRS.HTM">MOV</a> instructions that access them can only be executed at privilege level zero. An attempt to read or write the debug registers when executing at any other privilege level causes a general protection exception. <a href="#fig12-1">Figure 12-1</a> shows the format of the debug registers.
+		<p><a name="fig12-1"><img align="center" src="FIG12-1.GIF" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/FIG12-1.GIF" border="0">
+		<h2>12.2.1 Debug Address Registers (DR0-DR3)</h2>
+		Each of these registers contains the linear address associated with one of four breakpoint conditions. Each breakpoint condition is further defined by bits in DR7.
+		<p>The debug address registers are effective whether or not paging is enabled. The addresses in these registers are linear addresses. If paging is enabled, the linear addresses are translated into physical addresses by the processor's paging mechanism (as explained in <a href="C05.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/C05.HTM">Chapter 5</a> ) . If paging is not enabled, these linear addresses are the same as physical addresses.
+		<p>Note that when paging is enabled, different tasks may have different linear-to-physical address mappings. When this is the case, an address in a debug address register may be relevant to one task but not to another. For this reason the 80386 has both global and local enable bits in DR7. These bits indicate whether a given debug address has a global (all tasks) or local (current task only) relevance.
+		<h2>12.2.2 Debug Control Register (DR7)</h2>
+		The debug control register shown in <a href="#fig12-1">Figure 12-1</a> both helps to define the debug conditions and selectively enables and disables those conditions.
+		<p>For each address in registers DR0-DR3, the corresponding fields R/W0 through R/W3 specify the type of action that should cause a breakpoint. The processor interprets these bits as follows:
+		<ul>
+			<li>00 -- Break on instruction execution only
+			<li>01 -- Break on data writes only
+			<li>10 -- undefined
+			<li>11 -- Break on data reads or writes but not instruction fetches
+		</ul>
+		Fields LEN0 through LEN3 specify the length of data item to be monitored. A length of 1, 2, or 4 bytes may be specified. The values of the length fields are interpreted as follows:
+		<ul>
+			<li>00 -- one-byte length
+			<li>01 -- two-byte length
+			<li>10 -- undefined
+			<li>11 -- four-byte length
+		</ul>
+		If RWn is 00 (instruction execution), then LENn should also be 00. Any other length is undefined.
+		<p>The low-order eight bits of DR7 (L0 through L3 and G0 through G3) selectively enable the four address breakpoint conditions. There are two levels of enabling: the local (L0 through L3) and global (G0 through G3) levels. The local enable bits are automatically reset by the processor at every task switch to avoid unwanted breakpoint conditions in the new task. The global enable bits are not reset by a task switch; therefore, they can be used for conditions that are global to all tasks.
+		<p>The LE and GE bits control the &quot;exact data breakpoint match&quot; feature of the processor. If either LE or GE is set, the processor slows execution so that data breakpoints are reported on the instruction that causes them. It is recommended that one of these bits be set whenever data breakpoints are armed. The processor clears LE at a task switch but does not clear GE.
+		<h2>12.2.3 Debug Status Register (DR6)</h2>
+		The debug status register shown in <a href="#fig12-1">Figure 12-1</a> permits the debugger to determine which debug conditions have occurred.
+		<p>When the processor detects an enabled debug exception, it sets the low-order bits of this register (B0 thru B3) before entering the debug exception handler. Bn is set if the condition described by DRn, LENn, and R/Wn occurs. (Note that the processor sets Bn regardless of whether Gn or Ln is set. If more than one breakpoint condition occurs at one time and if the breakpoint trap occurs due to an enabled condition other than n, Bn may be set, even though neither Gn nor Ln is set.)
+		<p>The BT bit is associated with the T-bit (debug trap bit) of the TSS (refer to 7 for the location of the T-bit). The processor sets the BT bit before entering the debug handler if a task switch has occurred and the T-bit of the new TSS is set. There is no corresponding bit in DR7 that enables and disables this trap; the T-bit of the TSS is the sole enabling bit.
+		<p>The BS bit is associated with the TF (trap flag) bit of the EFLAGS register. The BS bit is set if the debug handler is entered due to the occurrence of a single-step exception. The single-step trap is the highest-priority debug exception; therefore, when BS is set, any of the other debug status bits may also be set.
+		<p>The BD bit is set if the next instruction will read or write one of the eight debug registers and ICE-386 is also using the debug registers at the same time.
+		<p>Note that the bits of DR6 are never cleared by the processor. To avoid any confusion in identifying the next debug exception, the debug handler should move zeros to DR6 immediately before returning.
+		<h2>12.2.4 Breakpoint Field Recognition</h2>
+		The linear address and LEN field for each of the four breakpoint conditions define a range of sequential byte addresses for a data breakpoint. The LEN field permits specification of a one-, two-, or four-byte field. Two-byte fields must be aligned on word boundaries (addresses that are multiples of two) and four-byte fields must be aligned on doubleword boundaries (addresses that are multiples of four). These requirements are enforced by the processor; it uses the LEN bits to mask the low-order bits of the addresses in the debug address registers. Improperly aligned code or data breakpoint addresses will not yield the expected results.
+		<p>A data read or write breakpoint is triggered if any of the bytes participating in a memory access is within the field defined by a breakpoint address register and the corresponding LEN field. <a href="#Table 12-1">Table 12-1</a> gives some examples of breakpoint fields with memory references that both do and do not cause traps.
+		<p>To set a data breakpoint for a misaligned field longer than one byte, it may be desirable to put two sets of entries in the breakpoint register such that each entry is properly aligned and the two entries together span the length of the field.
+		<p>Instruction breakpoint addresses must have a length specification of one byte (LEN = 00); other values are undefined. The processor recognizes an instruction breakpoint address only when it points to the first byte of an instruction. If the instruction has any prefixes, the breakpoint address must point to the first prefix.
+		<pre>
+
+
+
+<a name="Table 12-1">Table 12-1. Breakpoint Field Recognition Examples
+
+Address (hex)          Length
+
+DR0             0A0001          1 (LEN0 = 00)
+Register Contents      DR1             0A0002          1 (LEN1 = 00)
+DR2             0B0002          2 (LEN2 = 01)
+DR3             0C0000          4 (LEN3 = 11)
+
+Some Examples of Memory                0A0001          1
+References That Cause Traps            0A0002          1
+0A0001          2
+0A0002          2
+0B0002          2
+0B0001          4
+0C0000          4
+0C0001          2
+0C0003          1
+
+Some Examples of Memory                0A0000          1
+References That Don't Cause Traps      0A0003          4
+0B0000          2
+0C0004          4
+</a>
+</pre>
+		<p>
+		<hr>
+		<p><b>up:</b> <a href="C12.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/C12.HTM">Chapter 12 -- Debugging</a><br>
+		<b>prev:</b> <a href="S12_01.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/S12_01.HTM">12.1 Debugging Features of the Architecture</a><br>
+		<b>next:</b> <a href="S12_03.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/S12_03.HTM">12.3 Debug Exceptions</a>
+	</body>
+

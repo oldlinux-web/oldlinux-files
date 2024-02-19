@@ -1,0 +1,680 @@
+// AKAI Disk Utilities - Copyright(c)1996-1999 Paul Kellett
+// 
+// You may use any part of this code for any purpose!
+//
+// Version 4.1 (November 1999)  
+// Compiled with Borland Turbo C++ for DOS using "compact" memory model 
+//
+//
+// Background info:
+// 
+// In the (IBM compatible) PC BIOS, the vector at interrupt 1E points to a table
+// of floppy disk controller parameters. The table usually resembles the following: 
+//
+//   Byte   Value    Description
+//   ------------------------------------------------------------------
+//     0     223     Specifications part 1
+//     1       2     Specifications part 2
+//     2      37     Motor run time
+//     3       2     Block size: 0=128, 1=256, 2=512, 3=1024 bytes
+//     4      18     Last sector number
+//     5      27     Sector search gap
+//     6     255     Data transfer length
+//     7     108     Gap between sectors
+//     8     246     ASCII code of format symbol
+//     9      15     Head settle time
+//    10       8     Speed up time
+//
+// The actual values vary a little depending on the PC and if Windows is running. 
+// You should always leave the table in the same state you found it!
+//
+// To adjust the table, you need to be able to call interrupts to execute BIOS
+// functions. This is no problem in DOS and Windows 3.x, 95 and 98 (so long as
+// your compiler actually supports interrupts) but an executable running under
+// Windows NT (and probably Win2000) is not allowed direct access so a service
+// or driver must be written.
+
+
+#include <dos.h>
+#include <stdio.h>
+
+#define GETSEG(p) ((unsigned)(((unsigned long)((void far *)p))>>16))
+#define GETOFS(p) ((unsigned)((void far *)p))
+
+#define LO      5 //disk density
+#define HI     10
+
+#define S900    0 //sampler family
+#define S1000   3
+#define S3000  12
+
+#define FORMAT  1 //mode
+#define WRITE   2
+#define READ    3
+#define LIST    4
+#define IMAGE   5
+
+int diskfmt(int drv, int sid, int trk);
+int diskread(int drv, int dens, int blk, int secs, char far *buffer);
+int diskwrite(int drv, int dens, int blk, int secs, char far *buffer);
+int akai2asci(int cod);
+int asci2akai(int cod);
+void help(int err);
+
+union REGS reg;
+struct SREGS sreg;  //interrupts
+
+
+struct FormatTable
+{
+  unsigned char trk;
+  unsigned char sid;
+  unsigned char sec;
+  unsigned char len;
+};
+
+
+struct DirTable  //disk table of contents
+{
+  unsigned char name[13];
+  unsigned char type;
+  unsigned char orig;
+  long int length;
+  unsigned int start;
+};
+
+
+int diskfmt(int drv, int sid, int trk) //format a track
+{
+  struct FormatTable ft[11];
+  int i;
+
+  for(i=0;i<10;i++)
+  {
+    ft[i].trk=trk;
+    ft[i].sid=sid;
+    ft[i].sec=i+1;
+    ft[i].len=3;  // 1024 bytes per sector
+  }
+  reg.h.ah=5;
+  reg.h.al=10;    // 10 sectors per track (low density doesn't seem to work)
+  reg.h.dh=sid;
+  reg.h.dl=drv;
+  reg.h.ch=trk;
+  reg.x.bx=GETOFS(ft);
+  sreg.es=GETSEG(ft);
+   int86x(0x13,&reg,&reg,&sreg);
+  return(reg.h.ah);
+}
+
+
+int diskread(int drv, int dens, int blk, int secs, char far *buffer) //read sector(s)
+{
+  reg.h.ah=2;
+  reg.h.al=secs;
+  reg.h.dh=(blk/dens)%2;
+  reg.h.dl=drv;
+  reg.h.ch=blk/(2*dens);
+  reg.h.cl=1+(blk%dens);
+  reg.x.bx=GETOFS(buffer);
+  sreg.es=GETSEG(buffer);
+   int86x(0x13,&reg,&reg,&sreg);
+  return(reg.h.ah);
+}
+
+
+int diskwrite(int drv, int dens, int blk, int secs, char far *buffer) //write sector(s)
+{
+  reg.h.ah=3;
+  reg.h.al=secs;
+  reg.h.dh=(blk/dens)%2;
+  reg.h.dl=drv;
+  reg.h.ch=blk/(2*dens);
+  reg.h.cl=1+(blk%dens);
+  reg.x.bx=GETOFS(buffer);
+  sreg.es=GETSEG(buffer);
+   int86x(0x13,&reg,&reg,&sreg);
+  return(reg.h.ah);
+}
+
+
+int akai2asci(int cod) //convert between ASCII and Akai character sets
+{
+  if(cod>=0 && cod<10)
+  {
+    return(cod+48);
+  }
+  if(cod>10 && cod<37)
+  {
+    return(cod+54);
+  }
+  switch(cod)
+  {
+    case 37: return(35); // #
+    case 38: return(43); // +
+    case 39: return(45); // -
+    case 40: return(46); // .
+    default: return(32);
+  }
+}
+
+
+int asci2akai(int cod)
+{
+  if(cod>47 && cod<58)
+  {
+    return(cod-48);
+  }
+  if(cod>64 && cod<91)
+  {
+    return(cod-54);
+  }
+  if(cod>96 && cod<123)
+  {
+    return(cod-86);
+  }
+  switch(cod)
+  {
+    case 35: return(37);
+    case 43: return(38);
+    case 45: return(39);
+    case 46: return(40);
+    default: return(10);
+  }
+}
+
+
+void main(int argc, char *argv[])
+{
+  unsigned int oldseg, oldofs, newseg, newofs; //floppy parameter table vector
+  unsigned int er;        //error code returned by bios functions
+  unsigned int drv=0;     //0=A: 1=B:
+  unsigned int dens=HI;   //density (sectors per track)
+  unsigned int map[1600]; //sector map
+  unsigned int mode=0;    //see above
+  unsigned formode;       //format as S900, S1000 or S3000 family 
+  unsigned int type, ext, i, j, k, n=999, errcode=0;
+  unsigned char bufdma[10250];
+  unsigned char param[16], buffer[10250], label[13];
+  unsigned char far *ptr;
+  struct DirTable entry[64]; //table of contents
+  FILE *fl, *fp;
+  bufdma[1]=1;
+
+  //parse command line////////////////////////////////////////////////////////////////
+
+  if(*(argv[1])=='B' || *(argv[1])=='b') 
+   if(*(argv[1]+1)==':') {drv=1; ++argv; argc--;}  //select B: drive
+
+  if(*(argv[1])=='R' || *(argv[1])=='r') 
+  {
+    mode=READ;  //read file ...get file type number
+    if(*(argv[1]+1)>47 && *(argv[1]+1)<58) ext=(int)(*(argv[1]+1) - 48);
+    if(*(argv[1]+2)>47 && *(argv[1]+2)<58) ext=10 * ext + (int)(*(argv[1]+2) - 48);
+    if(*(argv[1]+3)>47 && *(argv[1]+3)<58) ext=10 * ext + (int)(*(argv[1]+3) - 48);
+  }
+
+  if(*(argv[1])=='W' || *(argv[1])=='w') 
+  {
+    mode=WRITE;  //write file ...get file type number
+    if(*(argv[1]+1)>47 && *(argv[1]+1)<58) ext=(int)(*(argv[1]+1) - 48);
+    if(*(argv[1]+2)>47 && *(argv[1]+2)<58) ext=10 * ext + (int)(*(argv[1]+2) - 48);
+    if(*(argv[1]+3)>47 && *(argv[1]+3)<58) ext=10 * ext + (int)(*(argv[1]+3) - 48);
+  }
+
+  if(*(argv[1])=='F' || *(argv[1])=='f')
+  {  
+    mode=FORMAT;  //format disk ...get sampler family
+    switch(*(argv[1]+1))
+    {
+      case '9': formode=S900;  break;
+      case '1': formode=S1000; break;
+      default : formode=S3000;
+    }
+  }
+
+  if(*(argv[1])=='D' || *(argv[1])=='d') mode=LIST;  //disk directory listing
+
+  if(*(argv[1])=='I' || *(argv[1])=='i') mode=IMAGE;  //copy whole disk image 
+
+  printf("\nAkai Floppy Disk Utilities v4");
+  printf("\nCopyright(c)1999 Paul Kellett");
+  printf("\nhttp://www.maxim.abel.co.uk/\n\n");
+
+  if(mode==0) //nothing on command line ...show help and terminate
+  {
+    puts(" Usage: ADISK4 [B:] d                            - Directory");
+    puts("        ADISK4 [B:] r### \"AKAINAME\" DOSNAME.EXT  - Read File");
+    puts("        ADISK4 [B:] w### DOSNAME.EXT \"AKAINAME\"  - Write File");
+    puts("        ADISK4 [B:] f@ \"LABEL\"                   - Format Disk");
+    puts("        ADISK4 [B:] i                            - Disk Image");
+    puts(" ");
+    puts("        ### = ASCII code of file type");
+    puts("          @ = Sampler family 9, 1 or 3");
+    exit(0);
+  }
+
+  //re-program floppy drive///////////////////////////////////////////////////////////
+
+  reg.h.ah=0x35;
+  reg.h.al=0x1E;
+  int86x(0x21,&reg,&reg,&sreg);                      // Read floppy parameter vector
+  oldseg=sreg.es;
+  oldofs=reg.x.bx;
+
+  for(i=0;i<16;i++)                                  // make copy of parameter table
+  {
+    ptr=MK_FP(oldseg,oldofs+i);
+    param[i] = *ptr;
+  }
+
+   // With Microsoft C you must write to the table directly...
+   // (char __far *)ptr=MK_FP(oldseg,oldofs+3); *ptr=3; etc.
+
+  param[3]=3;                                         // 1024 bytes per block
+  param[4]=dens;                                      // 10 blocks per track
+  param[8]=0;                                         // Don't format with ?
+  newseg=GETSEG(param);
+  newofs=GETOFS(param);
+  reg.h.ah=0x25;
+  reg.h.al=0x1E;
+  reg.x.dx=newofs;
+  sreg.ds=newseg;
+  int86x(0x21,&reg,&reg,&sreg);                      // Set vector to new parameters
+  reg.h.ah=0;
+  reg.h.dl=drv;
+  int86(0x13,&reg,&reg);                             // Reset floppy controller
+  if(reg.h.ah) printf("\nError %Xh setting up floppy!\n",reg.h.ah);
+
+  //format disk////////////////////////////////////////////////////////////////////
+
+  if(mode==FORMAT || mode==IMAGE)
+  {
+    if(mode==FORMAT)
+    {
+      printf("\nFormatting drive %c: for Akai ",'A'+drv);
+      switch(formode)
+      {
+        case S1000: printf("S1000\n"); break;
+        case S3000: printf("S3000\n"); break;
+           default: printf("S950\n");
+      }
+
+      i=0; //tidy up label
+      while(i<12 && *(argv[2]+i)) {label[i]=asci2akai(*(argv[2]+i)); i++;}
+      while(i<12) { label[i]=10; i++; }
+
+      er=diskfmt(drv, 0, 0); //clear 'disk changed' error
+      errcode=3; //assume faliure
+
+      if(er==0 || er==6)
+      {
+        printf("________________________________________");
+        printf("_______________________________________\r");
+
+        er=0;
+        for(i=0;i<80;i++)
+          if(diskfmt(drv, 0, i) + diskfmt(drv, 1, i))
+          {
+            printf("_");  //error - disk probably corrupt
+            er++;
+          }
+          else
+          {
+            printf("#");
+          }
+
+        for(i=0;i<2048;i++) buffer[i]=0;
+
+        if(formode==S900) //write S900 label (no entries or map)
+        {
+          for(i=0;i<12;i++) buffer[640+i]=label[i];
+          er+=diskwrite(drv,10,4,1,buffer);
+        }
+
+        if(formode==S1000)
+        {
+          for(i=0;i<64  ;i++) buffer[i*24+23]=3;             //S1000 toc
+          for(i=0;i<4   ;i++) buffer[1537+(2*i)]=64;         //S1000 map
+          er+=diskwrite(drv,10,0,2,buffer);
+
+          for(i=0;i<2048;i++) buffer[i]=0;                   //S1000 label
+          for(i=0;i<12  ;i++) buffer[640+i]=label[i];
+          buffer[652]=0; buffer[653]=0; buffer[654]=0;  buffer[655]=3;
+          buffer[656]=0; buffer[657]=1; buffer[658]=1;  buffer[659]=0;
+          buffer[660]=0; buffer[661]=0; buffer[662]=50; buffer[663]=9;
+          buffer[664]=12;buffer[665]=255; er+=diskwrite(drv,10,4,2,buffer);
+        }
+
+        if(formode==S3000)
+        {
+          for(i=0;i<64;i++)
+          {
+            for(j=0;j<12;j++)  buffer[i*24+j]=32;  // dummy S1000 toc
+            buffer[i*24+15]=1; buffer[i*24+23]=12;
+          }
+          buffer[16]=255;                          // S3000 series ID
+          for(i=0;i<17;i++) buffer[1537+2*i]=64;   // S3000 map
+          er+=diskwrite(drv,10,0,2,buffer);
+
+          for(i=0;i<2048;i++) buffer[i]=0;         //S3000 label
+          for(i=0;i<12;i++) buffer[640+i]=label[i];
+          buffer[652]=0 ;buffer[653]=0 ;buffer[654]=0 ;buffer[655]=12;
+          buffer[656]=0 ;buffer[657]=1 ;buffer[658]=1 ;buffer[659]=0 ;
+          buffer[660]=0 ;buffer[661]=0 ;buffer[662]=50;buffer[663]=9 ;
+          buffer[664]=12;buffer[665]=255; er+=diskwrite(drv,10,4,2,buffer);
+        }
+        if(er==0) errcode=0;
+      }
+
+    }
+    else //copy whole disk image
+    {
+      if((fp=fopen("adisk4.img","wb"))==NULL)
+      {
+        errcode=4;
+      }
+      else
+      {
+        printf("\nSaving disk image\n");
+        printf("________________________________________");
+        printf("_______________________________________\r");
+
+        k=0;
+        for(i=0;i<160;i++)
+        {
+                    er=diskread(drv,dens,i*10,10,buffer); //read 10 sectors at once for speed
+          if(er!=0) er=diskread(drv,dens,i*10,10,buffer); //and try again if error
+          if(er!=0) er=diskread(drv,dens,i*10,10,buffer);
+          for(j=0;j<9216;j++) fputc(buffer[j],fp);
+
+                    er=diskread(drv,dens,9+i*10,1,buffer); //for some reason 10th sector
+          if(er!=0) er=diskread(drv,dens,9+i*10,1,buffer); //may be corrupt so read again
+          if(er!=0) er=diskread(drv,dens,9+i*10,1,buffer);
+          for(j=0;j<1024;j++) fputc(buffer[j],fp);
+
+          k++; if(k==2) { printf("#"); k=0; }
+        }
+        fclose(fp);
+      }
+    }
+  }
+  else  //get sector map and table of contents for file transfer...
+  {
+
+reread:
+    er=diskread(drv,dens,dens-1,1,buffer);      //debugging: if(er)help(er);
+    if(er)                                      //try reading disk
+    {
+      switch (er)
+      {
+        case 2:
+        case 4: if(dens==HI)
+                {
+                  dens=LO; goto reread;  //if HI fails, try LO else not Akai
+                }
+                else
+                {
+                  printf("Disk in drive %c: is not Akai format!",'A'+drv);
+                }
+                break;
+
+       case  6: goto reread;  // clear disk change message
+
+       default: help(er);  //doesn't look like it, but program exits here!
+      }
+    }
+    else
+    {
+
+      er=diskread(drv,dens,3,2,buffer);    //read 5 sectors (in 2 chunks as 5th gets corrupted!)
+      if(er){printf("\nMap: "); help(er);}
+      for(i=0;i<2048;i++) buffer[3072+i]=buffer[i];
+      diskread(drv,dens,0,3,buffer);
+      if(dens==LO)
+      {                                                     // Get sector map
+        for(i=0;i<800;i++)
+        {
+          map[i]=buffer[1536+2*i]+256*buffer[1537+2*i];
+        }
+        for(i=800;i<1600;i++)map[i]=1; // make space not on disk unavailable
+        for(i=0;i<12;i++) label[i]=akai2asci(buffer[3136+i]); label[12]=0;
+        label[12]=0;                                         //get label
+      }
+      else
+      {
+        for(i=0;i<1600;i++)
+        {
+          map[i]=buffer[1536+2*i]+256*buffer[1537+2*i];
+        }
+        for(i=0;i<12;i++) label[i]=akai2asci(buffer[4736+i]); label[12]=0;
+      }
+
+      if(buffer[22]==0 && buffer[23]==0) type=S900; else type=S1000;
+
+      if(buffer[16]==255)                                // S3000 series
+      {
+        er=diskread(drv,dens,5,5,buffer);                //read S3000 TOC
+        if(er){printf("\nS3000: "); help(er);}
+        type=S3000;
+      }
+
+      for(i=0;i<64;i++)                                  // Read 64 entries
+      {
+        if(type==S900)
+        {
+          for(j=0;j<12;j++) entry[i].name[j]=buffer[i*24+j];
+          entry[i].name[10]=32; entry[i].name[11]=32;
+
+        }
+        else
+          for(j=0;j<12;j++) entry[i].name[j]=akai2asci(buffer[i*24+j]);
+        entry[i].name[12]=0;
+
+        entry[i].orig=entry[i].type=buffer[i*24+16];
+        entry[i].length=buffer[i*24+18]+256*buffer[i*24+19];
+        entry[i].length=buffer[i*24+17]+256*entry[i].length;
+        entry[i].start=buffer[i*24+20]+256L*buffer[i*24+21];
+      }
+
+      if(mode==READ) ///////////////////////////
+      {
+        i=0;
+        while(i<64 && n==999) //look for matching name & ext
+        {
+          if(entry[i].type==ext)    //for wanted type and name...
+          {
+            k=0; j=0;
+            while(j<12 && *(argv[2]+j))
+            {
+              if(*(argv[2]+j)==entry[i].name[j]) k++;
+              if(*(argv[2]+j)==(entry[i].name[j]+32) && entry[i].name[j]>64) k++;
+              j++;
+            }
+
+            while(j<12)   
+            {
+              if(entry[i].name[j]==32) k++;
+              j++;
+            }
+            if(k==12) n=i; //found complete match for filename
+          }
+          i++;
+        }
+        
+        if(n==999)
+        {
+          errcode=5;
+        }
+        else
+        {
+          if((fp=fopen(argv[3],"wb"))==NULL)
+          {
+            errcode=4;
+          }
+          else
+          {
+            printf("Reading \"%s\"\n",argv[2]);
+
+            while(entry[n].length>1024)
+            {
+              diskread(drv, dens, entry[n].start, 1, buffer);
+              entry[n].start=map[entry[n].start];
+              entry[n].length-=1024;
+              for(i=0;i<1024;i++) fputc(buffer[i],fp);
+            }
+            diskread(drv, dens, entry[n].start, 1, buffer);
+            for(i=0;i<entry[n].length;i++) fputc(buffer[i],fp);
+            fclose(fp);
+          }
+        }
+      }                      
+
+      if(mode==WRITE) //////////////////////////
+      {
+        i=0;
+        while(i<64 && n==999) //look for matching name & ext
+        {
+          if(entry[i].type==ext) //for wanted type and name...
+          {
+            k=0; j=0;
+            while(j<12 && *(argv[3]+j))
+            {
+              if(*(argv[3]+j)==entry[i].name[j]) k++;
+              if(*(argv[3]+j)==(entry[i].name[j]+32) && entry[i].name[j]>64) k++;
+              j++;
+            }
+
+            while(j<12)   
+            {
+              if(entry[i].name[j]==32) k++;
+              j++;
+            }
+            if(k==12) //found complete match
+            {
+              n=i; 
+              printf("Deleting %s\n",entry[n].name);
+            }
+          }
+          i++;
+        }
+
+        if(n==999) //no match, use first free slot
+        {
+          i=0; while(i<64 && entry[i].type) i++;
+          if(i<64) n=i;
+        }
+
+        if(n==999)
+        {
+          errcode=5;
+        }
+        else //found slot...
+        {
+          if((fp=fopen(argv[2],"rb"))==NULL)
+          {
+            errcode=4;
+          }
+          else
+          {
+            printf("Writing %s to \"%s\"\n",argv[2],argv[3]);
+
+              //while(feof(fp)==0)...
+              //write file!!
+            fclose(fp);
+          }
+
+          //write TOC (deletes entry if file not found)
+        }
+      }
+    }
+  }
+
+  reg.h.ah=0x25;                       
+  reg.h.al=0x1E;
+  reg.x.dx=oldofs;
+  sreg.ds=oldseg;
+   int86x(0x21,&reg,&reg,&sreg);  //restore old floppy parameter vector
+  reg.h.ah=0;
+  reg.h.dl=drv;
+   int86(0x13,&reg,&reg);  //reset controller
+  if(reg.h.ah) printf("\nError %Xh resettingfloppy!\n",reg.h.ah);
+  diskread(drv,18,0,1,buffer); //switch light off
+
+  //output results to log file//////////////////////////////////////////////////////
+
+  fl=fopen("adisk4.log","w");
+
+  if(mode==LIST && errcode==0) //directory listing
+  {
+    fprintf(fl,"Akai ");
+    switch(type)
+    {
+      case S1000: fprintf(fl,"S1000 "); break;
+      case S3000: fprintf(fl,"S3000 "); break;
+         default: fprintf(fl,"S900  ");
+    }
+    if(dens==LO) fprintf(fl,"LOW"); else fprintf(fl,"HIGH");
+    fprintf(fl," DENSITY \"%s\"\n", label);
+
+    k=0;
+    for(i=0;i<64;i++)
+      if(entry[i].type)
+      {
+        fprintf(fl,"%s\t%d\t%ld\n", entry[i].name, entry[i].type, entry[i].length);
+        printf("%s\t%d\t", entry[i].name, entry[i].type);
+        k++;
+        if(k==3) { printf("\n"); k=0; }
+      }
+    printf("\n");
+  }
+  else //success or faliure message
+  { 
+    switch(errcode)
+    {
+      case  1: fprintf(fl,"No Akai disk found!\n"); break;
+      case  2: fprintf(fl,"Disk is write protected!\n"); break;
+      case  3: fprintf(fl,"Disk Error!\n"); break;
+      case  4: fprintf(fl,"File Error!\n"); break;
+      case  5: fprintf(fl,"File not found!\n"); break;
+      default: fprintf(fl,"Finished!\n"); break;
+    }
+  }
+  fclose(fl);
+}
+
+
+void help(int err) //error messages
+{
+  switch(err)
+  {
+    case    1: printf("\nInvalid command!\n"); break;
+    case    2: printf("\nAddress not found!\n"); break;
+    case    3: printf("\nDisk write protected!\n"); break;
+    case    4: printf("\nSector not found!\n"); break;
+    case    5: printf("\nReset failed!\n"); break;
+    case    6: printf("\nDisk changed!\n"); break;
+    case    7: printf("\nBad parameter table!\n"); break;
+    case    8: printf("\nDMA overrun!\n"); break;
+    case    9: printf("\nDMA across 64k boundary!\n"); break;
+    case 0x0A: printf("\nBad sector!\n"); break;
+    case 0x0B: printf("\nBad track!\n"); break;
+    case 0x0C: printf("\nMedia type not found!\n"); break;
+    case 0x0D: printf("\nBad number of sectors!\n"); break;
+    case 0x10: printf("\nUncorrectable read error!\n"); break;
+    case 0x11: printf("\nCorrected read error!\n"); break;
+    case 0x20: printf("\nController faliure!\n"); break;
+    case 0x40: printf("\nTrack not found!\n"); break;
+    case 0x80: printf("\nNo disk!\n"); break;
+    case 0xAA: printf("\nFloppy not ready!\n"); break;
+    case 0xBB: printf("\nUndefined error!\n"); break;
+    case 0xCC: printf("\nWrite fault!\n"); break;
+    case 0xE0: printf("\nStatus error!\n"); break;
+    case 0xFF: printf("\nNo Disk!\n"); break;
+    case 9999: puts("** Copyright (c)1999 Paul Kellett - http://www.maxim.abel.co.uk **");
+  }
+}
+
+
+
+

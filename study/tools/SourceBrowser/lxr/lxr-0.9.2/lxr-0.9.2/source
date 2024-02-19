@@ -1,0 +1,294 @@
+#!/usr/bin/perl
+# $Id: source,v 1.32 2002/07/29 01:23:03 mbox Exp $
+
+# source --	Present sourcecode as html, complete with references
+#
+#	Arne Georg Gleditsch <argggh@ifi.uio.no>
+#	Per Kristian Gjermshus <pergj@ifi.uio.no>
+#
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+
+######################################################################
+
+$CVSID = '$Id: source,v 1.32 2002/07/29 01:23:03 mbox Exp $ ';
+
+use strict;
+use lib do { $0 =~ m{(.*)/} ? "$1/lib" : "lib" };
+
+use LXR::Common qw(:html);
+use Local;
+
+sub diricon {
+    my ($templ, $node, $dir) = @_;
+    my $img;
+
+    if ($node eq '../') {
+	$img = "/icons/back.gif";
+    } else {
+#      $img = "/icons/folder.gif";
+	$img = "internal-gopher-menu";
+    }
+
+    return fileref("<img align=\"bottom\" border=\"0\" src=\"$img\" alt=\"folder\">", "",
+		   $dir.$node);
+}
+
+
+sub dirname {
+    my ($templ, $node, $dir) = @_;
+
+    if ($node eq '../') {
+	return fileref("Parent directory", "dirfolder", $dir.$node);
+    } else {
+	return fileref($node, "dirfolder", $dir.$node);
+    }
+}
+
+
+sub fileicon {
+    my ($templ, $node, $dir) = @_;
+    my $img;
+
+    if ($node =~ /^.*\.[ch]$/) {
+#      $img = "/icons/c.gif";
+	$img = "internal-gopher-text";
+    } elsif ($node =~ /^.*\.(cpp|cc|java)$/) {
+	# TODO: Find a nice icon for c++ files (KDE?)
+#      $img = "/icons/c.gif";
+	$img = "internal-gopher-text";
+    } else {		
+	#      $img = "/icons/text.gif";
+	$img = "internal-gopher-unknown";
+    }
+    return fileref("<img align=\"bottom\" border=\"0\" src=\"$img\" alt=\"\">",
+                   "", $dir.$node);
+}
+
+sub filename {
+    my ($templ, $node, $dir) = @_;
+    return fileref($node, "dirfile", $dir.$node);
+}
+
+sub filesize {
+    my ($templ, $node, $dir) = @_;
+
+    my $s = $files->getfilesize($dir.$node, $release);
+    my $str;
+
+    if ($s < 1<<10) {
+	$str = "$s";
+    } else {
+#      if ($s < 1<<20) {
+	$str = ($s>>10) . "k";
+#      } else {
+#          $str = ($s>>20) . "M";
+#      }
+    }
+    return expandtemplate($templ,
+			  ('bytes'  => sub { return $str },
+			   'kbytes' => sub { return $str },
+			   'mbytes' => sub { return $str }));
+}
+
+sub modtime {
+    my ($templ, $node, $dir) = @_;
+
+    my $current_time = time;
+    my $file_time = $files->getfiletime($dir.$node, $release);
+
+    return '-' unless defined($file_time);
+
+    my @t = gmtime($file_time);
+    my ($sec, $min, $hour, $mday, $mon, $year) = @t;
+    return sprintf("%04d-%02d-%02d %02d:%02d:%02d",
+				   $year + 1900,
+				   $mon + 1, $mday, $hour, $min, $sec);
+}
+
+sub bgcolor {
+    my ($templ, $line) = @_;
+    return ((($line - 1) / 3) % 2) ? "#FFFFFF" : "#EEEEEE";
+}
+
+sub rowclass {
+    my ($templ, $line) = @_;
+    return ((($line - 1) / 3) % 2) ? "dirrow2" : "dirrow1";
+}
+
+sub direxpand {
+    my ($templ, $dir) = @_;
+    my $direx = '';
+    my $line  = 1;
+    my %index;
+    my @nodes;
+    my $node;
+    
+
+    @nodes = $files->getdir($dir, $release);
+    unless (@nodes) {
+	print("<p align=\"center\">\n<i>The directory ".
+	      $files->toreal($dir, $release).
+	      " does not exist.</i>\n");
+	#FIXME what does this do?
+	if ($files->toreal($dir, $release) =~ m#(.+[^/])[/]*$# ) {
+	    if (-e $1) {
+		warning("Unable to open ".
+			$files->toreal($dir, $release));
+	    }
+	}
+	return;
+    }
+    
+    %index = $files->getindex($dir, $release);
+
+    unshift(@nodes, '../') unless $dir eq '/';
+
+    #CSS checked _PH_
+    foreach $node (@nodes) {
+	if ($node =~ /\/$/) {
+	    $direx .= expandtemplate
+		($templ,
+		 ('iconlink'	=> sub { diricon(@_, $node, $dir) },
+		  'namelink'	=> sub { dirname(@_, $node, $dir) },
+		  'filesize'	=> sub { '-' },
+		  'modtime'	=> sub { modtime(@_, $node, $dir) },
+		  'bgcolor'	=> sub { bgcolor(@_, $line++) },
+		  'css'	        => sub { rowclass(@_, $line++) },
+		  'description'	=> sub { descexpand(@_, $node, $dir, \%index) }
+		  ));
+	}
+	else {
+	    next if $node =~ /^.*\.[oa]$|^core$|^00-INDEX$/;
+	    $direx .= expandtemplate
+		($templ,
+		 ('iconlink'	=> sub { fileicon(@_, $node, $dir) },
+		  'namelink'	=> sub { filename(@_, $node, $dir) },
+		  'filesize'	=> sub { filesize(@_, $node, $dir) },
+		  'modtime'	=> sub { modtime(@_, $node, $dir) },
+		  'bgcolor'	=> sub { bgcolor(@_, $line++) },
+		  'css'	        => sub { rowclass(@_, $line++) },
+		  'description'	=> sub { descexpand(@_, $node, $dir, \%index) }
+		  ));
+	}
+    }
+
+    return($direx);
+}
+
+sub printdir {
+    my $dir = shift;
+    my $templ;
+    
+    $templ = "<ul>\n\$files{\n<li>\$iconlink \$namelink\n}</ul>\n";
+    if ($config->htmldir) {
+	unless (open(TEMPL, $config->htmldir)) {
+	    warning("Template ".$config->htmldir." does not exist.");
+	} else {
+	    local($/) = undef;
+	    $templ = <TEMPL>;
+	    close(TEMPL);
+	}
+    }
+    
+    # print the description of the current directory
+    dirdesc($dir);
+    
+    # print the listing itself
+    print(expandtemplate($templ,
+			 ('files' => sub { direxpand(@_, $dir) })));
+}
+
+
+sub printfile {
+    my $raw = shift;
+
+    if ($pathname =~ m|/$|) {
+	printdir($pathname);
+    }
+    else {
+	my $fileh = $files->getfilehandle($pathname, $release);
+
+	if ($fileh) {
+	    if ($raw) {
+		print($fileh->getlines);
+	    } 
+#	    elsif ($node =~ /README$/) {
+#		print("<pre>",
+#		      markupstring($fileh, $node, $index), # FIXME
+#		      "</pre>");
+#	    } 
+	    else {
+		my @ann = $files->getannotations($pathname, $release);
+
+		if (@ann) {
+		    my ($a, $b);
+		    foreach $a (@ann) {
+			if ($a eq $b) {
+			    $a = ' ' x 16;
+			    next;
+			}
+
+			$b = $a;
+			$a .= ' ' x (6 - length($a)).
+			    $files->getauthor($pathname, $a);
+			$a .= ' ' x (16 - length($a));
+		    }
+		}
+
+		my $l;
+		my $outfun = sub {
+		    $l = shift;
+		    $l =~ s/(\n)/$1.shift(@ann)/ge;
+		    print $l;
+		};
+		&$outfun("<pre class=\"file\">\n");
+		markupfile($fileh, $outfun);
+		&$outfun("</pre>\n");
+	    }
+
+	} 
+	else {
+	    print("\<p align=\"center\">\n<i>The file $pathname does not exist.</i>\n");
+	    if (-f $files->toreal($pathname, $release)) {
+		warning("Unable to open ".$files->toreal($pathname, $release));
+	    }
+	}
+    }
+}
+
+
+httpinit;
+
+if ($config->filter && $pathname !~ $config->filter) {
+    makeheader('source');
+    print("\<p align=\"center\">\n<i>The file $pathname does not exist.</i>\n");
+    makefooter('source');
+    exit;
+}
+
+# If the file is html then simply pump it out.
+if ($pathname =~ /\.(html)$/ || $HTTP->{'param'}->{'raw'}) {
+    printfile(1);
+}
+else {
+    my $type = ($pathname !~ m|/$| ? 'source' : 'sourcedir');
+    
+    makeheader($type);
+    printfile(0);
+    makefooter($type);
+}
+
+httpclean;

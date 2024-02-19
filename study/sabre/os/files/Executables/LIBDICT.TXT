@@ -1,0 +1,129 @@
+
+Document ID: Q71891
+
+Product: Microsoft EXEMOD, EXEPACK, or LIB Utility
+Title: Dictionary Hashing Algorithm Used by the LIB Utility
+
+Updated: 16-MAY-1991
+Operating System Versions: 3.0X 3.10 3.11 3.14 3.15 3.17 3.18 | 3.1
+Operating Systems: MS-DOS                             | OS/2
+
+Summary:
+
+The last part of each library produced by the Microsoft Library
+Manager (LIB) contains a dictionary that holds all the public symbols
+in the library. The hashing algorithm mentioned on page 63 of the
+"Microsoft C Developer's Toolkit Reference" is used to place data in
+the dictionary. The code required to implement the hashing algorithm
+is shown at the end of this article.
+
+More Information:
+
+The library dictionary is divided into pages that are 512 bytes long.
+Each page starts with a 37-byte bucket table, which contains 37
+separate offsets to the symbols in the rest of the page. The values in
+the buckets are multiplied by 2 to get the actual offset (since 1 byte
+can contain only 256 different values).
+
+The hashing algorithm analyzes a symbol's name and produces two
+indexes (page index and bucket index) and two deltas (page index delta
+and bucket index delta). Using the offset contained in the bucket at
+bucket index in the page at page index, you must compare the symbol at
+that location with the one you are looking for.
+
+If (due to symbol collision) you have not found the correct symbol,
+add the bucket index delta to the current bucket index, modulo 37, and
+try again. Continue until all the buckets in the current page are
+tried. Then, add the page index delta to the current page, modulo by
+the page count, and try all the buckets in that page starting at
+bucket index. Continue this process until all of the possible page and
+offset combinations have been tried.
+
+For more information on the actual format of the symbols in the
+dictionary, and information on the format for the rest of the library,
+see the "Microsoft C Developer's Toolkit Reference."
+
+Sample Code
+-----------
+
+/* This code illustrates the hashing algorithm used by LIB */
+
+/* Compile options needed: none
+*/
+
+#include <stdio.h>
+#include <string.h>
+#include <malloc.h>
+#include <stdlib.h>
+
+#define XOR ^
+#define MODULO %
+
+char *symbol;        /* Symbol to find (or to place) */
+int dictlength;      /* Dictionary length in pages   */
+int buckets;         /* Number of buckets on one page */
+
+char *pb;            /* A pointer to the beginning of the symbol */
+char *pe;            /* A pointer to the end of the symbol */
+int slength;         /* Length of the symbol's name */
+
+int page_index;         /* Page Index */
+int page_index_delta;   /* Page Index Delta */
+int bucket_index;       /* Bucket Index */
+int bucket_index_delta; /* Bucket Index Delta */
+
+unsigned c;
+
+void hash(void)
+{
+   page_index = 0;
+   page_index_delta = 0;
+   bucket_index = 0;
+   bucket_index_delta = 0;
+
+   while( slength--)
+   {
+      c = *(pb++) | 32;        /* Convert character to lower case */
+      page_index = (page_index<<2) XOR c;                 /* Hash */
+      bucket_index_delta = (bucket_index_delta>>2) XOR c; /* Hash */
+      c = *(pe--) | 32;
+      bucket_index = (bucket_index>>2) XOR c;             /* Hash */
+      page_index_delta = (page_index_delta<<2) XOR c;     /* Hash */
+   }
+   /* Calculate page index  */
+   page_index = page_index MODULO dictlength;
+
+   /* Calculate page index delta */
+   if( (page_index_delta = page_index_delta MODULO dictlength) == 0)
+      page_index_delta = 1;
+
+   /* Calculate bucket offset */
+      bucket_index = bucket_index MODULO buckets;
+
+   /* Calculate bucket offset delta */
+   if( (bucket_index_delta = bucket_index_delta MODULO buckets) == 0)
+      bucket_index_delta = 1;
+}
+
+void main(void)
+{
+   int i;
+   dictlength = 3;
+   buckets = 37;
+
+   if ( (symbol = (char *) malloc( sizeof(char) * 4 )) == NULL )
+      exit(1);
+
+   strcpy( symbol, "one");
+
+   for( i = 0; i < 2; i++ )   {
+      slength = strlen(symbol);
+      pb = symbol;
+      pe = symbol + slength ;
+      hash();
+      printf("\npage_index:  %2d   page_index_delta:  %d",
+      page_index, page_index_delta);
+      printf("\nbucket_index: %2d   bucket_index_delta: %d",
+      bucket_index, bucket_index_delta);
+      strcpy( symbol, "two");
+   }

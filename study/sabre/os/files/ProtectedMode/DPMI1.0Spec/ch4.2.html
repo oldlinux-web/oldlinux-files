@@ -1,0 +1,98 @@
+
+
+A protected mode client terminates by executing an Int 21H in
+protected mode, passing the value 4CH in register AH and a return code
+in register AL.  (This mimics the Int 21H Function 4CH termination
+used by DOS applications in real mode.>  The client has the following
+responsibilities before termination:
+
+<ul>
+
+<li> real mode memory that was unlocked for paging with <a
+href="api/310602.html">Int 31H Function 0602H</a> must be relocked
+with <a href="api/310603.html">Int 31H Function 0603H</a>;<p>
+
+<li> interrupts hooked by the client for real mode with <a
+href="api/310201.html">Int 31H Function 0201H</a> must be released by
+restoring the address of the original owner of the interrupt.<p>
+
+<li> protected mode handlers for real mode exceptions installed with
+<a href="api/310213.html">Int 31H Function 0213H</a> should be cleaned
+up if possible.<p>
+
+</ul>
+
+When the DPMI host detects an Int 21H Function 4CH termination
+request, it takes the following actions (the detailed comparison of
+DPMI version 0.9 and version 1.0 host termination handling is in
+Appendix C, page 158>:
+
+<ul>
+
+<li> any extended memory blocks that were previously allocated with <a
+href="api/310501.html">Function 0501H</a> or <a
+href="api/310504.html">0504H</a> are unlocked and freed (this is the
+only cleanup action required by a DPMI V 0.9 host>;<p>
+
+<li>  the client's local descriptor table (LDT) is freed in its
+entirety by DPMI 1.0 hosts.  (A DPMI version 0.9 client should clean
+up its own segment descriptors before its termination since some DPMI
+version 0.9 hosts may not free the terminating client's segment
+descriptors if the client is not the primary client);<p>
+
+<li> physical address mappings created with <a
+href="api/310800.html">Int 31H Function 0800H</a> are freed;<p>
+
+<li> mappings created with <a href="api/310508.html">Int 31H Functions
+0508H</a> or <a href="api/310509.html">0509H</a> are destroyed;<p>
+
+<li> the client's interrupt descriptor table (IDT) is freed in it's
+entirety and any client exception handlers installed through <a
+href="api/310203.html">Functions 0203H</a>, <a
+href="api/310212.html">0212H</a> and <a
+href="api/310213.html">0213H</a> are deregistered;<p>
+
+<li> any real mode regions that were unlocked with <a
+href="api/310602.html">Function 0602H</a> are relocked;<p>
+
+<li> any real mode callbacks that were allocated with <a
+href="api/310303.html">Function 0303H</a> are deallocated;<p>
+
+<li>  the client's shared memory block allocations and serializations
+are freed;<p>
+
+<li> any debug watchpoints that were set with <a
+href="api/310b00.html">Function 0B00H</a> are cleared;<p>
+
+<li>  the coprocessor state (if any) is restored to the default.<p>
+
+</ul>
+
+After the DPMI host performs the cleanup activities listed above, it
+will switch to real mode and re-issue the Int 21H Function 4CH
+interrupt, passing the return code from the DPMI client down to DOS.
+DOS will then terminate the client as a real mode process by releasing
+its DOS memory blocks (whether allocated by real mode Int 21H Function
+48H or by <a href="api/310100.html">DPMI Function 0100H</a>), flushing
+file buffers, closing file and device handles, and so on.<p>
+
+Clients should only terminate from their main thread of execution, and
+should not issue the protected mode Int 21H Function 4CH from within a
+hardware interrupt handler, exception handler, or real mode callback.
+Client may, however, terminate from within a protected mode routine
+that has been entered via the DPMI raw mode switch service.  Clients
+which wish to terminate-and-stay-resident to provide services to
+protected mode clients should use <a href="api/310c01.html">DPMI
+Function 0C01H</a> rather than Int 21H Function 31H.<p>
+
+<i>Note:</i>  Although the DPMI host monitors for Int 21H Function 4Ch
+in protected mode, it ignores all other Int 21H Functions.  DOS
+Extenders typically install an interrupt 21H handler of their own in
+order to trap and service DOS function requests by a protected mode
+application; thus, the DOS Extender's Int 21H handler will always see
+the Function 4CH termination request first.  The DOS Extender should
+perform any cleanup activities of its own and then pass the
+termination request to the DPMI host by chaining the original owner of
+the protected mode Int 21H vector.<p>
+
+

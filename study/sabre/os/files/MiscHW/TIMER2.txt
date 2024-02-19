@@ -1,0 +1,192 @@
+				The Timer!!!
+				------------
+
+The system timer interrupt (Int 08) is controlled by an 8253 timer chip.  This
+chip has three outputs, and is also used to drive the memory refresh circuitry
+and the speaker.
+
+The timer output frequency is obtained by dividing the 8253 master clock
+frequency of 1,193,180 Hz by a 16 bit divisor.  (A zero divisor is treated as
+65,536.  This is the value programmed by the BIOS, to give a system timer of
+18.2065 Hz.)  The timer is programmed by sending a control byte to port 43h,
+followed by a divisor word (low byte, high byte) to port 4Xh where X is the
+timer being programmed.
+
+If the sytem timer (counter 0) is modified, an Int 8 handler must be written to
+call the original Int 8 handler 18.2 times per second, otherwise some system
+functions (eg time of day) may be upset.  When it does call the original Int 8
+handler it must NOT send and EOI to the 8259 for the timer interrupt, since the
+original Int 8 handler will send the EOI also.
+
+Sample code follows:
+
+
+.radix  16
+
+ratio   equ     4                       ;ratio of new freq to old freq
+                                        ;an integer, to keep it simple
+
+; Change timer frequency and revector interrupt
+
+        mov     ax,3508                 ;get original timer vector
+        int     21
+        mov     word ptr org_08,bx
+        mov     word ptr org_08+2,es
+        mov     ax,2508                 ;set new timer vector
+        mov     dx,offset int_08
+        int     21
+        cli
+        mov     al,36                   ;control byte
+        out     43,al
+        mov     al,low (10000/ratio)    ;LSB of divisor
+        out     40,al
+        mov     al,high (10000/ratio)   ;MSB of divisor
+        out     40,al
+        sti
+
+; Restore timer frequency and interrupt vector
+
+        cli
+        mov     al,36                   ;control byte
+        out     43,al
+        mov     al,0                    ;LSB of divisor (0 for 65536d)
+        out     40,al
+        out     40,al                   ;MSB of divisor (0 for 65536d)
+        sti
+        mov     ax,2508                 ;set new timer vector
+        push    ds
+        mov     dx,word ptr org_08
+        mov     ds,word ptr org_08+2
+        int     21
+        pop     ds
+
+
+; New Int 08 interrupt code
+
+; Note that all other (lower priority) interrupts are disabled by the PIC
+; until EOI is sent at the _end_ of the routine
+
+int_08: push    ax
+        ; insert interrupt code here
+        dec     cs:count                ;call original interrupt as required
+        jz      oldint
+eoi:    mov     al,20                   ;if not, send EOI to PIC
+        out     20,al
+        pop     ax
+        iret
+
+oldint: mov     cs:count,ratio          ;reset counter
+        pop     ax
+        jmp     far cs:[org_08]         ;original vector will send EOI to PIC
+
+; End of sample code
+
+
+
+
+The following is from:
+HelpPC 2.10, Quick Reference Utility, Copyright 1991 David Jurgens
+
+
+              8253/8254 PIT - Programmable Interval Timer
+
+        Port 40h, 8253 Counter 0 Time of Day Clock (normally mode 3)
+        Port 41h, 8253 Counter 1 RAM Refresh Counter (normally mode 2)
+        Port 42h, 8253 Counter 2 Cassette and Speaker Functions
+        Port 43h, 8253 Mode Control Register, data format:
+
+        |7|6|5|4|3|2|1|0|  Mode Control Register
+         | | | | | | | +---- 0=16 binary counter, 1=4 decade BCD counter
+         | | | | +-+-+----- counter mode bits
+         | | +-+---------- read/write/latch format bits
+         +-+------------- counter select bits (also 8254 read back command)
+
+    Bits
+     76 Counter Select Bits
+         00  select counter 0
+         01  select counter 1
+         10  select counter 2
+         11  read back command (8254 only, illegal on 8253, see below)
+
+    Bits
+     54 Read/Write/Latch Format Bits
+         00  latch present counter value
+         01  read/write of MSB only
+         10  read/write of LSB only
+         11  read/write LSB, followed by write of MSB
+
+    Bits
+     321  Counter Mode Bits
+        000  mode 0, interrupt on terminal count;  countdown, interrupt,
+             then wait for a new mode or count; loading a new count in the
+             middle of a count stops the countdown
+        001  mode 1, programmable one-shot; countdown with optional
+             restart; reloading the counter will not affect the countdown
+             until after the following trigger
+        010  mode 2, rate generator; generate one pulse after 'count' CLK
+             cycles; output remains high until after the new countdown has
+             begun; reloading the count mid-period does not take affect
+             until after the period
+
+        011  mode 3, square wave rate generator; generate one pulse after
+             'count' CLK cycles; output remains high until 1/2 of the next
+             countdown; it does this by decrementing by 2 until zero, at
+             which time it lowers the output signal, reloads the counter
+             and counts down again until interrupting at 0; reloading the
+             count mid-period does not take affect until after the period
+
+        100  mode 4, software triggered strobe; countdown with output high
+             until counter zero;  at zero output goes low for one CLK
+             period;  countdown is triggered by loading counter;  reloading
+             counter takes effect on next CLK pulse
+        101  mode 5, hardware triggered strobe; countdown after triggering
+             with output high until counter zero; at zero output goes low
+             for one CLK period
+
+    Read Back Command Format  (8254 only)
+
+        |7|6|5|4|3|2|1|0| Read Back Command (written to Mode Control Reg)
+         | | | | | | | +--- must be zero
+         | | | | | | +---- select counter 0
+         | | | | | +----- select counter 1
+         | | | | +------ select counter 2
+         | | | +------- 0 = latch status of selected counters
+         | | +-------- 0 = latch count of selected counters
+         +-+--------- 11 = read back command
+
+    Read Back Command Status (8254 only, read from counter register)
+
+        |7|6|5|4|3|2|1|0|  Read Back Command Status
+         | | | | | | | +--- 0=16 binary counter, 1=4 decade BCD counter
+         | | | | +-+-+---- counter mode bits (see Mode Control Reg above)
+         | | +-+--------- read/write/latch format (see Mode Control Reg)
+         | +------------ 1=null count (no count set), 0=count available
+         +------------- state of OUT pin (1=high, 0=low)
+
+
+        - the 8253 is used on the PC & XT, while the 8254 is used on the AT+
+        - all counters are decrementing and fully independent
+        - the PIT is tied to 3 clock lines all generating 1.19318 MHz.
+        - the value of 1.19318MHz is derived from (4.77/4 MHz) and has it's
+          roots based on NTSC frequencies
+        - counters are 16 bit quantities which are decremented and then
+          tested against zero.  Valid range is (0-65535).  To get a value
+          of 65536 clocks you must specify 0 as the default count since
+          65536 is a 17 bit value.
+        - reading by latching the count doesn't disturb the countdown but
+          reading the port directly does; except when using the 8254 Read
+          Back Command
+        - counter 0 is the time of day interrupt and is generated
+          approximately 18.2 times per sec.  The value 18.2 is derived from
+          the frequency 1.19318/65536 (the normal default count).
+        - counter 1 is normally set to 18 (dec.) and signals the 8237 to do
+          a RAM refresh approximately every 15us
+        - counter 2 is normally used to generate tones from the speaker
+          but can be used as a regular counter when used in conjunction
+          with the 8255
+        - newly loaded counters don't take effect until after an output
+          pulse or input CLK cycle depending on the mode
+        - the 8253 has a max input clock rate of 2.6MHz, the 8254 has max
+          input clock rate of 10MHz
+
+Mitch

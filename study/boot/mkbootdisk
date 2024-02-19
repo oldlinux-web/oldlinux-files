@@ -1,0 +1,206 @@
+#!/bin/bash
+
+# mkbootdisk
+#
+# Written by Erik Troan <ewt@redhat.com>
+
+pause=yes
+unset kernel
+device=/dev/fd0
+unset verbose
+unset witheth
+unset mkinitrdargs
+unset compact
+
+MOUNTDIR=/tmp/mkbootdisk
+PATH=/sbin:$PATH
+export PATH
+
+VERSION=1.4.2
+
+usage () {
+    cat >&2 <<EOF
+usage: `basename $0` [--version] [--noprompt] [--mkinitrdargs <args>] 
+       [--device <devicefile>] [--verbose -v] [--compact] <kernel>
+       (ex: `basename $0` --device /dev/fd1 2.0.31)
+EOF
+    exit $1
+}
+
+while [ $# -gt 0 ]; do
+    case $1 in
+	--device)
+	    shift
+	    device=$1
+	    ;;
+	--mkinitrdargs)
+	    shift
+	    mkinitrdargs=$1
+	    ;;
+	--help)
+	    usage 0
+	    ;;
+	--noprompt)
+	    unset pause
+	    ;;
+	-v)
+	    verbose=true
+	    ;;
+	--verbose)
+	    verbose=true
+	    ;;
+	--version)
+	    echo "mkbootdisk: version $VERSION"
+	    exit 0
+	    ;;
+	--compact)
+	    compact="compact"
+	    ;;
+	*)
+	    if [ -z "$kernel" ]; then
+		kernel=$1
+	    else
+		usage
+	    fi
+	    ;;
+    esac
+
+    shift
+done
+
+[ -z "$kernel" ] && usage 1
+
+[ -d /lib/modules/$kernel ] || {
+    echo "/lib/modules/$kernel is not a directory." >&2
+    exit 1
+}
+
+[ -f /boot/vmlinuz-$kernel ] || {
+    echo "/boot/vmlinuz-$kernel does not exist." >&2
+    exit 1
+}
+
+[ -f /etc/modules.conf -a -f /lib/modules/$kernel/modules.dep ] && {
+    ethmodule=`sort -u /etc/modules.conf | awk '/^alias eth0/ { print $3 }'`
+    [ -n "$ethmodule" ] && {
+	if echo $ethmodule | grep '\.o$'; then
+	    ethmodule=`echo ${ethmodule} | sed "s/\.o$//"`
+	fi
+	deps=`grep "/net/$ethmodule.o" /lib/modules/$kernel/modules.dep | head -1`
+	deps=`echo $deps | cut -d: -f2`
+	for n in $deps; do
+	    mod=`basename $n | cut -d. -f1`
+	    witheth="$witheth --with $mod"
+	done
+	witheth="$witheth --with $ethmodule"
+    }
+}
+
+[ -f /lib/modules/$kernel/fs/isofs.o ] &&
+	withfs="$withfs --with isofs"
+[ -f /lib/modules/$kernel/fs/nfs.o ] &&
+	withfs="$withfs --with nfs"
+[ -f /lib/modules/$kernel/fs/fat.o ] &&
+	withfs="$withfs --with fat"
+[ -f /lib/modules/$kernel/fs/msdos.o ] &&
+	withfs="$withfs --with msdos"
+
+rootdev=`awk '$1 ~ /^[^#]/ && $2 ~ /^\/$/ { print $1 ; exit }' /etc/fstab`
+
+if [ $(echo $rootdev | cut -c1-6) = "LABEL=" ]; then
+    rootlabel=$(echo $rootdev | cut -c7-)
+
+    # whee, now we have to look through every partition looking for
+    # the thing called $rootlabel, which could be raid. Ick.
+
+    list=$(tail +3 /proc/partitions | awk '{ print $4 '} | grep '^md')
+    list="$list $(tail +3 /proc/partitions | 
+			awk '{ print $4 '} | grep -v '^md')"
+    rootdev=""
+    for dev in $list; do
+	if tune2fs -l /dev/$dev >/dev/null 2>/dev/null; then
+	    label=$(tune2fs -l /dev/$dev 2>/dev/null | 
+		grep "Filesystem volume name" | awk '{print $4}')
+	    if [ "$label" = $rootlabel ]; then
+		rootdev=/dev/$dev
+		break
+	    fi
+	fi
+    done
+fi
+
+[ -z $rootdev ] && {
+    echo 'Cannot find root partition in /etc/fstab.' >&2
+    exit 1
+}
+
+[ -n "$pause" ] && {
+    echo "Insert a disk in $device. Any information on the disk will be lost."
+    echo -n "Press <Enter> to continue or ^C to abort: "
+    read aline
+}
+
+[ -n "$verbose" ] && echo -n "Formatting $device... "
+mkdosfs -I $device > /dev/null || {
+    echo "Failed to format $device" >&2
+    exit 1
+}
+
+syslinux $device
+[ -n "$verbose" ] && echo "done."
+
+rm -rf $MOUNTDIR
+mkdir $MOUNTDIR || {
+    echo "Failed to create $MOUNTDIR" >&2
+    exit 1
+}
+[ -d $MOUNTDIR ] || {
+    echo "$MOUNTDIR is not a directory!" >&2
+    exit 1
+}
+
+mount -t vfat $device $MOUNTDIR || {
+    rmdir $MOUNTDIR
+    exit 1
+}
+
+[ -n "$verbose" ] && echo -n "Copying /boot/vmlinuz-$kernel... "
+cp -a /boot/vmlinuz-$kernel $MOUNTDIR/vmlinuz
+[ -n "$verbose" ] && echo "done."
+
+[ -n "$verbose" ] && echo -n "Creating initrd image... "
+/sbin/mkinitrd $mkinitrdargs $witheth --ifneeded $MOUNTDIR/initrd.img $kernel
+[ -n "$verbose" ] && echo "done."
+
+[ -n "$verbose" ] && echo -n "Setting up syslinux... "
+
+[ -f $MOUNTDIR/initrd.img ] && INITRDARG="initrd=initrd.img"
+
+if [ $(echo $rootdev | cut -b 6-9) = "loop" ]; then
+    rootdev=$(ls -l $rootdev | sed 's/,//' | awk '{ printf("%02x%02x\n", $5, $6); }')
+fi
+
+cat > $MOUNTDIR/syslinux.cfg <<EOF
+default linux
+prompt 1
+display boot.msg
+timeout 100
+label linux
+	kernel vmlinuz
+	append $INITRDARG root=$rootdev
+EOF
+
+chmod 644 $MOUNTDIR/syslinux.cfg
+
+cat >> $MOUNTDIR/boot.msg <<EOF
+
+Press <return> (or wait 10 seconds) to boot your Red Hat Linux system from
+$rootdev. You may override the default linux kernel parameters by typing
+"linux <params>", followed by <return> if you like.
+
+EOF
+
+[ -n "$verbose" ] && echo "done."
+
+umount $MOUNTDIR
+rmdir $MOUNTDIR

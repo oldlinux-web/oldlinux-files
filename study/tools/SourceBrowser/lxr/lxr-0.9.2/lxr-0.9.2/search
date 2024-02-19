@@ -1,0 +1,180 @@
+#!/usr/bin/perl
+# $Id: search,v 1.11 2002/07/29 01:17:32 mbox Exp $
+
+# search --	Freetext search
+#
+#	Arne Georg Gleditsch <argggh@ifi.uio.no>
+#	Per Kristian Gjermshus <pergj@ifi.uio.no>
+#
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+
+######################################################################
+
+$CVSID = '$Id: search,v 1.11 2002/07/29 01:17:32 mbox Exp $ ';
+
+use strict;
+use lib do { $0 =~ m{(.*)/} ? "$1/lib" : "lib" };
+
+use LXR::Common qw(:html);
+use LXR::Config;
+
+my $maxhits = 1000;
+
+
+sub glimpsesearch {
+    my ($searchtext) = @_;
+
+    unless (open(GLIMPSE, "-|")) {
+	open(STDERR, ">&STDOUT");
+	$!='';
+	exec($config->glimpsebin,"-i","-H".$config->glimpsedir."/".$release,'-y','-n',$searchtext);
+	print("Glimpse subprocess died unexpextedly: $!\n");
+	exit;
+    }
+
+    my $numlines = 0;
+    my @glimpselines = ();
+    while (<GLIMPSE>) {
+	$numlines++;
+	push(@glimpselines,$_);
+	if ($numlines > $maxhits) {
+	    last;
+	}
+    }
+
+    close(GLIMPSE);
+
+    my $retval = $? >> 8;
+
+    # The manpage for glimpse says that it returns 2 on syntax errors or
+    # inaccessible files. It seems this is not the case. 
+    # We will have to work around it for the time being.
+    
+    if ($retval == 0) {
+	if (@glimpselines == 0) {
+	    print("No matching files<br>\n");
+	} else {
+	    if ($numlines > $maxhits) {
+		print("<b> Too many hits, displaying first $maxhits</b><br>\n");
+	    }
+	    print("<h1>$searchtext</h1>\n");
+	    my $sourceroot = $config->sourceroot;
+	    foreach my $glimpseline (@glimpselines) {
+		    
+		$glimpseline =~ s/$sourceroot//;
+		my ($file, $line, $text) = 
+		    $glimpseline =~ /(.*?):\s*(\d+)\s*:(.*)/;
+		$text =~ s/&/&amp;/g;
+		$text =~ s/</&lt;/g;
+		$text =~ s/>/&gt;/g;
+		
+		print(&fileref("$file, line $line", "find-file", 
+			       "/$file", $line),
+		      " -- $text<br>\n");
+	    }
+	}
+    } elsif ($retval == 1) {
+	my $glimpsebin = $config->glimpsebin;
+	my $glimpseresponse = join("<br>",@glimpselines);
+	my $glimpseresponse =~ s/$glimpsebin/Reason/;
+	my $glimpseresponse =~ s/glimpse: error in searching index//;
+	print("<b>Search failed</b><br>\n$glimpseresponse");
+    } else {
+	print("Unexpected returnvalue $retval from Glimpse\n");
+    }
+}
+
+
+sub swishsearch {
+    my ($searchtext) = @_;
+
+    unless (open(SWISH, "-|")) {
+	open(STDERR, ">&STDOUT");
+	exec($config->swishsearch,
+	     "-f", $config->swishdir."/".$release.".index",
+	     "-m", $maxhits, "-w", $searchtext);
+
+	print(STDERR "Couldn't exec ".$config->swishsearch.": $!\n");
+	kill(9, $$);
+    }
+
+    my @result = grep { not /^[\#\.]/ } <SWISH>;
+    close(SWISH);
+    my $retval = $? >> 8;
+
+    if ($retval == 0) {
+	if (@result == 0) {
+	    print("No matching files<br>\n");
+	} else {
+	    if (@result == $maxhits) {
+		print("<b> Too many hits, displaying first $maxhits</b><br>\n");
+	    }
+	    print("<h1>$searchtext</h1>\n");
+	    
+	    foreach my $hit (@result) {
+		my ($score, $file) = 
+		    $hit =~ /^(\d+) \/(\S+) \S+ \d+/;
+		
+		print("$score ", &fileref("$file", "find-file", "/$file"), "<br>\n");
+	    }
+	}
+    }
+    else {
+	print("<b>Search failed</b><br>\n@result");
+    }
+}
+
+
+sub search {
+    print("<p align=\"center\">\n",
+	  "<form method=\"get\" action=\"search\">\n");
+
+    foreach ($config->allvariables) {
+	if ($config->variable($_) ne $config->vardefault($_)) {
+	    print("<input type=\"hidden\" name=\"",$_, "\" ",
+		  "value=\"", $config->variable($_), "\">\n");
+	}
+    }
+
+    my $searchtext = $HTTP->{'param'}->{'string'};
+
+    print("<b>Search for: </b><input type=\"text\" name=\"string\" ",
+	  "value=\"",$searchtext,"\" size=\"50\">\n",
+	  "<input type=\"submit\" value=\"search\">\n",
+	  "</form>\n");
+
+    $| = 1; print('');
+
+    if ($searchtext ne "") {
+	print("<hr>\n");
+	if ($config->glimpsebin) {
+	    glimpsesearch($searchtext);
+	}
+	elsif ($config->swishsearch and $config->swishdir) {
+	    swishsearch($searchtext);
+	}
+    }
+}
+
+httpinit;
+
+&makeheader('search');
+&search;
+&makefooter('search');
+
+httpclean;
+
+

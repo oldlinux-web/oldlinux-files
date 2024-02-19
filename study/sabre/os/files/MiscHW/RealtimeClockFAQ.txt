@@ -1,0 +1,413 @@
+               Real Time Clock / CMOS Setup Reference
+                       Version: 10 March 1993
+                           By Tom Przeor
+
+AT model was the first in IBM PC family to keep track of time while
+switched off. The designers used Motorola MC146818 Real Time Clock
+(RTC from now on) chip. This chip provides clock and calendar
+functions, few registers to program the chip itself and some 50
+bytes of general purpose memory. Typically the RTC chip is used only
+on power on - the BIOS will initialize the DOS clock and verify the
+configuration. The RTC chip is capable of generating interrupts at
+specified frequency or time - we'll get back to it later.
+
+RTC BIOS interface.
+-------------------
+AT BIOS provides a number of basic functions to use RTC. The
+following short list should provide enough information to use them:
+
+RAM data areas used by RTC:
+
+ Addr hex   Size
+0040:0098  4 bytes  far pointer to user wait flag
+0040:009C  4 bytes  wait count
+0040:00A0  1 byte   wait active flag:
+                    bit 7 - 1 when wait time elapsed
+                    bit 0 - 1 when wait active
+                    bits 6-1 - reserved
+
+Int 1Ah function 02h - Get RTC time
+        entry:  AH = 02h
+        exit :  CF clear if successful, set on error
+                CH = hour (BCD)
+                CL = minutes (BCD)
+                DH = seconds (BCD)
+                DL = daylight savings flag
+                     (00h standard time, 01h daylight time)
+
+Int 1Ah function 03h - Set RTC time
+        entry:  AH = 03h
+                CH = hour (BCD)
+                CL = minutes (BCD)
+                DH = seconds (BCD)
+                DL = daylight savings flag (as above)
+        exit:   none
+
+Int 1Ah function 04h - Get RTC date
+        entry:  AH = 04h
+        exit:   CF clear if successful, set on error
+                CH = century (BCD)
+                CL = year (BCD)
+                DH = month (BCD)
+                DL = day (BCD)
+
+Int 1Ah function 05h - Set RTC date
+        entry:  AH = 05h
+                CH = century (BCD)
+                CL = year (BCD)
+                DH = month (BCD)
+                DL = day (BCD)
+        exit:   none
+
+Int 1Ah function 06h - Set RTC alarm
+        entry:  AH = 06h
+                CH = hour (BCD)
+                CL = minutes (BCD)
+                DH = seconds (BCD)
+        exit:   CF clear if successful, set on error
+        note:   place address for alarm routine in interrupt 4Ah
+                vector before using this service, the alarm occurs
+                every 24 hours until turned off, invoking int 4Ah
+                each time.
+
+Int 1Ah function 07h - Reset RTC alarm
+        entry:  AH = 07h
+        exit:   none
+        note:   disables alarm set with int1Ah/fn 06h. Don't forget
+                to restore old int 4Ah vector.
+
+Int 15h function 83h - Set/Cancel Wait Interval
+        subfunction 0 - Set Wait Interval
+        entry:  AH = 83h
+                AL = 00h
+                CX:DX = microseconds to delay
+                ES:BX -> byte whose high bit is to be set at end of
+                        interval
+        exit:   CF clear if successful, set on error
+
+Int 15h function 83h - Set/Cancel Wait Interval
+        subfunction 1 - Cancel Wait Interval
+        entry:  AH = 83h
+                AL = 01h
+        exit:   CF clear if successful, set on error
+                error status in AH:
+                80h invalid command (PC,PCjr)
+                86h function not supported (XT and later)
+
+Int 15h function 86h - Wait
+        entry:  AH = 86h
+                CX:DX = interval in microseconds
+        exit:   CF clear if successful (wait interval elapsed)
+                CF set on error or AH=83h wait already in progress
+
+There is a difference between functions 83h and 86h. Function 83h
+sets a wait interval and allows processing to continue. When the
+wait interval ends the user specified flag (pointed by ES:BX) is set
+and it is software responsibility to check that flag. That function
+can be stopped. Function 86h on the other hand suspends any
+processing until specified time interval is elapsed (and cannot be
+stopped). These two functions share the same data areas and cannot
+be used at the same time. Also note that their resolution is 977
+microseconds.
+
+Direct Access to RTC chip.
+--------------------------
+RTC chip can be accessed through I/O ports 70h and 71h. To read a
+byte from the chip, do an OUT 70h,addr; followed by IN al,71H.  To
+write a byte to chip, do an OUT 70h,addr; followed by OUT 71h,value.
+Example: read equipment byte from CMOS info
+
+mov     al,14h  ;register 14h holds equipment byte
+out     70h,al  ;select address 14h on RTC chip
+jmp     $+2     ;a slight delay to settle things
+in      al,71h  ;AL now has equipment byte
+
+* NOTE: Original MC146818 has 64 registers (00h to 3Fh). Most of the
+computers used today have a RTC functional equivalent incorporated
+in their 'chipset' and it can have more registers. Those extra bits
+are often used by chipset and BIOS designers to store extra
+information about things like DRAM wait states, refresh, m/b cache
+or user defined hard drive parameters - don't fiddle with them or
+you might end up in trouble. Also leave alone the reserved bytes.
+
+The RTC Registers.
+------------------
+The registers can be divided into three functional groups:
+
+1. Clock/calendar - updated from on chip clock, on IBM compatibles
+all quantities are stored in BCD format (ie. 23dec is stored 23h).
+
+2. Status - they affect working of RTC chip itself.
+
+3. CMOS configuration data - general purpose memory not affected and
+not affecting the RTC chip.
+
+Here is detailed list of registers (all byte sized, addr in hex):
+
+Addr    Function
+====    =========================================
+
+ **     clock/calendar
+
+ 00     current second for real-time clock
+ 01     alarm second
+ 02     current minute
+ 03     alarm minute
+ 04     current hour
+ 05     alarm hour
+ 06     current day of week (1=Sunday)
+ 07     current date of month
+ 08     current month
+ 09     current year  (final two digits; eg, 93)
+
+ **     status
+
+ 0A     Status Register A - Read/Write except UIP
+ ==     =========================================
+        ÚÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄ¿
+        ³  7  ³  6  ³  5  ³  4  ³  3  ³  2  ³  1  ³  0  ³
+        ³ UIP ³ DV2 ³ DV1 ³ DV0 ³ RS3 ³ RS2 ³ RS1 ³ RS0 ³
+        ÀÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÙ
+
+        bit 7 - UIP flag, Update In Progress. When set an update
+        cycle is in progress and the clock/calendar cannot be
+        accessed. When clear, at least 244 microseconds are
+        available to access clock/calendar bytes (it's plenty of
+        time even on 6MHz AT).
+
+        bits 6-4 - divider bits that define RTC operating frequency.
+        ATs have a 32.768 kHz (wrist watch) crystal to operate RTC
+        and divider should be set to '010', other values will make a
+        time machine from your computer.
+
+        bits 3-0 - Rate Selection bits that define the periodic
+        interrupt rate, see another table for details. Default value
+        set by BIOS is '0110'.
+
+ 0B     Status Register B - Read/Write
+ ==     ==============================
+        ÚÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄ¿
+        ³  7  ³  6  ³  5  ³  4  ³  3  ³  2  ³  1  ³  0  ³
+        ³ SET ³ PIE ³ AIE ³ UIE ³ SQWE³  DM ³24/12³ DSE ³
+        ÀÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÙ
+
+        bit 7 (SET) - when set to 1, any update in progress is
+        aborted and a program may initialize the
+        clock/calendar/alarm bytes without an update occurring.
+        Setting this bit clears UIE (bit 4). Clearing bit 7 allows
+        the update cycle to continue.
+
+        bit 6 (PIE) - Periodic Interrupt Enable, when set the
+        periodic interrupt will occur at the frequency specified by
+        RS bits in Status Register A.
+
+        bit 5 (AIE) - Alarm Interrupt Enable, when set the alarm
+        interrupt will be asserted once for each second that the
+        current time matches the alarm time.
+
+        bit 4 (UIE) - Update-ended Interrupt Enable, when set the
+        update-ended interrupt will be asserted once each second
+        after the end of update cycle. This bit is cleared when SET
+        bit goes high but it is not reset when SET is cleared.
+
+        bit 3 (SQWE) - Square Wave Enable, when set, enables the
+        square wave output on the SQW pin at the frequency specified
+        by the RS bits in the Status Register A. The SQW pin is not
+        connected to anything in the AT.
+
+        bit 2 (DM) - Data Mode, indicates mode for clock/calendar
+        data: 0=BCD and 1=binary, BIOS setting is 0.
+
+        bit 1 (24/12) - controls hours byte, 0=12-hour and 1=24-hour
+        format, BIOS setting is 1.
+
+        bit 0 (DSE) - Daylight Savings Enable, when set two special
+        updates will occur: last Sunday in April time will go
+        01:59:59 > 03:00:00 and last Sunday in October 01:59:59 >
+        01:00:00. BIOS sets it to 0 (ie. no daylight saving).
+
+ 0C     Status Register C - Read-only
+ ==     =============================
+        ÚÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄ¿
+        ³  7  ³  6  ³  5  ³  4  ³  3  ³  2  ³  1  ³  0  ³
+        ³ IRQF³  PF ³  AF ³  UF ³  0  ³  0  ³  0  ³  0  ³
+        ÀÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÙ
+
+        bit 7 (IRQF) - Interrupt Request Flag, when set one of the
+        interrupts enabled in Status Register B has occurred.
+
+        bit 6 (PF) - Periodic interrupt Flag, when set the periodic
+        interrupt has occurred.
+
+        bit 5 (AF) - Alarm interrupt Flag, when set the alarm
+        interrupt has occurred.
+
+        bit 4 (UF) - Update-ended interrupt Flag, when set the
+        update-ended alarm interrupt has occurred.
+
+        NOTE: PF, AF, UF are set regardless of corresponding enable
+        bits in Status Register B. IRQF will be set only if the
+        interrupt flag and its corresponding enable bit are set.
+        These four flags are cleared each time Status Register C is
+        read.
+
+        bits 3-0 - reserved, always 0.
+
+ 0D     Status Register D - Read-only
+ ==     =============================
+        ÚÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄ¿
+        ³  7  ³  6  ³  5  ³  4  ³  3  ³  2  ³  1  ³  0  ³
+        ³ VRT ³  0  ³  0  ³  0  ³  0  ³  0  ³  0  ³  0  ³
+        ÀÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÙ
+
+        bit 7 (VRT) - Valid RAM and Time, OK when set, when clear
+        indicates power was lost.
+
+        bits 6-0 - reserved.
+
+ **     configuration
+
+ 0E     POST diagnostics status byte
+ ==     ============================
+        bit 7 = 1 clock lost power
+        bit 6 = 1 CMOS checksum bad
+        bit 5 = 1 invalid configuration found at POST
+        bit 4 = 1 memory size compare error at POST
+        bit 3 = 1 fixed disk or controller failed
+        bit 2 = 1 invalid RTC time (eg. 31 Feb)
+        bits 1-0 - reserved
+
+ 0F     Shutdown Status Byte
+ ==     ====================
+        This byte is read upon startup after CPU reset in order to
+        determine if the reset cause (to get out of protected mode
+        etc.)
+        00 - power on reset
+        (0 = soft reset (Ctrl-Alt-Del) or unexpected shutdown.  Skip
+        POST) - conflicting info from older reference ??????
+        01 - memory size pass
+        02 - memory test pass
+        03 - memory test fail
+        04 - POST end, boot system
+        05 - JMP DWORD PTR 0:[0467h] with EOI (End Of Interrupt)
+        06 - protected tests pass
+        07 - protected tests fail
+        08 - memory size fail
+        09 - INT 15h block move
+        0A - JMP DWORD PTR 0:[0467h] without EOI
+
+ 10     Diskette drive types
+ ==     ====================
+        bits 7-4 - drive 0 type (A:)
+        bits 3-0 - drive 1 type (B:)
+                0000b - no drive
+                0001b - 360k
+                0010b - 1.2M
+                0011b - 720k
+                0100b - 1.44M
+
+ 11     Reserved
+ 12     Hard disk drive type
+ ==     ====================
+        (for drives C: and D:, when between 1 and 14)
+        bits 7-4 - fixed disk 0 type (C:)
+        bits 3-0 - fixed disk 1 type (D:)
+                0000b = no drive
+                0001b-1110b = drive type
+                1111b = drive 0 (1) type stored at addr 19h (1Ah)
+ 13     Reserved
+ 14     Equipment byte
+ ==     ==============
+        bits 7-6 - no. of floppy drives (00=1, 01=2, 10=3, 11=4)
+        bits 5-4 - primary display 00 = none, EGA, VGA ...
+                                   01 = 40x25 colour
+                                   10 = 80x25 colour
+                                   11 = 80x25 monochrome
+        bits 3-2 - reserved
+        bit 1 =1 if math copro installed
+        bit 0 =1 if floppy drive(s) present
+
+ 15     Base memory (low byte)
+ 16     Base memory (high byte)
+ ==     =======================
+        in kbytes (eg. 0100H=256K, 0200H=512K, 0280H=640K)
+
+ 17     Extended memory above 1M (low byte)
+ 18     Extended memory (high byte) in kbytes
+
+ 19     Disk 0 type if (CMOS addr 12H & 0fH) is 0fH
+ 1A     Disk 1 type if (CMOS addr 12H & f0H) is f0H
+
+ 1B-2D  Reserved
+
+ 2E     Checksum of CMOS addresses 10H through 20H  (high byte)
+ 2F     Checksum of CMOS addresses 10H through 20H  (low byte)
+
+ 30     Actual extended memory size (low byte)   ???
+ 31     Actual extended memory size (high byte)  ???
+ 
+ 32     Century in BCD (eg. 19h)
+
+ 33     Miscellaneous flags
+        bit 7 - IBM 128K memory option installed
+        bit 6 - used by "Setup" utility (?)
+        bits 5-0 - reserved
+
+ 34-3F  Reserved
+
+Using RTC hardware interrupt.
+-----------------------------
+RTC interrupt pin is connected to IRQ8 line in AT bus and generates
+int 70h when enabled. The chip can generate three different types of
+interrupts: periodic, alarm and update-ended. To use RTC interrupt
+first install interrupt service routine and point int 70h vector to
+it, then program RTC status registers (details shortly) and 'unmask'
+bit 0 of second PIC's mask register at port A1h. You can enable more
+than one interrupt type at the same time, in that case your
+interrupt handler should check which type has occurred (by reading
+Status Register C).
+
+Update-Ended Interrupt
+======================
+This is the simplest type - interrupt is generated after each clock
+update exactly every 1 second. To enable set bit 4 (UIE) in Status
+Register B.
+
+Alarm Interrupt
+===============
+This is a second type - it generates interrupt at specified time. To
+use it first set Alarm Seconds (addr 01h), Alarm Minute (addr 03h)
+and Alarm Hour (addr 05h), then set bit 5 (AIE) in Status Register
+B. The special value FFh in one of alarm registers will match any
+time, eg. FF:FF:00 will generate alarm interrupt every minute,
+FF:00:FF will generate interrupt every second during first minute of
+every hour.
+
+Periodic Interrupt
+==================
+The frequency of this interrupt is programmable from 2 to 8192 per
+second. To use this type of interrupt first set RS (Rate Select)
+bits in Status Register A to the required value:
+
+  RS    Int/sec         Period
+ 3210      -              -
+ 0000   none            none
+ 0001    256            3.90625 ms
+ 0010    128            7.8125  ms
+ 0011   8192            122.070 Micros
+ 0100   4096            244.141 Micros
+ 0101   2048            488.281 Micros
+ 0110   1024            976.562 Micros
+ 0111    512            1.93125 ms
+ 1000    256            3.90625 ms
+ 1001    128            7.8125  ms
+ 1010     64            15.625  ms
+ 1011     32            31.25   ms
+ 1100     16            62.50   ms
+ 1101      8            125.0   ms
+ 1110      4            250.0   ms
+ 1111      2            500.0   ms
+
+Note: usually this is set to 0110 by BIOS at boot up.
+
+After setting RS bits set bit 6 (PIE) in Status Register B.

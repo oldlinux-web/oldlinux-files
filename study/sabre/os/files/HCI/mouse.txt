@@ -1,0 +1,587 @@
+                     Programming the Microsoft Mouse
+                     -------------------------------
+
+                      "A Mouse! What A Great Idea!!"
+
+                                 -W. Disney
+
+
+          Written for the PC-GPE by bri (accbpf@vaxc.hofstra.edu)
+               and Mark Feldman (pcgpe@geocities.com)
+
+
+Disclaimer
+----------
+
+We assume no responsibility whatsoever for any effect that this file, the
+information contained therein or the use thereof has on you, your sanity,
+computer, spouse, children, pets or anything else related to you or your
+existance. No warranty is provided nor implied with this information.
+
+Introduction
+------------
+
+Programming the mouse is one of the easiest tasks you'll ever have to
+undertake. Mouse drivers hook themselves into interrupt 33h, so you
+can just call driver-functions the same way you would BIOS functions.
+
+Basics
+------
+
+The first step is to initialize the mouse driver. You do this by setting
+the ax register to 0 and calling interrupt 33h. This will return a
+non-zero number in ax if the driver is installed(which usually means if
+the mouse is installed. From here on in, anything I say about the mouse
+actually refers to the driver).
+
+To display the mouse cursor on the screen, set ax to 1 before calling int 33h.
+In text-mode you should get what appears to be a block-like text cursor, and
+in any graphics mode you should get the arrow by default(although we'll see
+how to change this later). The driver detects what mode you're in and draws
+the appropriate cursor.
+
+To hide the mouse cursor, you set the ax register to 2 and call the interrupt.
+Showing and hiding the mouse cursor is something you'll probably have to do
+often when you draw images to the screen. Believe you me, having a mouse move
+across something you're drawing can really wreck you're display. To get around
+this, hide the mouse cursor, draw what's necessary, and re-display the mouse
+cursor.
+
+Please note, mouse drivers often keep a 'display counter' that reads 0
+if the cursor is displayed and less then 0 if its hidden. Consecutive
+calls to hide the mouse cursor will decrement the counter and make it
+more and more negative-in which case it will take more calls to display
+the mouse cursor to get the counter to 0. Once the counter is 0, calls
+to display the mouse cursor have no effect on the counter. To read the
+state of the counter, you can call function 2Ah, and the counter is
+returned in the ax register. I'll touch on function 2Ah a bit more later.
+
+Last but not least, we should be able to figure out if any buttons are
+pressed, if so which ones, and where the mouse is.  This is easy, just
+set ax to 3 and call int 33h-the horizontal coordinate is returned
+in the cx register, the vertical coordinate in the dx register and
+bx has the button status. In bx, each bit reads 1 if a corresponding
+button is pressed-for example bit 0 is 1 if the left button is pressed,
+bit 1 is 1 if the right button is pressed, and bit 2 is 1 if the
+center button is pressed.
+
+As for the coordinates-be careful, as a lot of mouse drivers use a "virtual
+screen" of 640x200 pixels-which mean if you're screen resolution isn't this-
+you'll have to do some converting.
+
+
+SETTING THE CURSOR SHAPE
+------------------------
+
+When you use your mouse in a graphics mode, by default, you're stuck
+with the shape of the mouse cursor as an arrow. This is fine most of the
+time, but it can get boring after a while. Don't fret!!! You can alter the
+shape to accomodate your needs!
+
+The graphics mode cursor image is a 16-by-16 pixel area on the screen
+that is defined by a 64 byte buffer passed to int 33h, function 9. The first
+32 bytes contain the cursor mask-the appearance of the cursor on the screen.
+The second 32 bytes is the screen mask-it defines the appearance of the
+screen image under the cursor. In this 64 byte buffer, each bit corresponds
+to 1 pixel, i.e. the first two bytes in both of the masks corresponds to the
+16 pixels that make up the top row of the cursor.
+
+When you're designing the cursor mask, each bit is 1 if it is displayed,
+and 0 if it is not. On the screen mask, bits that are 1 are transparent.
+
+The mouse driver takes the screen mask, and the cursor mask and shoves
+them together, coming up with the following:
+
+
+Screen Mask Bit is      Cursor Mask Bit is      Resulting Screen Bit is
+------------------      ------------------      -----------------------
+        0                        0                         0
+        0                        1                         1
+	1                        0                     Bit is Not Changed
+	1                        1                     Bit is Inverted
+
+To set the shape you call Function 9h with ES holding the segment of your
+buffer containing the masks, and DX containing the offset of the buffer
+containing the cursor mask.
+
+One other important thing to note: your cursor has a hot spot=the point
+on your mouse cursor that is where the cursor is actually pointing.
+Usually this is 1, 1(that is 1 pixel from the top of the cursor and
+1 from the right). But when you change the image of your mouse cursor
+you might need to change the hot spot. You can do this by setting CX
+and DX of Function 9 to the horizontal and vertical offset of the hot
+spot.
+
+ODDS AND ENDS
+-------------
+
+Well, there are a few odds and ends here that you might find useful.
+
+You can set limits on where you want to allow the mouse cursor to roam.
+Function 7 & 8(AX= 7 & AX = 8) set the horizontal and vertical limits
+of the mouse cursor respectively. In both cases you input cx as the minimum
+coordinate in pixels, and dx as the maximum coordinate in pixels.
+
+You can take the mouse and move it to a certain position on the screen
+from inside your program. That's function 4(ax=4). You specify the
+horizontal coordinate in CX, and the vertical coordinate in DX. If you
+specify a coordinate outside a range you've set using functions 7 & 8,
+the mouse driver will most likely put the cursor at the very edge of
+that boundary.
+
+Lastly, you can set the amount of distance you're actual mouse moves
+to get the cursor on the screen to move. Mouse movement is measured
+in mickeys(I'm not joking here!) where each mickey is approximately
+1/200 of an inch. To adjust this use function 0Fh. CX should contain
+the number of horizontal mickeys, and dx the number of vertical ones.
+The numbers in CX and DX actually refer to the amount of mickeys needed
+to move the mouse cursor a total of 8 pixels. By default, CX is 8, while
+DX is 16. You can set a range of 1(hyper-active energetic mouse) to
+32,767(unbelievably sluggish and lazy).
+
+
+SLAM DUNKS AND LOW CEILINGS
+----------------------------
+(With special thanks to Feldman the Great for this section)
+
+Yes, like the subject header, something else that has never mixed very well
+together was mouse and SVGA programming. The reason, of course is that your
+mouse driver is what takes care of the updating of the image of the mouse
+cursor in graphics mode.
+
+You see, in the beginning, SVGA was created. This was widely regarded
+as a bad idea.
+
+Sure it looked cool, and there were more pretty colors than you could shake
+a kaleidoscope at, but there was no standard. (This was before VESA, and sadly
+even today many mouse drivers don't use VESA) This left all SVGA chip
+makers to deviously make chips however they wanted, depending on what
+kind of mood they were in, and what they had had for lunch. As most
+SVGA chip designers rarely ate the same thing at lunchtime, you wound up
+with a googleplex full of SVGA cards that all were 110% incompatible
+with each other.
+
+Remember what I said about your mouse driver handling your mouse cursor.
+Now mouse drivers had to know how to handle every single SVGA card, so
+they could draw the cursors correctly in SVGA mode. Mouse driver
+maufacturers got around this problem in a rather novel way: they ignored
+SVGA.
+
+Because of this, most mouse drivers throw up their hands in disgust when
+confronted with the ugly head of SVGA and simply provide you with no mouse
+cursor at all. Likewise, if you're programming for Mode X, you're likely to
+run into the same trouble. You CAN get around this, however. How? you ask
+with baited breath. Simply install your own mouse handler(I'm using the word
+'simply' rather loosely here). What this will do, is cause the mouse driver
+to call one of your functions-and then you're responsible for updating the
+graphics cursor image on the screen.
+
+Basically, you call Function 0Ch. CX contains the event mask: on what
+conditions the mouse driver will call your function. The mask is listed
+below:
+		Bit   If set
+		 0    Mouse Cursor Movement
+		 1    Left Button Pressed
+		 2    Left Button Released
+		 3    Right Button Pressed
+		 4    Right Button Released
+		 5    Center Button Pressed
+		 6    Center Button Released
+
+The ES register holds the segment of your mouse code that the driver
+should call, and DX holds the offset. (As an aside, I'd recommend
+doing the mouse handler itself in assembly, as getting it to work
+in C or Pascal is an uphill struggle at best).
+
+When the mouse driver calls your function, AX will contain the event
+flag that you set earlier. BX will contain the button status: 0 if
+the left button is pressed, 1 if the right button is pressed, and 2
+if the center button is pressed. CX and DX contain the horizontal and
+vertical position of the mouse cursor respectively.
+
+To disable an installed handler, simply call function 0Ch with an
+event mask of 0, or call Function 0h.
+
+Well that about wraps it up...if you have any questions at all,
+please feel free to contact me (bri) at accbpf@vaxc.hofstra.edu and I'll
+do my best to answer them.
+
+Quick Reference Guide to Interrupt 33h
+--------------------------------------
+
+FUNCTION: AX = 0h
+	Description: Determines whether a mouse is available and if it is
+		     initializes the mouse driver.
+	Returns    : AX = Non-Zero (If Mouse is installed, 0 if not)
+		     BX = Number of Mouse Buttons
+FUNCTION: AX = 1h
+	Description: Increments the mouse cursor display counter.
+	Returns    : Nothing
+
+FUNCTION: AX = 2h
+	Description: Decrements the mouse cursor display counter.
+	Returns    : Nothing
+
+FUNCTION: AX = 3h
+	Description: Returns the current mouse position and button status.
+	Returns	   : BX = Buttons status:
+			  Bit 0: Left Button
+			  Bit 1: Right Button
+			  Bit 2: Center Button
+		     CX = Horizontal Coordinate
+		     DX = Vertical Coordinate
+
+FUNCTION: AX = 4h
+	Description: Moves the mouse cursor to a certain position on the screen.
+	Call  With : CX = Horizontal Coordinate
+		     DX = Vertical Coordinate
+	Returns    : Nothing
+
+FUNCTION: AX = 5h
+	Description: Reports on the status and numbers of presses for a
+		     button.
+	Call with  : BX = Button to Check
+  			  0 = Left Button
+			  1 = Right Button
+		          2 = Center Button
+	Returns    : AX = Button Status
+		          Bit 0 = Left Button
+			  Bit 1 = Right Button
+			  Bit 2 = Center Button
+		     BX = Button Press Counter
+ 		     CX = Horizontal Coordinate of Last Button Press
+		     DX = Vertical Coordinate of Last Button Press
+
+FUNCTION: AX = 6h
+	Description: Gets the button release information.
+	Call With  : BX = Button to Query
+		       0 = Left Button
+		       1 = Right Button
+		       2 = Center Button
+	Returns    : AX = Button Status(1 if pressed)
+		       Bit 0 = Left Button
+		       Bit 1 = Right Button
+		       Bit 2 = Center Button
+		     BX = Button Release counter
+		     CX = Horizontal Coordinate of last button release
+		     DX = Vertical Coordinate of last button release
+
+FUNCTION: AX = 7h
+        Description: Sets the horizontal limits for the mouse cursor.
+	Calls With : CX = Minimum horizontal mouse coordinate.
+	             DX = Maximum horizontal mouse coordinate.
+
+FUNCTION: AX = 8h
+	Description: Sets the vertical limits for the mouse cursor.
+        Call With  : CX = Minimum vertical mouse coordinate.
+		     DX = Maximum vertical mouse coordinate.
+	Returns    : Nothing
+
+FUNCTION: AX = 9h
+	Description: Defines the shape of the graphics mode cursor.
+	Call With  : BX = Hoorizontal hot spot offset
+	  	     CX = Vertical hot spot offset
+		     ES = Segment of buffer containing cursor mask
+		     DX = Offset of buffer containing cusror mask
+
+	Returns    : Nothing
+
+FUNCTION: AX = 0Ah
+        Description: Definesthe shape of the text mode cursor
+	Call With  : BX = Cursor Type
+		         0 = Software Cursor
+			 1 = Hardware cursor
+		     if BX = 0 then
+		        CX = Screen Mask value
+		        DX = Cursor Mask Value
+		     else
+ 			CX = Starting Scan Line For Cursor
+			DX = Ending Scan Line For Cursor
+
+FUNCTION: AX = 0Bh
+	Description: Returns the net mouse movement since the last call
+		     to this function(or since the mouse was initialized).
+	Returns    : CX = Horizontal mouse movement(in Mickeys)
+		     DX = Vertical mouse movement(in Mickeys)
+
+FUNCTION: AX = 0Ch
+	Description: Sets the user defined mouse handler.
+	Call With  : CX = Event Mask
+
+		Bit   If set
+		 0    Mouse Cursor Movement
+		 1    Left Button Pressed
+		 2    Left Button Released
+		 3    Right Button Pressed
+		 4    Right Button Released
+		 5    Center Button Pressed
+		 6    Center Button Released
+
+		     ES = Segment of your mouse handler code
+		     DX = Offset of your mouse handler code
+	Returns    : AX = Event Mask
+		     BX = Button Status(1 if pressed)
+		       Bit 0 = Left Button
+		       Bit 1 = Right Button
+		       Bit 2 = Center Button
+                     CX = Horizontal Coordinate
+		     DX = Vertical Coordinate
+
+FUNCTION: AX = 2Ah
+	Description: Returns display counter state, and current hot spot
+	Returns    : BX = Horizontal offset of hot spot
+		     CX = Vertical offset of hot spot
+
+
+
+A complete list of mouse function calls can be found in the file GMOUSE.TXT,
+the file contains calls for both Microsoft (2 button) and Genius (3 button)
+modes.
+
+Writing Custom Handlers
+-----------------------
+
+Most mouse drivers do not support SVGA modes, so you must write custom
+handlers if you want mouse support for these modes.
+
+Rather than writing an entire mouse driver, you can write a simple handler
+routine to take care of the graphics and tell the mouse driver to call it
+whenever the mouse does anything. This function is descibed in the GMOUSE.DOC
+file, but this demo Pascal program shows the general idea. It sets mode 13h,
+resets the mouse and waits for a key to be pressed. Whenever you do anything
+to the mouse (moving it or pressing a button) the handler will get called
+and it will draw a pixel on the screen. The color of the pixel depends on
+which buttons are being pressed.
+
+Uses Crt, Dos;
+
+{$F+}
+{ called with bl = buttons, cx = x * 2, dx = y }
+procedure Handler; far; assembler;
+asm
+
+  { This mouse "handler" just draws a pixel at the current mouse pos }
+  pusha
+  push es                  ; pusha doesn't save es
+  mov ax, $A000
+  mov es, ax
+  shr cx, 1
+  xchg dh, dl
+  mov di, dx
+  shr dx, 2
+  add di, dx
+  add di, cx
+  mov al, bl
+  inc al
+  stosb
+  pop es
+  popa
+end;
+{$F-}
+
+begin
+  asm
+
+    { Set graphics mode 13h }
+    mov ax, $13
+    int $10
+
+    { Initialize mouse driver }
+    xor ax, ax
+    int $33
+
+    { Install custom handler }
+    mov ax, SEG Handler
+    mov es, ax
+    mov dx, OFS Handler
+    mov ax, 12
+    mov cx, $1F
+    int $33
+
+    { Wait for a key press }
+    xor ah, ah
+    int $16
+
+    { Back to text mode }
+    mov ax, 3
+    int $10
+  end;
+end.
+
+
+
+
+Alternatively you may wish to write your own interrupt handler to process
+mouse events as they happen. When a mouse event occurs, 3 interrupts are
+generated and the bytes are available via the COM port.
+
+                  ----------------------------
+                  |       Interrupt    Port  |
+                  ----------------------------
+                  | COM1      $0C       $3F8 |
+                  | COM2      $0B       $3F8 |
+                  ----------------------------
+
+The three bytes sent are formatted as follows:
+
+
+               1st byte        2nd byte         3rd byte
+          -----------------   ---------------   ---------------
+          |-|1|?|?|X|X|Y|Y| - |0|X|X|X|X|X|X|   |0|Y|Y|Y|Y|Y|Y|
+          -----------------   ---------------   ---------------
+               | | \ / \ /           |                |
+               | |  |   |            |                |
+               | |  |   ------------- ----------      |
+               | |  ----------       |        \ \     |
+               | |          \_\_ _ _ _ _ _ _   \_\_ _ _ _ _ _ _  
+               | |          |_|_|_|_|_|_|_|_|  |_|_|_|_|_|_|_|_|
+               | |             X increment        Y increment
+ Left Button --  |
+Right Button ---- 
+
+
+The X and Y increment values are in 2's compliment signed char format. (BTW
+thanks go to Adam Seychell for posting this info to comp.os.msdos.programmer).
+
+
+A simple Borland Pascal 7.0 mouse handler follows. First we declare a few
+things we'll need:
+
+
+
+----------------------------------------------------------------------
+Uses Crt, Dos;
+
+{$F+}
+
+const COM1INTR = $0C;
+      COM1PORT = $3F8;
+
+var bytenum : word;
+    combytes : array[0..2] of byte;
+    x, y : longint;
+    button1, button2 : boolean;
+    MouseHandler : procedure;
+----------------------------------------------------------------------
+
+The bytenum variable is used to keep track of which byte is expected next
+(ie 0, 1 or 2). The combytes variable is simply an array to keep track of
+bytes received so far. The mouse position will be stored in the x and y
+variables (note that this example will not perfrom any range checking).
+button1 and button2 will be used to store the states of each of the buttons.
+MouseHandler will be used to store the normal mouse driver event handler.
+We'll also need it to reset everything once we are finished.
+
+Here's the actual handler:
+
+----------------------------------------------------------------------
+procedure MyMouseHandler; Interrupt;
+var dx, dy : integer;
+var inbyte : byte;
+begin
+
+  { Get the port byte }
+  inbyte := Port[COM1PORT];
+
+  { Make sure we are properly "synched" }
+  if (inbyte and 64) = 64 then bytenum := 0;
+
+  { Store the byte and adjust bytenum }
+  combytes[bytenum] := inbyte;
+  inc(bytenum);
+
+  { Have we received all 3 bytes? }
+  if bytenum = 3 then
+    begin
+
+      { Yes, so process them }
+      dx := (combytes[0] and 3) shl 6 + combytes[1];
+      dy := (combytes[0] and 12) shl 4 + combytes[2];
+      if dx >= 128 then dx := dx - 256;
+      if dy >= 128 then dy := dy - 256;
+      x := x + dx;
+      y := y + dy;
+      button1 := (combytes[0] And 32) <> 0;
+      button2 := (combytes[0] And 16) <> 0;
+
+      { And start on first byte again }
+      bytenum := 0;
+    end;
+
+  { Acknowledge the interrupt }
+  Port[$20] := $20;
+end;
+----------------------------------------------------------------------
+
+Once again pretty simple stuff. We just read the byte from the com1 port and
+figure out if it's time to do anything yet. If bit 6 is set to 1 then we
+know that it's meant to be the first byte of the 3, so we reset our
+bytenum variable to zero (in a perfect world bytes would always come in 3's
+and we would never need to check, but it never hurts to be careful).
+
+When 3 bytes have been received we simple decode them according to the
+diagram above and update the appropriate variables accordingly.
+
+The 'Port[$20] := $20;' command just lets the interrupt controller know we
+have processed the interrupt so it can send us the next one when it wants to.
+
+Note that the above "handler" does nothing more than keep track of the
+current mouse position and button states. If we were writing a proper mouse
+driver for an SVGA game we would also have to write custom cursor routines.
+I'll leave that bit to you!
+
+To actually install our mouse driver we'll have to set up all the variables,
+save the address of the current mouse handler and install our own. We'll
+also need call the existing mouse driver to set up the COM1 port to make
+sure it sends us the mouse bytes as it receives them. We could do this
+ourselves, but why make life harder than it already is?
+
+----------------------------------------------------------------------
+procedure InitMyDriver;
+begin
+
+  { Initialize the normal mouse handler }
+  asm
+    mov ax, 0
+    int $33
+  end;
+
+  { Initialize some of the variables we'll be using }
+  bytenum := 0;
+  x := 0;
+  y := 0;
+  button1 := false;
+  button2 := false;
+
+  { Save the current mouse handler and set up our own }
+  GetIntVec(COM1INTR, @MouseHandler);
+  SetIntVec(COM1INTR, Addr(MyMouseHandler));
+end;
+----------------------------------------------------------------------
+
+
+And finally when our program is finished it'll need to clean up after
+itself and return control back to the normal mouse driver:
+
+----------------------------------------------------------------------
+procedure CleanUpMyDriver;
+begin
+  SetIntVec(COM1INTR, @MouseHandler);
+end;
+----------------------------------------------------------------------
+
+
+This little bit of source will test the above code. It does nothing more
+than repeatedly write the mouse position and button states to the screen
+until a keyboard key is pressed:
+
+----------------------------------------------------------------------
+begin
+  ClrScr;
+  InitMyDriver;
+  while not keypressed do
+    WriteLn(x : 5, y : 5, button1 : 7, button2 : 7);
+  CleanUpMyDriver;
+end.
+----------------------------------------------------------------------
+

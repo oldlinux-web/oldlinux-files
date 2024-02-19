@@ -1,0 +1,112 @@
+  <STYLE MEDIA="screen">
+    #bodytext { font-family: Verdana, Arial, Helvetica;font-size: 9pt; line-height: 125%;}
+  </STYLE>
+    <STYLE MEDIA="print">
+    #bodytext {display: all; margin-left: 90px; margin-right: 20px; font-family: Times; font-size: 11pt; line-height: 112%;}
+  </STYLE>
+
+<FONT FACE="Verdana, Arial, Helvetica" SIZE=1><blockquote><div id="bodytext">
+<!-- XXXXXXXXXXXXXXXXX PAGE TITLE: XXXXXXXXXXXXXXXXXXXXX -->
+<h3 class=main>Media Status Notification Support Specification for SCSI and ATAPI Devices, Version 0.1</h3>
+<!-- XXXXXXXXXXXXXXXXX START TOC: XXXXXXXXXXXXXXXXXXXXXX -->
+<DL class=contents>
+	<DT class=contents><B>Contents:</B></DT>
+	<DD class=contents><a class=contents href="#Introduction">Introduction</a></DD>
+	<DD class=contents><a class=contents href="#Enabling">Enabling and Disabling Media Status Notification Support</a></DD>
+	<DD class=contents><a class=contents href="#Returning">Returning Media Status</a></DD>
+	<DD class=contents><a class=contents href="#Reporting">Reporting Media Status Changes</a></DD>
+	<DD class=contents><a class=contents href="#SCSI">SCSI Compatibility Considerations</a></DD>
+</DL>
+<!-- XXXXXXXXXXXXXXX START CONTENT: XXXXXXXXXXXXXXXXXXXX -->
+<h3><A NAME="Introduction"></A>Introduction</h3>
+
+<P>A major shortcoming of removable media devices on PC platforms is their inability to report to the host when the user attempts to eject the medium. Currently most removable media devices just eject the medium when the user presses the Eject button, and potentially any data the operating system has not saved to the device is lost. Various volume tracking and locking schemes reduce this risk, but do not eliminate it. Ideally, devices will have a means of communicating to the host that the user wants to eject the medium or has inserted a new medium.</P>
+ 
+<P>This specification defines a protocol for providing this function for SCSI ATA and ATAPI devices. The support is enabled using a new SCSI command, ENABLE MEDIA STATUS, and the media status is retrieved using a new SCSI ATA command, GET MEDIA STATUS. </P>
+
+<P>Because it is difficult for a SCSI target to asynchronously interrupt the host due to lack of industry support for Asynchronous Event Notification, the GET MEDIA STATUS command is not completed by the target until a media status change occurs. If tagged command queuing is not supported by the target and/or the host, a means of polling the target for status changes is also specified.
+Note that in some controllers the unused words in the ID Drive data are returned as 0FFFFh. Thus it may be better if the Status Notification support was returned as a 2 bit field, where 00b, 11b are both defined as drive not supporting Status notification.</P>
+
+<h3><A NAME="Enabling"></A>Enabling and Disabling Media Status Notification Support</h3>
+
+<P>To maintain compatibility with existing BIOS implementations and operating systems, the target must assume that the host does  shall not enableimplement Media Status Notification support until the ENABLE MEDIA STATUS command is issued by the host, as described in this section.</P>
+
+<P>When the host enables the support using the ENABLE MEDIA STATUS command, the target shallmust respond as described in this specification. When the host disables this featuresupport, the target must default to normal operating modes. A SCSI bus reset, bus device reset or power on condition must also cause the target to return to normal operating modes.</P>
+ 
+<P><b>ENABLE MEDIA STATUS Command</b></P>
+
+<P>The ENABLE MEDIA STATUS command requests that the SCSI Target enable or disable Media Status Notification. If Media Status Notification is not supported, the target shall return CHECK CONDITION (Sense Key 05 ILLEGAL REQUEST, Sense Code 24 INVALID FIELD IN COMMAND PACKET).
+</P>
+<P>
+<img src="scsienbl.gif" width=573 height=260 border=0></P>
+
+<P>An Enable bit of one indicates that the target shall enable Media Status Notification. If the target currently has Media Status Notification enabled, the target shall return CHECK CONDITION (Sense Key 05 ILLEGAL REQUEST, Sense Code 4E OVERLAPPED COMMANDS ATTEMPTED).</P>
+
+<P>An Enable bit of zero indicates that the target shall disable Media Status Notification.</P>
+
+<h3><A NAME="Returning"></A>Returning Media Status</h3>
+
+<P>The media status information is returned when the host issues the GET MEDIA STATUS command described below.</P>
+
+<P><b>GET MEDIA STATUS Command</b></P>
+
+<P>The ENABLE MEDIA STATUS command requests that the SCSI Target report media status changes. If Media Status Notification is not supported or not enabled, the target shall return CHECK CONDITION (Sense Key 05 ILLEGAL REQUEST, Sense Code 24 INVALID FILED IN COMMAND PACKET).</P>
+
+<P>
+<img src="scsigetm.gif" width=572 height=260 border=0></P>
+
+<P>This command has two modes of operation. If the Immed bit is set to one, and if the state of the target is normal (that is, medium not inserted, Eject button not pushed), the GET MEDIA STATUS command shall return good status. If the state of the target has changed, a CHECK CONDITION command shall be returned, and the subsequent REQUEST SENSE command shall return the appropriate keys as defined in the Reporting Media Status Changes section below.</P>
+
+<P>If the Immed bit is set to zero (and the target supports tagged command queuing) and if the state of the target is normal (that is, medium in the target, medium not changed, Eject button not pushed), the GET MEDIA STATUS command shall be queued by the target until the status of the medium changes, or some error condition occurs. If the state of the target has changed, a CHECK CONDITION command shall be returned, and the subsequent REQUEST SENSE command shall return the appropriate keys as defined in the Reporting Media Status Changes section below.</P>
+
+<P>If the Immed bit is set to zero and the target DOES NOT support tagged command queuing, the target shall return CHECK CONDITION (Sense Key 05 ILLEGAL REQUEST, Sense Code 24 INVALID FIELD IN COMMAND PACKET).</P>
+
+<h3><A NAME="Reporting"></A>Reporting Media Status Changes</h3>
+
+<P>When a media status change has been detected, the GET MEDIA STATUS command shall return CHECK CONDITION. The target shall return the following sense data:</P>
+
+<P>Sense Key 06 (UNIT ATTENTION)</P>
+
+<P>Sense Code E0 (MEDIA STATUS CHANGE)</P>
+
+<P>Additional Sense Code Qualifier:</P>
+
+<P><b>00 - EJREQ </b></P>
+
+<P>This Qualifier indicates that the user has attempted to eject the medium. Usually this Qualifier will be set when the user presses the Eject button on the target. If theThe target is capable of preventing removal of the media, the target shallmust not allow the medium to be ejected until an EJECT command is received from the host. This Qualifier shallmust not be set again in response to the GET MEDIA STATUS command until the user subsequently releases the button and presses it again.</P>
+<P><b>01 - NEWMED</b></P>
+<P>This Qualifier indicates that a medium has been newly inserted in the target. The Qualifier must not be set for more than one invocation of the GET MEDIA STATUS command, until the user removes or reinserts the medium. In other words, when the user inserts a new medium in the target, and a GET MEDIA STATUS command is issued, the target will set this Qualifier. The next GET MEDIA STATUS command must not result in this Qualifier being set again unless the medium has been removed and reinserted.</P>
+<P>All other Qualifiers are reserved.</P>
+
+<h3><A NAME="SCSI"></A>SCSI Compatibility Considerations</h3>
+
+<P>SCSI commands must be processed exactly the same as they would be if Media Status Notification was not enabled. When the GET MEDIA STATUS command is received by the SCSI target, the status changed error codes must be reported as described in "Returning Media Status" earlier in this specification. However, the state of the bits must not be cleared by any other SCSI command. The insertion of a new medium must be reported independently with both the GET MEDIA STATUS and other SCSI commands. For example, if the user inserts a new medium and the target is accessed with an SCSI command, the CHECK CONDITION with UNIT ATTENTION must be reported, but the target must also report the NEMED error when it receives the next GET MEDIA STATUS command. The behavior must be the same if, after the medium is inserted, the GET MEDIA STATUS command is received before the next SCSI command.</P>
+<P>When the user presses the Eject button on the target, the SCSI commands must not be affected, but the EJREQ status must be reported when the first GET MEDIA STATUS command is received after the button is pressed, (it is reported only once after each button press). The SCSI target must continue to operate as normal. If the host determines that it is safe to eject the medium, an SCSI EJECT command shall be issued to the target by the host, at which time the target shall eject the medium.</P>
+
+<P><TABLE WIDTH=78% BORDER=1 CELLPADDING=5 CELLSPACING=0>
+<TR VALIGN=TOP BGCOLOR="#80AADD">
+<TD colspan=3><FONT FACE="Arial" SIZE=2><B>Revision Record</B></FONT></TD></TR>
+<TR VALIGN=TOP>
+<TD><FONT FACE="Arial" SIZE=2><b>Edition</b></FONT></TD>
+<TD><FONT FACE="Arial" SIZE=2>Date Published</FONT></TD>
+<TD><FONT FACE="Arial" SIZE=2>Revised Comments</FONT></TD></TR>
+<TR VALIGN=TOP>
+<TD><FONT FACE="Arial" SIZE=2>0.1</FONT></TD>
+<TD><FONT FACE="Arial" SIZE=2>March 1996</FONT></TD>
+<TD><FONT FACE="Arial" SIZE=2>First Draft Version</FONT></TD></TR>
+</TABLE></P>
+<P>Send comments to <A HREF="mailto:billpa@microsoft.com">billpa@microsoft.com</A>.</P>
+
+
+<!-- XXXXXXXXXXXXXXXX END CONTENT XXXXXXXXXXXXXXXXXXXXXX -->
+</div></blockquote></font>
+<TABLE CELLPADDING=0 CELLSPACING=0 WIDTH=92% BORDER=0>
+<TR><TD WIDTH=60></TD><TD></TD></TR><TR><TD></TD><TD valign=top>
+<hr size="1" color="#441100" noshade WIDTH="100%">
+<FONT FACE="Verdana, Arial, Helvetica" SIZE=1><p>
+<!-- ENTER CHANGE OF DATE -->
+<q class=date>File Date: July 7, 1998<br>
+<!--COPYRIGHT STATEMENT--><A STYLE="color:#001144" STYLE="text-decoration:underline;" HREF="/misc/cpyright.htm">&copy; 1999 Microsoft Corporation. All rights reserved. Terms of Use.</A></q><BR></FONT>
+<!--COPYRIGHT STATEMENT END--></TD></TR></table>
+</BODY>
+</HTML>

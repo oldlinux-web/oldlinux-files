@@ -1,0 +1,263 @@
+Some remarks on the usage of the Real Time Clock (RTC) MC 146818 of the AT.
+Not as comprehensive as The_Serial_Port, but I'm working on it :-).
+                                                                     Chris
+
+--------------------------------------------------------------------------
+
+You should use the BIOS interrupt 1Ah to program the RTC. If you don't
+like this or if you want to use some special features, here is how to
+access the registers directly:
+
+
+Reading an RTC register
+-----------------------
+  cli  ; make sure no interrupt wants to access the RTC in the mean time
+  mov  al,address
+  out  70h,al
+  in   al,71h
+  sti
+
+  _disable();
+  outp(0x70,address);
+  x=inp(0x71);
+  _enable();
+
+
+Writing an RTC register
+-----------------------
+  cli
+  mov  al,address
+  out  70h,al
+  mov  al,value
+  out  71h,al
+  sti
+
+  _disable();
+  outp(0x70,address);
+  outp(0x71,value);
+  _enable();
+
+
+Make sure you rewrite the address before every access, even if it's identical
+with the previous access! CPU interrupts should be disabled during your
+access, but of course you don't need to do that explicitly every time if they
+are disabled anyway (eg. in an interrupt handler).
+
+The RTC generates interrupt 70h. You must enable level 2 of the master ICU and
+level 0 of the slave ICU. (Clear bit 2 of port 21h and bit 0 of port 0A1h;
+both registers are read/write). Both master and slave ICU expect an EOI (write
+20h to 20h and 0A0h).
+
+
+And these are the registers:
+
+Address     Function
+--------------------------------------
+   0        actual second
+   1        alarm second
+   2        actual minute
+   3        alarm minute
+   4        actual hour
+   5        alarm hour
+   6        day of week (not used by the BIOS nor DOS)
+   7        day of month
+   8        month
+   9        year
+   A        status A
+   B        status B
+   C        status C
+   D        status D
+   E - 3F   buffered memory that holds the BIOS setup
+   40 - 7F  buffered memory available with some clones
+
+
+status A (Control 1)
+--------
+  Bit 0-3: interrupt frequency (PC: 0110b = 1024 ints per second)
+      4-6: xtal frequency (PC: 010b = 32,768 kHz)
+        7: UIP (update in progess: if 1, time is invalid)
+  UIP tells you when you can't read the registers 0, 2, 4, 6 - 9 at the
+  moment. It is usually high for less than a millisecond.
+  You can change bits 0-6. These are the values that produce useful results
+  in a PC:
+  
+      Bits 6-4
+      --------
+        010     use 32,768 Hz xtal
+        others  don't do anything useful in PCs, really...
+
+      Bits 3-0
+      --------
+        0000    seems to inhibit the whole RTC
+        0001    divides xtal by 128 (PC: 256 ints per second)
+        0010    divides xtal by 256 (PC: 128 ints per second)
+        0011    divides xtal by 4 (PC: 8192 ints per second)
+        0100    divides xtal by 8 (PC: 4096 ints per second)
+        0101    divides xtal by 16 (PC: 2048 ints per second)
+        0110    divides xtal by 32 (PC: 1024 ints per second)
+        0111    divides xtal by 64 (PC: 512 ints per second)
+        1000    divides xtal by 128 (PC: 256 ints per second)
+        1001    divides xtal by 256 (PC: 128 ints per second)
+        1010    divides xtal by 512 (PC: 64 ints per second)
+        1011    divides xtal by 1024 (PC: 32 ints per second)
+        1100    divides xtal by 2048 (PC: 16 ints per second)
+        1101    divides xtal by 4096 (PC: 8 ints per second)
+        1110    divides xtal by 8192 (PC: 4 ints per second)
+        1111    divides xtal by 16384 (PC: 2 ints per second)
+
+  Obviously you should only use values 0011 - 1111. Note also that
+  8192 ints per second is an awful lot for slow computers.
+  
+
+status B (Control 2)
+--------
+  Bit 0: 1=daylight savings flag (German "Sommerzeit"-"summer time")
+      1: 0=12hr, 1=24hr mode (PC: 1)
+      2: 0=BCD, 1=binary mode (PC: 0)
+      3: 1=square wave generator on (PC: 0)
+      4: 1=generate time update interrupts (every second) (PC: 0)
+      5: 1=alarm interrupt (int when alarm time reached) (PC: 0)
+      6: 1=generate periodic interrupt (see status A) (PC: 0)
+      7: 1=inhibit time increment (while setting the clock)
+
+status C (interrupt cause)
+--------
+  Bit 4: 1=time changed (generated every second)
+      5: 1=alarm time reached
+      6: 1=periodic int
+  others not defined
+
+status D (battery)
+--------
+  Bit 7: 1=battery OK, 0=battery weak
+  others undefined
+
+
+When servicing interrupts, you MUST read status C! That's the chip's inter-
+rupt acknowledge. Make sure to read this register after programming the
+interrupt control register (status B), or you won't get any interrupts.
+
+The Day Of Week - Counter counts from 1 to 7 and restarts with 1 again. When
+0, it is not incremented. On a PC, it's always 0 if you don't set it to a
+specific value. (Ralf Brown says 1=sunday, but not with my PCs.)
+
+
+Using the BIOS instead
+======================
+
+[sneaked from Ralf Brown's interrupt list version 31]
+
+
+----------1A02-------------------------------
+INT 1A - TIME - GET REAL-TIME CLOCK TIME (AT,XT286,PS)
+	AH = 02h
+Return: CF clear if successful
+	    CH = hour (BCD)
+	    CL = minutes (BCD)
+	    DH = seconds (BCD)	
+	    DL = daylight savings flag (00h standard time, 01h daylight time)
+	CF set on error (i.e. clock not running or in middle of update)
+SeeAlso: AH=00h
+----------1A03-------------------------------
+INT 1A - TIME - SET REAL-TIME CLOCK TIME (AT,XT286,PS)
+	AH = 03h
+	CH = hour (BCD)
+	CL = minutes (BCD)
+	DH = seconds (BCD)
+	DL = daylight savings flag (00h standard time, 01h daylight time)
+SeeAlso: AH=01h
+----------1A04-------------------------------
+INT 1A - TIME - GET REAL-TIME CLOCK DATE (AT,XT286,PS)
+	AH = 04h
+Return: CF clear if successful
+	    CH = century (BCD)
+	    CL = year (BCD)
+	    DH = month (BCD)
+	    DL = day (BCD)
+	CF set on error
+SeeAlso: AH=02h,AH=05h,INT 21/AH=2Ah
+----------1A05-------------------------------
+INT 1A - TIME - SET REAL-TIME CLOCK DATE (AT,XT286,PS)
+	AH = 05h
+	CH = century (BCD)
+	CL = year (BCD)
+	DH = month (BCD)
+	DL = day (BCD)
+SeeAlso: AH=04h,INT 21/AH=2Bh
+----------1A06-------------------------------
+INT 1A - TIME - SET ALARM (AT,XT286,PS)
+	AH = 06h
+	CH = hour (BCD)
+	CL = minutes (BCD)
+	DH = seconds (BCD)
+Return: CF set on error (alarm already set or clock stopped for update)
+	CF clear if successful
+Note:	the alarm occurs every 24 hours until turned off, invoking INT 4A each
+	  time
+SeeAlso: AH=07h,INT 4A
+----------1A07-------------------------------
+INT 1A - TIME - CANCEL ALARM (AT,XT286,PS)
+	AH = 07h
+Return: alarm disabled
+Note:	does not disable the real-time clock's IRQ
+SeeAlso: AH=06h,INT 70
+
+If you wish to reset the system clock according to the RTC, call int 21h
+function 2Dh. Note that starting with DOS 3.3, this also influences the
+RTC!! See below.
+
+----------212C-------------------------------
+INT 21 - DOS 1+ - GET SYSTEM TIME
+	AH = 2Ch
+Return: CH = hour
+	CL = minute
+	DH = second
+	DL = 1/100 seconds
+Note:	on most systems, the resolution of the system clock is about 5/100sec,
+	  so returned times generally do not increment by 1
+	on some systems, DL may always return 00h
+SeeAlso: AH=2Ah,AH=2Dh,AH=E7h,INT 1A/AH=00h,INT 1A/AH=02h,INT 1A/AH=FEh
+SeeAlso: INT 2F/AX=120Dh
+----------212D-------------------------------
+INT 21 - DOS 1+ - SET SYSTEM TIME
+	AH = 2Dh
+	CH = hour
+	CL = minute
+	DH = second
+	DL = 1/100 seconds
+Return: AL = result
+	    00h successful
+	    FFh invalid time, system time unchanged
+Note:	DOS 3.3+ also sets CMOS clock
+SeeAlso: AH=2Bh"DOS",AH=2Ch,INT 1A/AH=01h,INT 1A/AH=03h,INT 1A/AH=FFh"AT&T"
+
+A better method to reset the system clock is to calculate the number of
+timer clicks since midnight and write it to the BIOS variable 0h:46Ch
+(or call int 1Ah). This does not affect the precision of the RTC like calls
+to 212D do.
+
+ 0h:46Ch	DWORD	Timer ticks since midnight
+ 0h:470h	BYTE	Timer overflow, non-zero if has counted past midnight
+
+----------1A00-------------------------------
+INT 1A - TIME - GET SYSTEM TIME
+	AH = 00h
+Return: CX:DX = number of clock ticks since midnight
+	AL = midnight flag, nonzero if midnight passed since time last read
+Notes:	there are approximately 18.2 clock ticks per second, 1800B0h per 24 hrs
+	IBM and many clone BIOSes set the flag for AL rather than incrementing
+	  it, leading to loss of a day if two consecutive midnights pass
+	  without a request for the time (e.g. if the system is on but idle)
+SeeAlso: AH=01h,AH=02h,INT 21/AH=2Ch
+----------1A01-------------------------------
+INT 1A - TIME - SET SYSTEM TIME
+	AH = 01h
+	CX:DX = number of clock ticks since midnight
+SeeAlso: AH=00h,AH=03h,INT 21/AH=2Dh
+
+BTW: the exact value is 18.2064819335 clicks per second (or 1193180/65536).
+You can calculate these values without floating point arithmetics!
+
+
+Ralf Brown's interrupt list is available from several ftp sites. Ask an archie
+server for "prog inter3". I think the actual version is 38.

@@ -1,0 +1,190 @@
+
+
+Shared memory blocks can be used for inter-client communication or
+simply to hold tables or subroutine libraries that are needed by more
+than one client.  Explicit use of shared blocks is necessary because
+each VM has its own linear address space, and thus cannot inspect or
+modify the memory owned by a client in another virtual machine.  The
+basic strategy for use of a shared memory block is as follows:
+
+<ul>
+
+<li> Allocate shared memory block;<p>
+
+<li> Establish addressability for the shared block;<p>
+
+<li> Make a successful serialization request for the shared block
+(i.e. obtain ownership or right of access to the block);<p>
+
+<li> Access the code or data in the shared block; <p>
+
+<li> Free the serialization of the shared block;<p>
+
+<li> Deallocate the shared memory block.<p>
+
+</ul>
+
+Shared memory blocks are allocated with <a href="api/310d00.html">Int 31H Function 0D00H</a>.  The
+client passes the address of a data structure that specifies the ASCIIZ
+name and requested size of the shared block to the host; the host
+returns the block's handle, linear base address, and actual size in
+the same structure.  The block's true size is determined by the first
+client to allocate the block, and the block will have the same linear
+address for all clients which allocate it. <p>
+
+After the shared block is allocated, the client must allocate one or
+more descriptors that will be used to address the block with <a
+href="api/310000.html">Int 31H Function 0000H</a>.  Once descriptor(s)
+have been allocated and initialized to point to a shared memory block
+through separate LDT management calls, the client has the physical
+capability to read, write, or execute addresses within the block as
+allowed by the access rights/type byte.  The client should synchronize
+with any other clients which might have addressability to the same
+block, to avoid race conditions or corruption of data.  This
+synchronization is accomplished with <a href="api/310d02.html">Int 31H
+Function 0D02H</a> (Serialize on Shared Memory) and <a
+href="api/310d03.html">Int 31H Function 0D03H</a> (Free Serialization
+on Shared Memory).  Serialization can be thought of as representing
+ownership or right of access to a shared memory block.<p>
+
+In essence, <a href="api/310d02.html">Int 31H Functions 0D02H</a> and
+<a href="api/310d03.html">0D03H</a> treat the handle of a shared
+memory block as a semaphore.  The client can request exclusive
+(read/write) or shared (read-only) serialization with <a
+href="api/310d02.html">Int 31H Function 0D02H</a>, and the host will
+grant the serialization if no other client has already obtained a
+conflicting serialization on the same memory block.  The client can
+then go ahead and manipulate the shared memory block, releasing the
+serialization with <a href="api/310d03.html">Int 31H Function
+0D03H</a> when it is finished using the block.  If the <a
+href="api/310d02.html">Int 31H Function 0D02H</a> serialization request
+fails, the client will either be suspended until the serialization is
+available, or the function will return with an error code, depending
+on the parameters supplied by the client. <p>
+
+The first paragraph (16 bytes) of the shared memory block (or the
+entire shared block, if smaller than 16 bytes) will always be
+initialized to zero on the first allocation and can be used by clients
+as an "area initialized" indicator.  For example, a shared memory
+block might be used by a suite of cooperating client programs to hold
+a table of static data or a subroutine library.  The first client to
+allocate the shared memory block can obtain exclusive ownership of the
+block with <a href="api/310d02.html">Int 31H Function 0D02H</a>, load
+the necessary data or code into the block from disk, set the first 16
+bytes of the block to a nonzero value, and finally release its
+ownership of the block with <a href="api/310d03.html">Int 31H Function
+0D03H</a>.  Other clients that allocate the shared memory block can
+check the "area initialized" indicator and know that the desired code
+or data is already present in memory. <p>
+
+When a client has finished using the shared memory block, it should
+deallocate the shared block with <a href="api/310d01.html">Int 31H
+Function 0D01H</a>.  After the block is deallocated, the linear
+addresses within the block are no longer valid for the current client,
+and may cause an exception if accessed.  However, the block is not
+actually destroyed until all clients which have allocated the block
+have also deallocated it. <p>
+
+Note that a client can make multiple (nested) allocation requests for
+the same shared memory block, and should assume that each allocation
+request will return a distinct handle.  The shared block will remain
+physically accessible to the client until each of its handles to the
+block have been deallocated.  Similarly, a client can make multiple
+serialization requests for the same block, and will retain "ownership"
+of the block until a corresponding number of deserialization requests
+have been issued.  Lastly, allocation of zero-length shared memory
+blocks is explicitly allowed, so that clients can use the handles
+resulting from such allocations as pure semaphores. <p>
+
+<b>Example:</b> The following code illustrates how shared memory can
+be used to load code and data that can be used by more than one DPMI
+client.  Note that no serialization calls are required if the memory
+is already initialized.
+
+<pre>
+memreqstruc struc
+length	dd	?			; number of bytes requested
+actual	dd	?			; number of bytes allocated
+handle	dd	?			; handle for shared memory block
+base	dd	?			; linear address of shared block
+nameptr	dp	?			; pointer to shared memory name
+	dw	0			; reserved, must be zero
+	dd	0			; reserved, must be zero
+memreqstruc ends
+
+memname	db	'MYBLOCK',0
+memreq	memreqstruc <>			; allocate request block
+
+	.
+	.
+	.
+	mov	word ptr memreq.length,2000h	; set reqeusted length
+	mov	word ptr memreq.length+2,0	; of shared block to 8 KB
+					; initialize nameptr
+	mov	dword ptr memreq.nameptr, offset memname
+	mov	word ptr memreq.nameptr+4, ds
+
+	mov	di,ds			; ES:DI = address of shared
+	mov	es,di			; memory request structure
+	mov	di,offset memreq
+	mov	ax,0d00h		; DPMI fxn 0D00H = allocate
+	<a href="api/310d00.html">int	31h</a>			; shared memory block
+	jc	error			; jump if allocation failed
+
+	mov	cx,1			; allocate one LDT descriptor
+	mov	ax,0			; using DPMI Function 0000h
+	<a href="api/310000.html">int	31h</a>
+	jc	error			; jump, no descriptor available
+
+	mov	bx,ax			; let BX = new selector
+	mov	dx,word ptr memreq.base		; let CX:DX = linear base
+	mov	cx,word ptr memreq.base+2	; address of shared block
+	mov	ax,0007h		; set descriptor base address
+	<a href="api/310007.html">int	31h</a>			; using DPMI Function 0007H
+	jc	error			; jump, function failed
+
+	mov	dx,word ptr memreq.actual	; set CX:DX = length-1
+	mov	cx,word ptr memreq.actual+2	; of shared memory block
+	sub	dx,0
+	sbb	cx,0			; (BX still = selector)
+	mov	ax,8			; set descriptor limit using
+	<a href="api/310008.html">int	31h</a>			; DPMI Function 0008H
+	jc	error			; jump, function failed
+
+	mov	es,bx			; ES = selector for shared block
+	mov	ax,es:[0]		; is block already initialized
+	or	ax,ax
+	jnz	@@1			; jump if it's initialized
+
+					; not initialized, get ownership
+					; of the shared memory block
+	mov	di,word ptr memreq.handle	; SI:DI = handle for
+	mov	si,word ptr memreq.handle+2	; shared memory block
+	mov	dx,0			; exclusive + wait for ownership
+	mov	ax,0d02h		; DPMI Fxn 0D02H = serialize
+	<a href="api/310d02.html">int	31h</a>
+	jc	error			; jump if serialization failed
+
+	mov	ax,es:	[0]		; check again if someone else
+	or	ax,ax			; already initialized block
+	jnz	@@2			; jump if it's initialized
+	
+	.
+	.				; load code into the shared
+	.				; memory block here...
+	.
+	
+@@2:					; now release ownership of
+					; the shared memory block
+	mov	di,word ptr memreq.handle	; SI:DI = handle for
+	mov	si,word ptr memreq.hanlde+2	; shared memory block
+	mov	dx,0			; serialization type = exclusive
+	mov	ax,0d03h		; DPMI Fxn 0D03H = release
+	<a href="api/310d03.html">int	31h</a>
+	jc	error			;  jump if serialization failed
+
+@@1:					; finished initializing the
+					; shared memory block
+</pre>
+
+

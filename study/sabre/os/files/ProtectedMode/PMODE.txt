@@ -1,0 +1,318 @@
+[ Article crossposted from comp.lang.asm.x86 ]
+[ Author was Jerzy Tarasiuk ]
+[ Posted on 25 May 1995 17:37:03 +0200 ]
+
+Real and Protected Modes.
+
+Beginning from 80286, Intel CPUs have ability to work in Protected Mode
+(older CPUs have Real Mode only). For compatibility reasons, all CPUs
+start in Real Mode after reset. Below are presented main differences
+between Real Mode and Protected modes for Intel CPUs. Note there are:
+Real Mode, Protected Mode, Virtual 8086 Mode (they will be frequently
+called RM, PM, VM86, respectively; also 286+(386+) will mean Intel
+80286(80386) or better).
+
+There are some differences between these modes in memory addressing
+(PM can address all memory, while RM can't unless it is set in PM on
+386+, and VM86 cannot unless using PM supporting it to remap memory
+- this way EMM386 works); instruction set (some instruction are not
+allowed in RM), privileges (something can be forbidden in PM for less
+privileged code, many operations are forbidden in VM86), interrupt
+handling. PM supports multitasking, PM can run tasks in VM86 (the
+VM86 cannot function alone, must have PM code supporting it; it works
+similarly 8086 CPU with few enhancements except interrupt servicing
+which goes through PM). PM cannot store data to code segment (unless
+by aliasing; MOV CS:[BX],AX is illegal in PM). VM86 and PM on 386+ can
+have selective I/O port access restrictions (some ports can be accessed
+without causing exception and other can't).
+
+
+Memory addressing and Paging.
+
+In any mode, opcode defines some offset and segment of referenced memory
+address, e.g. mov ax,es:[bx+si+1] - segment es, offset bx+si+1, push si
+- segment ss, offset sp-2, opcode itself is referenced by segment cs and
+offset ip; the address is translated to Linear Address by adding the
+offset to base of the segment and the Linear Address is then translated
+to Physical Address which is outputed by CPU on its address pins.
+
+In RM or VM86, the base is segment*10h; in PM the base is taken from
+descriptor table (LDT or GDT) and can have any value.
+The value in segment register is called "selector" and its bits 15-3
+specify offset in LDT or GDT (the offset is multiply of 8), bit 2 is 0
+for GDT, 1 for LDT, bits 1-0 specify RPL (Requested Privilege Level).
+
+Unless Paging (possible in PM and VM86, on 386+ only) is enabled,
+Physical Address = Linear. With Paging, low 12 bits of Linear Address
+go to Physical, other are used as index to two-level page tables
+(first bits 31-22 select page directory, then bits 21-12 select page).
+
+Paging can also restrict access to some pages (in a way non-privileged
+code can read it only or has no access at all), or define non-present
+pages which have assigned physical addresses and put in memory in a way
+transparent to program when access to their Linear Address is attempted.
+Note Linear Address space is 4GB on 386+, and probably no system has so
+much physical memory: Paging makes system able to simulate it has.
+
+Segment has also limit. Initially, the limit is 0FFFFh for all segment
+registers and cannot be changed in RM or VM86. In PM it is loaded from
+LDT or GDT when segment register is loaded. On 286 in PM the limit can
+be up to 0FFFFh, on 386+ in PM it can be up to 0FFFFFFFFh.
+Also, PM allows "expand down" segments which allow access from address
+limit+1 to maximum possible value of limit (depend on segment type).
+
+
+Privilege Levels and Rules.
+
+In RM, CPU has full privileges. In PM and VM86, they can be restricted.
+This reduces possibility of making disasters by bad code.
+
+Base rules: cannot access more privileged data or call less privileged
+code than own privilege (although can return to less privileged code).
+Additional: call to more privileged code cannot use any target address
+caller wants, it can use addresses specified by system only; call to
+more privileged code must change stack to make sure enough stack space
+is available for called code (so caller cannot cause crash in it).
+
+There are 4 levels: level 0 is full privilege (except Debug Registers,
+which can be protected from access even from level 0; some instructions
+are reserved for level 0 only), the bigger level the less privileges
+are. Few terms used for Privilege Levels: CPL - Current PL, DPL -
+Descriptor PL, RPL - Requested PL (in selector), IOPL (in flags) -
+max CPL allowing I/O sensitive opcodes (CLI, STI, PUSHF, POPF,...).
+
+Unless accessing Conforming Code segment, privilege rules require
+max(CPL,RPL)<=DPL. To execute code (by FAR CALL or JMP) need DPL<=CPL
+(note unless it is Conforming, must be DPL=CPL and RPL<=CPL) - cannot
+call less privileged procedure, for example. To transfer control to
+code with less PL (more privileged), must CALL via call gate (in such
+a case, need max(CPL,RPL)<=gate_DPL, but for code the gate refers to
+may be code_DPL<gate_DPL; the gate is entry in GDT or LDT; privilege
+rules require also target_code_DPL <= CPL for CALL, = for JMP), this
+also requires TR to point to valid TSS because it switches stack: old
+SS:[E]SP are pushed on new stack, then parameters (as defined in call
+gate) are pushed, finally CS:[E]IP are pushed. On return from the call
+CPU detects RPL of CS on stack > CPL and switches stack back (if =, no
+stack switch, < inhibited by privilege rules), for proper functioning
+parameter counts on RET and in call gate must match. For stack segment
+DPL must be equal CPL (so in more privileged mode no crash is possible
+due to incorrect stack setting in less privileged, and in the less
+privileged there is no access to more privileged mode stack).
+
+The RPL is for system to block possibility to pass a pointer from user
+code which is invalid in user mode and valid in system: system uses RPL
+as for user code and gets access violation error in such a case.
+It can be done using ARPL opcode which adjusts RPL for a selector, and
+sets ZF if changed (to inform OS invalid access might be attempted).
+OS uses it to set RPL of the pointer to CPL of the application code.
+
+It is possible to check what access having to a segment by opcodes like
+VERR, VERW, LAR, LSL. They all set ZF if having access, clear if not.
+First two simply verify R/W access, LAR gets bits defining access right
+for a segment, LSL gives the segment limit value. These opcodes allow
+checking what would cause access violation, instead getting the error.
+
+Some instructions are allowed at CPL=0 only. They are:
+Clear TaskÄSwitched Flag (CLTS), Halt Processor (HLT), loading some
+system registers (GDTR,IDTR,LDTR,MSW,TR), any access to CRx,DRx,TRx.
+Some other require CPL<=IOPL. They are: IN, INS, OUT, OUTS, CLI, STI.
+Also, POPF behavior depends on CPL: if CPL>0, IOPL and VM aren't
+changed by POPF, if CPL>IOPL, IF (interrupt enable) isn't changed.
+
+
+Interrupts.
+
+In every mode, there is an array containing information what action is
+to be taken in case of interrupt. Its first entry corresponds to INT 0,
+next to INT 1, and so on. It is called IDT(Interrupt Descriptor Table).
+In RM, each entry in the IDT is simply far address of interrupt service
+routine. Initially IDT is located at address 0 and has 100h entries
+(400h bytes; some CPU-s have its limit 0FFFFh but the remainder isn't
+accessible in RM); on pre-80286 CPUs the IDT address and size cannot be
+changed, on 286+ can load and store them using LIDT and SIDT opcodes.
+
+In PM the IDT has 8-byte entries which can be interrupt, trap or task
+gates. Trap differs from interrupt by leaving interrupt flag same as
+in interrupted code. Task gate causes calling another task. They all
+have DPLs and interrupt instruction causes General Protection error
+if CPL > interrupt or trap gate DPL. However, other interrupt sources
+have "CPL 0" - they can access any gate needed.
+
+Some conditions can cause an Exception. They are (for 80386): divide
+error (0), debug exceptions (1), non-maskable interrupt (2), breakpoint
+(3), overflow (4, on into opcode), bounds check (5, on bound opcode),
+invalid opcode (6), coprocessor not available (7), double fault (8,E),
+coprocessor segment overrun (9,P), invalid TSS (10,PE), segment not
+present (11,PE), stack error (12,E), general protection error (13,E),
+page fault (14,PE), coprocessor error (16); marked by P can occur in
+PM and VM86 only, marked by E push error code on stack if they occur
+in PM or VM86 (so stack is: error, IP, CS, flags; the error code is
+usually either 0 or selector causing the exception (in case selector is
+invalid or non-accessible), with flags on low order bits: bit 0 means
+external source, bit 1 IDT selector, bit 2 LDT; for page fault it is
+set of flags (bits 3-31 undefined): bit 0 set if page protection
+violation, 1 if writing, 2 if user mode), most of them push IP of
+opcode causing them, except 3,4,9 which push IP of next opcode.
+Note: interrupt cannot be serviced at PL>CPL (unless via task switch),
+attempt to do it causes General Protection error.
+
+Interrupt processing in PM is more complicated when interrupt handler
+has Privilege Level other than current code. It is handled similarly
+CALL via gate: stack is switched, new SS:SP are taken from TSS, old
+SS:SP are pushed on the new stack, then flags, CS, IP and eventually
+error code (for some exceptions) are pushed.
+In VM86 interrupt pushes GS,FS,DS,ES,SS,ESP,EFLAGS,CS,EIP (exception
+also error code) onto PL 0 stack. There is VM bit in EFLAGS set to tell
+interrupt occured in VM86. Note IDT must contain task gates and 80386
+trap or interrupt gates pointing to a non-conforming code segment with
+DPL=0 only - interrupt service must come through PL 0 or task switch.
+The VM86 itself has CPL 3 and is allowed in 386 task only.
+
+
+Descriptor Tables (PM only).
+
+Global Descriptor Table(GDT) can contain descriptors of any type except
+interrupt and trap gates. It is necessary for PM. First entry in GDT
+isn't used - it corresponds to null selector which can be loaded into
+segment register but causes exception if used for memory addressing.
+
+Local Descriptor Table(LDT) can contain "normal" segment descriptors
+(not e.g. TSS) and call or task gates only. Usually every task has its
+own LDT (changed on task switch). The LDT must have descriptor in GDT.
+
+Interrupt Descriptor Table(IDT) was discussed in "Interrupts" section.
+
+"Normal" segment descriptors are referenced when a segment register is
+loaded and they describe a memory area and give some access to it.
+Bit 2 of selector used selects table: 0 means GDT, 1 means LDT.
+Other descriptors can be Task State Segment(TSS), and gates. They can
+be referenced "as a code segment", e.g. by far jump or call and they
+cause transferring control to task or code segment referenced by them.
+It is kind of indirect jump or call (they contain target selector).
+TSS or gate pointing to TSS cause task switch. Gate can be used to
+transfer control to more privileged code not accessible directly.
+TSS can be also referenced by LTR (Load Task Register) opcode and it
+is done once during PM initialization. LDT descriptor can be loaded
+into LDTR(register) by LLDT opcode and usually it is done once.
+
+
+Segment and System Descriptors.
+
+The following segment types (in byte [descriptor+5]) are supported
+(for all bit 7 means present in memory, bits 5-6 keep DPL which says
+what is maximum CPL which can access the descriptor, the restriction is
+for all descriptors, not segments only, except conforming segments):
+
+10h+flags	- data: bit 1 - writable, bit 2 - expand down
+18h+flags	- code: bit 1 - readable, bit 2 - conforming
+
+for both, bit 0 is set by any access. The descriptor also contains
+limit in word [0] (in 386 segments extended to bits 0-3 of byte [6])
+and base in bytes [2..4] (in 386 segments extended to byte [7]).
+Byte [6] keeps few additional flags: bit 7 - granularity (limit is in
+4kB pages; e.g. limit 0 means 0..0FFFh accessible), bit 6 - 32-bit
+addressing (applies to code and stack - use EIP, ESP, makes expand down
+segment upper limit 4GB), bit 5 must be 0, bit 4 is for programmer.
+
+01h+flags	- TSS: bit 1 - busy, bit 3 - 386 TSS
+02h		- LDT
+04h+flags	- call gate
+05h		- task gate
+06h+flags	- interrupt gate: bit 0 - trap, bit 3 - 386.
+
+for all gates, word[2] keeps selector, word[0] and word[3] keep offset
+of called code (ignored for task gate), byte[4] keeps word count (0-31)
+for copying in case of inter-level call (call gate only, else ignored);
+TSS and LDT have base and limit in same form as code and data segments
+have, they can have bit 7 set in byte [6] to specify limit in pages.
+Word [6] should be 0 for the descriptor to mean the same on 286/386.
+
+LDT is similar GDT, except not all descriptor types are allowed.
+TSS holds entire task state (all registers: general, segment, flags,
+ip, ldtr); it also keeps link to caller TSS (valid if the task was
+activated by INT or CALL) and stacks (SS and [E]SP) for PL 0,1,2
+(they are used when more privileged code is invoked via gate from less
+privileged). 386 TSS has also debug trap bit (if set, causes INT 1 on
+task switch to the TSS), I/O bit map (saying which I/O addresses can
+be accessed when CPL>IOPL without General Protection exception), and
+CR3 value for the task (can remap memory on task switch).
+
+
+Page tables:
+
+both page directory and page table entries keep referenced address in
+bits 31-12, have bits 11-9 reserved for programmer, must have bits 8,7,
+4,3 set to 0; bit 5 is called A (accessed), it is set by CPU on access
+to the entry, bit 6 is called D (dirty), it is set if referenced memory
+is written; bit 0 is called P (present), all other are ignored if it is
+not set; bit 2 allows user (CPL=3) access if set, bit 1 allows user to
+write (together with bit 2 only), for CPL<3 read/write is allowed for
+any setting of bits 1 and 2 (no protection against system this way).
+Note page table entries used are usually cached by CPU: modifying them
+in memory may cause no mapping change until the cache is reloaded. The
+cache is flushed every time CR3 (which points to first page directory
+entry) is loaded. Bits 0-11 of CR3 must be 0 (directory page-aligned).
+Addressing through page tables: CR3+(Linear_Address SHR 20) AND 0FFCh
+is address in Page Directory, the entry at the address contains Page
+Table address; Page Table address + (Linear_Address SHR 10) AND 0FFCh
+is address in Page Table and the entry at the address contains base
+address of the page, combine it with bits 11-0 of Linear_Address and
+the result is Physical Address. In case of any error, CR2 is set to the
+Linear Address causing the error and error code explains what error.
+Note: if Paging is enabled, CR3 must keep Physical Address of Page
+Directory and all other addresses are Linear Addresses.
+
+
+Switching to Protected Mode or back to Real Mode:
+
+First: to get control in case of crash, need store in dword [0467h]
+address where control is to be passed, and put 0Ah in CMOS register 0Fh
+(by CLI; MOV AL,8Fh; OUT 70h,AL; (1us delay) MOV AL,0Ah; OUT 71h,AL;).
+Also: normally, some circuitry in PC compatibles disables address line
+A20; must enable it. If you use HIMEM, it can be enabled by a request
+to HIMEM. If you also have DOS=HIGH, it is usually enabled, as it is
+enabled by any DOS call. In other cases, you must send output port
+value to keyboard controller to enable it before switching to PM.
+
+Switch to PM: required is loading GDTR, then can enable protection by
+setting CR0/MSW bit 0 (MOV EAX,CR0; OR AL,1; MOV CR0,EAX; or SMSW AX;
+OR AL,1; LMSW AX; first on 386+, second on 286+); it is recommended
+to load IDTR immediately before or after mode switch (same IDT can't be
+valid in both modes); immediately after mode change should execute JMP
+to flush prefetch queue which may be partially decoded (the decoding
+may be mode dependent); need load CS and SS - they contain invalid
+selectors and e.g. interrupt causes them to be put on stack and crash
+on IRET; it is also recommended to load all segment registers (they can
+be loaded with 0 to contain invalid selector and cause exception if any
+of them is used to address memory) and LDTR; before first task switch
+must load TR (selector of valid free TSS descriptor; the TSS will be
+used to store state on task switch).
+
+These is also a BIOS call which switches to PM and changes external
+interrupt vector mapping (normally 1st controller has 08h..0Fh, 2nd
+70h..77h, the 1st conflicts with some CPU exceptions; however it is
+easy to distinguish external interrupt from an exception), it also
+enables address line A20. See INT 15h, AH=89h description.
+
+Returning to RM: it can be done by clearing bit 0 in CR0 but it needs
+some preparation: must disable paging (go to code/stack which has
+linear addresses same as physical, clear PG bit in CR0, clear CR3), go
+to code segment with limit=64k and load all segment registers except
+CS with valid descriptor of 64kB read/write expand-up byte-granular
+present segment (attribute byte=93h, extended attribute=0) - otherwise
+you can get RM with e.g. read-only or 32kB ES, which will soon cause
+crash. After clearing the bit 0 of CR0 execute far jump to load CS and
+flush prefetch queue and load segment registers for RM.
+
+This is not available on 80286 which has no CR0 register (the Protect
+Enable bit cannot be cleared by LMSW). The only way to get to RM again
+is resetting the CPU: it can be done by the following code: CLI;
+XOR CX,CX; wait_kbd_ctrlr_input_empty: IN AL,64h; TEST AL,2; LOOPNZ
+wait_kbd_ctrlr_input_empty; MOV AL,0FEh; OUT 64h,AL; HLT; or by CPU
+shutdown (resulting in case of exception while servicing double fault).
+
+Note most programs running system in VM86 provide interface to switch
+to PM and back to VM86, it is called VCPI (Virtual Control Program
+Interface), can be tested for presence and invoked by INT 67h,AH=0DEh.
+It requires 3 entries in GDT to be reserved for VCPI provider.
+

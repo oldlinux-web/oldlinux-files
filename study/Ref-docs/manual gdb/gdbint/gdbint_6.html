@@ -1,0 +1,874 @@
+<HTML>
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<!-- Created on October, 18  2002 by texi2html 1.64 -->
+<!-- 
+Written by: Lionel Cons <Lionel.Cons@cern.ch> (original author)
+            Karl Berry  <karl@freefriends.org>
+            Olaf Bachmann <obachman@mathematik.uni-kl.de>
+            and many others.
+Maintained by: Olaf Bachmann <obachman@mathematik.uni-kl.de>
+Send bugs and suggestions to <texi2html@mathematik.uni-kl.de>
+ 
+-->
+<HEAD>
+<TITLE>GDB Internals: Symbol Handling</TITLE>
+
+<META NAME="description" CONTENT="GDB Internals: Symbol Handling">
+<META NAME="keywords" CONTENT="GDB Internals: Symbol Handling">
+<META NAME="resource-type" CONTENT="document">
+<META NAME="distribution" CONTENT="global">
+<META NAME="Generator" CONTENT="texi2html 1.64">
+
+</HEAD>
+
+<BODY LANG="" BGCOLOR="#FFFFFF" TEXT="#000000" LINK="#0000FF" VLINK="#800080" ALINK="#FF0000">
+
+<A NAME="SEC37"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_5.html#SEC32"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC38"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_7.html#SEC61"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_7.html#SEC61"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H1> 6. Symbol Handling </H1>
+<!--docid::SEC37::-->
+<P>
+
+Symbols are a key part of GDB's operation.  Symbols include variables,
+functions, and types.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC38"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC37"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC39"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC37"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC37"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_7.html#SEC61"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H2> 6.1 Symbol Reading </H2>
+<!--docid::SEC38::-->
+<P>
+
+<A NAME="IDX91"></A>
+<A NAME="IDX92"></A>
+<A NAME="IDX93"></A>
+GDB reads symbols from <EM>symbol files</EM>.  The usual symbol
+file is the file containing the program which GDB is
+debugging.  GDB can be directed to use a different file for
+symbols (with the <SAMP>`symbol-file'</SAMP> command), and it can also read
+more symbols via the <SAMP>`add-file'</SAMP> and <SAMP>`load'</SAMP> commands, or while
+reading symbols from shared libraries.
+</P><P>
+
+<A NAME="IDX94"></A>
+Symbol files are initially opened by code in <TT>`symfile.c'</TT> using
+the BFD library (see section <A HREF="gdbint_12.html#SEC102">12. Support Libraries</A>).  BFD identifies the type
+of the file by examining its header.  <CODE>find_sym_fns</CODE> then uses
+this identification to locate a set of symbol-reading functions.
+</P><P>
+
+<A NAME="IDX95"></A>
+<A NAME="IDX96"></A>
+<A NAME="IDX97"></A>
+Symbol-reading modules identify themselves to GDB by calling
+<CODE>add_symtab_fns</CODE> during their module initialization.  The argument
+to <CODE>add_symtab_fns</CODE> is a <CODE>struct sym_fns</CODE> which contains the
+name (or name prefix) of the symbol format, the length of the prefix,
+and pointers to four functions.  These functions are called at various
+times to process symbol files whose identification matches the specified
+prefix.
+</P><P>
+
+The functions supplied by each module are:
+</P><P>
+
+<DL COMPACT>
+<DT><CODE><VAR>xyz</VAR>_symfile_init(struct sym_fns *sf)</CODE>
+<DD><P>
+
+<A NAME="IDX98"></A>
+Called from <CODE>symbol_file_add</CODE> when we are about to read a new
+symbol file.  This function should clean up any internal state (possibly
+resulting from half-read previous files, for example) and prepare to
+read a new symbol file.  Note that the symbol file which we are reading
+might be a new "main" symbol file, or might be a secondary symbol file
+whose symbols are being added to the existing symbol table.
+</P><P>
+
+The argument to <CODE><VAR>xyz</VAR>_symfile_init</CODE> is a newly allocated
+<CODE>struct sym_fns</CODE> whose <CODE>bfd</CODE> field contains the BFD for the
+new symbol file being read.  Its <CODE>private</CODE> field has been zeroed,
+and can be modified as desired.  Typically, a struct of private
+information will be <CODE>malloc</CODE>'d, and a pointer to it will be placed
+in the <CODE>private</CODE> field.
+</P><P>
+
+There is no result from <CODE><VAR>xyz</VAR>_symfile_init</CODE>, but it can call
+<CODE>error</CODE> if it detects an unavoidable problem.
+</P><P>
+
+<DT><CODE><VAR>xyz</VAR>_new_init()</CODE>
+<DD><P>
+
+Called from <CODE>symbol_file_add</CODE> when discarding existing symbols.
+This function needs only handle the symbol-reading module's internal
+state; the symbol table data structures visible to the rest of
+GDB will be discarded by <CODE>symbol_file_add</CODE>.  It has no
+arguments and no result.  It may be called after
+<CODE><VAR>xyz</VAR>_symfile_init</CODE>, if a new symbol table is being read, or
+may be called alone if all symbols are simply being discarded.
+</P><P>
+
+<DT><CODE><VAR>xyz</VAR>_symfile_read(struct sym_fns *sf, CORE_ADDR addr, int mainline)</CODE>
+<DD><P>
+
+Called from <CODE>symbol_file_add</CODE> to actually read the symbols from a
+symbol-file into a set of psymtabs or symtabs.
+</P><P>
+
+<CODE>sf</CODE> points to the <CODE>struct sym_fns</CODE> originally passed to
+<CODE><VAR>xyz</VAR>_sym_init</CODE> for possible initialization.  <CODE>addr</CODE> is
+the offset between the file's specified start address and its true
+address in memory.  <CODE>mainline</CODE> is 1 if this is the main symbol
+table being read, and 0 if a secondary symbol file (e.g. shared library
+or dynamically loaded file) is being read.</DL>
+<P>
+
+In addition, if a symbol-reading module creates psymtabs when
+<VAR>xyz</VAR>_symfile_read is called, these psymtabs will contain a pointer
+to a function <CODE><VAR>xyz</VAR>_psymtab_to_symtab</CODE>, which can be called
+from any point in the GDB symbol-handling code.
+</P><P>
+
+<DL COMPACT>
+<DT><CODE><VAR>xyz</VAR>_psymtab_to_symtab (struct partial_symtab *pst)</CODE>
+<DD><P>
+
+Called from <CODE>psymtab_to_symtab</CODE> (or the <CODE>PSYMTAB_TO_SYMTAB</CODE> macro) if
+the psymtab has not already been read in and had its <CODE>pst-&#62;symtab</CODE>
+pointer set.  The argument is the psymtab to be fleshed-out into a
+symtab.  Upon return, <CODE>pst-&#62;readin</CODE> should have been set to 1, and
+<CODE>pst-&#62;symtab</CODE> should contain a pointer to the new corresponding symtab, or
+zero if there were no symbols in that part of the symbol file.
+</DL>
+<P>
+
+<HR SIZE="6">
+<A NAME="SEC39"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC38"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC40"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC40"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC37"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_7.html#SEC61"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H2> 6.2 Partial Symbol Tables </H2>
+<!--docid::SEC39::-->
+<P>
+
+GDB has three types of symbol tables:
+</P><P>
+
+<UL>
+<A NAME="IDX99"></A>
+<A NAME="IDX100"></A>
+<LI>
+Full symbol tables (<EM>symtabs</EM>).  These contain the main
+information about symbols and addresses.
+<P>
+
+<A NAME="IDX101"></A>
+<LI>
+Partial symbol tables (<EM>psymtabs</EM>).  These contain enough
+information to know when to read the corresponding part of the full
+symbol table.
+<P>
+
+<A NAME="IDX102"></A>
+<A NAME="IDX103"></A>
+<LI>
+Minimal symbol tables (<EM>msymtabs</EM>).  These contain information
+gleaned from non-debugging symbols.
+</UL>
+<P>
+
+<A NAME="IDX104"></A>
+This section describes partial symbol tables.
+</P><P>
+
+A psymtab is constructed by doing a very quick pass over an executable
+file's debugging information.  Small amounts of information are
+extracted--enough to identify which parts of the symbol table will
+need to be re-read and fully digested later, when the user needs the
+information.  The speed of this pass causes GDB to start up very
+quickly.  Later, as the detailed rereading occurs, it occurs in small
+pieces, at various times, and the delay therefrom is mostly invisible to
+the user.
+</P><P>
+
+The symbols that show up in a file's psymtab should be, roughly, those
+visible to the debugger's user when the program is not running code from
+that file.  These include external symbols and types, static symbols and
+types, and <CODE>enum</CODE> values declared at file scope.
+</P><P>
+
+The psymtab also contains the range of instruction addresses that the
+full symbol table would represent.
+</P><P>
+
+<A NAME="IDX105"></A>
+<A NAME="IDX106"></A>
+The idea is that there are only two ways for the user (or much of the
+code in the debugger) to reference a symbol:
+</P><P>
+
+<UL>
+<A NAME="IDX107"></A>
+<A NAME="IDX108"></A>
+<LI>
+By its address (e.g. execution stops at some address which is inside a
+function in this file).  The address will be noticed to be in the
+range of this psymtab, and the full symtab will be read in.
+<CODE>find_pc_function</CODE>, <CODE>find_pc_line</CODE>, and other
+<CODE>find_pc_<small>...</small></CODE> functions handle this.
+<P>
+
+<A NAME="IDX109"></A>
+<LI>
+By its name
+(e.g. the user asks to print a variable, or set a breakpoint on a
+function).  Global names and file-scope names will be found in the
+psymtab, which will cause the symtab to be pulled in.  Local names will
+have to be qualified by a global name, or a file-scope name, in which
+case we will have already read in the symtab as we evaluated the
+qualifier.  Or, a local symbol can be referenced when we are "in" a
+local scope, in which case the first case applies.  <CODE>lookup_symbol</CODE>
+does most of the work here.
+</UL>
+<P>
+
+The only reason that psymtabs exist is to cause a symtab to be read in
+at the right moment.  Any symbol that can be elided from a psymtab,
+while still causing that to happen, should not appear in it.  Since
+psymtabs don't have the idea of scope, you can't put local symbols in
+them anyway.  Psymtabs don't have the idea of the type of a symbol,
+either, so types need not appear, unless they will be referenced by
+name.
+</P><P>
+
+It is a bug for GDB to behave one way when only a psymtab has
+been read, and another way if the corresponding symtab has been read
+in.  Such bugs are typically caused by a psymtab that does not contain
+all the visible symbols, or which has the wrong instruction address
+ranges.
+</P><P>
+
+The psymtab for a particular section of a symbol file (objfile) could be
+thrown away after the symtab has been read in.  The symtab should always
+be searched before the psymtab, so the psymtab will never be used (in a
+bug-free environment).  Currently, psymtabs are allocated on an obstack,
+and all the psymbols themselves are allocated in a pair of large arrays
+on an obstack, so there is little to be gained by trying to free them
+unless you want to do a lot more work.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC40"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC39"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC41"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC44"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC37"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC44"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H2> 6.3 Types </H2>
+<!--docid::SEC40::-->
+<P>
+
+<HR SIZE="6">
+<A NAME="SEC41"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC40"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC42"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[ &lt;&lt; ]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[ &gt;&gt; ]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> Fundamental Types (e.g., <CODE>FT_VOID</CODE>, <CODE>FT_BOOLEAN</CODE>). </H3>
+<!--docid::SEC41::-->
+<P>
+
+<A NAME="IDX110"></A>
+These are the fundamental types that GDB uses internally.  Fundamental
+types from the various debugging formats (stabs, ELF, etc) are mapped
+into one of these.  They are basically a union of all fundamental types
+that GDB knows about for all the languages that GDB
+knows about.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC42"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC41"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC43"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[ &lt;&lt; ]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[ &gt;&gt; ]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> Type Codes (e.g., <CODE>TYPE_CODE_PTR</CODE>, <CODE>TYPE_CODE_ARRAY</CODE>). </H3>
+<!--docid::SEC42::-->
+<P>
+
+<A NAME="IDX111"></A>
+Each time GDB builds an internal type, it marks it with one
+of these types.  The type may be a fundamental type, such as
+<CODE>TYPE_CODE_INT</CODE>, or a derived type, such as <CODE>TYPE_CODE_PTR</CODE>
+which is a pointer to another type.  Typically, several <CODE>FT_*</CODE>
+types map to one <CODE>TYPE_CODE_*</CODE> type, and are distinguished by
+other members of the type struct, such as whether the type is signed
+or unsigned, and how many bits it uses.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC43"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC42"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC44"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[ &lt;&lt; ]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[ &gt;&gt; ]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> Builtin Types (e.g., <CODE>builtin_type_void</CODE>, <CODE>builtin_type_char</CODE>). </H3>
+<!--docid::SEC43::-->
+<P>
+
+These are instances of type structs that roughly correspond to
+fundamental types and are created as global types for GDB to
+use for various ugly historical reasons.  We eventually want to
+eliminate these.  Note for example that <CODE>builtin_type_int</CODE>
+initialized in <TT>`gdbtypes.c'</TT> is basically the same as a
+<CODE>TYPE_CODE_INT</CODE> type that is initialized in <TT>`c-lang.c'</TT> for
+an <CODE>FT_INTEGER</CODE> fundamental type.  The difference is that the
+<CODE>builtin_type</CODE> is not associated with any particular objfile, and
+only one instance exists, while <TT>`c-lang.c'</TT> builds as many
+<CODE>TYPE_CODE_INT</CODE> types as needed, with each one associated with
+some particular objfile.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC44"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC43"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC45"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC53"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC37"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC53"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H2> 6.4 Object File Formats </H2>
+<!--docid::SEC44::-->
+<P>
+
+<HR SIZE="6">
+<A NAME="SEC45"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC44"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC46"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC53"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC44"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC53"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 6.4.1 a.out </H3>
+<!--docid::SEC45::-->
+<P>
+
+<A NAME="IDX112"></A>
+The <CODE>a.out</CODE> format is the original file format for Unix.  It
+consists of three sections: <CODE>text</CODE>, <CODE>data</CODE>, and <CODE>bss</CODE>,
+which are for program code, initialized data, and uninitialized data,
+respectively.
+</P><P>
+
+The <CODE>a.out</CODE> format is so simple that it doesn't have any reserved
+place for debugging information.  (Hey, the original Unix hackers used
+<SAMP>`adb'</SAMP>, which is a machine-language debugger!)  The only debugging
+format for <CODE>a.out</CODE> is stabs, which is encoded as a set of normal
+symbols with distinctive attributes.
+</P><P>
+
+The basic <CODE>a.out</CODE> reader is in <TT>`dbxread.c'</TT>.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC46"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC45"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC47"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC47"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC44"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC53"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 6.4.2 COFF </H3>
+<!--docid::SEC46::-->
+<P>
+
+<A NAME="IDX113"></A>
+The COFF format was introduced with System V Release 3 (SVR3) Unix.
+COFF files may have multiple sections, each prefixed by a header.  The
+number of sections is limited.
+</P><P>
+
+The COFF specification includes support for debugging.  Although this
+was a step forward, the debugging information was woefully limited.  For
+instance, it was not possible to represent code that came from an
+included file.
+</P><P>
+
+The COFF reader is in <TT>`coffread.c'</TT>.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC47"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC46"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC48"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC48"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC44"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC53"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 6.4.3 ECOFF </H3>
+<!--docid::SEC47::-->
+<P>
+
+<A NAME="IDX114"></A>
+ECOFF is an extended COFF originally introduced for Mips and Alpha
+workstations.
+</P><P>
+
+The basic ECOFF reader is in <TT>`mipsread.c'</TT>.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC48"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC47"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC49"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC49"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC44"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC53"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 6.4.4 XCOFF </H3>
+<!--docid::SEC48::-->
+<P>
+
+<A NAME="IDX115"></A>
+The IBM RS/6000 running AIX uses an object file format called XCOFF.
+The COFF sections, symbols, and line numbers are used, but debugging
+symbols are <CODE>dbx</CODE>-style stabs whose strings are located in the
+<CODE>.debug</CODE> section (rather than the string table).  For more
+information, see section `Top' in <CITE>The Stabs Debugging Format</CITE>.
+</P><P>
+
+The shared library scheme has a clean interface for figuring out what
+shared libraries are in use, but the catch is that everything which
+refers to addresses (symbol tables and breakpoints at least) needs to be
+relocated for both shared libraries and the main executable.  At least
+using the standard mechanism this can only be done once the program has
+been run (or the core file has been read).
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC49"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC48"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC50"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC50"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC44"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC53"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 6.4.5 PE </H3>
+<!--docid::SEC49::-->
+<P>
+
+<A NAME="IDX116"></A>
+Windows 95 and NT use the PE (<EM>Portable Executable</EM>) format for their
+executables.  PE is basically COFF with additional headers.
+</P><P>
+
+While BFD includes special PE support, GDB needs only the basic
+COFF reader.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC50"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC49"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC51"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC51"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC44"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC53"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 6.4.6 ELF </H3>
+<!--docid::SEC50::-->
+<P>
+
+<A NAME="IDX117"></A>
+The ELF format came with System V Release 4 (SVR4) Unix.  ELF is similar
+to COFF in being organized into a number of sections, but it removes
+many of COFF's limitations.
+</P><P>
+
+The basic ELF reader is in <TT>`elfread.c'</TT>.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC51"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC50"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC52"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC52"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC44"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC53"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 6.4.7 SOM </H3>
+<!--docid::SEC51::-->
+<P>
+
+<A NAME="IDX118"></A>
+SOM is HP's object file and debug format (not to be confused with IBM's
+SOM, which is a cross-language ABI).
+</P><P>
+
+The SOM reader is in <TT>`hpread.c'</TT>.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC52"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC51"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC53"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC53"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC44"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC53"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 6.4.8 Other File Formats </H3>
+<!--docid::SEC52::-->
+<P>
+
+<A NAME="IDX119"></A>
+Other file formats that have been supported by GDB include Netware
+Loadable Modules (<TT>`nlmread.c'</TT>).
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC53"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC52"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC54"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC60"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC37"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC60"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H2> 6.5 Debugging File Formats </H2>
+<!--docid::SEC53::-->
+<P>
+
+This section describes characteristics of debugging information that
+are independent of the object file format.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC54"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC53"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC55"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC60"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC53"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC60"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 6.5.1 stabs </H3>
+<!--docid::SEC54::-->
+<P>
+
+<A NAME="IDX120"></A>
+<CODE>stabs</CODE> started out as special symbols within the <CODE>a.out</CODE>
+format.  Since then, it has been encapsulated into other file
+formats, such as COFF and ELF.
+</P><P>
+
+While <TT>`dbxread.c'</TT> does some of the basic stab processing,
+including for encapsulated versions, <TT>`stabsread.c'</TT> does
+the real work.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC55"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC54"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC56"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC56"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC53"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC60"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 6.5.2 COFF </H3>
+<!--docid::SEC55::-->
+<P>
+
+<A NAME="IDX121"></A>
+The basic COFF definition includes debugging information.  The level
+of support is minimal and non-extensible, and is not often used.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC56"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC55"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC57"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC57"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC53"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC60"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 6.5.3 Mips debug (Third Eye) </H3>
+<!--docid::SEC56::-->
+<P>
+
+<A NAME="IDX122"></A>
+ECOFF includes a definition of a special debug format.
+</P><P>
+
+The file <TT>`mdebugread.c'</TT> implements reading for this format.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC57"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC56"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC58"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC58"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC53"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC60"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 6.5.4 DWARF 1 </H3>
+<!--docid::SEC57::-->
+<P>
+
+<A NAME="IDX123"></A>
+DWARF 1 is a debugging format that was originally designed to be
+used with ELF in SVR4 systems.
+</P><P>
+
+The DWARF 1 reader is in <TT>`dwarfread.c'</TT>.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC58"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC57"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC59"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC59"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC53"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC60"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 6.5.5 DWARF 2 </H3>
+<!--docid::SEC58::-->
+<P>
+
+<A NAME="IDX124"></A>
+DWARF 2 is an improved but incompatible version of DWARF 1.
+</P><P>
+
+The DWARF 2 reader is in <TT>`dwarf2read.c'</TT>.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC59"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC58"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC60"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC60"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC53"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC60"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H3> 6.5.6 SOM </H3>
+<!--docid::SEC59::-->
+<P>
+
+<A NAME="IDX125"></A>
+Like COFF, the SOM definition includes debugging information.
+</P><P>
+
+<HR SIZE="6">
+<A NAME="SEC60"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC59"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_7.html#SEC61"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC37"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC37"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_7.html#SEC61"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H2> 6.6 Adding a New Symbol Reader to GDB </H2>
+<!--docid::SEC60::-->
+<P>
+
+<A NAME="IDX126"></A>
+If you are using an existing object file format (<CODE>a.out</CODE>, COFF, ELF, etc),
+there is probably little to be done.
+</P><P>
+
+If you need to add a new object file format, you must first add it to
+BFD.  This is beyond the scope of this document.
+</P><P>
+
+You must then arrange for the BFD code to provide access to the
+debugging symbols.  Generally GDB will have to call swapping routines
+from BFD and a few other BFD internal routines to locate the debugging
+information.  As much as possible, GDB should not depend on the BFD
+internal data structures.
+</P><P>
+
+For some targets (e.g., COFF), there is a special transfer vector used
+to call swapping routines, since the external data structures on various
+platforms have different sizes and layouts.  Specialized routines that
+will only ever be implemented by one object file format may be called
+directly.  This interface should be described in a file
+<TT>`bfd/lib<VAR>xyz</VAR>.h'</TT>, which is included by GDB.
+</P><P>
+
+<A NAME="Language Support"></A>
+</P><P>
+
+<HR SIZE="6">
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_6.html#SEC37"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_7.html#SEC61"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_19.html#SEC186">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdbint_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<BR>  
+<FONT SIZE="-1">
+
+<address>
+
+<p>Please send FSF &amp; GNU inquiries &amp; questions to <a
+href="mailto:gnu@gnu.org">gnu@gnu.org</a>.  There are also <a
+href="http://www.gnu.org/home.html#ContactInfo">other ways to
+contact</a> the FSF.</p>
+
+<p>These pages are maintained by <a
+href="http://www.gnu.org/software/gdb/">the GDB developers</a>.</p>
+
+<p>Copyright Free Software Foundation, Inc., 59 Temple Place - Suite
+330, Boston, MA 02111, USA.</p>
+
+<p>Verbatim copying and distribution of this entire article is
+permitted in any medium, provided this notice is preserved.</p>
+
+</address>
+
+This document was generated
+by <I>GDB Administrator</I> on <I>October, 18  2002</I>
+using <A HREF="http://www.mathematik.uni-kl.de/~obachman/Texi2html
+"><I>texi2html</I></A>
+
+</BODY>
+</HTML>
