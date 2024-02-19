@@ -1,0 +1,329 @@
+This fix repairs an insidious problem with the make command that plagues
+people with fast machines.  ("Fast" being defined as faster than what
+KJB has been using until now, i.e. better than a 486/66.)  The problem
+is that make doesn't add everything to the library if 'make install' is
+run to rebuild /usr/src/lib/ from scratch.  It may happen that the next
+bit of the library is compiled in the same second as a previous bit.
+The new bit doesn't look new (same timestamp), and is thus not added.
+
+This fix also adds an "include some-file" statement to the makefile
+syntax that allows one to include the contents of one makefile into
+another.  KJB happened to have implemented this feature when he fixed
+the time bug.
+
+To apply this fix and recompile make do the following as bin:
+
+	! cd /usr
+	! patch -p0 < "this-file"
+
+	! cp -p /usr/bin/make /usr/bin/make.old    # Just in case.
+	! cd src/commands/make
+	! make install
+
+You will find several files in the make directory that end in ~ that are
+the originals of the patched files.  You can delete them, and the
+make.old binary once you have verified that the new make works.  (That
+make is needed to remake make should ring your "be careful" bells.)
+
+diff -c -r /save/std/2.0.0/src/commands/make/h.h ./src/commands/make/h.h
+*** /save/std/2.0.0/src/commands/make/h.h	Sat Nov 13 14:37:40 1993
+--- ./src/commands/make/h.h	Sat Jan 18 15:52:02 1997
+***************
+*** 28,33 ****
+--- 28,34 ----
+  #include <time.h>
+  #include <utime.h>
+  #include <stdio.h>
++ #include <limits.h>
+  #endif
+  
+  #ifdef eon
+***************
+*** 221,227 ****
+  EXTERN bool  quest    INIT(FALSE); /*  Question up-to-dateness of file  */
+  EXTERN bool  useenv   INIT(FALSE); /*  Env. macro def. overwrite makefile def.*/
+  EXTERN bool  dbginfo  INIT(FALSE); /*  Print lot of debugging information */
+! EXTERN bool  ambigmac INIT(FALSE); /*  guess undef. ambiguous macros (*,<) */
+  EXTERN struct name  *firstname;
+  EXTERN char         *str1;
+  EXTERN char         *str2;
+--- 222,228 ----
+  EXTERN bool  quest    INIT(FALSE); /*  Question up-to-dateness of file  */
+  EXTERN bool  useenv   INIT(FALSE); /*  Env. macro def. overwrite makefile def.*/
+  EXTERN bool  dbginfo  INIT(FALSE); /*  Print lot of debugging information */
+! EXTERN bool  ambigmac INIT(TRUE);  /*  guess undef. ambiguous macros (*,<) */
+  EXTERN struct name  *firstname;
+  EXTERN char         *str1;
+  EXTERN char         *str2;
+***************
+*** 232,237 ****
+--- 233,239 ----
+  EXTERN int           maxsuffarray INIT(0);   /* last used entry in suffarray */
+  EXTERN struct macro *macrohead;
+  EXTERN bool          expmake; /* TRUE if $(MAKE) has been expanded */
++ EXTERN char	    *makefile;     /*  The make file  */
+  EXTERN int           lineno;
+  
+  #ifdef tos
+diff -c -r /save/std/2.0.0/src/commands/make/input.c ./src/commands/make/input.c
+*** /save/std/2.0.0/src/commands/make/input.c	Mon Dec 21 18:56:29 1992
+--- ./src/commands/make/input.c	Sat Nov 23 12:08:22 1996
+***************
+*** 346,351 ****
+--- 346,380 ----
+  	expand(&str1s);
+  	p = str1;
+  
++ 	while (isspace(*p))  p++;
++ 
++ 	/* include? */
++ 	if (strncmp(p, "include", 7) == 0 && isspace(p[7])) {
++ 		char *old_makefile = makefile;
++ 		int old_lineno = lineno;
++ 		FILE *ifd;
++ 
++ 		if ((q = malloc(strlen(p+8)+1)) == (char *)0)
++ 			fatal("No memory for include",(char *)0,0);
++ 
++ 		strcpy(q, p+8);
++ 		p = q;
++ 		while ((makefile = gettok(&q)) != (char *)0) {
++ 			if ((ifd = fopen(makefile, "r")) == (FILE *)0)
++ 				fatal("Can't open %s: %s", makefile, errno);
++ 			lineno = 0;
++ 			input(ifd);
++ 			fclose(ifd);
++ 		}
++ 		free(p);
++ 		makefile = old_makefile;
++ 		lineno = old_lineno;
++ 
++ 		if (getline(&str1s, fd))
++ 			return;
++ 		continue;
++ 	}
++ 
+  	while (((q = strchr(p, ':')) != (char *)0) &&
+  	    (p != q) && (q[-1] == '\\'))	/*  Find dependents  */
+  	{
+diff -c -r /save/std/2.0.0/src/commands/make/main.c ./src/commands/make/main.c
+*** /save/std/2.0.0/src/commands/make/main.c	Wed Mar 09 12:39:05 1994
+--- ./src/commands/make/main.c	Sat Nov 23 12:07:25 1996
+***************
+*** 44,50 ****
+  
+  static char version[]= "2.0";
+  
+- static char *makefile;      /*  The make file  */
+  static FILE *ifd;           /*  Input file desciptor  */
+  static char *ptrmakeflags;
+  
+--- 44,49 ----
+***************
+*** 141,153 ****
+    else if (!makefile) {    /*  If no file, then use default */
+  	if ((ifd = fopen(DEFN1, "r")) == (FILE *)0) {
+  		if (errno != MNOENT || !DEFN2)
+! 			fatal("Can't open %s; error %02x", DEFN1, errno);
+  		else if ((ifd = fopen(DEFN2, "r")) == (FILE *)0)
+! 			fatal("Can't open %s; error %02x", DEFN2, errno);
+  	}
+    }
+    else if ((ifd = fopen(makefile, "r")) == (FILE *)0)
+! 	fatal("Can't open %s; error %2x", makefile, errno);
+  
+    init();
+  
+--- 140,152 ----
+    else if (!makefile) {    /*  If no file, then use default */
+  	if ((ifd = fopen(DEFN1, "r")) == (FILE *)0) {
+  		if (errno != MNOENT || !DEFN2)
+! 			fatal("Can't open %s: %s", DEFN1, errno);
+  		else if ((ifd = fopen(DEFN2, "r")) == (FILE *)0)
+! 			fatal("Can't open %s: %s", DEFN2, errno);
+  	}
+    }
+    else if ((ifd = fopen(makefile, "r")) == (FILE *)0)
+! 	fatal("Can't open %s: %s", makefile, errno);
+  
+    init();
+  
+***************
+*** 283,289 ****
+  int   a2;
+  {
+    fprintf(stderr, "%s: ", myname);
+!   fprintf(stderr, msg, a1, a2);
+    fputc('\n', stderr);
+    exit(1);
+  }
+--- 282,288 ----
+  int   a2;
+  {
+    fprintf(stderr, "%s: ", myname);
+!   fprintf(stderr, msg, a1, strerror(a2));
+    fputc('\n', stderr);
+    exit(1);
+  }
+diff -c -r /save/std/2.0.0/src/commands/make/make.c ./src/commands/make/make.c
+*** /save/std/2.0.0/src/commands/make/make.c	Tue Feb 13 19:52:22 1996
+--- ./src/commands/make/make.c	Sat Jan 18 15:50:59 1997
+***************
+*** 24,29 ****
+--- 24,32 ----
+  
+  #include "h.h"
+  
++ /* Files made with a make rule newer than the youngest file. */
++ #define NEWER	((time_t) -1 < 0 ? (time_t) LONG_MAX : (time_t) -1)
++ 
+  static bool  execflag;
+  
+  /*
+***************
+*** 68,74 ****
+  #ifdef unix
+  /*
+   *    Make a file look very outdated after an error trying to make it.
+!  *    This keeps hard links intact.  (kjb)
+   */
+  int makeold(name) char *name;
+  {
+--- 71,77 ----
+  #ifdef unix
+  /*
+   *    Make a file look very outdated after an error trying to make it.
+!  *    Don't remove, this keeps hard links intact.  (kjb)
+   */
+  int makeold(name) char *name;
+  {
+***************
+*** 390,396 ****
+    }
+    if (r < 0) {
+  	if (errno != ENOENT)
+! 		fatal("Can't open %s; error %d", np->n_name, errno);
+  
+  	np->n_time = 0L;
+    } else {
+--- 393,399 ----
+    }
+    if (r < 0) {
+  	if (errno != ENOENT)
+! 		fatal("Can't open %s: %s", np->n_name, errno);
+  
+  	np->n_time = 0L;
+    } else {
+***************
+*** 418,429 ****
+  
+    if ((fd = open(np->n_name, 0)) < 0) {
+  	if (errno != ER_NOTF)
+! 		fatal("Can't open %s; error %02x", np->n_name, errno);
+  
+  	np->n_time = 0L;
+    }
+    else if (getstat(fd, &info) < 0)
+! 	fatal("Can't getstat %s; error %02x", np->n_name, errno);
+    else {
+  	np->n_time = info.st_mod;
+  	np->n_flag |= N_EXISTS;
+--- 421,432 ----
+  
+    if ((fd = open(np->n_name, 0)) < 0) {
+  	if (errno != ER_NOTF)
+! 		fatal("Can't open %s: %s", np->n_name, errno);
+  
+  	np->n_time = 0L;
+    }
+    else if (getstat(fd, &info) < 0)
+! 	fatal("Can't getstat %s: %s", np->n_name, errno);
+    else {
+  	np->n_time = info.st_mod;
+  	np->n_flag |= N_EXISTS;
+***************
+*** 437,448 ****
+  
+    if ((fd = open(np->n_name, 0)) < 0) {
+    if (errno != E_PNNF)
+! 		fatal("Can't open %s; error %02x", np->n_name, errno);
+  
+  	np->n_time = 0L;
+    }
+    else if (getmdate(fd, &info) < 0)
+! 	fatal("Can't getstat %s; error %02x", np->n_name, errno);
+    else {
+  	np->n_time = cnvtime(&info);
+  	np->n_flag |= N_EXISTS;
+--- 440,451 ----
+  
+    if ((fd = open(np->n_name, 0)) < 0) {
+    if (errno != E_PNNF)
+! 		fatal("Can't open %s: %s", np->n_name, errno);
+  
+  	np->n_time = 0L;
+    }
+    else if (getmdate(fd, &info) < 0)
+! 	fatal("Can't getstat %s: %s", np->n_name, errno);
+    else {
+  	np->n_time = cnvtime(&info);
+  	np->n_flag |= N_EXISTS;
+***************
+*** 584,601 ****
+       time_t t;
+  
+       t = np->n_time;
+!      time(&np->n_time);
+       return (t < dtime);
+    }
+    else if ((np->n_time < dtime || !( np->n_flag & N_EXISTS))
+                 && !(np->n_flag & N_DOUBLE)) {
+       execflag = FALSE;
+       make1(np, (struct line *)0, qdp, basename, inputname); /* free()'s qdp */
+!      time(&np->n_time);
+       if ( execflag) np->n_flag |= N_EXEC;
+    }
+    else if ( np->n_flag & N_EXEC ) {
+!      time(&np->n_time);
+    }
+  
+    if (dbginfo) {
+--- 587,604 ----
+       time_t t;
+  
+       t = np->n_time;
+!      np->n_time = NEWER;
+       return (t < dtime);
+    }
+    else if ((np->n_time < dtime || !( np->n_flag & N_EXISTS))
+                 && !(np->n_flag & N_DOUBLE)) {
+       execflag = FALSE;
+       make1(np, (struct line *)0, qdp, basename, inputname); /* free()'s qdp */
+!      np->n_time = NEWER;
+       if ( execflag) np->n_flag |= N_EXEC;
+    }
+    else if ( np->n_flag & N_EXEC ) {
+!      np->n_time = NEWER;
+    }
+  
+    if (dbginfo) {
+diff -c -r /save/std/2.0.0/src/commands/make/reader.c ./src/commands/make/reader.c
+*** /save/std/2.0.0/src/commands/make/reader.c	Mon Nov 15 20:12:14 1993
+--- ./src/commands/make/reader.c	Sat Nov 23 11:37:41 1996
+***************
+*** 28,34 ****
+  {
+    fprintf(stderr, "%s: ", myname);
+    fprintf(stderr, msg, a1);
+!   if (lineno)  fprintf(stderr, " near line %d", lineno);
+    fputc('\n', stderr);
+    exit(1);
+  }
+--- 28,34 ----
+  {
+    fprintf(stderr, "%s: ", myname);
+    fprintf(stderr, msg, a1);
+!   if (lineno)  fprintf(stderr, " in %s near line %d", makefile, lineno);
+    fputc('\n', stderr);
+    exit(1);
+  }

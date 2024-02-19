@@ -1,0 +1,57 @@
+This fix repairs a bug in the code handling the resetting of an Adaptec
+host adapter.  Some adapters, notably the old 1540A type, do not set all
+the expected status bits immediately after the reset is done.  This will
+keep the driver from recognizing the card.
+
+To apply this fix do the following as bin:
+
+	! cd /usr
+	! patch -p0 < "this-file"
+
+And build a new kernel normally.  You will find the original aha_scsi.c
+file renamed to aha_scsi.c~ in src/kernel/.  You may wish to delete it
+to clean things up.
+
+diff -c -r /save/std/2.0.0/src/kernel/aha_scsi.c ./src/kernel/aha_scsi.c
+*** /save/std/2.0.0/src/kernel/aha_scsi.c	Sun Apr 21 21:54:49 1996
+--- ./src/kernel/aha_scsi.c	Wed Oct 23 22:09:08 1996
+***************
+*** 1852,1872 ****
+    /* Reset controller, wait for self test to complete. */
+    out_byte(AHA_CNTLREG, AHA_HRST);
+    milli_start(&ms);
+!   while ((stat = in_byte(AHA_STATREG)) & AHA_STST) {
+  	if (milli_elapsed(&ms) >= AHA_TIMEOUT) {
+! 		printf("aha0: AHA154x controller not responding\n");
+  		return(0);
+  	}
+    }
+- 
+-   /* Check for self-test failure. */
+-   if ((stat & (AHA_DIAGF | AHA_INIT | AHA_IDLE | AHA_CDF | AHA_DF))
+- 						!= (AHA_INIT | AHA_IDLE)) {
+- 	printf("aha0: AHA154x controller failed self-test\n");
+- 	return(0);
+-   }
+- 
+-   /* !! maybe a santity check here: make sure IDLE and INIT are set? */
+  
+    /* Get information about controller type and configuration. */
+    cmd[0] = AHACOM_HAINQUIRY;
+--- 1852,1867 ----
+    /* Reset controller, wait for self test to complete. */
+    out_byte(AHA_CNTLREG, AHA_HRST);
+    milli_start(&ms);
+!   while (((stat = in_byte(AHA_STATREG)) & (AHA_STST | AHA_DIAGF | AHA_INIT
+! 		| AHA_IDLE | AHA_CDF | AHA_DF)) != (AHA_INIT | AHA_IDLE))
+!   {
+  	if (milli_elapsed(&ms) >= AHA_TIMEOUT) {
+! 		printf(
+! 		  "aha0: AHA154x controller not responding, status = 0x%02x\n",
+! 			stat);
+  		return(0);
+  	}
+    }
+  
+    /* Get information about controller type and configuration. */
+    cmd[0] = AHACOM_HAINQUIRY;

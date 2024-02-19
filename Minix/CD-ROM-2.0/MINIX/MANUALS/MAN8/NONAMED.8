@@ -1,0 +1,163 @@
+.\" These numbers should match those in nonamed.c:
+.ds TT "1 hour"
+.ds ST "two seconds"
+.ds MT "four seconds"
+.ds LT "five minutes"
+.ds NS "five"
+.ds NI "256"
+.TH NONAMED 8
+.SH NAME
+nonamed \- not a name daemon, but acts like one
+.SH SYNOPSIS
+.B nonamed
+.RB [ \-d [\fIlevel\fP]]
+.RB [ \-p
+.IR port ]
+.RB [ \-n
+.IR address [/\fIport\fP]]
+.SH DESCRIPTION
+.B Nonamed
+is not an Internet name daemon.  When started it immediately tries to find a
+real name daemon on the local network.  If it finds one then it will relay
+any DNS queries to that name daemon.  If it can't find one then it will do
+its best to answer simple queries using the
+.B /etc/hosts
+table for name to address translation.
+.PP
+On startup
+.B nonamed
+broadcasts up to \*(NS simple UDP queries on the local network.  This is a
+somewhat nasty thing to do, because it makes all name servers on the net
+spring into action to answer the request.  The first name server to answer
+is used by
+.B nonamed
+to answer the queries of its clients.  The broadcast search is repeated
+after an hour to give another name server a chance to be abused.  (It is
+quite normal for a host to use a remote name server.  The broadcasts are a
+bit unfriendly, but they only happen once an hour.)
+.PP
+If a real name server is found then
+.B nonamed
+enters "relay mode", passing all queries on.  In relay mode the daemon
+cannot be distinguished from a real DNS name daemon. 
+.PP
+.B Nonamed
+accepts both UDP and TCP queries under Minix-vmd.  Under standard Minix
+only UDP queries are accepted.  \*(NI relayed UDP queries can be outstanding
+before it forgets where the first one came from.
+.PP
+In answer mode
+.B nonamed
+can answer simple DNS queries to translate a host name to an IP address, or
+an IP address to a host name.  Suppose
+.B /etc/hosts
+looks like this:
+.PP
+.RS
+.ta +15n
+.nf
+127.0.0.1	localhost
+192.9.200.1	darask.home.cs.vu.nl
+192.9.200.2	burask.home.cs.vu.nl
+.fi
+.RE
+.PP
+Then queries for the host names listed can be answered with the IP addresses
+to the left of them.  If the name can't be found then it is retried with the
+domain name stripped of, this is because "localhost" is looked up as
+"localhost.home.cs.vu.nl" in the above example.  Reverse lookups are
+answered with the first hostname on the line with the IP address.
+.PP
+UDP queries are immediately answered on startup if the answer can be found
+in the hosts file.  Failure answers, and answers to TCP queries are delayed
+until it decides that there are no real name servers out there.
+.PP
+.B Nonamed
+employs several timeouts for efficient operation:
+.PP
+If \*(NS broadcasts, \*(ST apart fail to produce a name server on startup
+then it decides that there are no real name servers around.
+.PP
+After \*(TT it will again look for a name server.  (We don't want to hog the
+same one indefinitely.)
+.PP
+If no UDP reply is seen in \*(MT than a simple probe is sent the name
+server.  If that doesn't provoke an answer in \*(ST then it will look for a
+new name server.  A failing TCP connection will also invoke a search, the
+TCP connection is then made to the new name server.  A client using UDP will
+retry eventually, a client using TCP will notice nothing but a short delay.
+The daemon drops back into answer mode if the search fails and it has a
+hosts file with a "localhost" entry.
+.PP
+It waits \*(LT for any action on a TCP stream before the connection is
+aborted.
+.PP
+In answer mode it will generate data with a TTL (time to live) of \*(TT.
+.SH OPTIONS
+The options are only useful when debugging
+.BR nonamed ,
+although it can be very instructive to watch DNS queries being done.
+.TP
+.BR \-d [\fIlevel\fP]
+Set debugging level to
+.I level
+(a single digit, by default
+.BR 1 .)
+Debug mode 1 makes
+.B nonamed
+decode and display the DNS queries and replies that it receives, sends and
+relays.  The decoding only handles the common cases.  In debug mode 2 it
+prints tracing information about the internal jobs it executes.  In debug
+mode 3 it core dumps when an error causes it to exit.  The debugging level
+may also be increased by 1 at runtime by sending signal
+.B SIGUSR1
+or turned off (set to 0) with
+.BR SIGUSR2 .
+.TP
+.RB [ \-p " \fIport\fP]
+Port to use instead of the normal
+.B domain
+port.
+.TP
+.RB [ \-n " \fIaddress\fP[/\fIport\fP]]
+Use this IP address and port to find a real name server.  It can be used to
+make
+.B nonamed
+relay to another
+.BR nonamed .
+(They do not listen to broadcasts, of course.)  You can run two daemons on
+one machine if you choose a new port number for one of them.  You can force
+.B nonamed
+out of relay mode by sending it a hangup signal.
+.SH FILES
+.TP 15n
+/etc/hosts
+Hosts to address translation table when in answer mode.
+.SH "SEE ALSO"
+.BR gethostbyname (3),
+.BR resolver (3),
+.BR hosts (5),
+.BR set_net_default (8),
+.BR boot (8),
+.BR inetd (8),
+.BR irdpd (8),
+.BR rarpd (8).
+.SH NOTES
+You can specify a remote name server in
+.B /etc/resolv.conf
+to circumvent
+.BR nonamed .
+But then you lose its talent for automatically finding new name servers when
+the remote name server becomes unreachable.
+.PP
+Don't add a "localhost" entry to the hosts file if there are remote name
+servers.  It makes
+.B nonamed
+drop back in answer mode on a flaky network.
+.SH BUGS
+If you can get a remote
+.B nonamed
+to listen to your name server then you can make it believe anything you
+want to.  You need access to a machine on the same subnet of course.
+.SH AUTHOR
+Kees J. Bot (kjb@cs.vu.nl)

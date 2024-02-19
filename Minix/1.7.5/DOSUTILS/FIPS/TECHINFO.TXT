@@ -1,0 +1,226 @@
+Technical Info on FIPS
+----------------------
+
+FIPS was written in C++ V2.0 with the Turbo C++ 1.0 and Borland C++ 3.1
+compilers.
+It should compile with any newer C++ compiler (perhaps after minor changes
+to the BIOS calls).
+
+If you're a C++ wizard, don't look too closely at the code, this is my first
+C++ program, so it is far from acceptable (too much public data, some ini-
+tializers and assignment operators are missing etc.). Constructive critizism
+is always welcome however.
+
+How FIPS works:
+
+FIPS uses the BIOS interrupts 13h 00h (reset disks), 13h 02h (read sector),
+13h 08h (get drive parameters), 13h 03h (write sector) and 13h 04h (verify
+sector).
+
+Here is the sequence of function calls in main:
+
+evaluate_argument_vector
+  read the commandline arguments and set the global variables accordingly
+notice
+  display copyright notice and version number
+ask_for_drive_number
+  let the user choose the drive (if more than 1)
+harddrive.reset
+  reset harddrive
+harddrive.rootsector->read
+  read the sector 0,0,1 of the chosen drive into an array of unsigned char
+hd.partition_table().get
+  extract the necessary information from the root sector (see below - The
+  root sector)
+hd.print_partition_table
+  print the information
+hd.check
+  check if everything is ok (see below - The root sector)
+ask_for_partition_number
+  let the user choose the partition
+partition->bootsector->read
+  read the first sector of the chosen partition to another array
+partition->bpb().get
+  extract info from the boot sector (see below - The boot sector)
+partition->print_bpb
+  print the info
+partition->info().get
+  calculate no. of clusters, starting sector of FATs etc.
+partition->check
+  check boot sector (see below - The boot sector)
+fat1.check_against(fat2)
+  check if FAT 1 is identical to FAT 2 (see below - The FAT)
+save_root_and_boot
+  write root- and boot sector to floppy disk (optional)
+ask_for_new_start_cylinder
+  ask the user for the first cylinder of the new partition
+fat2.check_empty
+  check if chosen part of partition is empty (see below - The FAT)
+hd.calculate_new_root
+  from the chosen start cylinder calculate the new partition table
+  Note that the partition entries will be moved to the beginning of the par- 
+  tition table, so that the new partition will be the last one and the drive
+  names will not change.
+hd.partition_table.put
+  write the new partition table into the root sector buffer
+hd.partition_table.get,hd.print_partition_table,hd.check
+  check if new root sector is ok
+partition->calculate_new_boot
+  put new number of sectors in boot sector info
+partition->bpb()->put
+  write new boot sector info into boot sector buffer
+partition->bpb()->get,partition->print_bpb,partition->check
+  check if new boot sector is ok
+ask_for_write_permission
+  ask if user wants to proceed
+harddrive.rootsector->write
+  write the changed root sector to the disk
+partition->bootsector->write
+  write the changed boot sector to the disk
+
+
+The root sector
+---------------
+
+The root sector is the first sector on every hard disk. It contains the
+program that loads the boot sector of the bootable partition and the
+partition table. The last two bytes of the root sector must be 55 aa (hex).
+The partition table begins at 1be. It contains 4 * 16 Bytes for the four
+possible partitions.
+All numbers are zero based except the start/end-sector number (may be 1-63).
+One partition entry contains the following:
+
+1 Byte - Bootable Flag. Must be 0 (not bootable) or 80h (bootable).
+	 At most one Partition may be bootable at a time.
+	 (somewhere I read the bootable flag may also be 81h for the
+	 second drive - does anybody know anything about that?)
+
+1 Byte - Start Head. The number of the head of the first sector of the
+	 partition.
+
+2 Bytes - Start Sector + Cylinder. The Bits are as follows:
+
+			CCSSSSSS CCCCCCCC
+
+	  where the first byte contains the sector number (1 - 63), and
+	  the high two bits of the cylinder number. The second byte con-
+	  tains the low eight bits of the cylinder number.
+
+1 Byte - System Indicator. For DOS this may be:
+
+	1 - 12-bit FAT, 16-bit sector number
+	4 - 16-bit FAT, 16-bit sector number
+	5 - Extended Partition
+	6 - 16-bit FAT, 32-bit sector number
+
+1 Byte - End Head. Head Number of the last sector of the partition
+
+2 Bytes - End Sector + Cylinder. Same format as Start Sector + Cylinder
+
+4 Bytes - First Sector. Number of the first sector of the partition. This
+	  corresponds to the Start Head, Sector + Cylinder. High Byte
+	  comes first.
+
+4 Bytes - Total number of Sectors.
+
+The function check_rootsector_validity checks the following:
+
+- Signature Bytes (55 aa) in the last two bytes of the sector
+- not more than one bootable partition
+- Bootable flag is 0 or 80h
+- Start/End sector of a partition is not 0
+- Start/End sector & head are not greater than drive geometry allows
+- Start cylinder * sectors * heads + start head * sectors + start sector - 1
+  = first sector (where sectors is no. of sectors per track, heads is
+  no. of heads of the drive)
+- End cylinder * sectors * heads + end head * sector + end sector = first
+  sector + number of sectors
+- if System Indicator is 0, all other bytes of partition entry are 0
+- all partitions except the first begin on cylinder boundaries (head = 0,
+  sectors = 1)
+- all partition end on cylinder boundaries
+- partitions don't overlap
+- no free space between partitions
+
+
+The boot sector
+---------------
+
+The boot sector is the first sector of every partition. It contains the
+program that boots the operating system and the bios parameter block.
+The last two bytes must again contain 55 aa. The information in the
+boot sector is the following:
+
+00  3 bytes  jump instruction ('eb xx 90' or 'e9 xx xx')
+03  8 bytes  OEM name and version - e.g. MSDOS5.0
+0b  2 bytes  bytes per sector - should be 512
+0d  1 byte   sectors per cluster - power of two
+0e  2 bytes  reserved sectors - typically 1 (boot sector)
+10  1 byte   number of FATs - must be 2
+11  2 bytes  number of rootdirectory entries - typically 512
+13  2 bytes  number of sectors (short) - 0, if BIGDOS partition
+15  1 byte   media descriptor - typically f8h
+16  2 bytes  sectors per FAT - varies
+18  2 bytes  sectors per track
+1a  2 bytes  number of heads
+1c  2 bytes  number of hidden sectors (low)
+
+- extended BPB since DOS 4.0 -
+
+1e  2 bytes  number of hidden sectors (high)
+20  4 bytes  number of sectors (long)
+24  1 byte   physical drive number - 80h or 81h
+25  1 byte   reserved
+26  1 byte   signature - 29h
+
+The function check_bootsector_validity checks the following:
+
+- correct jump instruction
+- signature bytes 55 aa in the last two bytes of the sector
+- bytes per sector = 512
+- sectors per cluster is power of two
+- reserved sectors = 1
+- number of FATs = 2
+- number of rootdirectory entries is multiple of 16
+- media descriptor = f8h
+- sectors per fat <= 256
+- sectors per fat big enough to hold complete FAT
+- sectors per track matches BIOS info
+- number of heads matches BIOS info
+- hidden sectors = start sector
+- signature = 29h, if BIGDOS
+- physical drive number = actual drive number
+- number of sectors matches partition info
+- system indicator byte in root sector matches partition type
+
+
+The FAT
+-------
+
+The File Allocation Table contains the information how the clusters of the
+disk are linked to files. Every directory entry contains a pointer to the
+first cluster of the file. The corresponding cluster entry in the FAT con-
+tains a pointer to the next cluster, or an EOF marker (FFFF for 16-bit FATs,
+FFF for 12-bit FATs) if the cluster is the last one of the file.
+Bad clusters are marked with FFF7 or FF7. Empty clusters are marked with 0.
+The first cluster on the disk is cluster number 2, it begins at the first
+sector after the root directory. The FAT entries for the clusters 0 and 1
+contain the media descriptor byte (usually F8h for harddisk) and two or
+three FFh bytes.
+There exist two copies of the FAT on a normal DOS partition, these two
+copies must be identical. FAT 2 is the primary FAT.
+
+The function check_fat_validity checks if the two FATs are identical and if
+the entries 0 and 1 contain what they are supposed to.
+
+The function check_fat_empty checks if the cluster entries that cover the
+new partition contain either 0 (empty) or FFF7 (Bad cluster).
+
+
+------------------------------------------------------------------------------
+
+I hope you find this information useful. If you found anything not to be
+exact or if you have additions, please let me know asap.
+
+Arno Schaefer
+schaefer@rbg.informatik.th-darmstadt.de

@@ -1,0 +1,342 @@
+.TH BOOT 8
+.SH NAME
+boot \- from power on to the login prompt
+.SH DESCRIPTION
+.de SP
+.if t .sp 0.4
+.if n .sp
+..
+At power on the machine reads the first sector of the boot device into memory
+and executes it.  This bootstrap code loads
+.BR /boot ,
+the Minix Boot Monitor.  The monitor loads the kernel binaries from
+.BR /minix ,
+or the newest file in
+.B /minix
+if it is a directory.
+.PP
+The Minix system is now running, the different tasks initialize themselves
+and control is transferred to the last one,
+.BR init .
+.PP
+.B Init
+is the grandparent of all Minix processes, it is responsible for starting
+login processes on each terminal, but first it runs
+.BR /etc/rc .
+.PP
+.B /etc/rc
+checks the state of the system and starts daemons.  First it sets the
+keyboard translation to the mapping in
+.B /etc/keymap
+if present, then it reads the time zone from
+.B /etc/timeinfo
+followed by a call to
+.BR readclock (8)
+to set Minix time from the hardware clock.  Next the file systems are checked
+if necessary and the
+.B /usr
+file system is mounted.
+.PP
+The system is now ready for multiuser startup,
+.B /etc/rc
+starts the
+.BR update (8)
+and
+.BR cron (8)
+daemons, and initializes the network services.
+.B /etc/rc
+finally recovers crashed editor buffers and cleans out the
+.B tmp
+directories.
+.PP
+.B Init
+reads
+.B /etc/ttytab
+and starts a
+.BR getty (8)
+for each enabled terminal line to allow a user to log in.
+.SH "BOOT ENVIRONMENT"
+Many features of the drivers inside the kernel are controlled by settings in
+the boot environment.  The values of these variables are usually colon or
+comma separated numbers configuring the driver.
+.B "DPETH0 = 300:10"
+tells the ethernet driver to use I/O address 0x300, interrupt request
+10, and the default memory address (0xD0000, values may be omitted) for the
+first ethernet board.  (Note that IRQ 2 is redirected to IRQ 9 on AT's and
+PS/2's, so use 9 if a device is jumpered for 2.)
+.PP
+Variables that are special to both the monitor and the kernel are described
+in
+.BR monitor (8).
+This section lists extra variables or variable settings:
+.TP
+\fBhd\fR = \fBat\fR | \fBbios\fP | \fBesdi\fR | \fBxt\fR
+Choose the driver that is to be used for the hard disk, in order: IBM/AT
+(classic AT or newer IDE), BIOS (generic driver), ESDI (some PS/2's), or
+IBM/XT.  By default the first of these drivers that is enabled is used.
+Most drivers are present in the kernel as distributed, but may be taken out
+by modifying
+.BR /usr/include/minix/config.h .
+(An XT should always use the BIOS driver, not the XT driver, because BIOS
+calls are cheap on an XT.  The XT driver can be used on AT machines with an
+old XT controller.)
+.TP
+\fBDPETH\fIn\fR = \fBon\fR | \fBoff\fR
+Turn an ethernet board on or off.  The driver is by default in "sink" mode
+for all boards.  The sink mode allows one to use the driver without an
+ethernet board installed.  The driver will play /dev/null for that device,
+i.e. nothing comes in, and anything send out is dropped on the floor.  If
+the board is turned on then the driver will use it to send out packets, if
+it is turned off then the driver will fail for that board.
+.TP
+\fBDPETH\fIn\fR = \fII/O-addr\fR:\fIirq\fR:\fImem_addr\fR
+Set the I/O address (hex), IRQ (decimal) and memory address (hex) of the
+.IR n -th
+ethernet board and turn it on.  By default they are configured as
+280:3:D0000 and 300:5:CC000.  The memory address is ignored for the Novell
+ethernet boards, but may be explicitly set to zero to indicate that the board
+.B is
+a Novell ethernet board.  You do not need to specify the IRQ with modern
+Western Digital 8013 compatible ethernet cards, the driver asks the board
+what its IRQ is.
+(Note that the default IRQ conflicts with the second serial line, so the
+serial line is turned off if the ethernet board is configured for IRQ 3.)
+.TP
+\fBDPETH\fIn\fB_EA\fR = \fIe0\fR:\fIe1\fR:\fIe2\fR:\fIe3\fR:\fIe4\fR:\fIe5\fR
+Set the ethernet address of the
+.IR n -th
+ethernet board.  The address is normally obtained from the ethernet board,
+so only in exceptional circumstances is this setting ever needed.  (Use the
+address of the main server if you want a career change.)
+.TP
+\fBAHA0\fR = \fII/O-addr\fR:\fIbus-on\fR:\fIbus-off\fR:\fItr-speed\fR
+Configure the Adaptec 154xA SCSI host adapter to use the given I/O address
+(hex), Bus-on time (decimal), Bus-off time (decimal) and transfer speed
+(hex).  The default is 330:15:1:00.  The default transfer speed is always
+5.0 Mb/s (code 00) ignoring the jumper settings.
+.TP
+\fBsd\fIn\fR = \fItarget\fR,\fIlun\fR
+Program SCSI disk
+.BI sd n
+to have the given target and logical unit number.  The target and lun
+of a tape or other SCSI device may be changed by setting the
+.BI sd n
+variable that would be used had it been a disk.  So tape device st7 can be
+set to target 4, lun 1 with sd35=4,1.
+.TP
+\fBMCD\fR = \fII/O-addr\fR:\fIirq\fR
+I/O address (hex) and IRQ (decimal) of the Mitsumi CD-ROM driver, by default
+300:10.
+.SH "TCP/IP CONFIGURATION"
+To use TCP/IP you have to compile a kernel with networking enabled, and
+unless you are running standalone you have to enable the ethernet driver.
+See the
+.BI DPETH n
+boot variable above.  The driver supports these ethernet cards:  Western
+Digital 8003, Western Digital 8013, SMC Elite Ultra 16, Novell NE1000,
+Novell NE2000.  Many newer variants of the WD8013, now under the SMC brand,
+are also supported.
+.PP
+You are likely to use TCP/IP in one of three situations:
+.PP
+.RS
+Standalone with no connection to a network.
+.SP
+In a small network with no support from a "big" host.
+.SP
+Connected to a large network with address and name servers.
+.RE
+.PP
+In each situation you need a different set of configuration files.
+.SS Standalone
+The machine is configured with a fixed IP address:
+.BR 192.9.200.1 .
+This is one of the addresses Sun used to give to machines without a
+registered network address.  This address is normally blocked at gateways,
+so it can do no damage if used in a real net by accident.  You need one
+file,
+.BR /etc/hosts ,
+that should look like this (using the name "darask" as an example):
+.PP
+.RS
+.ta +15n
+127.0.0.1	localhost
+.br
+192.9.200.1	darask
+.RE
+.SS "Small Network"
+In a network where the Minix machine can't obtain its IP address and name
+from a different host you need specify the ethernet address to host name
+translation in the
+.B /etc/ethers
+file for use by the RARP daemon.  Suppose you have two machines in your
+network then
+.B /etc/ethers
+could look like this:
+.PP
+.RS
+.ta +20n
+0:0:c0:a:77:23	darask
+.br
+0:0:c0:a:68:ce	burask
+.RE
+.PP
+Use
+.B hostaddr \-e
+to find out what the six octet ethernet address of a host is.  Use the address
+as printed: lowercase hex digits, no leading zeros.  The
+.B /etc/hosts
+file shows their IP addresses:
+.PP
+.RS
+.ta +15n
+127.0.0.1	localhost
+.br
+192.9.200.1	darask
+.br
+192.9.200.2	burask
+.RE
+.PP
+.B Warning!
+Do not add ethernet addresses of diskless workstations to your ethers file.
+A Sun for instance has the stupid habit of booting from the first RARP server
+that answers, probably your Minix machine...
+.SS "Large Network"
+In a network with a central network administration your machine's IP address
+and name are given by the RARP and name services of the special servers on
+the network.  For a new machine you need to apply for an IP address and host
+name with your network administrator supplying the ethernet address of your
+machine.  You don't need any configuration files now, the
+.B irdpd
+and
+.B nonamed
+daemons automatically find a router and a name server.
+.PP
+Note that no knowledge of the IP address or hostname of the Minix machine
+itself is necessary, it all comes from the RARP and name servers.  A series
+of Minix machines can therefore set up identically.  Even if you have no RARP
+or name servers you can still set them up identically if you list all the
+Minix hosts in the hosts and ethers files.
+.SS "Simpler configuration tools"
+The
+.BR rarpd ,
+.BR irdpd
+and
+.BR nonamed
+daemons are complex little programs that try to obtain information about
+their surroundings automatically to tell the machine what its place in the
+network is.  It should come as no surprise that there are simpler utilities
+to configure a machine.  On a memory starved machine it may even be wise to
+configure a machine statically to get rid of the daemons.  The first daemon,
+.BR rarpd ,
+can be replaced by:
+.PP
+.RS
+.B ifconfig \-h
+.I host-IP-address
+.RE
+.PP
+to set the IP address of the machine.  Note that this is only necessary if
+there is no external RARP service.  The second daemon
+.B irdpd
+can be replaced by setting a static route:
+.PP
+.RS
+.B add_route \-g
+.I router-IP-address
+.RE
+.PP
+(if there is a router.)  The last daemon,
+.BR nonamed ,
+can be replaced by an entry in
+.B /etc/resolv.conf
+that specifies an external name daemon:
+.PP
+.RS
+.B nameserver
+.I nameserver-IP-address
+.RE
+.PP
+The
+.B ifconfig
+and
+.B add_route
+calls can be placed in the file
+.BR /etc/rc.net .
+The calls to the daemons will have to be edited out of
+.BR /etc/rc .
+Note that these changes undo all the efforts to make Minix TCP/IP
+autoconfigurable.  Make very sure that all the IP addresses are correct, and
+that the IP address of your machine is unique.  (Mistakenly using the
+address of a main server will make all other machines look at your machine,
+and will make all the users of all other machines look at you.)
+.SH FILES
+.TP 20n
+/boot
+Minix Boot Monitor.
+.TP
+/minix
+Kernel image, or directory containing them.
+.TP
+/etc/rc
+First of the system initialization files.
+.TP
+/etc/hosts
+Name to IP address mapping.
+.TP
+/etc/ethers
+Name to ethernet address mapping.
+.SH "SEE ALSO"
+.BR monitor (8),
+.BR init (8),
+.BR inet (8),
+.BR loadkeys (8),
+.BR readclock (8),
+.BR fsck (1),
+.BR update (8),
+.BR cron (8),
+.BR ttytab (5),
+.BR getty (8),
+.BR hostaddr (1),
+.BR ifconfig (8),
+.BR irdpd (8),
+.BR nonamed (8),
+.BR rarpd (8),
+.BR hosts (5),
+.BR ethers (5),
+.BR set_net_default (8).
+.SH DIAGNOSTICS
+.TP 5n
+Checking File Systems.
+If the system has crashed then
+.B fsck
+is called for the root and /usr file systems.  It is wise to reboot if the
+root file system must be fixed.
+.TP
+Finish the name of device to mount as /usr: /dev/
+If the name of the /usr file system has not been set in /etc/fstab.
+You can type a device name, say
+.BR fd0 .
+.TP
+hostaddr: unable to fetch IP address
+TCP/IP misconfiguration.  The RARP may have failed because the ethernet
+address of the machine is not entered in either the remote or the local
+ethers file.  Either talk to your Network Administrator, or make an ethers
+and a hosts file.
+.TP
+1.2.3.4 login:
+If you see an IP address instead of a host name then the system failed to
+translate the IP address.  Either talk to your Network Administrator to
+have the reverse address translation tables fixed, or make a hosts file.
+.SH NOTES
+The names "darask" and "burask" are names of cities from the Dutch
+translation of the novel "The Many-Colored Land" by Julian May.  The author
+of this text likes names of hosts to be things that contain people, like
+cities and ships.
+.SH BUGS
+Indefinite hangs are possible if I/O addresses or IRQ's are wrong.  A driver
+may babble about addresses and IRQ's, but that does not mean that what it
+says is true, it may just be configured that way.  It is very difficult to
+find peripherals on a PC automatically, and Minix doesn't even try.
+.SH AUTHOR
+Kees J. Bot (kjb@cs.vu.nl)
