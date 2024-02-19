@@ -1,0 +1,4265 @@
+*** 0.96c/linux/Makefile	Sun Jul  5 03:09:23 1992
+--- linux/Makefile	Sat Jul 11 20:11:52 1992
+***************
+*** 89,95 ****
+  
+  Version:
+  	@./makever.sh
+! 	@echo \#define UTS_RELEASE \"0.96c-`cat .version`\" > include/linux/config_rel.h
+  	@echo \#define UTS_VERSION \"`date +%D`\" > include/linux/config_ver.h
+  	touch include/linux/config.h
+  
+--- 89,95 ----
+  
+  Version:
+  	@./makever.sh
+! 	@echo \#define UTS_RELEASE \"0.96c.pl1-`cat .version`\" > include/linux/config_rel.h
+  	@echo \#define UTS_VERSION \"`date +%D`\" > include/linux/config_ver.h
+  	touch include/linux/config.h
+  
+*** 0.96c/linux/boot/setup.S	Tue May 19 03:36:58 1992
+--- linux/boot/setup.S	Thu Jul  9 14:41:55 1992
+***************
+*** 189,197 ****
+  	out	#0xA1,al
+  	.word	0x00eb,0x00eb
+  	mov	al,#0xFF		! mask off all interrupts for now
+- 	out	#0x21,al
+- 	.word	0x00eb,0x00eb
+  	out	#0xA1,al
+  
+  ! well, that certainly wasn't fun :-(. Hopefully it works, and we don't
+  ! need no steenking BIOS anyway (except for the initial loading :-).
+--- 189,198 ----
+  	out	#0xA1,al
+  	.word	0x00eb,0x00eb
+  	mov	al,#0xFF		! mask off all interrupts for now
+  	out	#0xA1,al
++ 	.word	0x00eb,0x00eb
++ 	mov	al,#0xFB		! mask all irq's but irq2 which
++ 	out	#0x21,al		! is cascaded
+  
+  ! well, that certainly wasn't fun :-(. Hopefully it works, and we don't
+  ! need no steenking BIOS anyway (except for the initial loading :-).
+***************
+*** 241,250 ****
+  	push	ds
+  	push	cs
+  	pop	ds
+! 	mov 	ax,#0xc000
+  	mov	es,ax
+  	lea	si,msg1
+! 	call	prtstr
+  flush:	in	al,#0x60		! Flush the keyboard buffer
+  	cmp	al,#0x82
+  	jb	nokey
+--- 242,316 ----
+  	push	ds
+  	push	cs
+  	pop	ds
+! 
+! ! First try and execute a VESA BIOS call
+! 
+! 	mov	ax,#0x4f00		! AX = VESA BIOS func RETURN SVGA Info
+! 	push	cs
+! 	pop	es
+! 	lea	di,vib			! ES:[DI] -> VESA Information Block Ptr
+! 	int	0x10
+! 
+! 	cmp	ax,#0x004f		! Check result status
+! 	jne	novesa			! VESA BIOS not supported or failed
+! 
+! ! OK!  We got a VESA BIOS, let's figure out what we can do!
+! 
+! ! Print out the VESA information from the VIB
+! 
+! 	lea	si,vib			! This should print out VESA
+! 	lodsb
+! 	call	prnt1
+! 	lodsb
+! 	call	prnt1
+! 	lodsb
+! 	call	prnt1
+! 	lodsb
+! 	call	prnt1
+! 	call	space
+! 
+! 	mov	al,vib+5		! This is the version of VESA supported
+! 	call	dprnt
+! 	mov	al,#0x2e
+! 	call	prnt1
+! 	mov	al,vib+4
+! 	call	dprnt
+! 	call	space
+! 
+! 	push	ds
+! 	lds	si,vib+6		! This prints out the OEM string
+! 	call	prtstr
+! 	call	space
+! 	pop	ds
+! 
+! 	mov	al,vib+10		! This prints out the Vesa Capabilities
+! 	call	dprnt
+! 	mov	al,vib+11
+! 	call	dprnt
+! 	mov	al,vib+12
+! 	call	dprnt
+! 	mov	al,vib+13
+! 	call	dprnt
+! 
+! 	push	ds			! Finally, go through the list of modes
+! 	lds	si,vib+14
+! model:	lodsw				! Get mode number
+! 	cmp	ax,#0xFFFF
+! 	je	isvesa
+! 	call	addmod			! Check to see if this is a TEXT mode
+! 	jmp	model
+! 
+! isvesa:	call	docr
+! 	pop	ds
+! 	lea	si,dscvesa
+! 	lea	di,movesa
+! 	lea	cx,selmod
+! 	jmp	cx
+! 
+! novesa:	mov 	ax,#0xc000
+  	mov	es,ax
+  	lea	si,msg1
+! 	call	prtstr			! Press <RETURN> to see SVGA-modes ...
+  flush:	in	al,#0x60		! Flush the keyboard buffer
+  	cmp	al,#0x82
+  	jb	nokey
+***************
+*** 463,485 ****
+  	mov	al,#0x55
+  	xor	al,#0xea
+  	cmp	al,bh
+! 	jne	novid7
+  	lea	si,dscvideo7
+  	lea	di,movideo7
+  selmod:	push	si
+! 	lea	si,msg2
+  	call	prtstr
+! 	xor	cx,cx
+! 	mov	cl,(di)
+  	pop	si
+  	push	si
+  	push	cx
+  tbl:	pop	bx
+  	push	bx
+! 	mov	al,bl
+! 	sub	al,cl
+! 	call	dprnt
+  	call	spcing
+  	lodsw
+  	xchg	al,ah
+  	call	dprnt
+--- 529,566 ----
+  	mov	al,#0x55
+  	xor	al,#0xea
+  	cmp	al,bh
+! 	je	isvideo7
+! 	lea	cx,set8x8
+! 	jmp	cx
+! isvideo7:
+  	lea	si,dscvideo7
+  	lea	di,movideo7
++ 
++ ! Upon Entry to SELMOD, SI -> list of Modes, DI -> List of Mode Numbers
++ 
+  selmod:	push	si
+! 	lea	si,msg2			! Numb:   Mode:   COLSxROWS
+  	call	prtstr
+! 	mov	cx,(di)			! This gets Number of Modes in list
+  	pop	si
+  	push	si
+  	push	cx
+  tbl:	pop	bx
+  	push	bx
+! 	mov	ax,bx
+! 	sub	ax,cx
+! 	call	hprntl			! Print out selection number
+! 	push	ax
+  	call	spcing
++ 	pop	ax
++ 	push	di
++ 	add	ax,ax
++ 	add	ax,#2
++ 	add	di,ax
++ 	mov	ax,(di)
++ 	call	hprntl			! Print out MODE number
++ 	call	spcing
++ 	pop	di
+  	lodsw
+  	xchg	al,ah
+  	call	dprnt
+***************
+*** 493,499 ****
+  	loop	tbl
+  	pop	cx
+  	call	docr
+! 	lea	si,msg3
+  	call	prtstr
+  	pop	si
+  	add	cl,#0x80
+--- 574,580 ----
+  	loop	tbl
+  	pop	cx
+  	call	docr
+! 	lea	si,msg3			! Choose Mode Number
+  	call	prtstr
+  	pop	si
+  	add	cl,#0x80
+***************
+*** 509,526 ****
+  nozero:	sub	al,#0x80
+  	dec	al
+  	xor	ah,ah
+  	add	di,ax
+  	inc	di
+! 	push	ax
+! 	mov	al,(di)
+! 	int 	0x10
+  	pop	ax
+- 	shl	ax,#1
+  	add	si,ax
+! 	lodsw
+  	pop	ds
+  	ret
+! novid7:
+  	mov	ax,#0x1112
+  	mov	bl,#0
+  	int	0x10		! use 8x8 font set (50 lines on VGA)
+--- 590,627 ----
+  nozero:	sub	al,#0x80
+  	dec	al
+  	xor	ah,ah
++ 	shl	ax,#1
++ 	push	ax
+  	add	di,ax
+  	inc	di
+! 	inc	di
+! 	mov	ax,(di)			! AX = Mode
+! 	cmp	ah,#0
+! 	jne	setvesa
+! 	int 	0x10			! Set OLD style mode
+! 
+! retmode:
+  	pop	ax
+  	add	si,ax
+! 	lodsw				! Get COLSxROWS
+  	pop	ds
+  	ret
+! 
+! setvesa:
+! 	pop	bx
+! 	cmp	ah,#0xFF		! Special, mode FF, set 8x8 font
+! 	je	set8x8
+! 
+! 	push	bx
+! 	mov	bx,ax			! Mode to set
+! 	mov	ax,#0x4f02		! Set VESA mode
+! 	int	0x10
+! 
+! 	jmp	retmode
+! 		
+! ! If we can't find the adapter in the table, at least set 80x50
+! 
+! set8x8:
+  	mov	ax,#0x1112
+  	mov	bl,#0
+  	int	0x10		! use 8x8 font set (50 lines on VGA)
+***************
+*** 541,557 ****
+  	mov	ax,#0x5032	! return 80x50
+  	ret
+  
+  ! Routine that 'tabs' to next col.
+  
+  spcing:	mov	al,#0x2e
+- 	call	prnt1
+- 	mov	al,#0x20
+  	call	prnt1	
+! 	mov	al,#0x20
+  	call	prnt1	
+! 	mov	al,#0x20
+  	call	prnt1	
+! 	mov	al,#0x20
+  	call	prnt1
+  	ret	
+  
+--- 642,724 ----
+  	mov	ax,#0x5032	! return 80x50
+  	ret
+  
++ ! Routine to add mode in ax to VESA selection table
++ 
++ addmod:	push	cx
++ 	push	ds
++ 	push	es
++ 	push	di
++ 	push	bx
++ 	push	dx
++ 	push	ax
++ 
++ 	mov	cx,ax			! CX = VESA mode number
++ 	push	cs
++ 	pop	es
++ 	lea	di,mib			! ES:[DI] -> Mode Information Block
++ 	mov	ax,#0x4f01		! AX = Get VESA Mode Info
++ 	int	0x10	
++ 
++ 	cmp	ax,#0x004f		! If fails, assume it's not a TEXT mode
++ 	jne	adfail
++ 
++ 	push	cs
++ 	pop	ds			! Make DS contain something reasonable
++ 
++ 	mov	ax,mib			! Get Mode Attributes field
++ 	and	al,#0x12		! Mask Text and Extended bits
++ 	cmp	al,#0x02		! Text and Extended info available?
++ 	jne	adfail
++ 
++ 	call	space
++ 
++ 	mov	ax,mib+18		! Horizontal Resolution
++ 	mov	bl,mib+22		! X Char Size
++ 	div	bl
++ ! HACK:  For some reason, my Diamond Stealth card returns 160 cols for its
++ !	 132 coloumn modes, so don't return any sizes > 132?
++ 	sub	al,#132
++ 	jbe	orgcol
++ 	sub	al,al
++ orgcol:	add	al,#132			! MIN(cols, 132)
++ 	mov	dh,al			! Put num cols in DH
++ 	mov	ax,mib+20		! Vertical Resolution
++ 	mov	bl,mib+23		! Y Char Size
++ 	div	bl
++ 	mov	dl,al			! Put num rows in DL
++ 
++ 	mov	bx,movesa		! Get current number of video modes
++ 	lea	di,movesa
++ 	inc	(di)			! This is a NEW mode
++ 	add	bx,bx
++ 	add	di,bx
++ 	add	di,#2
++ 	pop	ax			! Get Mode number back
++ 	push	ax
++ 	mov	(di),ax			! Mode number
++ 	lea	di,dscvesa
++ 	add	di,bx
++ 	mov	(di),dx			! Screen resolution
++ 
++ adfail:	pop	ax
++ 	pop	dx
++ 	pop	bx
++ 	pop	di
++ 	pop	es
++ 	pop	ds
++ 	pop	cx
++ 
++ 	ret
++ 
+  ! Routine that 'tabs' to next col.
+  
+  spcing:	mov	al,#0x2e
+  	call	prnt1	
+! space3:	mov	al,#0x20
+  	call	prnt1	
+! space2:	mov	al,#0x20
+  	call	prnt1	
+! space:	mov	al,#0x20
+  	call	prnt1
+  	ret	
+  
+***************
+*** 564,569 ****
+--- 731,769 ----
+  	jmp	prtstr
+  fin:	ret
+  
++ ! Routine to print out HEX values on screen.
++ ! The value to be printed is in the AX register.
++ 
++ hprntl:	xchg	ah,al
++ 	call	hprnt
++ 	xchg	ah,al
++ 	call	hprnt
++ 	ret
++ 
++ ! Routine to print out HEX values on the screen
++ ! The valueto be printed is in the AL register.  AH is preserved.
++ 
++ hprnt:	push	ax
++ 	shr	al,4
++ 	and	al,#0xf
++ 	call	hprnt1
++ 	pop	ax
++ 	push	ax
++ 	and	al,#0xf
++ 	call	hprnt1
++ 	pop	ax
++ 	ret
++ 
++ ! Routine to print out one HEX digit on the screen.
++ ! The value to be printed is in al (0-F)
++ 
++ hprnt1:	cmp	al,#10
++ 	jl	hdec
++ 	add	al,#7			! Convert 10-15 to A-F
++ hdec:	add	al,#0x30		! Convert to ASCII
++ 	call	prnt1			! print it
++ 	ret
++ 
+  ! Routine to print a decimal value on screen, the value to be
+  ! printed is put in al (i.e 0-255). 
+  
+***************
+*** 635,641 ****
+  
+  msg1:		.ascii	"Press <RETURN> to see SVGA-modes available or any other key to continue."
+  		db	0x0d, 0x0a, 0x0a, 0x00
+! msg2:		.ascii	"Mode:  COLSxROWS:"
+  		db	0x0d, 0x0a, 0x0a, 0x00
+  msg3:		.ascii	"Choose mode by pressing the corresponding number."
+  		db	0x0d, 0x0a, 0x00
+--- 835,841 ----
+  
+  msg1:		.ascii	"Press <RETURN> to see SVGA-modes available or any other key to continue."
+  		db	0x0d, 0x0a, 0x0a, 0x00
+! msg2:		.ascii	"Numb:   Mode:  COLSxROWS:"
+  		db	0x0d, 0x0a, 0x0a, 0x00
+  msg3:		.ascii	"Choose mode by pressing the corresponding number."
+  		db	0x0d, 0x0a, 0x00
+***************
+*** 647,662 ****
+  
+  ! Manufacturer:	  Numofmodes:	Mode:
+  
+! moati:		.byte	0x02,	0x23, 0x33 
+! moahead:	.byte	0x05,	0x22, 0x23, 0x24, 0x2f, 0x34
+! mocandt:	.byte	0x02,	0x60, 0x61
+! mocirrus:	.byte	0x04,	0x1f, 0x20, 0x22, 0x31
+! moeverex:	.byte	0x0a,	0x03, 0x04, 0x07, 0x08, 0x0a, 0x0b, 0x16, 0x18, 0x21, 0x40
+! mogenoa:	.byte	0x0a,	0x58, 0x5a, 0x60, 0x61, 0x62, 0x63, 0x64, 0x72, 0x74, 0x78
+! moparadise:	.byte	0x02,	0x55, 0x54
+! motrident:	.byte	0x07,	0x50, 0x51, 0x52, 0x57, 0x58, 0x59, 0x5a
+! motseng:	.byte	0x05,	0x26, 0x2a, 0x23, 0x24, 0x22
+! movideo7:	.byte	0x06,	0x40, 0x43, 0x44, 0x41, 0x42, 0x45
+  
+  !			msb = Cols lsb = Rows:
+  
+--- 847,863 ----
+  
+  ! Manufacturer:	  Numofmodes:	Mode:
+  
+! moati:		.word	0x02,	0x23, 0x33 
+! moahead:	.word	0x05,	0x22, 0x23, 0x24, 0x2f, 0x34
+! mocandt:	.word	0x02,	0x60, 0x61
+! mocirrus:	.word	0x04,	0x1f, 0x20, 0x22, 0x31
+! moeverex:	.word	0x0a,	0x03, 0x04, 0x07, 0x08, 0x0a, 0x0b, 0x16, 0x18, 0x21, 0x40
+! mogenoa:	.word	0x0a,	0x58, 0x5a, 0x60, 0x61, 0x62, 0x63, 0x64, 0x72, 0x74, 0x78
+! moparadise:	.word	0x02,	0x55, 0x54
+! motrident:	.word	0x07,	0x50, 0x51, 0x52, 0x57, 0x58, 0x59, 0x5a
+! motseng:	.word	0x05,	0x26, 0x2a, 0x23, 0x24, 0x22
+! movideo7:	.word	0x06,	0x40, 0x43, 0x44, 0x41, 0x42, 0x45
+! movesa:		.word	0x02,	0x03, 0xFFFF, 254*0
+  
+  !			msb = Cols lsb = Rows:
+  
+***************
+*** 670,676 ****
+--- 871,881 ----
+  dsctrident:	.word 	0x501e, 0x502b, 0x503c, 0x8419, 0x841e, 0x842b, 0x843c
+  dsctseng:	.word	0x503c, 0x6428, 0x8419, 0x841c, 0x842c
+  dscvideo7:	.word	0x502b, 0x503c, 0x643c, 0x8419, 0x842c, 0x841c
++ dscvesa:	.word	0x5019, 0x5032, 254*0
+  	
++ vib:		.word	256*0
++ mib:		.word	256*0
++ 
+  .text
+  endtext:
+  .data
+*** 0.96c/linux/fs/inode.c	Thu Jul  2 00:42:04 1992
+--- linux/fs/inode.c	Sat Jul 11 01:37:05 1992
+***************
+*** 252,257 ****
+--- 252,258 ----
+  	}
+  	inode->i_dev = dev;
+  	inode->i_ino = nr;
++ 	inode->i_flags = inode->i_sb->s_flags;
+  	read_inode(inode);
+  	return inode;
+  }
+*** 0.96c/linux/fs/open.c	Thu Jul  2 00:42:04 1992
+--- linux/fs/open.c	Sat Jul 11 03:58:46 1992
+***************
+*** 73,78 ****
+--- 73,82 ----
+  		iput(inode);
+  		return -EACCES;
+  	}
++ 	if (IS_RDONLY(inode)) {
++ 		iput(inode);
++ 		return -EROFS;
++ 	}
+  	inode->i_size = length;
+  	if (inode->i_op && inode->i_op->truncate)
+  		inode->i_op->truncate(inode);
+***************
+*** 91,97 ****
+  		return -EBADF;
+  	if (!(inode = file->f_inode))
+  		return -ENOENT;
+! 	if (S_ISDIR(inode->i_mode) || !(file->f_flags & 2))
+  		return -EACCES;
+  	inode->i_size = length;
+  	if (inode->i_op && inode->i_op->truncate)
+--- 95,101 ----
+  		return -EBADF;
+  	if (!(inode = file->f_inode))
+  		return -ENOENT;
+! 	if (S_ISDIR(inode->i_mode) || !(file->f_mode & 2))
+  		return -EACCES;
+  	inode->i_size = length;
+  	if (inode->i_op && inode->i_op->truncate)
+***************
+*** 112,117 ****
+--- 116,125 ----
+  
+  	if (!(inode=namei(filename)))
+  		return -ENOENT;
++ 	if (IS_RDONLY(inode)) {
++ 		iput(inode);
++ 		return -EROFS;
++ 	}
+  	if (times) {
+  		if ((current->euid != inode->i_uid) && !suser()) {
+  			iput(inode);
+***************
+*** 215,220 ****
+--- 223,230 ----
+  		return -ENOENT;
+  	if ((current->euid != inode->i_uid) && !suser())
+  		return -EPERM;
++ 	if (IS_RDONLY(inode))
++ 		return -EROFS;
+  	inode->i_mode = (mode & 07777) | (inode->i_mode & ~07777);
+  	inode->i_dirt = 1;
+  	return 0;
+***************
+*** 230,235 ****
+--- 240,249 ----
+  		iput(inode);
+  		return -EPERM;
+  	}
++ 	if (IS_RDONLY(inode)) {
++ 		iput(inode);
++ 		return -EROFS;
++ 	}
+  	inode->i_mode = (mode & 07777) | (inode->i_mode & ~07777);
+  	inode->i_dirt = 1;
+  	iput(inode);
+***************
+*** 245,250 ****
+--- 259,266 ----
+  		return -EBADF;
+  	if (!(inode = file->f_inode))
+  		return -ENOENT;
++ 	if (IS_RDONLY(inode))
++ 		return -EROFS;
+  	if ((current->euid == inode->i_uid && user == inode->i_uid &&
+  	     (in_group_p(group) || group == inode->i_gid)) ||
+  	    suser()) {
+***************
+*** 262,267 ****
+--- 278,287 ----
+  
+  	if (!(inode = lnamei(filename)))
+  		return -ENOENT;
++ 	if (IS_RDONLY(inode)) {
++ 		iput(inode);
++ 		return -EROFS;
++ 	}
+  	if ((current->euid == inode->i_uid && user == inode->i_uid &&
+  	     (in_group_p(group) || group == inode->i_gid)) ||
+  	    suser()) {
+***************
+*** 325,330 ****
+--- 345,351 ----
+  int sys_close(unsigned int fd)
+  {	
+  	struct file * filp;
++ 	struct inode * inode;
+  
+  	if (fd >= NR_OPEN)
+  		return -EINVAL;
+***************
+*** 340,348 ****
+  		filp->f_count--;
+  		return 0;
+  	}
+  	if (filp->f_op && filp->f_op->release)
+! 		filp->f_op->release(filp->f_inode,filp);
+! 	iput(filp->f_inode);
+  	filp->f_count--;
+  	return 0;
+  }
+--- 361,370 ----
+  		filp->f_count--;
+  		return 0;
+  	}
++ 	inode = filp->f_inode;
+  	if (filp->f_op && filp->f_op->release)
+! 		filp->f_op->release(inode,filp);
+  	filp->f_count--;
++ 	iput(inode);
+  	return 0;
+  }
+*** 0.96c/linux/fs/exec.c	Thu Jul  2 01:30:00 1992
+--- linux/fs/exec.c	Sat Jul 11 00:49:32 1992
+***************
+*** 183,189 ****
+  		iput(inode);
+  		return -EACCES;
+  	}
+! 	if (!(bh = bread(inode->i_dev,inode->i_data[0]))) {
+  		iput(inode);
+  		return -EACCES;
+  	}
+--- 183,189 ----
+  		iput(inode);
+  		return -EACCES;
+  	}
+! 	if (!(bh = bread(inode->i_dev,bmap(inode,0)))) {
+  		iput(inode);
+  		return -EACCES;
+  	}
+***************
+*** 406,412 ****
+--- 406,422 ----
+  		retval = -EACCES;
+  		goto exec_error2;
+  	}
++ 	if (IS_NOEXEC(inode)) { /* FS mustn't be mounted noexec */
++ 		retval = -EPERM;
++ 		goto exec_error2;
++ 	}
+  	i = inode->i_mode;
++ 	if (IS_NOSUID(inode) && (((i & S_ISUID) && inode->i_uid != current->
++ 	    euid) || ((i & S_ISGID) && inode->i_gid != current->egid)) &&
++ 	    !suser()) {
++ 		retval = -EPERM;
++ 		goto exec_error2;
++ 	}
+  	/* make sure we don't let suid, sgid files be ptraced. */
+  	if (current->flags & PF_PTRACED) {
+  		e_uid = current->euid;
+***************
+*** 424,430 ****
+  		retval = -EACCES;
+  		goto exec_error2;
+  	}
+! 	if (!(bh = bread(inode->i_dev,inode->i_data[0]))) {
+  		retval = -EACCES;
+  		goto exec_error2;
+  	}
+--- 434,440 ----
+  		retval = -EACCES;
+  		goto exec_error2;
+  	}
+! 	if (!(bh = bread(inode->i_dev,bmap(inode,0)))) {
+  		retval = -EACCES;
+  		goto exec_error2;
+  	}
+*** 0.96c/linux/fs/super.c	Fri Jul  3 03:09:37 1992
+--- linux/fs/super.c	Sat Jul 11 15:56:17 1992
+***************
+*** 11,16 ****
+--- 11,17 ----
+  #include <linux/sched.h>
+  #include <linux/minix_fs.h>
+  #include <linux/ext_fs.h>
++ /* #include <linux/msdos_fs.h> */
+  #include <linux/kernel.h>
+  #include <linux/stat.h>
+  #include <asm/system.h>
+***************
+*** 18,23 ****
+--- 19,25 ----
+  
+  #include <errno.h>
+  
++ 
+  int sync_dev(int dev);
+  void wait_for_keypress(void);
+  
+***************
+*** 36,41 ****
+--- 38,44 ----
+  static struct file_system_type file_systems[] = {
+  	{minix_read_super,"minix"},
+  	{ext_read_super,"ext"},
++  /*	{msdos_read_super,"msdos"}, */
+  	{NULL,NULL}
+  };
+  
+***************
+*** 112,118 ****
+  		sb->s_op->put_super(sb);
+  }
+  
+! static struct super_block * read_super(int dev,char *name,void *data)
+  {
+  	struct super_block * s;
+  	struct file_system_type *type;
+--- 115,121 ----
+  		sb->s_op->put_super(sb);
+  }
+  
+! static struct super_block * read_super(int dev,char *name,int flags,void *data)
+  {
+  	struct super_block * s;
+  	struct file_system_type *type;
+***************
+*** 133,138 ****
+--- 136,142 ----
+  			break;
+  	}
+  	s->s_dev = dev;
++ 	s->s_flags = flags;
+  	if (!type->read_super(s,data))
+  		return(NULL);
+  	s->s_dev = dev;
+***************
+*** 183,209 ****
+  	return 0;
+  }
+  
+! int sys_mount(char * dev_name, char * dir_name, char * type, int rw_flag)
+  {
+! 	struct inode * dev_i, * dir_i;
+  	struct super_block * sb;
+- 	int dev;
+- 	char tmp[100],*t;
+- 	int i;
+  
+! 	if (!suser())
+! 		return -EPERM;
+! 	if (!(dev_i = namei(dev_name)))
+  		return -ENOENT;
+! 	dev = dev_i->i_rdev;
+! 	if (!S_ISBLK(dev_i->i_mode)) {
+! 		iput(dev_i);
+! 		return -EPERM;
+! 	}
+! 	iput(dev_i);
+! 	if (!(dir_i=namei(dir_name)))
+! 		return -ENOENT;
+! 	if (dir_i->i_count != 1 || dir_i->i_ino == MINIX_ROOT_INO) {
+  		iput(dir_i);
+  		return -EBUSY;
+  	}
+--- 187,209 ----
+  	return 0;
+  }
+  
+! /*
+!  * do_mount() does the actual mounting after sys_mount has done the ugly
+!  * parameter parsing. When enough time has gone by, and everything uses the
+!  * new mount() parameters, sys_mount() can then be cleaned up.
+!  *
+!  * We cannot mount a filesystem if it has active, used, or dirty inodes.
+!  * We also have to flush all inode-data for this device, as the new mount
+!  * might need new info.
+!  */
+! static int do_mount(int dev, const char * dir, char * type, int flags, void * data)
+  {
+! 	struct inode * inode, * dir_i;
+  	struct super_block * sb;
+  
+! 	if (!(dir_i = namei(dir)))
+  		return -ENOENT;
+! 	if (dir_i->i_count != 1 || dir_i->i_mount) {
+  		iput(dir_i);
+  		return -EBUSY;
+  	}
+***************
+*** 211,239 ****
+  		iput(dir_i);
+  		return -EPERM;
+  	}
+! 	if (dir_i->i_mount) {
+  		iput(dir_i);
+  		return -EPERM;
+  	}
+  	if (type) {
+! 		i = 0;
+! 		while (i < 100 && (tmp[i] = get_fs_byte(type++)))
+! 			i++;
+  		t = tmp;
+  	} else
+  		t = "minix";
+! 	if (!(sb = read_super(dev,t,NULL))) {
+! 		iput(dir_i);
+! 		return -EBUSY;
+! 	}
+! 	if (sb->s_covered) {
+! 		iput(dir_i);
+! 		return -EBUSY;
+! 	}
+! 	sb->s_covered = dir_i;
+! 	dir_i->i_mount = 1;
+! 	dir_i->i_dirt = 1;		/* NOTE! we don't iput(dir_i) */
+! 	return 0;			/* we do that in umount */
+  }
+  
+  void mount_root(void)
+--- 211,292 ----
+  		iput(dir_i);
+  		return -EPERM;
+  	}
+! 	for (inode = inode_table+0 ; inode < inode_table+NR_INODE ; inode++) {
+! 		if (inode->i_dev != dev)
+! 			continue;
+! 		if (inode->i_count || inode->i_dirt || inode->i_lock) {
+! 			iput(dir_i);
+! 			return -EBUSY;
+! 		}
+! 		inode->i_dev = 0;
+! 	}
+! 	sb = read_super(dev,type,flags,data);
+! 	if (!sb || sb->s_covered) {
+  		iput(dir_i);
++ 		return -EBUSY;
++ 	}
++ 	sb->s_flags = flags;
++ 	sb->s_covered = dir_i;
++ 	dir_i->i_mount = 1;
++ 	return 0;		/* we don't iput(dir_i) - see umount */
++ }
++ 
++ /*
++  * Flags is a 16-bit value that allows up to 16 non-fs dependent flags to
++  * be given to the mount() call (ie: read-only, no-dev, no-suid etc).
++  *
++  * data is a (void *) that can point to any structure up to 4095 bytes, which
++  * can contain arbitrary fs-dependent information (or be NULL).
++  *
++  * NOTE! As old versions of mount() didn't use this setup, the flags has to have
++  * a special 16-bit magic number in the hight word: 0xC0ED. If this magic word
++  * isn't present, the flags and data info isn't used, as the syscall assumes we
++  * are talking to an older version that didn't understand them.
++  */
++ int sys_mount(char * dev_name, char * dir_name, char * type,
++ 	unsigned long new_flags, void *data)
++ {
++ 	struct inode * inode;
++ 	int dev;
++ 	int retval = 0;
++ 	char tmp[100],*t;
++ 	int i;
++ 	unsigned long flags = 0;
++ 	unsigned long page = 0;
++ 
++ 	if (!suser())
+  		return -EPERM;
++ 	if (!(inode = namei(dev_name)))
++ 		return -ENOENT;
++ 	dev = inode->i_rdev;
++ 	if (!S_ISBLK(inode->i_mode))
++ 		retval = -EPERM;
++ 	else if (IS_NODEV(inode))
++ 		retval = -EACCES;
++ 	iput(inode);
++ 	if (retval)
++ 		return retval;
++ 	if ((new_flags & 0xffff0000) == 0xC0ED0000) {
++ 		flags = new_flags & 0xffff;
++ 		if (data && (unsigned long) data < TASK_SIZE)
++ 			page = get_free_page();
+  	}
++ 	if (page) {
++ 		i = TASK_SIZE - (unsigned long) data;
++ 		if (i < 0 || i > 4095)
++ 			i = 4095;
++ 		memcpy_fromfs((void *) page,data,i);
++ 	}
+  	if (type) {
+! 		for (i = 0 ; i < 100 ; i++)
+! 			if (!(tmp[i] = get_fs_byte(type++)))
+! 				break;
+  		t = tmp;
+  	} else
+  		t = "minix";
+! 	retval = do_mount(dev,dir_name,t,flags,(void *) page);
+! 	free_page(page);
+! 	return retval;
+  }
+  
+  void mount_root(void)
+***************
+*** 255,261 ****
+  		p->s_lock = 0;
+  		p->s_wait = NULL;
+  	}
+! 	if (!(p=read_super(ROOT_DEV,"minix",NULL)))
+  		panic("Unable to mount root");
+   	/*wait_for_keypress();
+  	if (!(mi=iget(ROOT_DEV,MINIX_ROOT_INO)))
+--- 308,314 ----
+  		p->s_lock = 0;
+  		p->s_wait = NULL;
+  	}
+! 	if (!(p=read_super(ROOT_DEV,"minix",0,NULL)))
+  		panic("Unable to mount root");
+   	/*wait_for_keypress();
+  	if (!(mi=iget(ROOT_DEV,MINIX_ROOT_INO)))
+***************
+*** 264,269 ****
+--- 317,323 ----
+  	mi=p->s_mounted;
+  	mi->i_count += 3 ;	/* NOTE! it is logically used 4 times, not 1 */
+  	p->s_mounted = p->s_covered = mi;
++ 	p->s_flags = 0;
+  	current->pwd = mi;
+  	current->root = mi;
+  	free=0;
+*** 0.96c/linux/fs/namei.c	Thu Jul  2 00:42:04 1992
+--- linux/fs/namei.c	Sat Jul 11 03:57:49 1992
+***************
+*** 229,234 ****
+--- 229,238 ----
+  			iput(dir);
+  			return -EACCES;
+  		}
++ 		if (IS_RDONLY(dir)) {
++ 			iput(dir);
++ 			return -EROFS;
++ 		}
+  		return dir->i_op->create(dir,basename,namelen,mode,res_inode);
+  	}
+  	if (flag & O_EXCL) {
+***************
+*** 238,254 ****
+  	}
+  	if (!(inode = follow_link(dir,inode)))
+  		return -ELOOP;
+  	if ((S_ISDIR(inode->i_mode) && (flag & O_ACCMODE)) ||
+  	    !permission(inode,ACC_MODE(flag))) {
+  		iput(inode);
+  		return -EPERM;
+  	}
+- 	inode->i_atime = CURRENT_TIME;
+  	if (flag & O_TRUNC)
+  		if (inode->i_op && inode->i_op->truncate) {
+  			inode->i_size = 0;
+  			inode->i_op->truncate(inode);
+  		}
+  	*res_inode = inode;
+  	return 0;
+  }
+--- 242,272 ----
+  	}
+  	if (!(inode = follow_link(dir,inode)))
+  		return -ELOOP;
++ 	if (S_ISBLK(inode->i_mode) || S_ISCHR(inode->i_mode)) {
++ 		if (IS_NODEV(inode)) {
++ 			iput(inode);
++ 			return -EACCES;
++ 		}
++ 	} else {
++ 		if (IS_RDONLY(inode) && (flag & (O_TRUNC | O_ACCMODE))) {
++ 			iput(inode);
++ 			return -EROFS;
++ 		}
++ 	}
+  	if ((S_ISDIR(inode->i_mode) && (flag & O_ACCMODE)) ||
+  	    !permission(inode,ACC_MODE(flag))) {
+  		iput(inode);
+  		return -EPERM;
+  	}
+  	if (flag & O_TRUNC)
+  		if (inode->i_op && inode->i_op->truncate) {
+  			inode->i_size = 0;
+  			inode->i_op->truncate(inode);
+  		}
++ 	if (!IS_RDONLY(inode)) {
++ 		inode->i_atime = CURRENT_TIME;
++ 		inode->i_dirt = 1;
++ 	}
+  	*res_inode = inode;
+  	return 0;
+  }
+***************
+*** 265,270 ****
+--- 283,292 ----
+  		iput(dir);
+  		return -ENOENT;
+  	}
++ 	if (IS_RDONLY(dir)) {
++ 		iput(dir);
++ 		return -EROFS;
++ 	}
+  	if (!permission(dir,MAY_WRITE)) {
+  		iput(dir);
+  		return -EACCES;
+***************
+*** 295,300 ****
+--- 317,326 ----
+  		iput(dir);
+  		return -ENOENT;
+  	}
++ 	if (IS_RDONLY(dir)) {
++ 		iput(dir);
++ 		return -EROFS;
++ 	}
+  	if (!permission(dir,MAY_WRITE)) {
+  		iput(dir);
+  		return -EACCES;
+***************
+*** 318,323 ****
+--- 344,353 ----
+  		iput(dir);
+  		return -ENOENT;
+  	}
++ 	if (IS_RDONLY(dir)) {
++ 		iput(dir);
++ 		return -EROFS;
++ 	}
+  	if (!permission(dir,MAY_WRITE)) {
+  		iput(dir);
+  		return -EACCES;
+***************
+*** 341,346 ****
+--- 371,380 ----
+  		iput(dir);
+  		return -EPERM;
+  	}
++ 	if (IS_RDONLY(dir)) {
++ 		iput(dir);
++ 		return -EROFS;
++ 	}
+  	if (!permission(dir,MAY_WRITE)) {
+  		iput(dir);
+  		return -EACCES;
+***************
+*** 365,370 ****
+--- 399,408 ----
+  		iput(dir);
+  		return -ENOENT;
+  	}
++ 	if (IS_RDONLY(dir)) {
++ 		iput(dir);
++ 		return -EROFS;
++ 	}
+  	if (!permission(dir,MAY_WRITE)) {
+  		iput(dir);
+  		return -EACCES;
+***************
+*** 395,400 ****
+--- 433,443 ----
+  		iput(dir);
+  		return -EPERM;
+  	}
++ 	if (IS_RDONLY(dir)) {
++ 		iput(oldinode);
++ 		iput(dir);
++ 		return -EROFS;
++ 	}
+  	if (dir->i_dev != oldinode->i_dev) {
+  		iput(dir);
+  		iput(oldinode);
+***************
+*** 453,458 ****
+--- 496,506 ----
+  		iput(old_dir);
+  		iput(new_dir);
+  		return -EXDEV;
++ 	}
++ 	if (IS_RDONLY(new_dir) || IS_RDONLY(old_dir)) {
++ 		iput(old_dir);
++ 		iput(new_dir);
++ 		return -EROFS;
+  	}
+  	if (!old_dir->i_op || !old_dir->i_op->rename) {
+  		iput(old_dir);
+*** 0.96c/linux/fs/ioctl.c	Thu Jul  2 00:42:04 1992
+--- linux/fs/ioctl.c	Sat Jul 11 00:49:32 1992
+***************
+*** 6,11 ****
+--- 6,12 ----
+  
+  #include <errno.h>
+  
++ #include <asm/segment.h>
+  #include <linux/string.h>
+  #include <linux/stat.h>
+  #include <linux/sched.h>
+***************
+*** 13,21 ****
+--- 14,30 ----
+  int sys_ioctl(unsigned int fd, unsigned int cmd, unsigned long arg)
+  {	
+  	struct file * filp;
++ 	int block;
+  
+  	if (fd >= NR_OPEN || !(filp = current->filp[fd]))
+  		return -EBADF;
++ 	if (S_ISREG(filp->f_inode->i_mode) && cmd == BMAP_IOCTL &&
++ 	    filp->f_inode->i_op->bmap) {
++ 		block = get_fs_long((long *) arg);
++ 		block = filp->f_inode->i_op->bmap(filp->f_inode,block);
++ 		put_fs_long(block,(long *) arg);
++ 		return 0;
++ 	}
+  	if (filp->f_op && filp->f_op->ioctl)
+  		return filp->f_op->ioctl(filp->f_inode, filp, cmd,arg);
+  	return -EINVAL;
+*** 0.96c/linux/fs/ext/bitmap.c	Fri Jul  3 03:18:53 1992
+--- linux/fs/ext/bitmap.c	Sat Jul 11 05:04:14 1992
+***************
+*** 203,208 ****
+--- 203,209 ----
+  		iput(inode);
+  		return NULL;
+  	}
++ 	inode->i_flags = inode->i_sb->s_flags;
+  	j = 8192;
+  	for (i=0 ; i<8 ; i++)
+  		if (bh=inode->i_sb->s_imap[i])
+*** 0.96c/linux/fs/ext/file.c	Fri Jul  3 16:24:07 1992
+--- linux/fs/ext/file.c	Sat Jul 11 00:49:32 1992
+***************
+*** 153,160 ****
+  	} while (left > 0);
+  	if (!read)
+  		return -EIO;
+! 	inode->i_atime = CURRENT_TIME;
+! 	inode->i_dirt = 1;
+  	return read;
+  }
+  
+--- 153,162 ----
+  	} while (left > 0);
+  	if (!read)
+  		return -EIO;
+! 	if (!IS_RDONLY(inode)) {
+! 		inode->i_atime = CURRENT_TIME;
+! 		inode->i_dirt = 1;
+! 	}
+  	return read;
+  }
+  
+*** 0.96c/linux/fs/ext/freelists.c	Fri Jul  3 03:08:06 1992
+--- linux/fs/ext/freelists.c	Sat Jul 11 05:04:14 1992
+***************
+*** 70,81 ****
+  		if (bh->b_count)
+  			brelse(bh);
+  	}
+! 	efb = (struct ext_free_block *) sb->s_zmap[1]->b_data;
+! 	if (efb->count == 254) {
+  #ifdef EXTFS_DEBUG
+  printk("ext_free_block: block full, skipping to %d\n", block);
+  #endif
+! 		brelse (sb->s_zmap[1]);
+  		if (!(sb->s_zmap[1] = bread (dev, block)))
+  			panic ("ext_free_block: unable to read block to free\n");
+  		efb = (struct ext_free_block *) sb->s_zmap[1]->b_data;
+--- 70,83 ----
+  		if (bh->b_count)
+  			brelse(bh);
+  	}
+! 	if (sb->s_zmap[1])
+! 		efb = (struct ext_free_block *) sb->s_zmap[1]->b_data;
+! 	if (!sb->s_zmap[1] || efb->count == 254) {
+  #ifdef EXTFS_DEBUG
+  printk("ext_free_block: block full, skipping to %d\n", block);
+  #endif
+! 		if (sb->s_zmap[1])
+! 			brelse (sb->s_zmap[1]);
+  		if (!(sb->s_zmap[1] = bread (dev, block)))
+  			panic ("ext_free_block: unable to read block to free\n");
+  		efb = (struct ext_free_block *) sb->s_zmap[1]->b_data;
+***************
+*** 209,221 ****
+  		free_super (inode->i_sb);
+  		return;
+  	}
+! 	efi = ((struct ext_free_inode *) inode->i_sb->s_imap[1]->b_data) +
+! 		(((unsigned long) inode->i_sb->s_imap[0])-1)%EXT_INODES_PER_BLOCK;
+! 	if (efi->count == 14) {
+  #ifdef EXTFS_DEBUG
+  printk("ext_free_inode: inode full, skipping to %d\n", inode->i_ino);
+  #endif
+! 		brelse (inode->i_sb->s_imap[1]);
+  		block = 2 + (inode->i_ino - 1) / EXT_INODES_PER_BLOCK;
+  		if (!(bh = bread(inode->i_dev, block)))
+  			panic("ext_free_inode: unable to read inode block\n");
+--- 211,225 ----
+  		free_super (inode->i_sb);
+  		return;
+  	}
+! 	if (inode->i_sb->s_imap[1])
+! 		efi = ((struct ext_free_inode *) inode->i_sb->s_imap[1]->b_data) +
+! 			(((unsigned long) inode->i_sb->s_imap[0])-1)%EXT_INODES_PER_BLOCK;
+! 	if (!inode->i_sb->s_imap[1] || efi->count == 14) {
+  #ifdef EXTFS_DEBUG
+  printk("ext_free_inode: inode full, skipping to %d\n", inode->i_ino);
+  #endif
+! 		if (inode->i_sb->s_imap[1])
+! 			brelse (inode->i_sb->s_imap[1]);
+  		block = 2 + (inode->i_ino - 1) / EXT_INODES_PER_BLOCK;
+  		if (!(bh = bread(inode->i_dev, block)))
+  			panic("ext_free_inode: unable to read inode block\n");
+***************
+*** 249,254 ****
+--- 253,259 ----
+  		iput(inode);
+  		return NULL;
+  	}
++ 	inode->i_flags = inode->i_sb->s_flags;
+  	if (!inode->i_sb->s_imap[1])
+  		return 0;
+  	lock_super (inode->i_sb);
+*** 0.96c/linux/fs/ext/namei.c	Fri Jul  3 16:28:36 1992
+--- linux/fs/ext/namei.c	Sat Jul 11 12:35:28 1992
+***************
+*** 808,813 ****
+--- 808,817 ----
+  		retval = 0;
+  		goto end_rename;
+  	}
++ 	if (S_ISDIR(new_inode->i_mode)) {
++ 		retval = -EEXIST;
++ 		goto end_rename;
++ 	}
+  	if (S_ISDIR(old_inode->i_mode)) {
+  		retval = -EEXIST;
+  		if (new_bh)
+*** 0.96c/linux/fs/minix/bitmap.c	Thu Jul  2 00:44:28 1992
+--- linux/fs/minix/bitmap.c	Sat Jul 11 05:03:11 1992
+***************
+*** 191,196 ****
+--- 191,197 ----
+  		iput(inode);
+  		return NULL;
+  	}
++ 	inode->i_flags = inode->i_sb->s_flags;
+  	j = 8192;
+  	for (i=0 ; i<8 ; i++)
+  		if (bh=inode->i_sb->s_imap[i])
+*** 0.96c/linux/fs/minix/file.c	Thu Jul  2 00:44:28 1992
+--- linux/fs/minix/file.c	Sat Jul 11 00:49:33 1992
+***************
+*** 153,160 ****
+  	} while (left > 0);
+  	if (!read)
+  		return -EIO;
+! 	inode->i_atime = CURRENT_TIME;
+! 	inode->i_dirt = 1;
+  	return read;
+  }
+  
+--- 153,162 ----
+  	} while (left > 0);
+  	if (!read)
+  		return -EIO;
+! 	if (!IS_RDONLY(inode)) {
+! 		inode->i_atime = CURRENT_TIME;
+! 		inode->i_dirt = 1;
+! 	}
+  	return read;
+  }
+  
+*** 0.96c/linux/fs/minix/namei.c	Fri Jul  3 16:28:36 1992
+--- linux/fs/minix/namei.c	Sat Jul 11 12:35:28 1992
+***************
+*** 676,681 ****
+--- 676,685 ----
+  		retval = 0;
+  		goto end_rename;
+  	}
++ 	if (S_ISDIR(new_inode->i_mode)) {
++ 		retval = -EEXIST;
++ 		goto end_rename;
++ 	}
+  	if (S_ISDIR(old_inode->i_mode)) {
+  		retval = -EEXIST;
+  		if (new_bh)
+*** 0.96c/linux/init/main.c	Sun Jul  5 00:57:47 1992
+--- linux/init/main.c	Tue Jul  7 17:06:59 1992
+***************
+*** 53,58 ****
+--- 53,59 ----
+  
+  extern int vsprintf();
+  extern void init(void);
++ extern void init_IRQ(void);
+  extern long blk_dev_init(long,long);
+  extern long chr_dev_init(long,long);
+  extern void hd_init(void);
+***************
+*** 164,169 ****
+--- 165,171 ----
+  		buffer_memory_end = 1*1024*1024;
+  	main_memory_start = buffer_memory_end;
+  	trap_init();
++ 	init_IRQ();
+  	sched_init();
+  	main_memory_start = chr_dev_init(main_memory_start,memory_end);
+  	main_memory_start = blk_dev_init(main_memory_start,memory_end);
+***************
+*** 183,196 ****
+  		init();
+  	}
+  /*
+!  *   NOTE!!   For any other task 'pause()' would mean we have to get a
+!  * signal to awaken, but task0 is the sole exception (see 'schedule()')
+!  * as task 0 gets activated at every idle moment (when no other tasks
+!  * can run). For task0 'pause()' just means we go check if some other
+!  * task can run, and if not we return here.
+   */
+  	for(;;)
+! 		__asm__("int $0x80"::"a" (__NR_pause):"ax");
+  }
+  
+  static int printf(const char *fmt, ...)
+--- 185,200 ----
+  		init();
+  	}
+  /*
+!  * task[0] is meant to be used as an "idle" task: it may not sleep, but
+!  * it might do some general things like count free pages or it could be
+!  * used to implement a reasonable LRU algorithm for the paging routines:
+!  * anything that can be useful, but shouldn't take time from the real
+!  * processes.
+!  *
+!  * Right now task[0] just does a infinite loop in user mode.
+   */
+  	for(;;)
+! 		/* nothing */ ;
+  }
+  
+  static int printf(const char *fmt, ...)
+*** 0.96c/linux/kernel/Makefile	Sun Jul  5 03:09:42 1992
+--- linux/kernel/Makefile	Sat Jul 11 20:12:09 1992
+***************
+*** 18,24 ****
+  
+  SUBDIRS	= chr_drv blk_drv math
+  
+! OBJS  = sched.o sys_call.o traps.o asm.o fork.o \
+  	panic.o printk.o vsprintf.o sys.o exit.o \
+  	signal.o mktime.o ptrace.o ioport.o itimer.o
+  
+--- 18,24 ----
+  
+  SUBDIRS	= chr_drv blk_drv math
+  
+! OBJS  = sched.o sys_call.o traps.o irq.o fork.o \
+  	panic.o printk.o vsprintf.o sys.o exit.o \
+  	signal.o mktime.o ptrace.o ioport.o itimer.o
+  
+***************
+*** 73,78 ****
+--- 73,85 ----
+    /usr/src/linux/include/linux/mm.h /usr/src/linux/include/linux/kernel.h /usr/src/linux/include/signal.h \
+    /usr/src/linux/include/sys/param.h /usr/src/linux/include/sys/time.h /usr/src/linux/include/time.h \
+    /usr/src/linux/include/sys/resource.h /usr/src/linux/include/errno.h 
++ irq.o : irq.c /usr/src/linux/include/signal.h /usr/src/linux/include/sys/types.h \
++   /usr/src/linux/include/stddef.h /usr/src/linux/include/errno.h /usr/src/linux/include/sys/ptrace.h \
++   /usr/src/linux/include/linux/sched.h /usr/src/linux/include/linux/head.h /usr/src/linux/include/linux/fs.h \
++   /usr/src/linux/include/sys/dirent.h /usr/src/linux/include/limits.h /usr/src/linux/include/sys/vfs.h \
++   /usr/src/linux/include/linux/mm.h /usr/src/linux/include/linux/kernel.h /usr/src/linux/include/sys/param.h \
++   /usr/src/linux/include/sys/time.h /usr/src/linux/include/time.h /usr/src/linux/include/sys/resource.h \
++   /usr/src/linux/include/asm/system.h /usr/src/linux/include/asm/io.h /usr/src/linux/include/asm/irq.h 
+  itimer.o : itimer.c /usr/src/linux/include/linux/sched.h /usr/src/linux/include/linux/head.h \
+    /usr/src/linux/include/linux/fs.h /usr/src/linux/include/sys/types.h /usr/src/linux/include/stddef.h \
+    /usr/src/linux/include/sys/dirent.h /usr/src/linux/include/limits.h /usr/src/linux/include/sys/vfs.h \
+*** 0.96c/linux/kernel/sched.c	Sun Jul  5 01:27:18 1992
+--- linux/kernel/sched.c	Tue Jul  7 18:53:54 1992
+***************
+*** 10,15 ****
+--- 10,18 ----
+   * call functions (type getpid(), which just extracts a field from
+   * current-task
+   */
++ 
++ #define TIMER_IRQ 0
++ 
+  #include <linux/sched.h>
+  #include <linux/timer.h>
+  #include <linux/kernel.h>
+***************
+*** 369,375 ****
+  unsigned long timer_active = 0;
+  struct timer_struct timer_table[32];
+  
+! void do_timer(long cpl)
+  {
+  	unsigned long mask;
+  	struct timer_struct *tp = timer_table+0;
+--- 372,378 ----
+  unsigned long timer_active = 0;
+  struct timer_struct timer_table[32];
+  
+! static void do_timer(int cpl)
+  {
+  	unsigned long mask;
+  	struct timer_struct *tp = timer_table+0;
+***************
+*** 376,393 ****
+  	struct task_struct ** task_p;
+  	static int avg_cnt = 0;
+  
+! 	for (mask = 1 ; mask ; tp++,mask += mask) {
+! 		if (mask > timer_active)
+! 			break;
+! 		if (!(mask & timer_active))
+! 			continue;
+! 		if (tp->expires > jiffies)
+! 			continue;
+! 		timer_active &= ~mask;
+! 		tp->fn();
+! 		sti();
+  	}
+! 
+  	/* Update ITIMER_REAL for every task */
+  	for (task_p = &LAST_TASK; task_p >= &FIRST_TASK; task_p--)
+  		if (*task_p && (*task_p)->it_real_value
+--- 379,397 ----
+  	struct task_struct ** task_p;
+  	static int avg_cnt = 0;
+  
+! 	jiffies++;
+! 	if (!cpl)
+! 		current->stime++;
+! 	else
+! 		current->utime++;
+! 	if (--avg_cnt < 0) {
+! 		avg_cnt = 500;
+! 		update_avg();
+  	}
+! 	if ((--current->counter)<=0) {
+! 		current->counter=0;
+! 		need_resched = 1;
+! 	}
+  	/* Update ITIMER_REAL for every task */
+  	for (task_p = &LAST_TASK; task_p >= &FIRST_TASK; task_p--)
+  		if (*task_p && (*task_p)->it_real_value
+***************
+*** 402,417 ****
+  		send_sig(SIGPROF,current,1);
+  	}
+  	/* Update ITIMER_VIRT for current task if not in a system call */
+! 	if (cpl && current->it_virt_value && !(--current->it_virt_value)) {
+  		current->it_virt_value = current->it_virt_incr;
+  		send_sig(SIGVTALRM,current,1);
+  	}
+! 
+! 	if (cpl)
+! 		current->utime++;
+! 	else
+! 		current->stime++;
+! 
+  	if (next_timer) {
+  		next_timer->jiffies--;
+  		while (next_timer && next_timer->jiffies <= 0) {
+--- 406,426 ----
+  		send_sig(SIGPROF,current,1);
+  	}
+  	/* Update ITIMER_VIRT for current task if not in a system call */
+! 	if (current->it_virt_value && !(--current->it_virt_value)) {
+  		current->it_virt_value = current->it_virt_incr;
+  		send_sig(SIGVTALRM,current,1);
+  	}
+! 	for (mask = 1 ; mask ; tp++,mask += mask) {
+! 		if (mask > timer_active)
+! 			break;
+! 		if (!(mask & timer_active))
+! 			continue;
+! 		if (tp->expires > jiffies)
+! 			continue;
+! 		timer_active &= ~mask;
+! 		tp->fn();
+! 		sti();
+! 	}
+  	if (next_timer) {
+  		next_timer->jiffies--;
+  		while (next_timer && next_timer->jiffies <= 0) {
+***************
+*** 425,438 ****
+  	}
+  	if (current_DOR & 0xf0)
+  		do_floppy_timer();
+- 	if (--avg_cnt < 0) {
+- 		avg_cnt = 500;
+- 		update_avg();
+- 	}
+- 	if ((--current->counter)<=0) {
+- 		current->counter=0;
+- 		need_resched = 1;
+- 	}
+  }
+  
+  int sys_alarm(long seconds)
+--- 434,439 ----
+***************
+*** 496,501 ****
+--- 497,503 ----
+  		panic("Struct sigaction MUST be 16 bytes");
+  	set_tss_desc(gdt+FIRST_TSS_ENTRY,&(init_task.task.tss));
+  	set_ldt_desc(gdt+FIRST_LDT_ENTRY,&(init_task.task.ldt));
++ 	set_system_gate(0x80,&system_call);
+  	p = gdt+2+FIRST_TSS_ENTRY;
+  	for(i=1 ; i<NR_TASKS ; i++) {
+  		task[i] = NULL;
+***************
+*** 511,517 ****
+  	outb_p(0x36,0x43);		/* binary, mode 3, LSB/MSB, ch 0 */
+  	outb_p(LATCH & 0xff , 0x40);	/* LSB */
+  	outb(LATCH >> 8 , 0x40);	/* MSB */
+! 	set_intr_gate(0x20,&timer_interrupt);
+! 	outb(inb_p(0x21)&~0x01,0x21);
+! 	set_system_gate(0x80,&system_call);
+  }
+--- 513,517 ----
+  	outb_p(0x36,0x43);		/* binary, mode 3, LSB/MSB, ch 0 */
+  	outb_p(LATCH & 0xff , 0x40);	/* LSB */
+  	outb(LATCH >> 8 , 0x40);	/* MSB */
+! 	request_irq(TIMER_IRQ,do_timer);
+  }
+*** 0.96c/linux/kernel/traps.c	Thu May 21 12:53:42 1992
+--- linux/kernel/traps.c	Fri Jul 10 16:34:12 1992
+***************
+*** 57,63 ****
+  void page_fault(void);
+  void coprocessor_error(void);
+  void reserved(void);
+- void parallel_interrupt(void);
+  void irq13(void);
+  void alignment_check(void);
+  
+--- 57,62 ----
+***************
+*** 116,122 ****
+  
+  void do_nmi(long esp, long error_code)
+  {
+! 	die("nmi",esp,error_code);
+  }
+  
+  void do_debug(long esp, long error_code)
+--- 115,121 ----
+  
+  void do_nmi(long esp, long error_code)
+  {
+! 	printk("Uhhuh. NMI received. Dazed and confused, but trying to continue\n");
+  }
+  
+  void do_debug(long esp, long error_code)
+***************
+*** 201,207 ****
+  	for (i=18;i<48;i++)
+  		set_trap_gate(i,&reserved);
+  	set_trap_gate(45,&irq13);
+- 	outb_p(inb_p(0x21)&0xfb,0x21);
+- 	outb(inb_p(0xA1)&0xdf,0xA1);
+- 	set_trap_gate(39,&parallel_interrupt);
+  }
+--- 200,203 ----
+*** 0.96c/linux/kernel/chr_drv/keyboard.c	Sun Jul  5 01:20:58 1992
+--- linux/kernel/chr_drv/keyboard.c	Tue Jul  7 18:33:38 1992
+***************
+*** 58,64 ****
+  static void kb_wait(void), kb_ack(void);
+  static unsigned int handle_diacr(unsigned int);
+  
+! void do_keyboard(void)
+  {
+  	static unsigned char rep = 0xff, repke0 = 0;
+  	unsigned char scancode, x;
+--- 58,64 ----
+  static void kb_wait(void), kb_ack(void);
+  static unsigned int handle_diacr(unsigned int);
+  
+! void keyboard_interrupt(int cpl)
+  {
+  	static unsigned char rep = 0xff, repke0 = 0;
+  	unsigned char scancode, x;
+***************
+*** 874,880 ****
+  }
+  		
+  
+! #if defined KBD_FR || defined KBD_US
+  static unsigned char num_table[] = "789-456+1230.";
+  #else
+  static unsigned char num_table[] = "789-456+1230,";
+--- 874,880 ----
+  }
+  		
+  
+! #if defined KBD_FR || defined KBD_US || defined KBD_UK
+  static unsigned char num_table[] = "789-456+1230.";
+  #else
+  static unsigned char num_table[] = "789-456+1230,";
+*** 0.96c/linux/kernel/chr_drv/console.c	Mon Jun 29 05:10:41 1992
+--- linux/kernel/chr_drv/console.c	Sat Jul 11 12:41:53 1992
+***************
+*** 30,35 ****
+--- 30,37 ----
+   * <g-hunt@ee.utah.edu>
+   */
+  
++ #define KEYBOARD_IRQ 1
++ 
+  #include <linux/sched.h>
+  #include <linux/timer.h>
+  #include <linux/tty.h>
+***************
+*** 68,74 ****
+  #define NPAR 16
+  
+  extern void vt_init(void);
+! extern void keyboard_interrupt(void);
+  extern void set_leds(void);
+  extern unsigned char kapplic;
+  extern unsigned char ckmode;
+--- 70,76 ----
+  #define NPAR 16
+  
+  extern void vt_init(void);
+! extern void keyboard_interrupt(int cpl);
+  extern void set_leds(void);
+  extern unsigned char kapplic;
+  extern unsigned char ckmode;
+***************
+*** 241,248 ****
+  	"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+  	" !\"#$%&'()*+,-./0123456789:;<=>?"
+  	"@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^ "
+! 	"\004\261\007\007\007\007\370\361\007\007\275\267\326\323\327\304"
+! 	"\304\304\304\304\307\266\320\322\272\363\362\343\007\234\007\0"
+  	"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+  	"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+  	"\040\255\233\234\376\235\174\025\376\376\246\256\252\055\376\376"
+--- 243,250 ----
+  	"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+  	" !\"#$%&'()*+,-./0123456789:;<=>?"
+  	"@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^ "
+! 	"\004\261\007\007\007\007\370\361\040\007\331\277\332\300\305\007"
+! 	"\007\304\007\007\303\264\301\302\263\007\007\007\007\007\234\0"
+  	"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+  	"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+  	"\040\255\233\234\376\235\174\025\376\376\246\256\252\055\376\376"
+***************
+*** 250,260 ****
+  	"\376\376\376\376\216\217\222\200\376\220\376\376\376\376\376\376"
+  	"\376\245\376\376\376\376\231\376\376\376\376\376\232\376\376\341"
+  	"\205\240\203\376\204\206\221\207\212\202\210\211\215\241\214\213"
+! 	"\376\244\225\242\223\376\224\366\376\227\243\226\201\376\376\230"
+  };
+  
+  #define NORM_TRANS (translations[0])
+  #define GRAF_TRANS (translations[1])
+  
+  static unsigned char color_table[] = { 0, 4, 2, 6, 1, 5, 3, 7,
+  				       8,12,10,14, 9,13,11,15 };
+--- 252,280 ----
+  	"\376\376\376\376\216\217\222\200\376\220\376\376\376\376\376\376"
+  	"\376\245\376\376\376\376\231\376\376\376\376\376\232\376\376\341"
+  	"\205\240\203\376\204\206\221\207\212\202\210\211\215\241\214\213"
+! 	"\376\244\225\242\223\376\224\366\376\227\243\226\201\376\376\230",
+! /* IBM grapgics: minimal translations (CR, LF, LL and ESC) */
+! 	"\000\001\002\003\004\005\006\007\010\011\000\013\000\000\016\017"
+! 	"\020\021\022\023\024\025\026\027\030\031\032\000\034\035\036\037"
+! 	"\040\041\042\043\044\045\046\047\050\051\052\053\054\055\056\057"
+! 	"\060\061\062\063\064\065\066\067\070\071\072\073\074\075\076\077"
+! 	"\100\101\102\103\104\105\106\107\110\111\112\113\114\115\116\117"
+! 	"\120\121\122\123\124\125\126\127\130\131\132\133\134\135\136\137"
+! 	"\140\141\142\143\144\145\146\147\150\151\152\153\154\155\156\157"
+! 	"\160\161\162\163\164\165\166\167\170\171\172\173\174\175\176\177"
+! 	"\200\201\202\203\204\205\206\207\210\211\212\213\214\215\216\217"
+! 	"\220\221\222\223\224\225\226\227\230\231\232\233\234\235\236\237"
+! 	"\240\241\242\243\244\245\246\247\250\251\252\253\254\255\256\257"
+! 	"\260\261\262\263\264\265\266\267\270\271\272\273\274\275\276\277"
+! 	"\300\301\302\303\304\305\306\307\310\311\312\313\314\315\316\317"
+! 	"\320\321\322\323\324\325\326\327\330\331\332\333\334\335\336\337"
+! 	"\340\341\342\343\344\345\346\347\350\351\352\353\354\355\356\357"
+! 	"\360\361\362\363\364\365\366\367\370\371\372\373\374\375\376\377"
+  };
+  
+  #define NORM_TRANS (translations[0])
+  #define GRAF_TRANS (translations[1])
++ #define NULL_TRANS (translations[2])
+  
+  static unsigned char color_table[] = { 0, 4, 2, 6, 1, 5, 3, 7,
+  				       8,12,10,14, 9,13,11,15 };
+***************
+*** 605,611 ****
+  static void respond_string(char * p, int currcons, struct tty_struct * tty)
+  {
+  	while (*p) {
+! 		PUTCH(*p,tty->read_q);
+  		p++;
+  	}
+  	TTY_READ_FLUSH(tty);
+--- 625,631 ----
+  static void respond_string(char * p, int currcons, struct tty_struct * tty)
+  {
+  	while (*p) {
+! 		put_tty_queue(*p,tty->read_q);
+  		p++;
+  	}
+  	TTY_READ_FLUSH(tty);
+***************
+*** 621,627 ****
+  		n /= 10;
+  	} while(n && i < 3);	/* We'll take no chances */
+  	while (i--) {
+! 		PUTCH(buff[i],tty->read_q);
+  	}
+  	/* caller must flush */
+  }
+--- 641,647 ----
+  		n /= 10;
+  	} while(n && i < 3);	/* We'll take no chances */
+  	while (i--) {
+! 		put_tty_queue(buff[i],tty->read_q);
+  	}
+  	/* caller must flush */
+  }
+***************
+*** 628,639 ****
+  
+  static void cursor_report(int currcons, struct tty_struct * tty)
+  {
+! 	PUTCH('\033', tty->read_q);
+! 	PUTCH('[', tty->read_q);
+  	respond_num(y + (decom ? top+1 : 1), currcons, tty);
+! 	PUTCH(';', tty->read_q);
+  	respond_num(x+1, currcons, tty);
+! 	PUTCH('R', tty->read_q);
+  	TTY_READ_FLUSH(tty);
+  }
+  
+--- 648,659 ----
+  
+  static void cursor_report(int currcons, struct tty_struct * tty)
+  {
+! 	put_tty_queue('\033', tty->read_q);
+! 	put_tty_queue('[', tty->read_q);
+  	respond_num(y + (decom ? top+1 : 1), currcons, tty);
+! 	put_tty_queue(';', tty->read_q);
+  	respond_num(x+1, currcons, tty);
+! 	put_tty_queue('R', tty->read_q);
+  	TTY_READ_FLUSH(tty);
+  }
+  
+***************
+*** 905,911 ****
+  		printk("con_write: illegal tty\n\r");
+  		return;
+  	}
+! 	while (!tty->stopped &&	(c = GETCH(tty->write_q)) >= 0) {
+  		if (state == ESnormal && translate[c]) {
+  			if (need_wrap) {
+  				cr(currcons);
+--- 925,931 ----
+  		printk("con_write: illegal tty\n\r");
+  		return;
+  	}
+! 	while (!tty->stopped &&	(c = get_tty_queue(tty->write_q)) >= 0) {
+  		if (state == ESnormal && translate[c]) {
+  			if (need_wrap) {
+  				cr(currcons);
+***************
+*** 1176,1181 ****
+--- 1196,1203 ----
+  					G0_charset = GRAF_TRANS;
+  				else if (c == 'B')
+  					G0_charset = NORM_TRANS;
++ 				else if (c == 'U')
++ 					G0_charset = NULL_TRANS;
+  				if (charset == 0)
+  					translate = G0_charset;
+  				state = ESnormal;
+***************
+*** 1185,1190 ****
+--- 1207,1214 ----
+  					G1_charset = GRAF_TRANS;
+  				else if (c == 'B')
+  					G1_charset = NORM_TRANS;
++ 				else if (c == 'U')
++ 					G1_charset = NULL_TRANS;
+  				if (charset == 1)
+  					translate = G1_charset;
+  				state = ESnormal;
+***************
+*** 1338,1345 ****
+  	gotoxy(currcons,orig_x,orig_y);
+  	update_screen(fg_console);
+  
+! 	set_trap_gate(0x21,&keyboard_interrupt);
+! 	outb_p(inb_p(0x21)&0xfd,0x21);
+  	a=inb_p(0x61);
+  	outb_p(a|0x80,0x61);
+  	outb_p(a,0x61);
+--- 1362,1369 ----
+  	gotoxy(currcons,orig_x,orig_y);
+  	update_screen(fg_console);
+  
+! 	if (request_irq(KEYBOARD_IRQ,keyboard_interrupt))
+! 		printk("Unable to get IRQ%d for keyboard driver\n",KEYBOARD_IRQ);
+  	a=inb_p(0x61);
+  	outb_p(a|0x80,0x61);
+  	outb_p(a,0x61);
+*** 0.96c/linux/kernel/chr_drv/tty_ioctl.c	Fri Jul  3 04:26:08 1992
+--- linux/kernel/chr_drv/tty_ioctl.c	Wed Jul  8 17:12:50 1992
+***************
+*** 65,71 ****
+  	}
+  }
+  
+! static void wait_until_sent(struct tty_struct * tty)
+  {
+  	while (!(current->signal & ~current->blocked) && !EMPTY(tty->write_q)) {
+  		TTY_WRITE_FLUSH(tty);
+--- 65,71 ----
+  	}
+  }
+  
+! void wait_until_sent(struct tty_struct * tty)
+  {
+  	while (!(current->signal & ~current->blocked) && !EMPTY(tty->write_q)) {
+  		TTY_WRITE_FLUSH(tty);
+***************
+*** 122,127 ****
+--- 122,128 ----
+  			int channel)
+  {
+  	int i;
++ 	unsigned short old_cflag = tty->termios.c_cflag;
+  
+  	/* If we try to set the state of terminal and we're not in the
+  	   foreground, send a SIGTTOU.  If the signal is blocked or
+***************
+*** 135,141 ****
+  	}
+  	for (i=0 ; i< (sizeof (*termios)) ; i++)
+  		((char *)&tty->termios)[i]=get_fs_byte(i+(char *)termios);
+! 	if (IS_A_SERIAL(channel))
+  		change_speed(channel-64);
+  	return 0;
+  }
+--- 136,142 ----
+  	}
+  	for (i=0 ; i< (sizeof (*termios)) ; i++)
+  		((char *)&tty->termios)[i]=get_fs_byte(i+(char *)termios);
+! 	if (IS_A_SERIAL(channel) && tty->termios.c_cflag != old_cflag)
+  		change_speed(channel-64);
+  	return 0;
+  }
+***************
+*** 166,171 ****
+--- 167,173 ----
+  {
+  	int i;
+  	struct termio tmp_termio;
++ 	unsigned short old_cflag = tty->termios.c_cflag;
+  
+  	if ((current->tty == channel) &&
+  	    (tty->pgrp > 0) &&
+***************
+*** 184,190 ****
+  	tty->termios.c_line = tmp_termio.c_line;
+  	for(i=0 ; i < NCC ; i++)
+  		tty->termios.c_cc[i] = tmp_termio.c_cc[i];
+! 	if (IS_A_SERIAL(channel))
+  		change_speed(channel-64);
+  	return 0;
+  }
+--- 186,192 ----
+  	tty->termios.c_line = tmp_termio.c_line;
+  	for(i=0 ; i < NCC ; i++)
+  		tty->termios.c_cc[i] = tmp_termio.c_cc[i];
+! 	if (IS_A_SERIAL(channel) && tty->termios.c_cflag != old_cflag)
+  		change_speed(channel-64);
+  	return 0;
+  }
+***************
+*** 232,243 ****
+  	int pgrp;
+  	int dev;
+  
+! 	if (MAJOR(inode->i_rdev) == 5) {
+! 		dev = current->tty;
+! 		if (dev<0)
+! 			return -EINVAL;
+! 	} else
+! 		dev = MINOR(inode->i_rdev);
+  	tty = tty_table + (dev ? ((dev < 64)? dev-1:dev) : fg_console);
+  
+  	if (IS_A_PTY(dev))
+--- 234,244 ----
+  	int pgrp;
+  	int dev;
+  
+! 	if (MAJOR(file->f_rdev) != 4) {
+! 		printk("tty_ioctl: tty pseudo-major != 4\n");
+! 		return -EINVAL;
+! 	}
+! 	dev = MINOR(file->f_rdev);
+  	tty = tty_table + (dev ? ((dev < 64)? dev-1:dev) : fg_console);
+  
+  	if (IS_A_PTY(dev))
+***************
+*** 286,296 ****
+  				return 0;
+  			case TCIOFF:
+  				if (STOP_CHAR(tty))
+! 					PUTCH(STOP_CHAR(tty),tty->write_q);
+  				return 0;
+  			case TCION:
+  				if (START_CHAR(tty))
+! 					PUTCH(START_CHAR(tty),tty->write_q);
+  				return 0;
+  			}
+  			return -EINVAL; /* not implemented */
+--- 287,297 ----
+  				return 0;
+  			case TCIOFF:
+  				if (STOP_CHAR(tty))
+! 					put_tty_queue(STOP_CHAR(tty),tty->write_q);
+  				return 0;
+  			case TCION:
+  				if (START_CHAR(tty))
+! 					put_tty_queue(START_CHAR(tty),tty->write_q);
+  				return 0;
+  			}
+  			return -EINVAL; /* not implemented */
+*** 0.96c/linux/kernel/chr_drv/tty_io.c	Sat Jul  4 03:21:41 1992
+--- linux/kernel/chr_drv/tty_io.c	Wed Jul  8 18:00:50 1992
+***************
+*** 154,160 ****
+  	while (1) {
+  		if (FULL(tty->secondary))
+  			break;
+! 		c = GETCH(tty->read_q);
+  		if (c < 0)
+  			break;
+  		if (I_STRP(tty))
+--- 154,160 ----
+  	while (1) {
+  		if (FULL(tty->secondary))
+  			break;
+! 		c = get_tty_queue(tty->read_q);
+  		if (c < 0)
+  			break;
+  		if (I_STRP(tty))
+***************
+*** 178,190 ****
+  					 (c==EOF_CHAR(tty))))) {
+  					if (L_ECHO(tty)) {
+  						if (c<32) {
+! 							PUTCH(8,tty->write_q);
+! 							PUTCH(' ',tty->write_q);
+! 							PUTCH(8,tty->write_q);
+  						}
+! 						PUTCH(8,tty->write_q);
+! 						PUTCH(' ',tty->write_q);
+! 						PUTCH(8,tty->write_q);
+  						TTY_WRITE_FLUSH(tty);
+  					}
+  					DEC(tty->secondary->head);
+--- 178,190 ----
+  					 (c==EOF_CHAR(tty))))) {
+  					if (L_ECHO(tty)) {
+  						if (c<32) {
+! 							put_tty_queue(8,tty->write_q);
+! 							put_tty_queue(' ',tty->write_q);
+! 							put_tty_queue(8,tty->write_q);
+  						}
+! 						put_tty_queue(8,tty->write_q);
+! 						put_tty_queue(' ',tty->write_q);
+! 						put_tty_queue(8,tty->write_q);
+  						TTY_WRITE_FLUSH(tty);
+  					}
+  					DEC(tty->secondary->head);
+***************
+*** 200,212 ****
+  					continue;
+  				if (L_ECHO(tty)) {
+  					if (c<32) {
+! 						PUTCH(8,tty->write_q);
+! 						PUTCH(' ',tty->write_q);
+! 						PUTCH(8,tty->write_q);
+  					}
+! 					PUTCH(8,tty->write_q);
+! 					PUTCH(32,tty->write_q);
+! 					PUTCH(8,tty->write_q);
+  					TTY_WRITE_FLUSH(tty);
+  				}
+  				DEC(tty->secondary->head);
+--- 200,212 ----
+  					continue;
+  				if (L_ECHO(tty)) {
+  					if (c<32) {
+! 						put_tty_queue(8,tty->write_q);
+! 						put_tty_queue(' ',tty->write_q);
+! 						put_tty_queue(8,tty->write_q);
+  					}
+! 					put_tty_queue(8,tty->write_q);
+! 					put_tty_queue(32,tty->write_q);
+! 					put_tty_queue(8,tty->write_q);
+  					TTY_WRITE_FLUSH(tty);
+  				}
+  				DEC(tty->secondary->head);
+***************
+*** 250,265 ****
+  		    c==EOF_CHAR(tty)))
+  			tty->secondary->data++;
+  		if ((L_ECHO(tty) || (L_CANON(tty) && L_ECHONL(tty))) && (c==10)) {
+! 			PUTCH(10,tty->write_q);
+! 			PUTCH(13,tty->write_q);
+  		} else if (L_ECHO(tty)) {
+  			if (c<32 && L_ECHOCTL(tty)) {
+! 				PUTCH('^',tty->write_q);
+! 				PUTCH(c+64,tty->write_q);
+  			} else
+! 				PUTCH(c,tty->write_q);
+  		}
+! 		PUTCH(c,tty->secondary);
+  		TTY_WRITE_FLUSH(tty);
+  	}
+  	TTY_WRITE_FLUSH(tty);
+--- 250,265 ----
+  		    c==EOF_CHAR(tty)))
+  			tty->secondary->data++;
+  		if ((L_ECHO(tty) || (L_CANON(tty) && L_ECHONL(tty))) && (c==10)) {
+! 			put_tty_queue(10,tty->write_q);
+! 			put_tty_queue(13,tty->write_q);
+  		} else if (L_ECHO(tty)) {
+  			if (c<32 && L_ECHOCTL(tty)) {
+! 				put_tty_queue('^',tty->write_q);
+! 				put_tty_queue(c+64,tty->write_q);
+  			} else
+! 				put_tty_queue(c,tty->write_q);
+  		}
+! 		put_tty_queue(c,tty->secondary);
+  		TTY_WRITE_FLUSH(tty);
+  	}
+  	TTY_WRITE_FLUSH(tty);
+***************
+*** 299,305 ****
+  static int read_chan(unsigned int channel, struct file * file, char * buf, int nr)
+  {
+  	struct tty_struct * tty;
+- 	struct tty_struct * other_tty = NULL;
+  	int c;
+  	char * b=buf;
+  	int minimum,time;
+--- 299,304 ----
+***************
+*** 316,323 ****
+  			return -EIO;
+  		else
+  			return(tty_signal(SIGTTIN, tty));
+- 	if (channel & 0x80)
+- 		other_tty = tty_table + (channel ^ 0x40);
+  	time = 10L*tty->termios.c_cc[VTIME];
+  	minimum = tty->termios.c_cc[VMIN];
+  	if (L_CANON(tty)) {
+--- 315,320 ----
+***************
+*** 338,345 ****
+  		minimum = nr;
+  	TTY_READ_FLUSH(tty);
+  	while (nr>0) {
+! 		if (other_tty && other_tty->write)
+! 			TTY_WRITE_FLUSH(other_tty);
+  		cli();
+  		if (EMPTY(tty->secondary) || (L_CANON(tty) &&
+  		    !FULL(tty->read_q) && !tty->secondary->data)) {
+--- 335,342 ----
+  		minimum = nr;
+  	TTY_READ_FLUSH(tty);
+  	while (nr>0) {
+! 		if (tty->link && tty->link->write)
+! 			TTY_WRITE_FLUSH(tty->link);
+  		cli();
+  		if (EMPTY(tty->secondary) || (L_CANON(tty) &&
+  		    !FULL(tty->read_q) && !tty->secondary->data)) {
+***************
+*** 347,356 ****
+  				break;
+  			if (current->signal & ~current->blocked) 
+  				break;
+! 			if (IS_A_PTY_SLAVE(channel) && C_HUP(other_tty))
+  				break;
+- 			if (other_tty && !other_tty->count)
+- 				break;
+  			interruptible_sleep_on(&tty->secondary->proc_list);
+  			sti();
+  			TTY_READ_FLUSH(tty);
+--- 344,351 ----
+  				break;
+  			if (current->signal & ~current->blocked) 
+  				break;
+! 			if (tty->link && !tty->link->count)
+  				break;
+  			interruptible_sleep_on(&tty->secondary->proc_list);
+  			sti();
+  			TTY_READ_FLUSH(tty);
+***************
+*** 358,364 ****
+  		}
+  		sti();
+  		do {
+! 			c = GETCH(tty->secondary);
+  			if ((EOF_CHAR(tty) != __DISABLED_CHAR &&
+  			     c==EOF_CHAR(tty)) || c==10)
+  				tty->secondary->data--;
+--- 353,359 ----
+  		}
+  		sti();
+  		do {
+! 			c = get_tty_queue(tty->secondary);
+  			if ((EOF_CHAR(tty) != __DISABLED_CHAR &&
+  			     c==EOF_CHAR(tty)) || c==10)
+  				tty->secondary->data--;
+***************
+*** 381,388 ****
+  	}
+  	sti();
+  	TTY_READ_FLUSH(tty);
+! 	if (other_tty && other_tty->write)
+! 		TTY_WRITE_FLUSH(other_tty);
+  	current->timeout = 0;
+  	if (b-buf)
+  		return b-buf;
+--- 376,383 ----
+  	}
+  	sti();
+  	TTY_READ_FLUSH(tty);
+! 	if (tty->link && tty->link->write)
+! 		TTY_WRITE_FLUSH(tty->link);
+  	current->timeout = 0;
+  	if (b-buf)
+  		return b-buf;
+***************
+*** 419,424 ****
+--- 414,423 ----
+  	while (nr>0) {
+  		if (current->signal & ~current->blocked)
+  			break;
++ 		if (tty->link && !tty->link->count) {
++ 			send_sig(SIGPIPE,current,0);
++ 			break;
++ 		}
+  		if (FULL(tty->write_q)) {
+  			TTY_WRITE_FLUSH(tty);
+  			cli();
+***************
+*** 436,442 ****
+  					c='\r';
+  				if (c=='\n' && !(tty->flags & TTY_CR_PENDING) && O_NLCR(tty)) {
+  					tty->flags |= TTY_CR_PENDING;
+! 					PUTCH(13,tty->write_q);
+  					continue;
+  				}
+  				if (O_LCUC(tty))
+--- 435,441 ----
+  					c='\r';
+  				if (c=='\n' && !(tty->flags & TTY_CR_PENDING) && O_NLCR(tty)) {
+  					tty->flags |= TTY_CR_PENDING;
+! 					put_tty_queue(13,tty->write_q);
+  					continue;
+  				}
+  				if (O_LCUC(tty))
+***************
+*** 444,450 ****
+  			}
+  			b++; nr--;
+  			tty->flags &= ~TTY_CR_PENDING;
+! 			PUTCH(c,tty->write_q);
+  		}
+  		if (nr>0)
+  			schedule();
+--- 443,449 ----
+  			}
+  			b++; nr--;
+  			tty->flags &= ~TTY_CR_PENDING;
+! 			put_tty_queue(c,tty->write_q);
+  		}
+  		if (nr>0)
+  			schedule();
+***************
+*** 452,457 ****
+--- 451,458 ----
+  	TTY_WRITE_FLUSH(tty);
+  	if (b-buf)
+  		return b-buf;
++ 	if (tty->link && !tty->link->count)
++ 		return -EPIPE;
+  	if (current->signal & ~current->blocked)
+  		return -ERESTARTSYS;
+  	return 0;
+***************
+*** 460,477 ****
+  static int tty_read(struct inode * inode, struct file * file, char * buf, int count)
+  {
+  	int i;
+- 	
+- 	i = read_chan(current->tty,file,buf,count);
+- 	if (i > 0)
+- 		inode->i_atime = CURRENT_TIME;
+- 	return i;
+- }
+  
+! static int ttyx_read(struct inode * inode, struct file * file, char * buf, int count)
+! {
+! 	int i;
+! 	
+! 	i = read_chan(MINOR(inode->i_rdev),file,buf,count);
+  	if (i > 0)
+  		inode->i_atime = CURRENT_TIME;
+  	return i;
+--- 461,472 ----
+  static int tty_read(struct inode * inode, struct file * file, char * buf, int count)
+  {
+  	int i;
+  
+! 	if (MAJOR(file->f_rdev) != 4) {
+! 		printk("tty_read: pseudo-major != 4\n");
+! 		return -EINVAL;
+! 	}
+! 	i = read_chan(MINOR(file->f_rdev),file,buf,count);
+  	if (i > 0)
+  		inode->i_atime = CURRENT_TIME;
+  	return i;
+***************
+*** 481,502 ****
+  {
+  	int i;
+  	
+! 	i = write_chan(current->tty,file,buf,count);
+  	if (i > 0)
+  		inode->i_mtime = CURRENT_TIME;
+  	return i;
+  }
+  
+- static int ttyx_write(struct inode * inode, struct file * file, char * buf, int count)
+- {
+- 	int i;
+- 	
+- 	i = write_chan(MINOR(inode->i_rdev),file,buf,count);
+- 	if (i > 0)
+- 		inode->i_mtime = CURRENT_TIME;
+- 	return i;
+- }
+- 
+  static int tty_lseek(struct inode * inode, struct file * file, off_t offset, int orig)
+  {
+  	return -EBADF;
+--- 476,491 ----
+  {
+  	int i;
+  	
+! 	if (MAJOR(file->f_rdev) != 4) {
+! 		printk("tty_write: pseudo-major != 4\n");
+! 		return -EINVAL;
+! 	}
+! 	i = write_chan(MINOR(file->f_rdev),file,buf,count);
+  	if (i > 0)
+  		inode->i_mtime = CURRENT_TIME;
+  	return i;
+  }
+  
+  static int tty_lseek(struct inode * inode, struct file * file, off_t offset, int orig)
+  {
+  	return -EBADF;
+***************
+*** 522,536 ****
+  		dev = MINOR(dev);
+  	if (dev < 0)
+  		return -ENODEV;
+  	tty = TTY_TABLE(dev);
+  	if (IS_A_PTY_MASTER(dev)) {
+  		if (tty->count)
+  			return -EAGAIN;
+  	}
+- 	if (!tty->count && (!tty->link || !tty->link->count)) {
+- 		flush_input(tty);
+- 		flush_output(tty);
+- 	}
+  	tty->count++;
+  	retval = 0;
+  	if (!(filp->f_flags & O_NOCTTY) &&
+--- 511,528 ----
+  		dev = MINOR(dev);
+  	if (dev < 0)
+  		return -ENODEV;
++ 	filp->f_rdev = 0x0400 | dev;
+  	tty = TTY_TABLE(dev);
++ 	if (!tty->count && !(tty->link && tty->link->count)) {
++ 		flush_input(tty);
++ 		flush_output(tty);
++ 	}
+  	if (IS_A_PTY_MASTER(dev)) {
+  		if (tty->count)
+  			return -EAGAIN;
++ 		if (tty->link)
++ 			tty->link->count++;
+  	}
+  	tty->count++;
+  	retval = 0;
+  	if (!(filp->f_flags & O_NOCTTY) &&
+***************
+*** 541,576 ****
+  		tty->session = current->session;
+  		tty->pgrp = current->pgrp;
+  	}
+! 	if (IS_A_SERIAL(dev))
+  		retval = serial_open(dev-64,filp);
+  	else if (IS_A_PTY(dev))
+  		retval = pty_open(dev,filp);
+! 	if (retval)
+  		tty->count--;
+  	return retval;
+  }
+  
+  static void tty_release(struct inode * inode, struct file * filp)
+  {
+  	int dev;
+  	struct tty_struct * tty;
+  
+! 	dev = inode->i_rdev;
+! 	if (MAJOR(dev) == 5)
+! 		dev = current->tty;
+! 	else
+! 		dev = MINOR(dev);
+! 	if (dev < 0)
+  		return;
+  	tty = TTY_TABLE(dev);
+! 	if (--tty->count)
+  		return;
+! 	if (tty == redirect)
+! 		redirect = NULL;
+! 	if (IS_A_SERIAL(dev))
+  		serial_close(dev-64,filp);
+! 	else if (IS_A_PTY(dev))
+  		pty_close(dev,filp);
+  }
+  
+  static struct file_operations tty_fops = {
+--- 533,582 ----
+  		tty->session = current->session;
+  		tty->pgrp = current->pgrp;
+  	}
+! 	if (IS_A_SERIAL(dev) && tty->count < 2)
+  		retval = serial_open(dev-64,filp);
+  	else if (IS_A_PTY(dev))
+  		retval = pty_open(dev,filp);
+! 	if (retval) {
+  		tty->count--;
++ 		if (IS_A_PTY_MASTER(dev) && tty->link)
++ 			tty->link->count++;
++ 	}
+  	return retval;
+  }
+  
++ /*
++  * Note that releasing a pty master also releases the child, so
++  * we have to make the redirection checks after that and on both
++  * sides of a pty.
++  */
+  static void tty_release(struct inode * inode, struct file * filp)
+  {
+  	int dev;
+  	struct tty_struct * tty;
+  
+! 	dev = filp->f_rdev;
+! 	if (MAJOR(dev) != 4) {
+! 		printk("tty_close: tty pseudo-major != 4\n");
+  		return;
++ 	}
++ 	dev = MINOR(filp->f_rdev);
+  	tty = TTY_TABLE(dev);
+! 	if (IS_A_PTY_MASTER(dev) && tty->link)
+! 		tty->link->count--;
+! 	tty->count--;
+! 	if (tty->count)
+  		return;
+! 	if (IS_A_SERIAL(dev)) {
+! 		wait_until_sent(tty);
+  		serial_close(dev-64,filp);
+! 	} else if (IS_A_PTY(dev))
+  		pty_close(dev,filp);
++ 	if (!tty->count && (tty == redirect))
++ 		redirect = NULL;
++ 	if (tty = tty->link)
++ 		if (!tty->count && (tty == redirect))
++ 			redirect = NULL;
+  }
+  
+  static struct file_operations tty_fops = {
+***************
+*** 584,600 ****
+  	tty_release
+  };
+  
+- static struct file_operations ttyx_fops = {
+- 	tty_lseek,
+- 	ttyx_read,
+- 	ttyx_write,
+- 	NULL,		/* ttyx_readdir */
+- 	NULL,		/* ttyx_select */
+- 	tty_ioctl,	/* ttyx_ioctl */
+- 	tty_open,
+- 	tty_release
+- };
+- 
+  long tty_init(long kmem_start)
+  {
+  	int i;
+--- 590,595 ----
+***************
+*** 603,609 ****
+  	kmem_start += QUEUES * (sizeof (struct tty_queue));
+  	table_list[0] = con_queues + 0;
+  	table_list[1] = con_queues + 1;
+! 	chrdev_fops[4] = &ttyx_fops;
+  	chrdev_fops[5] = &tty_fops;
+  	for (i=0 ; i < QUEUES ; i++)
+  		tty_queues[i] = (struct tty_queue) {0,0,0,0,""};
+--- 598,604 ----
+  	kmem_start += QUEUES * (sizeof (struct tty_queue));
+  	table_list[0] = con_queues + 0;
+  	table_list[1] = con_queues + 1;
+! 	chrdev_fops[4] = &tty_fops;
+  	chrdev_fops[5] = &tty_fops;
+  	for (i=0 ; i < QUEUES ; i++)
+  		tty_queues[i] = (struct tty_queue) {0,0,0,0,""};
+*** 0.96c/linux/kernel/chr_drv/serial.c	Thu Jun 25 18:22:24 1992
+--- linux/kernel/chr_drv/serial.c	Tue Jul  7 18:32:46 1992
+***************
+*** 26,41 ****
+  
+  #define WAKEUP_CHARS (3*TTY_BUF_SIZE/4)
+  
+- /*
+-  * note that IRQ9 is what many docs call IRQ2 - on the AT hardware
+-  * the old IRQ2 line has been changed to IRQ9. The serial_table
+-  * structure considers IRQ2 to be the same as IRQ9.
+-  */
+- extern void IRQ9_interrupt(void);
+- extern void IRQ3_interrupt(void);
+- extern void IRQ4_interrupt(void);
+- extern void IRQ5_interrupt(void);
+- 
+  struct serial_struct serial_table[NR_SERIALS] = {
+  	{ PORT_UNKNOWN, 0, 0x3F8, 4, NULL},
+  	{ PORT_UNKNOWN, 1, 0x2F8, 3, NULL},
+--- 26,31 ----
+***************
+*** 43,62 ****
+  	{ PORT_UNKNOWN, 3, 0x2E8, 3, NULL},
+  };
+  
+- static struct serial_struct * irq_info[16] = { NULL, };
+- 
+  static void modem_status_intr(struct serial_struct * info)
+  {
+  	unsigned char status = inb(info->port+6);
+  
+! 	if ((status & 0x88) == 0x08 && info->tty->pgrp > 0)
+! 		kill_pg(info->tty->pgrp,SIGHUP,1);
+  #if 0
+! 	if ((status & 0x10) == 0x10)
+! 		info->tty->stopped = 0;
+! 	else
+! 		info->tty->stopped = 1;
+  #endif
+  }
+  
+  void send_break(unsigned int line)
+--- 33,52 ----
+  	{ PORT_UNKNOWN, 3, 0x2E8, 3, NULL},
+  };
+  
+  static void modem_status_intr(struct serial_struct * info)
+  {
+  	unsigned char status = inb(info->port+6);
+  
+! 	if (!(info->tty->termios.c_cflag & CLOCAL)) {
+! 		if ((status & 0x88) == 0x08 && info->tty->pgrp > 0)
+! 			kill_pg(info->tty->pgrp,SIGHUP,1);
+  #if 0
+! 		if ((status & 0x10) == 0x10)
+! 			info->tty->stopped = 0;
+! 		else
+! 			info->tty->stopped = 1;
+  #endif
++ 	}
+  }
+  
+  void send_break(unsigned int line)
+***************
+*** 94,108 ****
+  	int c, i = 0;
+  
+  	timer_active &= ~(1 << timer);
+! 	do {
+! 		if ((c = GETCH(queue)) < 0)
+! 			return;
+  		outb(c,port);
+! 		i++;
+! 	} while (info->type == PORT_16550A &&
+! 		  i < 14 && !EMPTY(queue));
+  	timer_table[timer].expires = jiffies + 10;
+  	timer_active |= 1 << timer;
+  	if (LEFT(queue) > WAKEUP_CHARS)
+  		wake_up(&queue->proc_list);
+  }
+--- 84,102 ----
+  	int c, i = 0;
+  
+  	timer_active &= ~(1 << timer);
+! 	while (inb_p(info->port+5) & 0x20) {
+! 		if (queue->tail == queue->head)
+! 			goto end_send;
+! 		c = queue->buf[queue->tail];
+! 		queue->tail++;
+! 		queue->tail &= TTY_BUF_SIZE-1;
+  		outb(c,port);
+! 		if ((info->type != PORT_16550A) || (++i >= 14))
+! 			break;
+! 	}
+  	timer_table[timer].expires = jiffies + 10;
+  	timer_active |= 1 << timer;
++ end_send:
+  	if (LEFT(queue) > WAKEUP_CHARS)
+  		wake_up(&queue->proc_list);
+  }
+***************
+*** 111,120 ****
+  {
+  	unsigned short port = info->port;
+  	struct tty_queue * queue = info->tty->read_q;
+  
+  	do {
+! 		PUTCH(inb(port),queue);
+  	} while (inb(port+5) & 1);
+  	timer_active |= (1<<SER1_TIMER)<<info->line;
+  }
+  
+--- 105,122 ----
+  {
+  	unsigned short port = info->port;
+  	struct tty_queue * queue = info->tty->read_q;
++ 	int head = queue->head;
++ 	int maxhead = (queue->tail-1) & (TTY_BUF_SIZE-1);
+  
++ 	timer_active &= ~((1<<SER1_TIMER)<<info->line);
+  	do {
+! 		queue->buf[head] = inb(port);
+! 		if (head != maxhead) {
+! 			head++;
+! 			head &= TTY_BUF_SIZE-1;
+! 		}
+  	} while (inb(port+5) & 1);
++ 	queue->head = head;
+  	timer_active |= (1<<SER1_TIMER)<<info->line;
+  }
+  
+***************
+*** 149,159 ****
+  	}
+  }
+  
+! void do_IRQ(int irq)
+  {
+! 	check_tty(irq_info[irq]);
+  }
+  
+  static void com1_timer(void)
+  {
+  	TTY_READ_FLUSH(tty_table+64);
+--- 151,197 ----
+  	}
+  }
+  
+! /*
+!  * Again, we disable interrupts to be sure there aren't any races:
+!  * see send_intr for details.
+!  */
+! static inline void do_rs_write(struct serial_struct * info)
+  {
+! 	if (!info->tty || !info->port)
+! 		return;
+! 	if (!info->tty->write_q || EMPTY(info->tty->write_q))
+! 		return;
+! 	cli();
+! 	send_intr(info);
+! 	sti();
+  }
+  
++ /*
++  * IRQ routines: one per line
++  */
++ static void com1_IRQ(int cpl)
++ {
++ 	check_tty(serial_table+0);
++ }
++ 
++ static void com2_IRQ(int cpl)
++ {
++ 	check_tty(serial_table+1);
++ }
++ 
++ static void com3_IRQ(int cpl)
++ {
++ 	check_tty(serial_table+2);
++ }
++ 
++ static void com4_IRQ(int cpl)
++ {
++ 	check_tty(serial_table+3);
++ }
++ 
++ /*
++  * Receive timer routines: one per line
++  */
+  static void com1_timer(void)
+  {
+  	TTY_READ_FLUSH(tty_table+64);
+***************
+*** 175,201 ****
+  }
+  
+  /*
+!  * Again, we disable interrupts to be sure there aren't any races:
+!  * see send_intr for details.
+   */
+- static inline void do_rs_write(struct serial_struct * info)
+- {
+- 	if (!info->tty || !info->port)
+- 		return;
+- 	if (!info->tty->write_q || EMPTY(info->tty->write_q))
+- 		return;
+- 	cli();
+- 	if (inb_p(info->port+5) & 0x20)
+- 		send_intr(info);
+- 	else {
+- 		unsigned int timer = SER1_TIMEOUT+info->line;
+- 
+- 		timer_table[timer].expires = jiffies + 10;
+- 		timer_active |= 1 << timer;
+- 	}
+- 	sti();
+- }
+- 
+  static void com1_timeout(void)
+  {
+  	do_rs_write(serial_table);
+--- 213,220 ----
+  }
+  
+  /*
+!  * Send timeout routines: one per line
+   */
+  static void com1_timeout(void)
+  {
+  	do_rs_write(serial_table);
+***************
+*** 276,288 ****
+  	irq = info->irq;
+  	if (irq == 2)
+  		irq = 9;
+! 	if (irq_info[irq] == info) {
+! 		irq_info[irq] = NULL;
+! 		if (irq < 8)
+! 			outb(inb_p(0x21) | (1<<irq),0x21);
+! 		else
+! 			outb(inb_p(0xA1) | (1<<(irq-8)),0xA1);
+! 	}
+  }
+  
+  static void startup(unsigned short port)
+--- 295,301 ----
+  	irq = info->irq;
+  	if (irq == 2)
+  		irq = 9;
+! 	free_irq(irq);
+  }
+  
+  static void startup(unsigned short port)
+***************
+*** 300,306 ****
+  {
+  	struct serial_struct * info;
+  	unsigned short port,quot;
+! 	unsigned cflag;
+  	static unsigned short quotient[] = {
+  		0, 2304, 1536, 1047, 857,
+  		768, 576, 384, 192, 96,
+--- 313,319 ----
+  {
+  	struct serial_struct * info;
+  	unsigned short port,quot;
+! 	unsigned cflag,cval;
+  	static unsigned short quotient[] = {
+  		0, 2304, 1536, 1047, 857,
+  		768, 576, 384, 192, 96,
+***************
+*** 318,339 ****
+  		outb(0x00,port+4);
+  	else if (!inb(port+4))
+  		startup(port);
+  	cli();
+! 	outb_p(0x80,port+3);		/* set DLAB */
+  	outb_p(quot & 0xff,port);	/* LS of divisor */
+  	outb_p(quot >> 8,port+1);	/* MS of divisor */
+! 	outb(0x03,port+3);		/* reset DLAB */
+  	sti();
+- /* set byte size and parity */
+- 	quot = cflag & (CSIZE | CSTOPB);
+- 	quot >>= 4;
+- 	if (cflag & PARENB)
+- 		quot |= 8;
+- 	if (!(cflag & PARODD))
+- 		quot |= 16;
+- 	outb(quot,port+3);
+  }
+  
+  /*
+   * this routine enables interrupts on 'line', and disables them for any
+   * other serial line that shared the same IRQ. Braindamaged AT hardware.
+--- 331,355 ----
+  		outb(0x00,port+4);
+  	else if (!inb(port+4))
+  		startup(port);
++ /* byte size and parity */
++ 	cval = cflag & (CSIZE | CSTOPB);
++ 	cval >>= 4;
++ 	if (cflag & PARENB)
++ 		cval |= 8;
++ 	if (!(cflag & PARODD))
++ 		cval |= 16;
+  	cli();
+! 	outb_p(cval | 0x80,port+3);	/* set DLAB */
+  	outb_p(quot & 0xff,port);	/* LS of divisor */
+  	outb_p(quot >> 8,port+1);	/* MS of divisor */
+! 	outb(cval,port+3);		/* reset DLAB */
+  	sti();
+  }
+  
++ static void (*serial_handler[NR_SERIALS])(int) = {
++ 	com1_IRQ,com2_IRQ,com3_IRQ,com4_IRQ
++ };
++ 
+  /*
+   * this routine enables interrupts on 'line', and disables them for any
+   * other serial line that shared the same IRQ. Braindamaged AT hardware.
+***************
+*** 341,348 ****
+  int serial_open(unsigned line, struct file * filp)
+  {
+  	struct serial_struct * info;
+! 	int irq;
+  	unsigned short port;
+  
+  	if (line >= NR_SERIALS)
+  		return -ENODEV;
+--- 357,365 ----
+  int serial_open(unsigned line, struct file * filp)
+  {
+  	struct serial_struct * info;
+! 	int irq,retval;
+  	unsigned short port;
++ 	void (*handler)(int) = serial_handler[line];
+  
+  	if (line >= NR_SERIALS)
+  		return -ENODEV;
+***************
+*** 352,367 ****
+  	irq = info->irq;
+  	if (irq == 2)
+  		irq = 9;
+! 	if (irq_info[irq] && irq_info[irq] != info)
+! 		return -EBUSY;
+! 	cli();
+  	startup(port);
+- 	irq_info[irq] = info;
+- 	if (irq < 8)
+- 		outb(inb_p(0x21) & ~(1<<irq),0x21);
+- 	else
+- 		outb(inb_p(0xA1) & ~(1<<(irq-8)),0xA1);
+- 	sti();
+  	return 0;
+  }
+  
+--- 369,377 ----
+  	irq = info->irq;
+  	if (irq == 2)
+  		irq = 9;
+! 	if (retval = request_irq(irq,handler))
+! 		return retval;
+  	startup(port);
+  	return 0;
+  }
+  
+***************
+*** 380,385 ****
+--- 390,397 ----
+  	struct serial_struct tmp;
+  	unsigned new_port;
+  	unsigned irq,new_irq;
++ 	int retval;
++ 	void (*handler)(int) = serial_handler[line];
+  
+  	if (!suser())
+  		return -EPERM;
+***************
+*** 401,420 ****
+  	if (irq == 2)
+  		irq = 9;
+  	if (irq != new_irq) {
+! 		if (irq_info[new_irq])
+! 			return -EBUSY;
+! 		cli();
+! 		irq_info[new_irq] = irq_info[irq];
+! 		irq_info[irq] = NULL;
+! 		info->irq = new_irq;
+! 		if (irq < 8)
+! 			outb(inb_p(0x21) | (1<<irq),0x21);
+! 		else
+! 			outb(inb_p(0xA1) | (1<<(irq-8)),0xA1);
+! 		if (new_irq < 8)
+! 			outb(inb_p(0x21) & ~(1<<new_irq),0x21);
+! 		else
+! 			outb(inb_p(0xA1) & ~(1<<(new_irq-8)),0xA1);
+  	}
+  	cli();
+  	if (new_port != info->port) {
+--- 413,422 ----
+  	if (irq == 2)
+  		irq = 9;
+  	if (irq != new_irq) {
+! 		retval = request_irq(new_irq,handler);
+! 		if (retval)
+! 			return retval;
+! 		free_irq(irq);
+  	}
+  	cli();
+  	if (new_port != info->port) {
+***************
+*** 450,459 ****
+  	timer_table[SER3_TIMEOUT].expires = 0;
+  	timer_table[SER4_TIMEOUT].fn = com4_timeout;
+  	timer_table[SER4_TIMEOUT].expires = 0;
+- 	set_intr_gate(0x23,IRQ3_interrupt);
+- 	set_intr_gate(0x24,IRQ4_interrupt);
+- 	set_intr_gate(0x25,IRQ5_interrupt);
+- 	set_intr_gate(0x29,IRQ9_interrupt);
+  	for (i = 0, info = serial_table; i < NR_SERIALS; i++,info++) {
+  		info->tty = (tty_table+64) + i;
+  		init(info);
+--- 452,457 ----
+*** 0.96c/linux/kernel/chr_drv/pty.c	Sun Jul  5 03:15:12 1992
+--- linux/kernel/chr_drv/pty.c	Wed Jul  8 14:18:16 1992
+***************
+*** 31,40 ****
+  	wake_up(&tty->read_q->proc_list);
+  	if (filp->f_flags & O_NDELAY)
+  		return 0;
+- 	if (IS_A_PTY_MASTER(dev)) {
+- 		tty->link->count++;
+- 		return 0;
+- 	}
+  	while (!tty->link->count && !(current->signal & ~current->blocked))
+  		interruptible_sleep_on(&tty->link->read_q->proc_list);
+  	if (!tty->link->count)
+--- 31,36 ----
+***************
+*** 48,55 ****
+  
+  	tty = tty_table + dev;
+  	wake_up(&tty->read_q->proc_list);
+  	if (IS_A_PTY_MASTER(dev)) {
+- 		tty->link->count--;
+  		if (tty->link->pgrp > 0)
+  			kill_pg(tty->link->pgrp,SIGHUP,1);
+  	}
+--- 44,51 ----
+  
+  	tty = tty_table + dev;
+  	wake_up(&tty->read_q->proc_list);
++ 	wake_up(&tty->link->write_q->proc_list);
+  	if (IS_A_PTY_MASTER(dev)) {
+  		if (tty->link->pgrp > 0)
+  			kill_pg(tty->link->pgrp,SIGHUP,1);
+  	}
+***************
+*** 66,73 ****
+  			TTY_READ_FLUSH(to);
+  			continue;
+  		}
+! 		c = GETCH(from->write_q);
+! 		PUTCH(c,to->read_q);
+  		if (current->signal & ~current->blocked)
+  			break;
+  	}
+--- 62,69 ----
+  			TTY_READ_FLUSH(to);
+  			continue;
+  		}
+! 		c = get_tty_queue(from->write_q);
+! 		put_tty_queue(c,to->read_q);
+  		if (current->signal & ~current->blocked)
+  			break;
+  	}
+*** 0.96c/linux/kernel/blk_drv/hd.c	Wed Jun  3 04:00:19 1992
+--- linux/kernel/blk_drv/hd.c	Sat Jul 11 00:49:35 1992
+***************
+*** 16,22 ****
+--- 16,25 ----
+   *  in the early extended-partition checks and added DM partitions
+   */
+  
++ #define HD_IRQ 14
++ 
+  #include <errno.h>
++ #include <signal.h>
+  
+  #include <linux/config.h>
+  #include <linux/sched.h>
+***************
+*** 82,88 ****
+  #define port_write(port,buf,nr) \
+  __asm__("cld;rep;outsw"::"d" (port),"S" (buf),"c" (nr):"cx","si")
+  
+- extern void hd_interrupt(void);
+  extern void rd_load(void);
+  
+  static unsigned int current_minor;
+--- 85,90 ----
+***************
+*** 279,285 ****
+--- 281,289 ----
+  	blk_size[MAJOR_NR] = hd_sizes;
+  	if (NR_HD)
+  		printk("Partition table%s ok.\n\r",(NR_HD>1)?"s":"");
++ #ifdef RAMDISK
+  	rd_load();
++ #endif
+  	mount_root();
+  	return (0);
+  }
+***************
+*** 517,523 ****
+   */
+  static void hd_times_out(void)
+  {	
+! 	do_hd = NULL;
+  	reset = 1;
+  	if (!CURRENT)
+  		return;
+--- 521,527 ----
+   */
+  static void hd_times_out(void)
+  {	
+! 	DEVICE_INTR = NULL;
+  	reset = 1;
+  	if (!CURRENT)
+  		return;
+***************
+*** 601,607 ****
+--- 605,614 ----
+  				(char *) &loc->sectors);
+  			put_fs_word(hd_info[dev].cyl,
+  				(short *) &loc->cylinders);
++ 			put_fs_long(hd[MINOR(inode->i_rdev)].start_sect,
++ 				(long *) &loc->start);
+  			return 0;
++ 		RO_IOCTLS(inode->i_rdev,arg);
+  		default:
+  			return -EINVAL;
+  	}
+***************
+*** 627,638 ****
+  	hd_release		/* release */
+  };
+  
+  void hd_init(void)
+  {
+  	blk_dev[MAJOR_NR].request_fn = DEVICE_REQUEST;
+  	blkdev_fops[MAJOR_NR] = &hd_fops;
+! 	set_intr_gate(0x2E,&hd_interrupt);
+! 	outb_p(inb_p(0x21)&0xfb,0x21);
+! 	outb(inb_p(0xA1)&0xbf,0xA1);
+  	timer_table[HD_TIMER].fn = hd_times_out;
+  }
+--- 634,668 ----
+  	hd_release		/* release */
+  };
+  
++ static void hd_interrupt(int cpl)
++ {
++ 	void (*handler)(void) = DEVICE_INTR;
++ 
++ 	DEVICE_INTR = NULL;
++ 	timer_active &= ~(1<<HD_TIMER);
++ 	if (!handler)
++ 		handler = unexpected_hd_interrupt;
++ 	handler();
++ }
++ 
++ /*
++  * This is the harddisk IRQ descruption. The SA_INTERRUPT in sa_flags
++  * means we run the IRQ-handler with interrupts disabled: this is bad for
++  * interrupt latency, but anything else has led to problems on some
++  * machines...
++  */
++ static struct sigaction hd_sigaction = {
++ 	hd_interrupt,
++ 	0,
++ 	SA_INTERRUPT,
++ 	NULL
++ };
++ 
+  void hd_init(void)
+  {
+  	blk_dev[MAJOR_NR].request_fn = DEVICE_REQUEST;
+  	blkdev_fops[MAJOR_NR] = &hd_fops;
+! 	if (irqaction(HD_IRQ,&hd_sigaction))
+! 		printk("Unable to get IRQ%d for the harddisk driver\n",HD_IRQ);
+  	timer_table[HD_TIMER].fn = hd_times_out;
+  }
+*** 0.96c/linux/kernel/blk_drv/ll_rw_blk.c	Sun Jul  5 00:54:14 1992
+--- linux/kernel/blk_drv/ll_rw_blk.c	Sat Jul 11 00:49:36 1992
+***************
+*** 8,13 ****
+--- 8,14 ----
+   * This handles all read/write requests to block devices
+   */
+  #include <errno.h>
++ #include <linux/string.h>
+  #include <linux/sched.h>
+  #include <linux/kernel.h>
+  #include <asm/system.h>
+***************
+*** 70,75 ****
+--- 71,101 ----
+  	wake_up(&bh->b_wait);
+  }
+  
++ /* RO fail safe mechanism */
++ 
++ static long ro_bits[NR_BLK_DEV][8];
++ 
++ int is_read_only(int dev)
++ {
++ 	int minor,major;
++ 
++ 	major = MAJOR(dev);
++ 	minor = MINOR(dev);
++ 	if (major < 0 || major >= NR_BLK_DEV) return 0;
++ 	return ro_bits[major][minor >> 5] & (1 << (minor & 31));
++ }
++ 
++ void set_device_ro(int dev,int flag)
++ {
++ 	int minor,major;
++ 
++ 	major = MAJOR(dev);
++ 	minor = MINOR(dev);
++ 	if (major < 0 || major >= NR_BLK_DEV) return;
++ 	if (flag) ro_bits[major][minor >> 5] |= 1 << (minor & 31);
++ 	else ro_bits[major][minor >> 5] &= ~(1 << (minor & 31));
++ }
++ 
+  /*
+   * add-request adds a request to the linked list.
+   * It disables interrupts so that it can muck with the
+***************
+*** 203,208 ****
+--- 229,238 ----
+  	}
+  	if (rw!=READ && rw!=WRITE)
+  		panic("Bad block dev command, must be R/W");
++ 	if (rw == WRITE && is_read_only(dev)) {
++ 		printk("Can't page to read-only device 0x%X\n\r",dev);
++ 		return;
++ 	}
+  	cli();
+  repeat:
+  	req = request+NR_REQUEST;
+***************
+*** 238,245 ****
+--- 268,281 ----
+  	if ((major=MAJOR(bh->b_dev)) >= NR_BLK_DEV ||
+  	!(blk_dev[major].request_fn)) {
+  		printk("ll_rw_block: Trying to read nonexistent block-device\n\r");
++ 		bh->b_dirt = bh->b_uptodate = 0;
+  		return;
+  	}
++ 	if ((rw == WRITE || rw == WRITEA) && is_read_only(bh->b_dev)) {
++ 		printk("Can't write to read-only device 0x%X\n\r",bh->b_dev);
++ 		bh->b_dirt = bh->b_uptodate = 0;
++ 		return;
++ 	}
+  	make_request(major,rw,bh);
+  }
+  
+***************
+*** 251,256 ****
+--- 287,293 ----
+  		request[i].dev = -1;
+  		request[i].next = NULL;
+  	}
++ 	memset(ro_bits,0,sizeof(ro_bits));
+  #ifdef RAMDISK
+  	mem_start += rd_init(mem_start, RAMDISK*1024);
+  #endif
+***************
+*** 270,275 ****
+--- 307,316 ----
+  
+  	if (rw!=READ && rw!=WRITE) {
+  		printk("ll_rw_swap: bad block dev command, must be R/W");
++ 		return;
++ 	}
++ 	if (rw == WRITE && is_read_only(dev)) {
++ 		printk("Can't swap to read-only device 0x%X\n\r",dev);
+  		return;
+  	}
+  	
+*** 0.96c/linux/kernel/blk_drv/floppy.c	Sat Jul  4 20:44:26 1992
+--- linux/kernel/blk_drv/floppy.c	Sat Jul 11 00:49:35 1992
+***************
+*** 38,43 ****
+--- 38,45 ----
+   * the floppy-change signal detection.
+   */
+  
++ #define FLOPPY_IRQ 6
++ 
+  #include <linux/sched.h>
+  #include <linux/fs.h>
+  #include <linux/kernel.h>
+***************
+*** 205,211 ****
+   * and ND is set means no DMA. Hardcoded to 6 (HLD=6ms, use DMA).
+   */
+  
+- extern void floppy_interrupt(void);
+  extern char tmp_floppy_area[1024];
+  extern char floppy_track_buffer[512*2*MAX_BUFFER_SECTORS];
+  
+--- 207,212 ----
+***************
+*** 560,566 ****
+  	else redo_fd_request();
+  }
+  
+! void unexpected_floppy_interrupt(void)
+  {
+  	current_track = NO_TRACK;
+  	output_byte(FD_SENSEI);
+--- 561,567 ----
+  	else redo_fd_request();
+  }
+  
+! static void unexpected_floppy_interrupt(void)
+  {
+  	current_track = NO_TRACK;
+  	output_byte(FD_SENSEI);
+***************
+*** 831,836 ****
+--- 832,840 ----
+  	int drive,cnt,okay;
+  	struct floppy_struct *this;
+  
++ 	switch (cmd) {
++ 		RO_IOCTLS(inode->i_rdev,param);
++ 	}
+  	if (!suser()) return -EPERM;
+  	drive = MINOR(inode->i_rdev);
+  	switch (cmd) {
+***************
+*** 975,980 ****
+--- 979,1006 ----
+  	floppy_release		/* release */
+  };
+  
++ static void floppy_interrupt(int cpl)
++ {
++ 	void (*handler)(void) = DEVICE_INTR;
++ 
++ 	DEVICE_INTR = NULL;
++ 	if (!handler)
++ 		handler = unexpected_floppy_interrupt;
++ 	handler();
++ }
++ 
++ /*
++  * This is the harddisk IRQ descruption. The SA_INTERRUPT in sa_flags
++  * means we run the IRQ-handler with interrupts disabled: this is bad for
++  * interrupt latency, but may be safer...
++  */
++ static struct sigaction floppy_sigaction = {
++ 	floppy_interrupt,
++ 	0,
++ 	SA_INTERRUPT,
++ 	NULL
++ };
++ 
+  void floppy_init(void)
+  {
+  	outb(current_DOR,FD_DOR);
+***************
+*** 984,989 ****
+  	timer_table[FLOPPY_TIMER].fn = floppy_shutdown;
+  	timer_active &= ~(1 << FLOPPY_TIMER);
+  	config_types();
+! 	set_intr_gate(0x26,&floppy_interrupt);
+! 	outb(inb_p(0x21)&~0x40,0x21);
+  }
+--- 1010,1015 ----
+  	timer_table[FLOPPY_TIMER].fn = floppy_shutdown;
+  	timer_active &= ~(1 << FLOPPY_TIMER);
+  	config_types();
+! 	if (irqaction(FLOPPY_IRQ,&floppy_sigaction))
+! 		printk("Unable to grab IRQ%d for the floppy driver\n",FLOPPY_IRQ);
+  }
+*** 0.96c/linux/kernel/blk_drv/blk.h	Wed Jun  3 04:23:19 1992
+--- linux/kernel/blk_drv/blk.h	Sat Jul 11 00:49:34 1992
+***************
+*** 54,59 ****
+--- 54,67 ----
+  
+  extern int * blk_size[NR_BLK_DEV];
+  
++ extern int is_read_only(int dev);
++ extern void set_device_ro(int dev,int flag);
++ 
++ #define RO_IOCTLS(dev,where) \
++   case BLKROSET: if (!suser()) return -EPERM; \
++ 		 set_device_ro((dev),get_fs_long((long *) (where))); return 0; \
++   case BLKROGET: put_fs_long(is_read_only(dev),(long *) (where)); return 0;
++ 		 
+  #ifdef MAJOR_NR
+  
+  /*
+*** 0.96c/linux/kernel/blk_drv/ramdisk.c	Thu Jun 18 14:16:39 1992
+--- linux/kernel/blk_drv/ramdisk.c	Tue Jul  7 16:03:33 1992
+***************
+*** 84,90 ****
+  void rd_load(void)
+  {
+  	struct buffer_head *bh;
+! 	struct super_block	s;
+  	int		block = 256;	/* Start at block 256 */
+  	int		i = 1;
+  	int		nblocks;
+--- 84,90 ----
+  void rd_load(void)
+  {
+  	struct buffer_head *bh;
+! 	struct minix_super_block s;
+  	int		block = 256;	/* Start at block 256 */
+  	int		i = 1;
+  	int		nblocks;
+*** 0.96c/linux/kernel/blk_drv/scsi/aha1542.c	Thu Jul  2 01:54:30 1992
+--- linux/kernel/blk_drv/scsi/aha1542.c	Thu Jul  9 19:44:56 1992
+***************
+*** 8,13 ****
+--- 8,14 ----
+  #include <linux/kernel.h>
+  #include <linux/head.h>
+  #include <linux/string.h>
++ #include <linux/sched.h>
+  #include <asm/system.h>
+  #include <asm/io.h>
+  #include <sys/types.h>
+***************
+*** 34,40 ****
+  long WAITtimeout, WAITnexttimeout = 3000000;
+  
+  void (*do_done)() = NULL;
+- extern void aha1542_interrupt();
+  
+  #define aha1542_intr_reset()  outb(IRST, CONTROL)
+  #define aha1542_enable_intr() outb(inb_p(0xA1) & ~8, 0xA1)
+--- 35,40 ----
+***************
+*** 192,198 ****
+  }
+  
+  /* A "high" level interrupt handler */
+! void aha1542_intr_handle(void)
+  {
+      int flag = inb(INTRFLAGS);
+      void (*my_done)() = do_done;
+--- 192,198 ----
+  }
+  
+  /* A "high" level interrupt handler */
+! static void aha1542_interrupt(int cpl)
+  {
+      int flag = inb(INTRFLAGS);
+      void (*my_done)() = do_done;
+***************
+*** 200,206 ****
+  
+      do_done = NULL;
+  #ifdef DEBUG
+!     printk("aha1542_intr_handle: ");
+      if (!(flag&ANYINTR)) printk("no interrupt?");
+      if (flag&MBIF) printk("MBIF ");
+      if (flag&MBOA) printk("MBOF ");
+--- 200,206 ----
+  
+      do_done = NULL;
+  #ifdef DEBUG
+!     printk("aha1542_interrupt: ");
+      if (!(flag&ANYINTR)) printk("no interrupt?");
+      if (flag&MBIF) printk("MBIF ");
+      if (flag&MBOA) printk("MBOF ");
+***************
+*** 212,218 ****
+  #endif
+      aha1542_intr_reset();
+      if (!my_done) {
+! 	printk("aha1542_intr_handle: Unexpected interrupt\n");
+  	return;
+      }
+  
+--- 212,218 ----
+  #endif
+      aha1542_intr_reset();
+      if (!my_done) {
+! 	printk("aha1542_interrupt: Unexpected interrupt\n");
+  	return;
+      }
+  
+***************
+*** 219,225 ****
+      /* is there mail :-) */
+  	
+      if (!mb[1].status) {
+! 	DEB(printk("aha1542_intr_handle: strange: mbif but no mail!\n"));
+  	my_done(DID_TIME_OUT << 16);
+  	return;
+      }
+--- 219,225 ----
+      /* is there mail :-) */
+  	
+      if (!mb[1].status) {
+! 	DEB(printk("aha1542_interrupt: strange: mbif but no mail!\n"));
+  	my_done(DID_TIME_OUT << 16);
+  	return;
+      }
+***************
+*** 235,252 ****
+  
+      if (ccb.tarstat == 2) {
+  	int i;
+! 	DEB(printk("aha1542_intr_handle: sense:"));
+  	for (i = 0; i < 12; i++)
+  	  printk("%02x ", ccb.cdb[ccb.cdblen+i]);
+  	printk("\n");
+  /*
+! 	DEB(printk("aha1542_intr_handle: buf:"));
+  	for (i = 0; i < bufflen; i++)
+  	  printk("%02x ", ((unchar *)buff)[i]);
+  	printk("\n");
+  */
+      }
+!     DEB(if (errstatus) printk("aha1542_intr_handle: returning %6x\n", errstatus));
+      my_done(errstatus);
+      return;
+  }
+--- 235,252 ----
+  
+      if (ccb.tarstat == 2) {
+  	int i;
+! 	DEB(printk("aha1542_interrupt: sense:"));
+  	for (i = 0; i < 12; i++)
+  	  printk("%02x ", ccb.cdb[ccb.cdblen+i]);
+  	printk("\n");
+  /*
+! 	DEB(printk("aha1542_interrupt: buf:"));
+  	for (i = 0; i < bufflen; i++)
+  	  printk("%02x ", ((unchar *)buff)[i]);
+  	printk("\n");
+  */
+      }
+!     DEB(if (errstatus) printk("aha1542_interrupt: returning %6x\n", errstatus));
+      my_done(errstatus);
+      return;
+  }
+***************
+*** 355,361 ****
+  
+  void call_buh()
+  {
+!     set_intr_gate(0x2b,&aha1542_interrupt);
+  }
+  
+  /* return non-zero on detection */
+--- 355,368 ----
+  
+  void call_buh()
+  {
+! 	struct sigaction sa;
+! 
+! 	sa.sa_handler = aha1542_interrupt;
+! 	sa.sa_flags = SA_INTERRUPT;
+! 	sa.sa_mask = 0;
+! 	sa.sa_restorer = NULL;
+! 	if (irqaction(intr_chan,&sa))
+! 		printk("Unable to allocate IRQ%d for aha controller\n", intr_chan);
+  }
+  
+  /* return non-zero on detection */
+***************
+*** 448,482 ****
+      DEB(printk("aha1542_reset called\n"));
+      return 0;
+  }
+- 
+- __asm__("
+- _aha1542_interrupt:
+- 	cld
+- 	pushl %eax
+- 	pushl %ecx
+- 	pushl %edx
+- 	push %ds
+- 	push %es
+- 	push %fs
+- 	movl $0x10,%eax
+- 	mov %ax,%ds
+- 	mov %ax,%es
+- 	movl $0x17,%eax
+- 	mov %ax,%fs
+- 	movb $0x20,%al
+- 	outb %al,$0xA0		# EOI to interrupt controller #1
+- 	jmp 1f			# give port chance to breathe
+- 1:	jmp 1f
+- 1:	outb %al,$0x20
+- # Please, someone, change this to use the timer
+- #	andl $0xfffeffff,_timer_active
+- 	movl $_aha1542_intr_handle,%edx
+- 	call *%edx		# ``interesting'' way of handling intr.
+- 	pop %fs
+- 	pop %es
+- 	pop %ds
+- 	popl %edx
+- 	popl %ecx
+- 	popl %eax
+- 	iret
+- ");
+--- 455,457 ----
+*** 0.96c/linux/kernel/blk_drv/scsi/sd_ioctl.c	Sat May  2 18:37:38 1992
+--- linux/kernel/blk_drv/scsi/sd_ioctl.c	Sat Jul 11 00:49:36 1992
+***************
+*** 3,8 ****
+--- 3,11 ----
+  #include <linux/kernel.h>
+  #include <linux/sched.h>
+  #include <linux/fs.h>
++ #include <asm/segment.h>
++ #include "../blk.h"
++ #include <errno.h>
+  #include "scsi.h"
+  #include "sd.h"
+  
+***************
+*** 13,18 ****
+--- 16,22 ----
+  	int dev = inode->i_rdev;
+  	
+  	switch (cmd) {
++ 		RO_IOCTLS(dev,arg);
+  		default:
+  			return scsi_ioctl(rscsi_disks[MINOR(dev) >> 4].device,cmd,(void *) arg);
+  	}
+*** 0.96c/linux/kernel/blk_drv/scsi/ultrastor.c	Fri May 29 00:26:06 1992
+--- linux/kernel/blk_drv/scsi/ultrastor.c	Thu Jul  9 19:27:15 1992
+***************
+*** 156,162 ****
+  };
+  #endif
+  
+! void ultrastor_interrupt(void);
+  
+  static void (*ultrastor_done)(int, int) = 0;
+  
+--- 156,162 ----
+  };
+  #endif
+  
+! void ultrastor_interrupt(int cpl);
+  
+  static void (*ultrastor_done)(int, int) = 0;
+  
+***************
+*** 293,303 ****
+      host_number = hostnum;
+      scsi_hosts[hostnum].this_id = config.ha_scsi_id;
+  #if USE_QUEUECOMMAND
+!     set_intr_gate(0x20 + config.interrupt, ultrastor_interrupt);
+!     /* gate to PIC 2 */
+!     outb_p(inb_p(0x21) & ~BIT(2), 0x21);
+!     /* enable the interrupt */
+!     outb(inb_p(0xA1) & ~BIT(config.interrupt - 8), 0xA1);
+  #endif
+      return TRUE;
+  }
+--- 293,309 ----
+      host_number = hostnum;
+      scsi_hosts[hostnum].this_id = config.ha_scsi_id;
+  #if USE_QUEUECOMMAND
+!     {
+!    	struct sigaction sa;
+!    	sa.sa_handler = ultrastor_interrupt;
+!    	sa.sa_flags = SA_INTERRUPT;
+!    	sa.sa_mask = 0;
+!    	sa.sa_restorer = NULL;
+!    	if (irqaction(config.interrupt,&sa)) {
+!    		printk("unable to get IRQ%d for ultrastor controller\n",config.interrupt);
+!    		return FALSE;
+!    	}
+!     }
+  #endif
+      return TRUE;
+  }
+***************
+*** 421,427 ****
+  }
+  
+  #if USE_QUEUECOMMAND
+! void ultrastor_interrupt_service(void)
+  {
+      if (ultrastor_done == 0) {
+  	printk("US14F: unexpected ultrastor interrupt\n\r");
+--- 427,433 ----
+  }
+  
+  #if USE_QUEUECOMMAND
+! void ultrastor_interrupt(int cpl)
+  {
+      if (ultrastor_done == 0) {
+  	printk("US14F: unexpected ultrastor interrupt\n\r");
+***************
+*** 434,470 ****
+  		   (mscp.adapter_status << 16) | mscp.target_status);
+      ultrastor_done = 0;
+  }
+- 
+- __asm__("
+- _ultrastor_interrupt:
+- 	cld
+- 	pushl %eax
+- 	pushl %ecx
+- 	pushl %edx
+- 	push %ds
+- 	push %es
+- 	push %fs
+- 	movl $0x10,%eax
+- 	mov %ax,%ds
+- 	mov %ax,%es
+- 	movl $0x17,%eax
+- 	mov %ax,%fs
+- 	movb $0x20,%al
+- 	outb %al,$0xA0		# EOI to interrupt controller #1
+- 	outb %al,$0x80		# give port chance to breathe
+- 	outb %al,$0x80
+- 	outb %al,$0x80
+- 	outb %al,$0x80
+- 	outb %al,$0x20
+- 	call _ultrastor_interrupt_service
+- 	pop %fs
+- 	pop %es
+- 	pop %ds
+- 	popl %edx
+- 	popl %ecx
+- 	popl %eax
+- 	iret
+- ");
+  #endif
+  
+  #endif
+--- 440,445 ----
+*** 0.96c/linux/kernel/sys_call.S	Thu Jun 25 16:40:29 1992
+--- linux/kernel/sys_call.S	Tue Jul  7 18:39:02 1992
+***************
+*** 81,87 ****
+   * Ok, I get parallel printer interrupts while using the floppy for some
+   * strange reason. Urgel. Now I just ignore them.
+   */
+! .globl _system_call,_timer_interrupt,_sys_execve
+  .globl _device_not_available, _coprocessor_error
+  .globl _divide_error,_debug,_nmi,_int3,_overflow,_bounds,_invalid_op
+  .globl _double_fault,_coprocessor_segment_overrun
+--- 81,87 ----
+   * Ok, I get parallel printer interrupts while using the floppy for some
+   * strange reason. Urgel. Now I just ignore them.
+   */
+! .globl _system_call,_sys_execve
+  .globl _device_not_available, _coprocessor_error
+  .globl _divide_error,_debug,_nmi,_int3,_overflow,_bounds,_invalid_op
+  .globl _double_fault,_coprocessor_segment_overrun
+***************
+*** 88,95 ****
+  .globl _invalid_TSS,_segment_not_present,_stack_segment
+  .globl _general_protection,_irq13,_reserved
+  .globl _alignment_check,_page_fault
+! .globl _keyboard_interrupt,_hd_interrupt
+! .globl _IRQ3_interrupt,_IRQ4_interrupt,_IRQ5_interrupt,_IRQ9_interrupt
+  
+  #define SAVE_ALL \
+  	cld; \
+--- 88,94 ----
+  .globl _invalid_TSS,_segment_not_present,_stack_segment
+  .globl _general_protection,_irq13,_reserved
+  .globl _alignment_check,_page_fault
+! .globl ret_from_sys_call
+  
+  #define SAVE_ALL \
+  	cld; \
+***************
+*** 170,184 ****
+  	jne 2f
+  	cmpw $0x17,OLDSS(%esp)		# was stack segment = 0x17 ?
+  	jne 2f
+! 1:	movl _current,%eax
+! 	cmpl _task,%eax			# task[0] cannot have signals
+! 	je 2f
+! 	cmpl $0,_need_resched
+  	jne reschedule
+  	cmpl $0,state(%eax)		# state
+  	jne reschedule
+  	cmpl $0,counter(%eax)		# counter
+  	je reschedule
+  	movl signal(%eax),%ebx
+  	movl blocked(%eax),%ecx
+  	notl %ecx
+--- 169,185 ----
+  	jne 2f
+  	cmpw $0x17,OLDSS(%esp)		# was stack segment = 0x17 ?
+  	jne 2f
+! 1:	cmpl $0,_need_resched
+  	jne reschedule
++ 	movl _current,%eax
+  	cmpl $0,state(%eax)		# state
+  	jne reschedule
+  	cmpl $0,counter(%eax)		# counter
+  	je reschedule
++ 	movl $1,_need_resched
++ 	cmpl _task,%eax			# task[0] cannot have signals
++ 	je 2f
++ 	movl $0,_need_resched
+  	movl signal(%eax),%ebx
+  	movl blocked(%eax),%ecx
+  	notl %ecx
+***************
+*** 240,340 ****
+  	call _math_emulate
+  	addl $4,%esp
+  	ret
+- 
+- .align 2
+- _keyboard_interrupt:
+- 	pushl $-1
+- 	SAVE_ALL
+- 	ACK_FIRST(0x02)
+- 	sti
+- 	call _do_keyboard
+- 	cli
+- 	UNBLK_FIRST(0x02)
+- 	jmp ret_from_sys_call
+- 
+- .align 2
+- _IRQ3_interrupt:
+- 	pushl $-1
+- 	SAVE_ALL
+- 	ACK_FIRST(0x08)
+- 	sti
+- 	pushl $3
+- 	call _do_IRQ
+- 	addl $4,%esp
+- 	cli
+- 	UNBLK_FIRST(0x08)
+- 	jmp ret_from_sys_call
+- 
+- .align 2
+- _IRQ4_interrupt:
+- 	pushl $-1
+- 	SAVE_ALL
+- 	ACK_FIRST(0x10)
+- 	sti
+- 	pushl $4
+- 	call _do_IRQ
+- 	addl $4,%esp
+- 	cli
+- 	UNBLK_FIRST(0x10)
+- 	jmp ret_from_sys_call
+- 
+- .align 2
+- _IRQ5_interrupt:
+- 	pushl $-1
+- 	SAVE_ALL
+- 	ACK_FIRST(0x20)
+- 	sti
+- 	pushl $5
+- 	call _do_IRQ
+- 	addl $4,%esp
+- 	cli
+- 	UNBLK_FIRST(0x20)
+- 	jmp ret_from_sys_call
+- 
+- .align 2
+- _IRQ9_interrupt:
+- 	pushl $-1
+- 	SAVE_ALL
+- 	ACK_SECOND(0x02)
+- 	sti
+- 	pushl $9
+- 	call _do_IRQ
+- 	addl $4,%esp
+- 	cli
+- 	UNBLK_SECOND(0x02)
+- 	jmp ret_from_sys_call
+- 
+- .align 2
+- _timer_interrupt:
+- 	pushl $-1		# mark this as an int
+- 	SAVE_ALL
+- 	ACK_FIRST(0x01)
+- 	sti
+- 	incl _jiffies
+- 	movl CS(%esp),%eax
+- 	andl $3,%eax		# %eax is CPL (0 or 3, 0=supervisor)
+- 	pushl %eax
+- 	call _do_timer		# 'do_timer(long CPL)' does everything from
+- 	addl $4,%esp		# task switching to accounting ...
+- 	cli
+- 	UNBLK_FIRST(0x01)
+- 	jmp ret_from_sys_call
+- 
+- .align 2
+- _hd_interrupt:
+- 	pushl $-1
+- 	SAVE_ALL
+- 	ACK_SECOND(0x40)
+- 	andl $0xfffeffff,_timer_active
+- 	xorl %edx,%edx
+- 	xchgl _do_hd,%edx
+- 	testl %edx,%edx
+- 	jne 1f
+- 	movl $_unexpected_hd_interrupt,%edx
+- 1:	call *%edx		# "interesting" way of handling intr.
+- 	cli
+- 	UNBLK_SECOND(0x40)
+- 	jmp ret_from_sys_call
+  
+  .align 2
+  _sys_execve:
+--- 241,246 ----
+*** /dev/null	Sat Jul 11 22:43:15 1992
+--- linux/kernel/irq.c	Thu Jul  9 14:43:34 1992
+***************
+*** 0 ****
+--- 1,171 ----
++ /*
++  *	linux/kernel/irq.c
++  *
++  *	(C) 1992 Linus Torvalds
++  *
++  * This file contains the code used by various IRQ handling routines:
++  * asking for different IRQ's should be done through these routines
++  * instead of just grabbing them. Thus setups with different IRQ numbers
++  * shouldn't result in any weird surprises, and installing new handlers
++  * should be easier.
++  */
++ 
++ /*
++  * IRQ's are in fact implemented a bit like signal handlers for the kernel.
++  * The same sigaction struct is used, and with similar semantics (ie there
++  * is a SA_INTERRUPT flag etc). Naturally it's not a 1:1 relation, but there
++  * are similarities.
++  *
++  * sa_handler(int irq_NR) is the default function called.
++  * sa_mask is 0 if nothing uses this IRQ
++  * sa_flags contains various info: SA_INTERRUPT etc
++  * sa_restorer is the unused
++  */
++ 
++ #include <signal.h>
++ #include <errno.h>
++ 
++ #include <sys/ptrace.h>
++ 
++ #include <linux/sched.h>
++ #include <asm/system.h>
++ #include <asm/io.h>
++ #include <asm/irq.h>
++ 
++ struct sigaction irq_sigaction[16] = {
++ 	{ NULL, 0, 0, NULL },
++ };
++ 
++ /*
++  * This builds up the IRQ handler stubs using some ugly macros in irq.h
++  */
++ BUILD_IRQ(FIRST,0,0x01)
++ BUILD_IRQ(FIRST,1,0x02)
++ BUILD_IRQ(FIRST,2,0x04)
++ BUILD_IRQ(FIRST,3,0x08)
++ BUILD_IRQ(FIRST,4,0x10)
++ BUILD_IRQ(FIRST,5,0x20)
++ BUILD_IRQ(FIRST,6,0x40)
++ BUILD_IRQ(FIRST,7,0x80)
++ BUILD_IRQ(SECOND,8,0x01)
++ BUILD_IRQ(SECOND,9,0x02)
++ BUILD_IRQ(SECOND,10,0x04)
++ BUILD_IRQ(SECOND,11,0x08)
++ BUILD_IRQ(SECOND,12,0x10)
++ BUILD_IRQ(SECOND,13,0x20)
++ BUILD_IRQ(SECOND,14,0x40)
++ BUILD_IRQ(SECOND,15,0x80)
++ 
++ /*
++  * This routine gets called at every IRQ request. Interrupts
++  * are enabled, the interrupt has been accnowledged and this
++  * particular interrupt is disabled when this is called.
++  *
++  * The routine has to call the appropriate handler (disabling
++  * interrupts if needed first), and then re-enable this interrupt-
++  * line if the handler was ok. If no handler exists, the IRQ isn't
++  * re-enabled.
++  *
++  * Note similarities on a very low level between this and the
++  * do_signal() function. Naturally this is simplified, but they
++  * get similar arguments, use them similarly etc... Note that
++  * unlike the signal-handlers, the IRQ-handlers don't get the IRQ
++  * (signal) number as argument, but the cpl value at the time of
++  * the interrupt.
++  */
++ void do_IRQ(int irq, struct pt_regs * regs)
++ {
++ 	struct sigaction * sa = irq + irq_sigaction;
++ 	void (*handler)(int);
++ 
++ 	if (!(handler = sa->sa_handler))
++ 		return;
++ 	if (sa->sa_flags & SA_INTERRUPT)
++ 		cli();
++ 	handler(regs->cs & 3);
++ 	cli();
++ 	if (irq < 8)
++ 		outb(inb_p(0x21) & ~(1<<irq),0x21);
++ 	else
++ 		outb(inb_p(0xA1) & ~(1<<(irq-8)),0xA1);
++ 	sti();
++ }
++ 
++ int irqaction(unsigned int irq, struct sigaction * new)
++ {
++ 	struct sigaction * sa;
++ 	unsigned long flags;
++ 
++ 	if (irq > 15)
++ 		return -EINVAL;
++ 	if (irq == 2)
++ 		irq = 9;
++ 	sa = irq + irq_sigaction;
++ 	if (sa->sa_mask)
++ 		return -EBUSY;
++ 	__asm__ __volatile__("pushfl ; popl %0 ; cli":"=r" (flags));
++ 	*sa = *new;
++ 	sa->sa_mask = 1;
++ 	if (irq < 8)
++ 		outb(inb_p(0x21) & ~(1<<irq),0x21);
++ 	else
++ 		outb(inb_p(0xA1) & ~(1<<(irq-8)),0xA1);
++ 	__asm__ __volatile__("pushl %0 ; popfl"::"r" (flags));
++ 	return 0;
++ }
++ 		
++ int request_irq(unsigned int irq, void (*handler)(int))
++ {
++ 	struct sigaction sa;
++ 
++ 	sa.sa_handler = handler;
++ 	sa.sa_flags = 0;
++ 	sa.sa_mask = 0;
++ 	sa.sa_restorer = NULL;
++ 	return irqaction(irq,&sa);
++ }
++ 
++ void free_irq(unsigned int irq)
++ {
++ 	struct sigaction * sa = irq + irq_sigaction;
++ 	unsigned long flags;
++ 
++ 	if (irq > 15) {
++ 		printk("Trying to free IRQ%d\n",irq);
++ 		return;
++ 	}
++ 	if (!sa->sa_mask) {
++ 		printk("Trying to free free IRQ%d\n",irq);
++ 		return;
++ 	}
++ 	__asm__ __volatile__("pushfl ; popl %0 ; cli":"=r" (flags));
++ 	if (irq < 8)
++ 		outb(inb_p(0x21) | (1<<irq),0x21);
++ 	else
++ 		outb(inb_p(0xA1) | (1<<(irq-8)),0xA1);
++ 	sa->sa_handler = NULL;
++ 	sa->sa_flags = 0;
++ 	sa->sa_mask = 0;
++ 	sa->sa_restorer = NULL;
++ 	__asm__ __volatile__("pushl %0 ; popfl"::"r" (flags));
++ }
++ 
++ void init_IRQ(void)
++ {
++ 	set_trap_gate(0x20,IRQ0_interrupt);
++ 	set_trap_gate(0x21,IRQ1_interrupt);
++ 	set_trap_gate(0x22,IRQ2_interrupt);
++ 	set_trap_gate(0x23,IRQ3_interrupt);
++ 	set_trap_gate(0x24,IRQ4_interrupt);
++ 	set_trap_gate(0x25,IRQ5_interrupt);
++ 	set_trap_gate(0x26,IRQ6_interrupt);
++ 	set_trap_gate(0x27,IRQ7_interrupt);
++ 	set_trap_gate(0x28,IRQ8_interrupt);
++ 	set_trap_gate(0x29,IRQ10_interrupt);
++ 	set_trap_gate(0x2a,IRQ10_interrupt);
++ 	set_trap_gate(0x2b,IRQ11_interrupt);
++ 	set_trap_gate(0x2c,IRQ12_interrupt);
++ 	set_trap_gate(0x2d,IRQ13_interrupt);
++ 	set_trap_gate(0x2e,IRQ14_interrupt);
++ 	set_trap_gate(0x2f,IRQ15_interrupt);
++ }
+*** 0.96c/linux/kernel/ptrace.c	Wed Jun 17 13:37:55 1992
+--- linux/kernel/ptrace.c	Thu Jul  9 19:18:53 1992
+***************
+*** 39,45 ****
+  {
+  	int i;
+  
+! 	for (i = 0; i < NR_TASKS; i++) {
+  		if (task[i] != NULL && (task[i]->pid == pid))
+  			return task[i];
+  	}
+--- 39,45 ----
+  {
+  	int i;
+  
+! 	for (i = 1; i < NR_TASKS; i++) {
+  		if (task[i] != NULL && (task[i]->pid == pid))
+  			return task[i];
+  	}
+***************
+*** 238,243 ****
+--- 238,245 ----
+  	if (request == PTRACE_ATTACH) {
+  		long tmp;
+  
++ 		if (child == current)
++ 			return -EPERM;
+  		if ((!current->dumpable || (current->uid != child->euid) ||
+  	 	    (current->gid != child->egid)) && !suser())
+  			return -EPERM;
+*** 0.96c/linux/lib/Makefile	Sun Jul  5 03:11:58 1992
+--- linux/lib/Makefile	Sat Jul 11 20:14:30 1992
+***************
+*** 14,20 ****
+  	$(CC) $(CFLAGS) -c $<
+  
+  OBJS  = ctype.o _exit.o open.o close.o errno.o write.o dup.o setsid.o \
+! 	execve.o wait.o string.o malloc.o itimer.o
+  
+  lib.a: $(OBJS)
+  	$(AR) rcs lib.a $(OBJS)
+--- 14,20 ----
+  	$(CC) $(CFLAGS) -c $<
+  
+  OBJS  = ctype.o _exit.o open.o close.o errno.o write.o dup.o setsid.o \
+! 	execve.o wait.o string.o malloc.o
+  
+  lib.a: $(OBJS)
+  	$(AR) rcs lib.a $(OBJS)
+***************
+*** 36,43 ****
+  dup.o : dup.c /usr/src/linux/include/linux/unistd.h 
+  errno.o : errno.c 
+  execve.o : execve.c /usr/src/linux/include/linux/unistd.h 
+- itimer.o : itimer.c /usr/src/linux/include/linux/unistd.h /usr/src/linux/include/sys/time.h \
+-   /usr/src/linux/include/time.h /usr/src/linux/include/sys/types.h /usr/src/linux/include/stddef.h 
+  malloc.o : malloc.c /usr/src/linux/include/linux/kernel.h /usr/src/linux/include/linux/mm.h \
+    /usr/src/linux/include/linux/fs.h /usr/src/linux/include/sys/types.h /usr/src/linux/include/stddef.h \
+    /usr/src/linux/include/sys/dirent.h /usr/src/linux/include/limits.h /usr/src/linux/include/sys/vfs.h \
+--- 36,41 ----
+*** 0.96c/linux/include/sys/time.h	Mon May 25 22:18:54 1992
+--- linux/include/sys/time.h	Wed Jul  8 15:17:52 1992
+***************
+*** 55,61 ****
+  };
+  
+  int getitimer(int which, struct itimerval *value);
+! int setitimer(int which, struct itimerval *value, struct itimerval *ovalue);
+  
+  #include <time.h>
+  #include <sys/types.h>
+--- 55,61 ----
+  };
+  
+  int getitimer(int which, struct itimerval *value);
+! int setitimer(int which, const struct itimerval *value, struct itimerval *ovalue);
+  
+  #include <time.h>
+  #include <sys/types.h>
+*** 0.96c/linux/include/linux/hdreg.h	Fri Apr 24 18:26:25 1992
+--- linux/include/linux/hdreg.h	Sat Jul 11 00:49:34 1992
+***************
+*** 69,73 ****
+--- 69,74 ----
+        unsigned char heads;
+        unsigned char sectors;
+        unsigned short cylinders;
++       unsigned long start;
+  };
+  #endif
+*** 0.96c/linux/include/linux/sched.h	Sun Jul  5 01:27:18 1992
+--- linux/include/linux/sched.h	Mon Jul  6 00:18:21 1992
+***************
+*** 228,233 ****
+--- 228,237 ----
+  extern void wake_up(struct task_struct ** p);
+  extern int in_group_p(gid_t grp);
+  
++ extern int request_irq(unsigned int irq,void (*handler)(int));
++ extern void free_irq(unsigned int irq);
++ extern int irqaction(unsigned int irq,struct sigaction * new);
++ 
+  /*
+   * Entry into gdt where to find first TSS. 0-nul, 1-cs, 2-ds, 3-syscall
+   * 4-TSS0, 5-LDT0, 6-TSS1 etc ...
+*** 0.96c/linux/include/linux/tty.h	Sat Jul  4 03:28:16 1992
+--- linux/include/linux/tty.h	Tue Jul  7 14:54:51 1992
+***************
+*** 69,76 ****
+  extern void put_tty_queue(char c, struct tty_queue * queue);
+  extern int get_tty_queue(struct tty_queue * queue);
+  
+- #define PUTCH(c,queue) put_tty_queue((c),(queue))
+- #define GETCH(queue) get_tty_queue(queue)
+  #define INTR_CHAR(tty) ((tty)->termios.c_cc[VINTR])
+  #define QUIT_CHAR(tty) ((tty)->termios.c_cc[VQUIT])
+  #define ERASE_CHAR(tty) ((tty)->termios.c_cc[VERASE])
+--- 69,74 ----
+***************
+*** 166,171 ****
+--- 164,170 ----
+  
+  extern void flush_input(struct tty_struct * tty);
+  extern void flush_output(struct tty_struct * tty);
++ extern void wait_until_sent(struct tty_struct * tty);
+  extern void copy_to_cooked(struct tty_struct * tty);
+  
+  extern int tty_ioctl(struct inode *, struct file *, unsigned int, unsigned int);
+*** 0.96c/linux/include/linux/fs.h	Fri Jul  3 03:09:37 1992
+--- linux/include/linux/fs.h	Sat Jul 11 01:27:13 1992
+***************
+*** 43,49 ****
+  
+  #define NR_OPEN 32
+  #define NR_INODE 128
+! #define NR_FILE 64
+  #define NR_SUPER 8
+  #define NR_HASH 307
+  #define NR_BUFFERS nr_buffers
+--- 43,49 ----
+  
+  #define NR_OPEN 32
+  #define NR_INODE 128
+! #define NR_FILE 128
+  #define NR_SUPER 8
+  #define NR_HASH 307
+  #define NR_BUFFERS nr_buffers
+***************
+*** 71,76 ****
+--- 71,103 ----
+  #define SEL_OUT		2
+  #define SEL_EX		4
+  
++ /*
++  * These are the fs-independent mount-flags: up to 16 flags are supported
++  */
++ #define MS_RDONLY    1 /* mount read-only */
++ #define MS_NOSUID    2 /* ignore suid and sgid bits */
++ #define MS_NODEV     4 /* disallow access to device special files */
++ #define MS_NOEXEC    8 /* disallow program execution */
++ 
++ /*
++  * Note that read-only etc flags are inode-specific: setting some file-system
++  * flags just means all the inodes inherit those flags by default. It might be
++  * possible to overrride it sevelctively if you really wanted to with some
++  * ioctl() that is not currently implemented.
++  */
++ #define IS_RDONLY(inode) ((inode)->i_flags & MS_RDONLY)
++ #define IS_NOSUID(inode) ((inode)->i_flags & MS_NOSUID)
++ #define IS_NODEV(inode) ((inode)->i_flags & MS_NODEV)
++ #define IS_NOEXEC(inode) ((inode)->i_flags & MS_NOEXEC)
++ 
++ /* the read-only stuff doesn't really belong here, but any other place is
++    probably as bad and I don't want to create yet another include file. */
++ 
++ #define BLKROSET 4701 /* set device read-only (0 = read-write) */
++ #define BLKROGET 4702 /* get read-only status (0 = read_write) */
++ 
++ #define BMAP_IOCTL 1
++ 
+  typedef char buffer_block[BLOCK_SIZE];
+  
+  struct buffer_head {
+***************
+*** 107,112 ****
+--- 134,140 ----
+  	struct task_struct * i_wait;
+  	struct task_struct * i_wait2;	/* for pipes */
+  	unsigned short i_count;
++ 	unsigned short i_flags;
+  	unsigned char i_lock;
+  	unsigned char i_dirt;
+  	unsigned char i_pipe;
+***************
+*** 120,125 ****
+--- 148,154 ----
+  	unsigned short f_flags;
+  	unsigned short f_count;
+  	unsigned short f_reada;
++ 	unsigned short f_rdev;		/* needed for /dev/tty */
+  	struct inode * f_inode;
+  	struct file_operations * f_op;
+  	off_t f_pos;
+***************
+*** 159,164 ****
+--- 188,194 ----
+  	unsigned char s_dirt;
+  	/* TUBE */
+  	struct super_operations *s_op;
++ 	int s_flags;
+  };
+  
+  struct file_operations {
+*** 0.96c/linux/include/linux/config.h	Sun Jul  5 01:28:18 1992
+--- linux/include/linux/config.h	Sat Jul 11 20:16:04 1992
+***************
+*** 26,32 ****
+  #define DEF_INITSEG	0x9000
+  #define DEF_SYSSEG	0x1000
+  #define DEF_SETUPSEG	0x9020
+! #define DEF_SYSSIZE	0x4000
+  
+  /*
+   * The root-device is no longer hard-coded. You can change the default
+--- 26,32 ----
+  #define DEF_INITSEG	0x9000
+  #define DEF_SYSSEG	0x1000
+  #define DEF_SETUPSEG	0x9020
+! #define DEF_SYSSIZE	0x5000
+  
+  /*
+   * The root-device is no longer hard-coded. You can change the default
+*** /dev/null	Sat Jul 11 22:43:15 1992
+--- linux/include/asm/irq.h	Tue Jul  7 18:45:48 1992
+***************
+*** 0 ****
+--- 1,75 ----
++ #ifndef _ASM_IRQ_H
++ #define _ASM_IRQ_H
++ 
++ /*
++  *	linux/include/asm/irq.h
++  *
++  *	(C) 1992 Linus Torvalds
++  */
++  
++ #define SAVE_ALL \
++ 	"cld\n\t" \
++ 	"push %gs\n\t" \
++ 	"push %fs\n\t" \
++ 	"push %es\n\t" \
++ 	"push %ds\n\t" \
++ 	"pushl %eax\n\t" \
++ 	"pushl %ebp\n\t" \
++ 	"pushl %edi\n\t" \
++ 	"pushl %esi\n\t" \
++ 	"pushl %edx\n\t" \
++ 	"pushl %ecx\n\t" \
++ 	"pushl %ebx\n\t" \
++ 	"movl $0x10,%edx\n\t" \
++ 	"mov %dx,%ds\n\t" \
++ 	"mov %dx,%es\n\t" \
++ 	"movl $0x17,%edx\n\t" \
++ 	"mov %dx,%fs\n\t"
++ 
++ #define ACK_FIRST(mask) \
++ 	"inb $0x21,%al\n\t" \
++ 	"jmp 1f\n" \
++ 	"1:\tjmp 1f\n" \
++ 	"1:\torb $" #mask ",%al\n\t" \
++ 	"outb %al,$0x21\n\t" \
++ 	"jmp 1f\n" \
++ 	"1:\tjmp 1f\n" \
++ 	"1:\tmovb $0x20,%al\n\t" \
++ 	"outb %al,$0x20\n\t"
++ 
++ #define ACK_SECOND(mask) \
++ 	"inb $0xA1,%al\n\t" \
++ 	"jmp 1f\n" \
++ 	"1:\tjmp 1f\n" \
++ 	"1:\torb $" #mask ",%al\n\t" \
++ 	"outb %al,$0xA1\n\t" \
++ 	"jmp 1f\n" \
++ 	"1:\tjmp 1f\n" \
++ 	"1:\tmovb $0x20,%al\n\t" \
++ 	"outb %al,$0xA0" \
++ 	"jmp 1f\n" \
++ 	"1:\tjmp 1f\n" \
++ 	"1:\toutb %al,$0x20\n\t"
++ 
++ #define IRQ_NAME2(nr) nr##_interrupt()
++ #define IRQ_NAME(nr) IRQ_NAME2(IRQ##nr)
++ 	
++ #define BUILD_IRQ(chip,nr,mask) \
++ extern void IRQ_NAME(nr); \
++ __asm__( \
++ "\n.align 2\n" \
++ ".globl _IRQ" #nr "_interrupt\n" \
++ "_IRQ" #nr "_interrupt:\n\t" \
++ 	"pushl $-1\n\t" \
++ 	SAVE_ALL \
++ 	"cli\n\t" \
++ 	ACK_##chip(mask) \
++ 	"sti\n\t" \
++ 	"movl %esp,%ebx\n\t" \
++ 	"pushl %ebx\n\t" \
++ 	"pushl $" #nr "\n\t" \
++ 	"call _do_IRQ\n\t" \
++ 	"addl $8,%esp\n\t" \
++ 	"jmp ret_from_sys_call");
++ 
++ #endif
