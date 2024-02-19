@@ -1,0 +1,175 @@
+<html><head><title>NASM Manual</title></head>
+<body><h1 align=center>The Netwide Assembler: NASM</h1>
+
+<p align=center><a href="nasmdo10.html">Next Chapter</a> |
+<a href="nasmdoc8.html">Previous Chapter</a> |
+<a href="nasmdoc0.html">Contents</a> |
+<a href="nasmdoci.html">Index</a>
+<h2><a name="chapter-9">Chapter 9: Mixing 16 and 32 Bit Code</a></h2>
+<p>This chapter tries to cover some of the issues, largely related to
+unusual forms of addressing and jump instructions, encountered when writing
+operating system code such as protected-mode initialisation routines, which
+require code that operates in mixed segment sizes, such as code in a 16-bit
+segment trying to modify data in a 32-bit one, or jumps between
+different-size segments.
+<h3><a name="section-9.1">9.1 Mixed-Size Jumps</a></h3>
+<p>The most common form of mixed-size instruction is the one used when
+writing a 32-bit OS: having done your setup in 16-bit mode, such as loading
+the kernel, you then have to boot it by switching into protected mode and
+jumping to the 32-bit kernel start address. In a fully 32-bit OS, this
+tends to be the <em>only</em> mixed-size instruction you need, since
+everything before it can be done in pure 16-bit code, and everything after
+it can be pure 32-bit.
+<p>This jump must specify a 48-bit far address, since the target segment is
+a 32-bit one. However, it must be assembled in a 16-bit segment, so just
+coding, for example,
+<p><pre>
+        jmp     0x1234:0x56789ABC       ; wrong!
+</pre>
+<p>will not work, since the offset part of the address will be truncated to
+<code><nobr>0x9ABC</nobr></code> and the jump will be an ordinary 16-bit
+far one.
+<p>The Linux kernel setup code gets round the inability of
+<code><nobr>as86</nobr></code> to generate the required instruction by
+coding it manually, using <code><nobr>DB</nobr></code> instructions. NASM
+can go one better than that, by actually generating the right instruction
+itself. Here's how to do it right:
+<p><pre>
+        jmp     dword 0x1234:0x56789ABC         ; right
+</pre>
+<p>The <code><nobr>DWORD</nobr></code> prefix (strictly speaking, it should
+come <em>after</em> the colon, since it is declaring the <em>offset</em>
+field to be a doubleword; but NASM will accept either form, since both are
+unambiguous) forces the offset part to be treated as far, in the assumption
+that you are deliberately writing a jump from a 16-bit segment to a 32-bit
+one.
+<p>You can do the reverse operation, jumping from a 32-bit segment to a
+16-bit one, by means of the <code><nobr>WORD</nobr></code> prefix:
+<p><pre>
+        jmp     word 0x8765:0x4321      ; 32 to 16 bit
+</pre>
+<p>If the <code><nobr>WORD</nobr></code> prefix is specified in 16-bit
+mode, or the <code><nobr>DWORD</nobr></code> prefix in 32-bit mode, they
+will be ignored, since each is explicitly forcing NASM into a mode it was
+in anyway.
+<h3><a name="section-9.2">9.2 Addressing Between Different-Size Segments</a></h3>
+<p>If your OS is mixed 16 and 32-bit, or if you are writing a DOS extender,
+you are likely to have to deal with some 16-bit segments and some 32-bit
+ones. At some point, you will probably end up writing code in a 16-bit
+segment which has to access data in a 32-bit segment, or vice versa.
+<p>If the data you are trying to access in a 32-bit segment lies within the
+first 64K of the segment, you may be able to get away with using an
+ordinary 16-bit addressing operation for the purpose; but sooner or later,
+you will want to do 32-bit addressing from 16-bit mode.
+<p>The easiest way to do this is to make sure you use a register for the
+address, since any effective address containing a 32-bit register is forced
+to be a 32-bit address. So you can do
+<p><pre>
+        mov     eax,offset_into_32_bit_segment_specified_by_fs 
+        mov     dword [fs:eax],0x11223344
+</pre>
+<p>This is fine, but slightly cumbersome (since it wastes an instruction
+and a register) if you already know the precise offset you are aiming at.
+The x86 architecture does allow 32-bit effective addresses to specify
+nothing but a 4-byte offset, so why shouldn't NASM be able to generate the
+best instruction for the purpose?
+<p>It can. As in <a href="#section-9.1">section 9.1</a>, you need only
+prefix the address with the <code><nobr>DWORD</nobr></code> keyword, and it
+will be forced to be a 32-bit address:
+<p><pre>
+        mov     dword [fs:dword my_offset],0x11223344
+</pre>
+<p>Also as in <a href="#section-9.1">section 9.1</a>, NASM is not fussy
+about whether the <code><nobr>DWORD</nobr></code> prefix comes before or
+after the segment override, so arguably a nicer-looking way to code the
+above instruction is
+<p><pre>
+        mov     dword [dword fs:my_offset],0x11223344
+</pre>
+<p>Don't confuse the <code><nobr>DWORD</nobr></code> prefix
+<em>outside</em> the square brackets, which controls the size of the data
+stored at the address, with the one <code><nobr>inside</nobr></code> the
+square brackets which controls the length of the address itself. The two
+can quite easily be different:
+<p><pre>
+        mov     word [dword 0x12345678],0x9ABC
+</pre>
+<p>This moves 16 bits of data to an address specified by a 32-bit offset.
+<p>You can also specify <code><nobr>WORD</nobr></code> or
+<code><nobr>DWORD</nobr></code> prefixes along with the
+<code><nobr>FAR</nobr></code> prefix to indirect far jumps or calls. For
+example:
+<p><pre>
+        call    dword far [fs:word 0x4321]
+</pre>
+<p>This instruction contains an address specified by a 16-bit offset; it
+loads a 48-bit far pointer from that (16-bit segment and 32-bit offset),
+and calls that address.
+<h3><a name="section-9.3">9.3 Other Mixed-Size Instructions</a></h3>
+<p>The other way you might want to access data might be using the string
+instructions (<code><nobr>LODSx</nobr></code>,
+<code><nobr>STOSx</nobr></code> and so on) or the
+<code><nobr>XLATB</nobr></code> instruction. These instructions, since they
+take no parameters, might seem to have no easy way to make them perform
+32-bit addressing when assembled in a 16-bit segment.
+<p>This is the purpose of NASM's <code><nobr>a16</nobr></code> and
+<code><nobr>a32</nobr></code> prefixes. If you are coding
+<code><nobr>LODSB</nobr></code> in a 16-bit segment but it is supposed to
+be accessing a string in a 32-bit segment, you should load the desired
+address into <code><nobr>ESI</nobr></code> and then code
+<p><pre>
+        a32     lodsb
+</pre>
+<p>The prefix forces the addressing size to 32 bits, meaning that
+<code><nobr>LODSB</nobr></code> loads from
+<code><nobr>[DS:ESI]</nobr></code> instead of
+<code><nobr>[DS:SI]</nobr></code>. To access a string in a 16-bit segment
+when coding in a 32-bit one, the corresponding
+<code><nobr>a16</nobr></code> prefix can be used.
+<p>The <code><nobr>a16</nobr></code> and <code><nobr>a32</nobr></code>
+prefixes can be applied to any instruction in NASM's instruction table, but
+most of them can generate all the useful forms without them. The prefixes
+are necessary only for instructions with implicit addressing:
+<code><nobr>CMPSx</nobr></code>
+(<a href="nasmdocb.html#section-B.4.27">section B.4.27</a>),
+<code><nobr>SCASx</nobr></code>
+(<a href="nasmdocb.html#section-B.4.286">section B.4.286</a>),
+<code><nobr>LODSx</nobr></code>
+(<a href="nasmdocb.html#section-B.4.141">section B.4.141</a>),
+<code><nobr>STOSx</nobr></code>
+(<a href="nasmdocb.html#section-B.4.303">section B.4.303</a>),
+<code><nobr>MOVSx</nobr></code>
+(<a href="nasmdocb.html#section-B.4.178">section B.4.178</a>),
+<code><nobr>INSx</nobr></code>
+(<a href="nasmdocb.html#section-B.4.121">section B.4.121</a>),
+<code><nobr>OUTSx</nobr></code>
+(<a href="nasmdocb.html#section-B.4.195">section B.4.195</a>), and
+<code><nobr>XLATB</nobr></code>
+(<a href="nasmdocb.html#section-B.4.334">section B.4.334</a>). Also, the
+various push and pop instructions (<code><nobr>PUSHA</nobr></code> and
+<code><nobr>POPF</nobr></code> as well as the more usual
+<code><nobr>PUSH</nobr></code> and <code><nobr>POP</nobr></code>) can
+accept <code><nobr>a16</nobr></code> or <code><nobr>a32</nobr></code>
+prefixes to force a particular one of <code><nobr>SP</nobr></code> or
+<code><nobr>ESP</nobr></code> to be used as a stack pointer, in case the
+stack segment in use is a different size from the code segment.
+<p><code><nobr>PUSH</nobr></code> and <code><nobr>POP</nobr></code>, when
+applied to segment registers in 32-bit mode, also have the slightly odd
+behaviour that they push and pop 4 bytes at a time, of which the top two
+are ignored and the bottom two give the value of the segment register being
+manipulated. To force the 16-bit behaviour of segment-register push and pop
+instructions, you can use the operand-size prefix
+<code><nobr>o16</nobr></code>:
+<p><pre>
+        o16 push    ss 
+        o16 push    ds
+</pre>
+<p>This code saves a doubleword of stack space by fitting two segment
+registers into the space which would normally be consumed by pushing one.
+<p>(You can also use the <code><nobr>o32</nobr></code> prefix to force the
+32-bit behaviour when in 16-bit mode, but this seems less useful.)
+<p align=center><a href="nasmdo10.html">Next Chapter</a> |
+<a href="nasmdoc8.html">Previous Chapter</a> |
+<a href="nasmdoc0.html">Contents</a> |
+<a href="nasmdoci.html">Index</a>
+</body></html>

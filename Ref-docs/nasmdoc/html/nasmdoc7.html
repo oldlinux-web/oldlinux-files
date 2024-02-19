@@ -1,0 +1,808 @@
+<html><head><title>NASM Manual</title></head>
+<body><h1 align=center>The Netwide Assembler: NASM</h1>
+
+<p align=center><a href="nasmdoc8.html">Next Chapter</a> |
+<a href="nasmdoc6.html">Previous Chapter</a> |
+<a href="nasmdoc0.html">Contents</a> |
+<a href="nasmdoci.html">Index</a>
+<h2><a name="chapter-7">Chapter 7: Writing 16-bit Code (DOS, Windows 3/3.1)</a></h2>
+<p>This chapter attempts to cover some of the common issues encountered
+when writing 16-bit code to run under <code><nobr>MS-DOS</nobr></code> or
+<code><nobr>Windows 3.x</nobr></code>. It covers how to link programs to
+produce <code><nobr>.EXE</nobr></code> or <code><nobr>.COM</nobr></code>
+files, how to write <code><nobr>.SYS</nobr></code> device drivers, and how
+to interface assembly language code with 16-bit C compilers and with
+Borland Pascal.
+<h3><a name="section-7.1">7.1 Producing <code><nobr>.EXE</nobr></code> Files</a></h3>
+<p>Any large program written under DOS needs to be built as a
+<code><nobr>.EXE</nobr></code> file: only <code><nobr>.EXE</nobr></code>
+files have the necessary internal structure required to span more than one
+64K segment. Windows programs, also, have to be built as
+<code><nobr>.EXE</nobr></code> files, since Windows does not support the
+<code><nobr>.COM</nobr></code> format.
+<p>In general, you generate <code><nobr>.EXE</nobr></code> files by using
+the <code><nobr>obj</nobr></code> output format to produce one or more
+<code><nobr>.OBJ</nobr></code> files, and then linking them together using
+a linker. However, NASM also supports the direct generation of simple DOS
+<code><nobr>.EXE</nobr></code> files using the
+<code><nobr>bin</nobr></code> output format (by using
+<code><nobr>DB</nobr></code> and <code><nobr>DW</nobr></code> to construct
+the <code><nobr>.EXE</nobr></code> file header), and a macro package is
+supplied to do this. Thanks to Yann Guidon for contributing the code for
+this.
+<p>NASM may also support <code><nobr>.EXE</nobr></code> natively as another
+output format in future releases.
+<h4><a name="section-7.1.1">7.1.1 Using the <code><nobr>obj</nobr></code> Format To Generate <code><nobr>.EXE</nobr></code> Files</a></h4>
+<p>This section describes the usual method of generating
+<code><nobr>.EXE</nobr></code> files by linking
+<code><nobr>.OBJ</nobr></code> files together.
+<p>Most 16-bit programming language packages come with a suitable linker;
+if you have none of these, there is a free linker called VAL, available in
+<code><nobr>LZH</nobr></code> archive format from
+<a href="ftp://x2ftp.oulu.fi/pub/msdos/programming/lang/"><code><nobr>x2ftp.oulu.fi</nobr></code></a>.
+An LZH archiver can be found at
+<a href="ftp://ftp.simtel.net/pub/simtelnet/msdos/arcers"><code><nobr>ftp.simtel.net</nobr></code></a>.
+There is another `free' linker (though this one doesn't come with sources)
+called FREELINK, available from
+<a href="http://www.pcorner.com/tpc/old/3-101.html"><code><nobr>www.pcorner.com</nobr></code></a>.
+A third, <code><nobr>djlink</nobr></code>, written by DJ Delorie, is
+available at
+<a href="http://www.delorie.com/djgpp/16bit/djlink/"><code><nobr>www.delorie.com</nobr></code></a>.
+A fourth linker, <code><nobr>ALINK</nobr></code>, written by Anthony A.J.
+Williams, is available at
+<a href="http://alink.sourceforge.net"><code><nobr>alink.sourceforge.net</nobr></code></a>.
+<p>When linking several <code><nobr>.OBJ</nobr></code> files into a
+<code><nobr>.EXE</nobr></code> file, you should ensure that exactly one of
+them has a start point defined (using the <code><nobr>..start</nobr></code>
+special symbol defined by the <code><nobr>obj</nobr></code> format: see
+<a href="nasmdoc6.html#section-6.2.6">section 6.2.6</a>). If no module
+defines a start point, the linker will not know what value to give the
+entry-point field in the output file header; if more than one defines a
+start point, the linker will not know <em>which</em> value to use.
+<p>An example of a NASM source file which can be assembled to a
+<code><nobr>.OBJ</nobr></code> file and linked on its own to a
+<code><nobr>.EXE</nobr></code> is given here. It demonstrates the basic
+principles of defining a stack, initialising the segment registers, and
+declaring a start point. This file is also provided in the
+<code><nobr>test</nobr></code> subdirectory of the NASM archives, under the
+name <code><nobr>objexe.asm</nobr></code>.
+<p><pre>
+segment code 
+
+..start: 
+        mov     ax,data 
+        mov     ds,ax 
+        mov     ax,stack 
+        mov     ss,ax 
+        mov     sp,stacktop
+</pre>
+<p>This initial piece of code sets up <code><nobr>DS</nobr></code> to point
+to the data segment, and initialises <code><nobr>SS</nobr></code> and
+<code><nobr>SP</nobr></code> to point to the top of the provided stack.
+Notice that interrupts are implicitly disabled for one instruction after a
+move into <code><nobr>SS</nobr></code>, precisely for this situation, so
+that there's no chance of an interrupt occurring between the loads of
+<code><nobr>SS</nobr></code> and <code><nobr>SP</nobr></code> and not
+having a stack to execute on.
+<p>Note also that the special symbol <code><nobr>..start</nobr></code> is
+defined at the beginning of this code, which means that will be the entry
+point into the resulting executable file.
+<p><pre>
+        mov     dx,hello 
+        mov     ah,9 
+        int     0x21
+</pre>
+<p>The above is the main program: load <code><nobr>DS:DX</nobr></code> with
+a pointer to the greeting message (<code><nobr>hello</nobr></code> is
+implicitly relative to the segment <code><nobr>data</nobr></code>, which
+was loaded into <code><nobr>DS</nobr></code> in the setup code, so the full
+pointer is valid), and call the DOS print-string function.
+<p><pre>
+        mov     ax,0x4c00 
+        int     0x21
+</pre>
+<p>This terminates the program using another DOS system call.
+<p><pre>
+segment data 
+
+hello:  db      'hello, world', 13, 10, '$'
+</pre>
+<p>The data segment contains the string we want to display.
+<p><pre>
+segment stack stack 
+        resb 64 
+stacktop:
+</pre>
+<p>The above code declares a stack segment containing 64 bytes of
+uninitialised stack space, and points <code><nobr>stacktop</nobr></code> at
+the top of it. The directive <code><nobr>segment stack stack</nobr></code>
+defines a segment <em>called</em> <code><nobr>stack</nobr></code>, and also
+of <em>type</em> <code><nobr>STACK</nobr></code>. The latter is not
+necessary to the correct running of the program, but linkers are likely to
+issue warnings or errors if your program has no segment of type
+<code><nobr>STACK</nobr></code>.
+<p>The above file, when assembled into a <code><nobr>.OBJ</nobr></code>
+file, will link on its own to a valid <code><nobr>.EXE</nobr></code> file,
+which when run will print `hello, world' and then exit.
+<h4><a name="section-7.1.2">7.1.2 Using the <code><nobr>bin</nobr></code> Format To Generate <code><nobr>.EXE</nobr></code> Files</a></h4>
+<p>The <code><nobr>.EXE</nobr></code> file format is simple enough that
+it's possible to build a <code><nobr>.EXE</nobr></code> file by writing a
+pure-binary program and sticking a 32-byte header on the front. This header
+is simple enough that it can be generated using
+<code><nobr>DB</nobr></code> and <code><nobr>DW</nobr></code> commands by
+NASM itself, so that you can use the <code><nobr>bin</nobr></code> output
+format to directly generate <code><nobr>.EXE</nobr></code> files.
+<p>Included in the NASM archives, in the <code><nobr>misc</nobr></code>
+subdirectory, is a file <code><nobr>exebin.mac</nobr></code> of macros. It
+defines three macros: <code><nobr>EXE_begin</nobr></code>,
+<code><nobr>EXE_stack</nobr></code> and <code><nobr>EXE_end</nobr></code>.
+<p>To produce a <code><nobr>.EXE</nobr></code> file using this method, you
+should start by using <code><nobr>%include</nobr></code> to load the
+<code><nobr>exebin.mac</nobr></code> macro package into your source file.
+You should then issue the <code><nobr>EXE_begin</nobr></code> macro call
+(which takes no arguments) to generate the file header data. Then write
+code as normal for the <code><nobr>bin</nobr></code> format - you can use
+all three standard sections <code><nobr>.text</nobr></code>,
+<code><nobr>.data</nobr></code> and <code><nobr>.bss</nobr></code>. At the
+end of the file you should call the <code><nobr>EXE_end</nobr></code> macro
+(again, no arguments), which defines some symbols to mark section sizes,
+and these symbols are referred to in the header code generated by
+<code><nobr>EXE_begin</nobr></code>.
+<p>In this model, the code you end up writing starts at
+<code><nobr>0x100</nobr></code>, just like a <code><nobr>.COM</nobr></code>
+file - in fact, if you strip off the 32-byte header from the resulting
+<code><nobr>.EXE</nobr></code> file, you will have a valid
+<code><nobr>.COM</nobr></code> program. All the segment bases are the same,
+so you are limited to a 64K program, again just like a
+<code><nobr>.COM</nobr></code> file. Note that an
+<code><nobr>ORG</nobr></code> directive is issued by the
+<code><nobr>EXE_begin</nobr></code> macro, so you should not explicitly
+issue one of your own.
+<p>You can't directly refer to your segment base value, unfortunately,
+since this would require a relocation in the header, and things would get a
+lot more complicated. So you should get your segment base by copying it out
+of <code><nobr>CS</nobr></code> instead.
+<p>On entry to your <code><nobr>.EXE</nobr></code> file,
+<code><nobr>SS:SP</nobr></code> are already set up to point to the top of a
+2Kb stack. You can adjust the default stack size of 2Kb by calling the
+<code><nobr>EXE_stack</nobr></code> macro. For example, to change the stack
+size of your program to 64 bytes, you would call
+<code><nobr>EXE_stack 64</nobr></code>.
+<p>A sample program which generates a <code><nobr>.EXE</nobr></code> file
+in this way is given in the <code><nobr>test</nobr></code> subdirectory of
+the NASM archive, as <code><nobr>binexe.asm</nobr></code>.
+<h3><a name="section-7.2">7.2 Producing <code><nobr>.COM</nobr></code> Files</a></h3>
+<p>While large DOS programs must be written as
+<code><nobr>.EXE</nobr></code> files, small ones are often better written
+as <code><nobr>.COM</nobr></code> files. <code><nobr>.COM</nobr></code>
+files are pure binary, and therefore most easily produced using the
+<code><nobr>bin</nobr></code> output format.
+<h4><a name="section-7.2.1">7.2.1 Using the <code><nobr>bin</nobr></code> Format To Generate <code><nobr>.COM</nobr></code> Files</a></h4>
+<p><code><nobr>.COM</nobr></code> files expect to be loaded at offset
+<code><nobr>100h</nobr></code> into their segment (though the segment may
+change). Execution then begins at <code><nobr>100h</nobr></code>, i.e.
+right at the start of the program. So to write a
+<code><nobr>.COM</nobr></code> program, you would create a source file
+looking like
+<p><pre>
+        org 100h 
+
+section .text 
+
+start: 
+        ; put your code here 
+
+section .data 
+
+        ; put data items here 
+
+section .bss 
+
+        ; put uninitialised data here
+</pre>
+<p>The <code><nobr>bin</nobr></code> format puts the
+<code><nobr>.text</nobr></code> section first in the file, so you can
+declare data or BSS items before beginning to write code if you want to and
+the code will still end up at the front of the file where it belongs.
+<p>The BSS (uninitialised data) section does not take up space in the
+<code><nobr>.COM</nobr></code> file itself: instead, addresses of BSS items
+are resolved to point at space beyond the end of the file, on the grounds
+that this will be free memory when the program is run. Therefore you should
+not rely on your BSS being initialised to all zeros when you run.
+<p>To assemble the above program, you should use a command line like
+<p><pre>
+nasm myprog.asm -fbin -o myprog.com
+</pre>
+<p>The <code><nobr>bin</nobr></code> format would produce a file called
+<code><nobr>myprog</nobr></code> if no explicit output file name were
+specified, so you have to override it and give the desired file name.
+<h4><a name="section-7.2.2">7.2.2 Using the <code><nobr>obj</nobr></code> Format To Generate <code><nobr>.COM</nobr></code> Files</a></h4>
+<p>If you are writing a <code><nobr>.COM</nobr></code> program as more than
+one module, you may wish to assemble several <code><nobr>.OBJ</nobr></code>
+files and link them together into a <code><nobr>.COM</nobr></code> program.
+You can do this, provided you have a linker capable of outputting
+<code><nobr>.COM</nobr></code> files directly (TLINK does this), or
+alternatively a converter program such as <code><nobr>EXE2BIN</nobr></code>
+to transform the <code><nobr>.EXE</nobr></code> file output from the linker
+into a <code><nobr>.COM</nobr></code> file.
+<p>If you do this, you need to take care of several things:
+<ul>
+<li>The first object file containing code should start its code segment
+with a line like <code><nobr>RESB 100h</nobr></code>. This is to ensure
+that the code begins at offset <code><nobr>100h</nobr></code> relative to
+the beginning of the code segment, so that the linker or converter program
+does not have to adjust address references within the file when generating
+the <code><nobr>.COM</nobr></code> file. Other assemblers use an
+<code><nobr>ORG</nobr></code> directive for this purpose, but
+<code><nobr>ORG</nobr></code> in NASM is a format-specific directive to the
+<code><nobr>bin</nobr></code> output format, and does not mean the same
+thing as it does in MASM-compatible assemblers.
+<li>You don't need to define a stack segment.
+<li>All your segments should be in the same group, so that every time your
+code or data references a symbol offset, all offsets are relative to the
+same segment base. This is because, when a <code><nobr>.COM</nobr></code>
+file is loaded, all the segment registers contain the same value.
+</ul>
+<h3><a name="section-7.3">7.3 Producing <code><nobr>.SYS</nobr></code> Files</a></h3>
+<p>MS-DOS device drivers - <code><nobr>.SYS</nobr></code> files - are pure
+binary files, similar to <code><nobr>.COM</nobr></code> files, except that
+they start at origin zero rather than <code><nobr>100h</nobr></code>.
+Therefore, if you are writing a device driver using the
+<code><nobr>bin</nobr></code> format, you do not need the
+<code><nobr>ORG</nobr></code> directive, since the default origin for
+<code><nobr>bin</nobr></code> is zero. Similarly, if you are using
+<code><nobr>obj</nobr></code>, you do not need the
+<code><nobr>RESB 100h</nobr></code> at the start of your code segment.
+<p><code><nobr>.SYS</nobr></code> files start with a header structure,
+containing pointers to the various routines inside the driver which do the
+work. This structure should be defined at the start of the code segment,
+even though it is not actually code.
+<p>For more information on the format of <code><nobr>.SYS</nobr></code>
+files, and the data which has to go in the header structure, a list of
+books is given in the Frequently Asked Questions list for the newsgroup
+<a href="news:comp.os.msdos.programmer"><code><nobr>comp.os.msdos.programmer</nobr></code></a>.
+<h3><a name="section-7.4">7.4 Interfacing to 16-bit C Programs</a></h3>
+<p>This section covers the basics of writing assembly routines that call,
+or are called from, C programs. To do this, you would typically write an
+assembly module as a <code><nobr>.OBJ</nobr></code> file, and link it with
+your C modules to produce a mixed-language program.
+<h4><a name="section-7.4.1">7.4.1 External Symbol Names</a></h4>
+<p>C compilers have the convention that the names of all global symbols
+(functions or data) they define are formed by prefixing an underscore to
+the name as it appears in the C program. So, for example, the function a C
+programmer thinks of as <code><nobr>printf</nobr></code> appears to an
+assembly language programmer as <code><nobr>_printf</nobr></code>. This
+means that in your assembly programs, you can define symbols without a
+leading underscore, and not have to worry about name clashes with C
+symbols.
+<p>If you find the underscores inconvenient, you can define macros to
+replace the <code><nobr>GLOBAL</nobr></code> and
+<code><nobr>EXTERN</nobr></code> directives as follows:
+<p><pre>
+%macro  cglobal 1 
+
+  global  _%1 
+  %define %1 _%1 
+
+%endmacro 
+
+%macro  cextern 1 
+
+  extern  _%1 
+  %define %1 _%1 
+
+%endmacro
+</pre>
+<p>(These forms of the macros only take one argument at a time; a
+<code><nobr>%rep</nobr></code> construct could solve this.)
+<p>If you then declare an external like this:
+<p><pre>
+cextern printf
+</pre>
+<p>then the macro will expand it as
+<p><pre>
+extern  _printf 
+%define printf _printf
+</pre>
+<p>Thereafter, you can reference <code><nobr>printf</nobr></code> as if it
+was a symbol, and the preprocessor will put the leading underscore on where
+necessary.
+<p>The <code><nobr>cglobal</nobr></code> macro works similarly. You must
+use <code><nobr>cglobal</nobr></code> before defining the symbol in
+question, but you would have had to do that anyway if you used
+<code><nobr>GLOBAL</nobr></code>.
+<p>Also see <a href="nasmdoc2.html#section-2.1.21">section 2.1.21</a>.
+<h4><a name="section-7.4.2">7.4.2 Memory Models</a></h4>
+<p>NASM contains no mechanism to support the various C memory models
+directly; you have to keep track yourself of which one you are writing for.
+This means you have to keep track of the following things:
+<ul>
+<li>In models using a single code segment (tiny, small and compact),
+functions are near. This means that function pointers, when stored in data
+segments or pushed on the stack as function arguments, are 16 bits long and
+contain only an offset field (the <code><nobr>CS</nobr></code> register
+never changes its value, and always gives the segment part of the full
+function address), and that functions are called using ordinary near
+<code><nobr>CALL</nobr></code> instructions and return using
+<code><nobr>RETN</nobr></code> (which, in NASM, is synonymous with
+<code><nobr>RET</nobr></code> anyway). This means both that you should
+write your own routines to return with <code><nobr>RETN</nobr></code>, and
+that you should call external C routines with near
+<code><nobr>CALL</nobr></code> instructions.
+<li>In models using more than one code segment (medium, large and huge),
+functions are far. This means that function pointers are 32 bits long
+(consisting of a 16-bit offset followed by a 16-bit segment), and that
+functions are called using <code><nobr>CALL FAR</nobr></code> (or
+<code><nobr>CALL seg:offset</nobr></code>) and return using
+<code><nobr>RETF</nobr></code>. Again, you should therefore write your own
+routines to return with <code><nobr>RETF</nobr></code> and use
+<code><nobr>CALL FAR</nobr></code> to call external routines.
+<li>In models using a single data segment (tiny, small and medium), data
+pointers are 16 bits long, containing only an offset field (the
+<code><nobr>DS</nobr></code> register doesn't change its value, and always
+gives the segment part of the full data item address).
+<li>In models using more than one data segment (compact, large and huge),
+data pointers are 32 bits long, consisting of a 16-bit offset followed by a
+16-bit segment. You should still be careful not to modify
+<code><nobr>DS</nobr></code> in your routines without restoring it
+afterwards, but <code><nobr>ES</nobr></code> is free for you to use to
+access the contents of 32-bit data pointers you are passed.
+<li>The huge memory model allows single data items to exceed 64K in size.
+In all other memory models, you can access the whole of a data item just by
+doing arithmetic on the offset field of the pointer you are given, whether
+a segment field is present or not; in huge model, you have to be more
+careful of your pointer arithmetic.
+<li>In most memory models, there is a <em>default</em> data segment, whose
+segment address is kept in <code><nobr>DS</nobr></code> throughout the
+program. This data segment is typically the same segment as the stack, kept
+in <code><nobr>SS</nobr></code>, so that functions' local variables (which
+are stored on the stack) and global data items can both be accessed easily
+without changing <code><nobr>DS</nobr></code>. Particularly large data
+items are typically stored in other segments. However, some memory models
+(though not the standard ones, usually) allow the assumption that
+<code><nobr>SS</nobr></code> and <code><nobr>DS</nobr></code> hold the same
+value to be removed. Be careful about functions' local variables in this
+latter case.
+</ul>
+<p>In models with a single code segment, the segment is called
+<code><nobr>_TEXT</nobr></code>, so your code segment must also go by this
+name in order to be linked into the same place as the main code segment. In
+models with a single data segment, or with a default data segment, it is
+called <code><nobr>_DATA</nobr></code>.
+<h4><a name="section-7.4.3">7.4.3 Function Definitions and Function Calls</a></h4>
+<p>The C calling convention in 16-bit programs is as follows. In the
+following description, the words <em>caller</em> and <em>callee</em> are
+used to denote the function doing the calling and the function which gets
+called.
+<ul>
+<li>The caller pushes the function's parameters on the stack, one after
+another, in reverse order (right to left, so that the first argument
+specified to the function is pushed last).
+<li>The caller then executes a <code><nobr>CALL</nobr></code> instruction
+to pass control to the callee. This <code><nobr>CALL</nobr></code> is
+either near or far depending on the memory model.
+<li>The callee receives control, and typically (although this is not
+actually necessary, in functions which do not need to access their
+parameters) starts by saving the value of <code><nobr>SP</nobr></code> in
+<code><nobr>BP</nobr></code> so as to be able to use
+<code><nobr>BP</nobr></code> as a base pointer to find its parameters on
+the stack. However, the caller was probably doing this too, so part of the
+calling convention states that <code><nobr>BP</nobr></code> must be
+preserved by any C function. Hence the callee, if it is going to set up
+<code><nobr>BP</nobr></code> as a <em>frame pointer</em>, must push the
+previous value first.
+<li>The callee may then access its parameters relative to
+<code><nobr>BP</nobr></code>. The word at <code><nobr>[BP]</nobr></code>
+holds the previous value of <code><nobr>BP</nobr></code> as it was pushed;
+the next word, at <code><nobr>[BP+2]</nobr></code>, holds the offset part
+of the return address, pushed implicitly by <code><nobr>CALL</nobr></code>.
+In a small-model (near) function, the parameters start after that, at
+<code><nobr>[BP+4]</nobr></code>; in a large-model (far) function, the
+segment part of the return address lives at
+<code><nobr>[BP+4]</nobr></code>, and the parameters begin at
+<code><nobr>[BP+6]</nobr></code>. The leftmost parameter of the function,
+since it was pushed last, is accessible at this offset from
+<code><nobr>BP</nobr></code>; the others follow, at successively greater
+offsets. Thus, in a function such as <code><nobr>printf</nobr></code> which
+takes a variable number of parameters, the pushing of the parameters in
+reverse order means that the function knows where to find its first
+parameter, which tells it the number and type of the remaining ones.
+<li>The callee may also wish to decrease <code><nobr>SP</nobr></code>
+further, so as to allocate space on the stack for local variables, which
+will then be accessible at negative offsets from
+<code><nobr>BP</nobr></code>.
+<li>The callee, if it wishes to return a value to the caller, should leave
+the value in <code><nobr>AL</nobr></code>, <code><nobr>AX</nobr></code> or
+<code><nobr>DX:AX</nobr></code> depending on the size of the value.
+Floating-point results are sometimes (depending on the compiler) returned
+in <code><nobr>ST0</nobr></code>.
+<li>Once the callee has finished processing, it restores
+<code><nobr>SP</nobr></code> from <code><nobr>BP</nobr></code> if it had
+allocated local stack space, then pops the previous value of
+<code><nobr>BP</nobr></code>, and returns via
+<code><nobr>RETN</nobr></code> or <code><nobr>RETF</nobr></code> depending
+on memory model.
+<li>When the caller regains control from the callee, the function
+parameters are still on the stack, so it typically adds an immediate
+constant to <code><nobr>SP</nobr></code> to remove them (instead of
+executing a number of slow <code><nobr>POP</nobr></code> instructions).
+Thus, if a function is accidentally called with the wrong number of
+parameters due to a prototype mismatch, the stack will still be returned to
+a sensible state since the caller, which <em>knows</em> how many parameters
+it pushed, does the removing.
+</ul>
+<p>It is instructive to compare this calling convention with that for
+Pascal programs (described in <a href="#section-7.5.1">section 7.5.1</a>).
+Pascal has a simpler convention, since no functions have variable numbers
+of parameters. Therefore the callee knows how many parameters it should
+have been passed, and is able to deallocate them from the stack itself by
+passing an immediate argument to the <code><nobr>RET</nobr></code> or
+<code><nobr>RETF</nobr></code> instruction, so the caller does not have to
+do it. Also, the parameters are pushed in left-to-right order, not
+right-to-left, which means that a compiler can give better guarantees about
+sequence points without performance suffering.
+<p>Thus, you would define a function in C style in the following way. The
+following example is for small model:
+<p><pre>
+global  _myfunc 
+
+_myfunc: 
+        push    bp 
+        mov     bp,sp 
+        sub     sp,0x40         ; 64 bytes of local stack space 
+        mov     bx,[bp+4]       ; first parameter to function 
+
+        ; some more code 
+
+        mov     sp,bp           ; undo "sub sp,0x40" above 
+        pop     bp 
+        ret
+</pre>
+<p>For a large-model function, you would replace
+<code><nobr>RET</nobr></code> by <code><nobr>RETF</nobr></code>, and look
+for the first parameter at <code><nobr>[BP+6]</nobr></code> instead of
+<code><nobr>[BP+4]</nobr></code>. Of course, if one of the parameters is a
+pointer, then the offsets of <em>subsequent</em> parameters will change
+depending on the memory model as well: far pointers take up four bytes on
+the stack when passed as a parameter, whereas near pointers take up two.
+<p>At the other end of the process, to call a C function from your assembly
+code, you would do something like this:
+<p><pre>
+extern  _printf 
+
+      ; and then, further down... 
+
+      push    word [myint]        ; one of my integer variables 
+      push    word mystring       ; pointer into my data segment 
+      call    _printf 
+      add     sp,byte 4           ; `byte' saves space 
+
+      ; then those data items... 
+
+segment _DATA 
+
+myint         dw    1234 
+mystring      db    'This number -&gt; %d &lt;- should be 1234',10,0
+</pre>
+<p>This piece of code is the small-model assembly equivalent of the C code
+<p><pre>
+    int myint = 1234; 
+    printf("This number -&gt; %d &lt;- should be 1234\n", myint);
+</pre>
+<p>In large model, the function-call code might look more like this. In
+this example, it is assumed that <code><nobr>DS</nobr></code> already holds
+the segment base of the segment <code><nobr>_DATA</nobr></code>. If not,
+you would have to initialise it first.
+<p><pre>
+      push    word [myint] 
+      push    word seg mystring   ; Now push the segment, and... 
+      push    word mystring       ; ... offset of "mystring" 
+      call    far _printf 
+      add    sp,byte 6
+</pre>
+<p>The integer value still takes up one word on the stack, since large
+model does not affect the size of the <code><nobr>int</nobr></code> data
+type. The first argument (pushed last) to <code><nobr>printf</nobr></code>,
+however, is a data pointer, and therefore has to contain a segment and
+offset part. The segment should be stored second in memory, and therefore
+must be pushed first. (Of course, <code><nobr>PUSH DS</nobr></code> would
+have been a shorter instruction than
+<code><nobr>PUSH WORD SEG mystring</nobr></code>, if
+<code><nobr>DS</nobr></code> was set up as the above example assumed.) Then
+the actual call becomes a far call, since functions expect far calls in
+large model; and <code><nobr>SP</nobr></code> has to be increased by 6
+rather than 4 afterwards to make up for the extra word of parameters.
+<h4><a name="section-7.4.4">7.4.4 Accessing Data Items</a></h4>
+<p>To get at the contents of C variables, or to declare variables which C
+can access, you need only declare the names as
+<code><nobr>GLOBAL</nobr></code> or <code><nobr>EXTERN</nobr></code>.
+(Again, the names require leading underscores, as stated in
+<a href="#section-7.4.1">section 7.4.1</a>.) Thus, a C variable declared as
+<code><nobr>int i</nobr></code> can be accessed from assembler as
+<p><pre>
+extern _i 
+
+        mov ax,[_i]
+</pre>
+<p>And to declare your own integer variable which C programs can access as
+<code><nobr>extern int j</nobr></code>, you do this (making sure you are
+assembling in the <code><nobr>_DATA</nobr></code> segment, if necessary):
+<p><pre>
+global  _j 
+
+_j      dw      0
+</pre>
+<p>To access a C array, you need to know the size of the components of the
+array. For example, <code><nobr>int</nobr></code> variables are two bytes
+long, so if a C program declares an array as
+<code><nobr>int a[10]</nobr></code>, you can access
+<code><nobr>a[3]</nobr></code> by coding
+<code><nobr>mov ax,[_a+6]</nobr></code>. (The byte offset 6 is obtained by
+multiplying the desired array index, 3, by the size of the array element,
+2.) The sizes of the C base types in 16-bit compilers are: 1 for
+<code><nobr>char</nobr></code>, 2 for <code><nobr>short</nobr></code> and
+<code><nobr>int</nobr></code>, 4 for <code><nobr>long</nobr></code> and
+<code><nobr>float</nobr></code>, and 8 for
+<code><nobr>double</nobr></code>.
+<p>To access a C data structure, you need to know the offset from the base
+of the structure to the field you are interested in. You can either do this
+by converting the C structure definition into a NASM structure definition
+(using <code><nobr>STRUC</nobr></code>), or by calculating the one offset
+and using just that.
+<p>To do either of these, you should read your C compiler's manual to find
+out how it organises data structures. NASM gives no special alignment to
+structure members in its own <code><nobr>STRUC</nobr></code> macro, so you
+have to specify alignment yourself if the C compiler generates it.
+Typically, you might find that a structure like
+<p><pre>
+struct { 
+    char c; 
+    int i; 
+} foo;
+</pre>
+<p>might be four bytes long rather than three, since the
+<code><nobr>int</nobr></code> field would be aligned to a two-byte
+boundary. However, this sort of feature tends to be a configurable option
+in the C compiler, either using command-line options or
+<code><nobr>#pragma</nobr></code> lines, so you have to find out how your
+own compiler does it.
+<h4><a name="section-7.4.5">7.4.5 <code><nobr>c16.mac</nobr></code>: Helper Macros for the 16-bit C Interface</a></h4>
+<p>Included in the NASM archives, in the <code><nobr>misc</nobr></code>
+directory, is a file <code><nobr>c16.mac</nobr></code> of macros. It
+defines three macros: <code><nobr>proc</nobr></code>,
+<code><nobr>arg</nobr></code> and <code><nobr>endproc</nobr></code>. These
+are intended to be used for C-style procedure definitions, and they
+automate a lot of the work involved in keeping track of the calling
+convention.
+<p>(An alternative, TASM compatible form of <code><nobr>arg</nobr></code>
+is also now built into NASM's preprocessor. See
+<a href="nasmdoc4.html#section-4.9">section 4.9</a> for details.)
+<p>An example of an assembly function using the macro set is given here:
+<p><pre>
+proc    _nearproc 
+
+%$i     arg 
+%$j     arg 
+        mov     ax,[bp + %$i] 
+        mov     bx,[bp + %$j] 
+        add     ax,[bx] 
+
+endproc
+</pre>
+<p>This defines <code><nobr>_nearproc</nobr></code> to be a procedure
+taking two arguments, the first (<code><nobr>i</nobr></code>) an integer
+and the second (<code><nobr>j</nobr></code>) a pointer to an integer. It
+returns <code><nobr>i + *j</nobr></code>.
+<p>Note that the <code><nobr>arg</nobr></code> macro has an
+<code><nobr>EQU</nobr></code> as the first line of its expansion, and since
+the label before the macro call gets prepended to the first line of the
+expanded macro, the <code><nobr>EQU</nobr></code> works, defining
+<code><nobr>%$i</nobr></code> to be an offset from
+<code><nobr>BP</nobr></code>. A context-local variable is used, local to
+the context pushed by the <code><nobr>proc</nobr></code> macro and popped
+by the <code><nobr>endproc</nobr></code> macro, so that the same argument
+name can be used in later procedures. Of course, you don't <em>have</em> to
+do that.
+<p>The macro set produces code for near functions (tiny, small and
+compact-model code) by default. You can have it generate far functions
+(medium, large and huge-model code) by means of coding
+<code><nobr>%define FARCODE</nobr></code>. This changes the kind of return
+instruction generated by <code><nobr>endproc</nobr></code>, and also
+changes the starting point for the argument offsets. The macro set contains
+no intrinsic dependency on whether data pointers are far or not.
+<p><code><nobr>arg</nobr></code> can take an optional parameter, giving the
+size of the argument. If no size is given, 2 is assumed, since it is likely
+that many function parameters will be of type
+<code><nobr>int</nobr></code>.
+<p>The large-model equivalent of the above function would look like this:
+<p><pre>
+%define FARCODE 
+
+proc    _farproc 
+
+%$i     arg 
+%$j     arg     4 
+        mov     ax,[bp + %$i] 
+        mov     bx,[bp + %$j] 
+        mov     es,[bp + %$j + 2] 
+        add     ax,[bx] 
+
+endproc
+</pre>
+<p>This makes use of the argument to the <code><nobr>arg</nobr></code>
+macro to define a parameter of size 4, because <code><nobr>j</nobr></code>
+is now a far pointer. When we load from <code><nobr>j</nobr></code>, we
+must load a segment and an offset.
+<h3><a name="section-7.5">7.5 Interfacing to Borland Pascal Programs</a></h3>
+<p>Interfacing to Borland Pascal programs is similar in concept to
+interfacing to 16-bit C programs. The differences are:
+<ul>
+<li>The leading underscore required for interfacing to C programs is not
+required for Pascal.
+<li>The memory model is always large: functions are far, data pointers are
+far, and no data item can be more than 64K long. (Actually, some functions
+are near, but only those functions that are local to a Pascal unit and
+never called from outside it. All assembly functions that Pascal calls, and
+all Pascal functions that assembly routines are able to call, are far.)
+However, all static data declared in a Pascal program goes into the default
+data segment, which is the one whose segment address will be in
+<code><nobr>DS</nobr></code> when control is passed to your assembly code.
+The only things that do not live in the default data segment are local
+variables (they live in the stack segment) and dynamically allocated
+variables. All data <em>pointers</em>, however, are far.
+<li>The function calling convention is different - described below.
+<li>Some data types, such as strings, are stored differently.
+<li>There are restrictions on the segment names you are allowed to use -
+Borland Pascal will ignore code or data declared in a segment it doesn't
+like the name of. The restrictions are described below.
+</ul>
+<h4><a name="section-7.5.1">7.5.1 The Pascal Calling Convention</a></h4>
+<p>The 16-bit Pascal calling convention is as follows. In the following
+description, the words <em>caller</em> and <em>callee</em> are used to
+denote the function doing the calling and the function which gets called.
+<ul>
+<li>The caller pushes the function's parameters on the stack, one after
+another, in normal order (left to right, so that the first argument
+specified to the function is pushed first).
+<li>The caller then executes a far <code><nobr>CALL</nobr></code>
+instruction to pass control to the callee.
+<li>The callee receives control, and typically (although this is not
+actually necessary, in functions which do not need to access their
+parameters) starts by saving the value of <code><nobr>SP</nobr></code> in
+<code><nobr>BP</nobr></code> so as to be able to use
+<code><nobr>BP</nobr></code> as a base pointer to find its parameters on
+the stack. However, the caller was probably doing this too, so part of the
+calling convention states that <code><nobr>BP</nobr></code> must be
+preserved by any function. Hence the callee, if it is going to set up
+<code><nobr>BP</nobr></code> as a frame pointer, must push the previous
+value first.
+<li>The callee may then access its parameters relative to
+<code><nobr>BP</nobr></code>. The word at <code><nobr>[BP]</nobr></code>
+holds the previous value of <code><nobr>BP</nobr></code> as it was pushed.
+The next word, at <code><nobr>[BP+2]</nobr></code>, holds the offset part
+of the return address, and the next one at <code><nobr>[BP+4]</nobr></code>
+the segment part. The parameters begin at <code><nobr>[BP+6]</nobr></code>.
+The rightmost parameter of the function, since it was pushed last, is
+accessible at this offset from <code><nobr>BP</nobr></code>; the others
+follow, at successively greater offsets.
+<li>The callee may also wish to decrease <code><nobr>SP</nobr></code>
+further, so as to allocate space on the stack for local variables, which
+will then be accessible at negative offsets from
+<code><nobr>BP</nobr></code>.
+<li>The callee, if it wishes to return a value to the caller, should leave
+the value in <code><nobr>AL</nobr></code>, <code><nobr>AX</nobr></code> or
+<code><nobr>DX:AX</nobr></code> depending on the size of the value.
+Floating-point results are returned in <code><nobr>ST0</nobr></code>.
+Results of type <code><nobr>Real</nobr></code> (Borland's own custom
+floating-point data type, not handled directly by the FPU) are returned in
+<code><nobr>DX:BX:AX</nobr></code>. To return a result of type
+<code><nobr>String</nobr></code>, the caller pushes a pointer to a
+temporary string before pushing the parameters, and the callee places the
+returned string value at that location. The pointer is not a parameter, and
+should not be removed from the stack by the <code><nobr>RETF</nobr></code>
+instruction.
+<li>Once the callee has finished processing, it restores
+<code><nobr>SP</nobr></code> from <code><nobr>BP</nobr></code> if it had
+allocated local stack space, then pops the previous value of
+<code><nobr>BP</nobr></code>, and returns via
+<code><nobr>RETF</nobr></code>. It uses the form of
+<code><nobr>RETF</nobr></code> with an immediate parameter, giving the
+number of bytes taken up by the parameters on the stack. This causes the
+parameters to be removed from the stack as a side effect of the return
+instruction.
+<li>When the caller regains control from the callee, the function
+parameters have already been removed from the stack, so it needs to do
+nothing further.
+</ul>
+<p>Thus, you would define a function in Pascal style, taking two
+<code><nobr>Integer</nobr></code>-type parameters, in the following way:
+<p><pre>
+global  myfunc 
+
+myfunc: push    bp 
+        mov     bp,sp 
+        sub     sp,0x40         ; 64 bytes of local stack space 
+        mov     bx,[bp+8]       ; first parameter to function 
+        mov     bx,[bp+6]       ; second parameter to function 
+
+        ; some more code 
+
+        mov     sp,bp           ; undo "sub sp,0x40" above 
+        pop     bp 
+        retf    4               ; total size of params is 4
+</pre>
+<p>At the other end of the process, to call a Pascal function from your
+assembly code, you would do something like this:
+<p><pre>
+extern  SomeFunc 
+
+       ; and then, further down... 
+
+       push   word seg mystring   ; Now push the segment, and... 
+       push   word mystring       ; ... offset of "mystring" 
+       push   word [myint]        ; one of my variables 
+       call   far SomeFunc
+</pre>
+<p>This is equivalent to the Pascal code
+<p><pre>
+procedure SomeFunc(String: PChar; Int: Integer); 
+    SomeFunc(@mystring, myint);
+</pre>
+<h4><a name="section-7.5.2">7.5.2 Borland Pascal Segment Name Restrictions</a></h4>
+<p>Since Borland Pascal's internal unit file format is completely different
+from <code><nobr>OBJ</nobr></code>, it only makes a very sketchy job of
+actually reading and understanding the various information contained in a
+real <code><nobr>OBJ</nobr></code> file when it links that in. Therefore an
+object file intended to be linked to a Pascal program must obey a number of
+restrictions:
+<ul>
+<li>Procedures and functions must be in a segment whose name is either
+<code><nobr>CODE</nobr></code>, <code><nobr>CSEG</nobr></code>, or
+something ending in <code><nobr>_TEXT</nobr></code>.
+<li>Initialised data must be in a segment whose name is either
+<code><nobr>CONST</nobr></code> or something ending in
+<code><nobr>_DATA</nobr></code>.
+<li>Uninitialised data must be in a segment whose name is either
+<code><nobr>DATA</nobr></code>, <code><nobr>DSEG</nobr></code>, or
+something ending in <code><nobr>_BSS</nobr></code>.
+<li>Any other segments in the object file are completely ignored.
+<code><nobr>GROUP</nobr></code> directives and segment attributes are also
+ignored.
+</ul>
+<h4><a name="section-7.5.3">7.5.3 Using <code><nobr>c16.mac</nobr></code> With Pascal Programs</a></h4>
+<p>The <code><nobr>c16.mac</nobr></code> macro package, described in
+<a href="#section-7.4.5">section 7.4.5</a>, can also be used to simplify
+writing functions to be called from Pascal programs, if you code
+<code><nobr>%define PASCAL</nobr></code>. This definition ensures that
+functions are far (it implies <code><nobr>FARCODE</nobr></code>), and also
+causes procedure return instructions to be generated with an operand.
+<p>Defining <code><nobr>PASCAL</nobr></code> does not change the code which
+calculates the argument offsets; you must declare your function's arguments
+in reverse order. For example:
+<p><pre>
+%define PASCAL 
+
+proc    _pascalproc 
+
+%$j     arg 4 
+%$i     arg 
+        mov     ax,[bp + %$i] 
+        mov     bx,[bp + %$j] 
+        mov     es,[bp + %$j + 2] 
+        add     ax,[bx] 
+
+endproc
+</pre>
+<p>This defines the same routine, conceptually, as the example in
+<a href="#section-7.4.5">section 7.4.5</a>: it defines a function taking
+two arguments, an integer and a pointer to an integer, which returns the
+sum of the integer and the contents of the pointer. The only difference
+between this code and the large-model C version is that
+<code><nobr>PASCAL</nobr></code> is defined instead of
+<code><nobr>FARCODE</nobr></code>, and that the arguments are declared in
+reverse order.
+<p align=center><a href="nasmdoc8.html">Next Chapter</a> |
+<a href="nasmdoc6.html">Previous Chapter</a> |
+<a href="nasmdoc0.html">Contents</a> |
+<a href="nasmdoci.html">Index</a>
+</body></html>

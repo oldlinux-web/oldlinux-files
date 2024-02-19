@@ -1,0 +1,545 @@
+<HTML>
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<!-- Created on November, 11  2002 by texi2html 1.64 -->
+<!-- 
+Written by: Lionel Cons <Lionel.Cons@cern.ch> (original author)
+            Karl Berry  <karl@freefriends.org>
+            Olaf Bachmann <obachman@mathematik.uni-kl.de>
+            and many others.
+Maintained by: Olaf Bachmann <obachman@mathematik.uni-kl.de>
+Send bugs and suggestions to <texi2html@mathematik.uni-kl.de>
+ 
+-->
+<HEAD>
+<TITLE>Debugging with GDB: Overlays</TITLE>
+
+<META NAME="description" CONTENT="Debugging with GDB: Overlays">
+<META NAME="keywords" CONTENT="Debugging with GDB: Overlays">
+<META NAME="resource-type" CONTENT="document">
+<META NAME="distribution" CONTENT="global">
+<META NAME="Generator" CONTENT="texi2html 1.64">
+
+</HEAD>
+
+<BODY LANG="" BGCOLOR="#FFFFFF" TEXT="#000000" LINK="#0000FF" VLINK="#800080" ALINK="#FF0000">
+
+<A NAME="SEC87"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_11.html#SEC86"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_12.html#SEC88"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_3.html#SEC6"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb.html#SEC_Top"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_13.html#SEC92"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_35.html#SEC643">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H1> 11. Debugging Programs That Use Overlays </H1>
+<!--docid::SEC87::-->
+<P>
+
+If your program is too large to fit completely in your target system's
+memory, you can sometimes use <EM>overlays</EM> to work around this
+problem.  GDB provides some support for debugging programs that
+use overlays.
+</P><P>
+
+<BLOCKQUOTE><TABLE BORDER=0 CELLSPACING=0> 
+<TR><TD ALIGN="left" VALIGN="TOP"><A HREF="gdb_12.html#SEC88">11.1 How Overlays Work</A></TD><TD>&nbsp;&nbsp;</TD><TD ALIGN="left" VALIGN="TOP">A general explanation of overlays.</TD></TR>
+<TR><TD ALIGN="left" VALIGN="TOP"><A HREF="gdb_12.html#SEC89">11.2 Overlay Commands</A></TD><TD>&nbsp;&nbsp;</TD><TD ALIGN="left" VALIGN="TOP">Managing overlays in GDB.</TD></TR>
+<TR><TD ALIGN="left" VALIGN="TOP"><A HREF="gdb_12.html#SEC90">11.3 Automatic Overlay Debugging</A></TD><TD>&nbsp;&nbsp;</TD><TD ALIGN="left" VALIGN="TOP">GDB can find out which overlays are
+                                   mapped by asking the inferior.</TD></TR>
+<TR><TD ALIGN="left" VALIGN="TOP"><A HREF="gdb_12.html#SEC91">11.4 Overlay Sample Program</A></TD><TD>&nbsp;&nbsp;</TD><TD ALIGN="left" VALIGN="TOP">A sample program using overlays.</TD></TR>
+</TABLE></BLOCKQUOTE>
+<P>
+
+<A NAME="How Overlays Work"></A>
+<HR SIZE="6">
+<A NAME="SEC88"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_12.html#SEC87"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_12.html#SEC89"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_12.html#SEC87"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_12.html#SEC87"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_13.html#SEC92"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_35.html#SEC643">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H2> 11.1 How Overlays Work </H2>
+<!--docid::SEC88::-->
+<P>
+
+Suppose you have a computer whose instruction address space is only 64
+kilobytes long, but which has much more memory which can be accessed by
+other means: special instructions, segment registers, or memory
+management hardware, for example.  Suppose further that you want to
+adapt a program which is larger than 64 kilobytes to run on this system.
+</P><P>
+
+One solution is to identify modules of your program which are relatively
+independent, and need not call each other directly; call these modules
+<EM>overlays</EM>.  Separate the overlays from the main program, and place
+their machine code in the larger memory.  Place your main program in
+instruction memory, but leave at least enough space there to hold the
+largest overlay as well.
+</P><P>
+
+Now, to call a function located in an overlay, you must first copy that
+overlay's machine code from the large memory into the space set aside
+for it in the instruction memory, and then jump to its entry point
+there.
+</P><P>
+
+<TABLE><tr><td>&nbsp;</td><td class=smallexample><FONT SIZE=-1><pre>    Data             Instruction            Larger
+Address Space       Address Space        Address Space
++-----------+       +-----------+        +-----------+
+|           |       |           |        |           |
++-----------+       +-----------+        +-----------+&#60;-- overlay 1
+| program   |       |   main    |   .----| overlay 1 | load address
+| variables |       |  program  |   |    +-----------+
+| and heap  |       |           |   |    |           |
++-----------+       |           |   |    +-----------+&#60;-- overlay 2
+|           |       +-----------+   |    |           | load address
++-----------+       |           |   |  .-| overlay 2 |
+                    |           |   |  | |           |
+         mapped ---&#62;+-----------+   |  | +-----------+
+         address    |           |   |  | |           |
+                    |  overlay  | &#60;-'  | |           |
+                    |   area    |  &#60;---' +-----------+&#60;-- overlay 3
+                    |           | &#60;---.  |           | load address
+                    +-----------+     `--| overlay 3 |
+                    |           |        |           |
+                    +-----------+        |           |
+                                         +-----------+
+                                         |           |
+                                         +-----------+
+
+<A NAME="A code overlay"></A>
+                    A code overlay
+</FONT></pre></td></tr></table></P><P>
+
+The diagram (see  <A HREF="gdb_12.html#A code overlay">A code overlay</A>) shows a system with separate data
+and instruction address spaces.  To map an overlay, the program copies
+its code from the larger address space to the instruction address space.
+Since the overlays shown here all use the same mapped address, only one
+may be mapped at a time.  For a system with a single address space for
+data and instructions, the diagram would be similar, except that the
+program variables and heap would share an address space with the main
+program and the overlay area.
+</P><P>
+
+An overlay loaded into instruction memory and ready for use is called a
+<EM>mapped</EM> overlay; its <EM>mapped address</EM> is its address in the
+instruction memory.  An overlay not present (or only partially present)
+in instruction memory is called <EM>unmapped</EM>; its <EM>load address</EM>
+is its address in the larger memory.  The mapped address is also called
+the <EM>virtual memory address</EM>, or <EM>VMA</EM>; the load address is also
+called the <EM>load memory address</EM>, or <EM>LMA</EM>.
+</P><P>
+
+Unfortunately, overlays are not a completely transparent way to adapt a
+program to limited instruction memory.  They introduce a new set of
+global constraints you must keep in mind as you design your program:
+</P><P>
+
+<UL>
+
+<LI>
+Before calling or returning to a function in an overlay, your program
+must make sure that overlay is actually mapped.  Otherwise, the call or
+return will transfer control to the right address, but in the wrong
+overlay, and your program will probably crash.
+<P>
+
+<LI>
+If the process of mapping an overlay is expensive on your system, you
+will need to choose your overlays carefully to minimize their effect on
+your program's performance.
+<P>
+
+<LI>
+The executable file you load onto your system must contain each
+overlay's instructions, appearing at the overlay's load address, not its
+mapped address.  However, each overlay's instructions must be relocated
+and its symbols defined as if the overlay were at its mapped address.
+You can use GNU linker scripts to specify different load and relocation
+addresses for pieces of your program; see section `Overlay Description' in <CITE>Using ld: the GNU linker</CITE>.
+<P>
+
+<LI>
+The procedure for loading executable files onto your system must be able
+to load their contents into the larger address space as well as the
+instruction and data spaces.
+<P>
+
+</UL>
+<P>
+
+The overlay system described above is rather simple, and could be
+improved in many ways:
+</P><P>
+
+<UL>
+
+<LI>
+If your system has suitable bank switch registers or memory management
+hardware, you could use those facilities to make an overlay's load area
+contents simply appear at their mapped address in instruction space.
+This would probably be faster than copying the overlay to its mapped
+area in the usual way.
+<P>
+
+<LI>
+If your overlays are small enough, you could set aside more than one
+overlay area, and have more than one overlay mapped at a time.
+<P>
+
+<LI>
+You can use overlays to manage data, as well as instructions.  In
+general, data overlays are even less transparent to your design than
+code overlays: whereas code overlays only require care when you call or
+return to functions, data overlays require care every time you access
+the data.  Also, if you change the contents of a data overlay, you
+must copy its contents back out to its load address before you can copy a
+different data overlay into the same mapped area.
+<P>
+
+</UL>
+<P>
+
+<A NAME="Overlay Commands"></A>
+<HR SIZE="6">
+<A NAME="SEC89"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_12.html#SEC88"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_12.html#SEC90"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_12.html#SEC90"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_12.html#SEC87"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_13.html#SEC92"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_35.html#SEC643">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H2> 11.2 Overlay Commands </H2>
+<!--docid::SEC89::-->
+<P>
+
+To use GDB's overlay support, each overlay in your program must
+correspond to a separate section of the executable file.  The section's
+virtual memory address and load memory address must be the overlay's
+mapped and load addresses.  Identifying overlays with sections allows
+GDB to determine the appropriate address of a function or
+variable, depending on whether the overlay is mapped or not.
+</P><P>
+
+GDB's overlay commands all start with the word <CODE>overlay</CODE>;
+you can abbreviate this as <CODE>ov</CODE> or <CODE>ovly</CODE>.  The commands are:
+</P><P>
+
+<DL COMPACT>
+<DT><CODE>overlay off</CODE>
+<DD><A NAME="IDX448"></A>
+Disable GDB's overlay support.  When overlay support is
+disabled, GDB assumes that all functions and variables are
+always present at their mapped addresses.  By default, GDB's
+overlay support is disabled.
+<P>
+
+<DT><CODE>overlay manual</CODE>
+<DD><A NAME="IDX449"></A>
+<A NAME="IDX450"></A>
+Enable <EM>manual</EM> overlay debugging.  In this mode, GDB
+relies on you to tell it which overlays are mapped, and which are not,
+using the <CODE>overlay map-overlay</CODE> and <CODE>overlay unmap-overlay</CODE>
+commands described below.
+<P>
+
+<DT><CODE>overlay map-overlay <VAR>overlay</VAR></CODE>
+<DD><DT><CODE>overlay map <VAR>overlay</VAR></CODE>
+<DD><A NAME="IDX451"></A>
+<A NAME="IDX452"></A>
+Tell GDB that <VAR>overlay</VAR> is now mapped; <VAR>overlay</VAR> must
+be the name of the object file section containing the overlay.  When an
+overlay is mapped, GDB assumes it can find the overlay's
+functions and variables at their mapped addresses.  GDB assumes
+that any other overlays whose mapped ranges overlap that of
+<VAR>overlay</VAR> are now unmapped.
+<P>
+
+<DT><CODE>overlay unmap-overlay <VAR>overlay</VAR></CODE>
+<DD><DT><CODE>overlay unmap <VAR>overlay</VAR></CODE>
+<DD><A NAME="IDX453"></A>
+<A NAME="IDX454"></A>
+Tell GDB that <VAR>overlay</VAR> is no longer mapped; <VAR>overlay</VAR>
+must be the name of the object file section containing the overlay.
+When an overlay is unmapped, GDB assumes it can find the
+overlay's functions and variables at their load addresses.
+<P>
+
+<DT><CODE>overlay auto</CODE>
+<DD><A NAME="IDX455"></A>
+Enable <EM>automatic</EM> overlay debugging.  In this mode, GDB
+consults a data structure the overlay manager maintains in the inferior
+to see which overlays are mapped.  For details, see <A HREF="gdb_12.html#SEC90">11.3 Automatic Overlay Debugging</A>.
+<P>
+
+<DT><CODE>overlay load-target</CODE>
+<DD><DT><CODE>overlay load</CODE>
+<DD><A NAME="IDX456"></A>
+<A NAME="IDX457"></A>
+Re-read the overlay table from the inferior.  Normally, GDB
+re-reads the table GDB automatically each time the inferior
+stops, so this command should only be necessary if you have changed the
+overlay mapping yourself using GDB.  This command is only
+useful when using automatic overlay debugging.
+<P>
+
+<DT><CODE>overlay list-overlays</CODE>
+<DD><DT><CODE>overlay list</CODE>
+<DD><A NAME="IDX458"></A>
+Display a list of the overlays currently mapped, along with their mapped
+addresses, load addresses, and sizes.
+<P>
+
+</DL>
+<P>
+
+Normally, when GDB prints a code address, it includes the name
+of the function the address falls in:
+</P><P>
+
+<TABLE><tr><td>&nbsp;</td><td class=smallexample><FONT SIZE=-1><pre>(gdb) print main
+$3 = {int ()} 0x11a0 &#60;main&#62;
+</FONT></pre></td></tr></table>When overlay debugging is enabled, GDB recognizes code in
+unmapped overlays, and prints the names of unmapped functions with
+asterisks around them.  For example, if <CODE>foo</CODE> is a function in an
+unmapped overlay, GDB prints it this way:
+</P><P>
+
+<TABLE><tr><td>&nbsp;</td><td class=smallexample><FONT SIZE=-1><pre>(gdb) overlay list
+No sections are mapped.
+(gdb) print foo
+$5 = {int (int)} 0x100000 &#60;*foo*&#62;
+</FONT></pre></td></tr></table>When <CODE>foo</CODE>'s overlay is mapped, GDB prints the function's
+name normally:
+</P><P>
+
+<TABLE><tr><td>&nbsp;</td><td class=smallexample><FONT SIZE=-1><pre>(gdb) overlay list
+Section .ov.foo.text, loaded at 0x100000 - 0x100034, 
+        mapped at 0x1016 - 0x104a
+(gdb) print foo
+$6 = {int (int)} 0x1016 &#60;foo&#62;
+</FONT></pre></td></tr></table></P><P>
+
+When overlay debugging is enabled, GDB can find the correct
+address for functions and variables in an overlay, whether or not the
+overlay is mapped.  This allows most GDB commands, like
+<CODE>break</CODE> and <CODE>disassemble</CODE>, to work normally, even on unmapped
+code.  However, GDB's breakpoint support has some limitations:
+</P><P>
+
+<UL>
+<LI>
+<A NAME="IDX459"></A>
+<A NAME="IDX460"></A>
+You can set breakpoints in functions in unmapped overlays, as long as
+GDB can write to the overlay at its load address.
+<LI>
+GDB can not set hardware or simulator-based breakpoints in
+unmapped overlays.  However, if you set a breakpoint at the end of your
+overlay manager (and tell GDB which overlays are now mapped, if
+you are using manual overlay management), GDB will re-set its
+breakpoints properly.
+</UL>
+<P>
+
+<A NAME="Automatic Overlay Debugging"></A>
+<HR SIZE="6">
+<A NAME="SEC90"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_12.html#SEC89"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_12.html#SEC91"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_12.html#SEC91"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_12.html#SEC87"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_13.html#SEC92"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_35.html#SEC643">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H2> 11.3 Automatic Overlay Debugging </H2>
+<!--docid::SEC90::-->
+<P>
+
+GDB can automatically track which overlays are mapped and which
+are not, given some simple co-operation from the overlay manager in the
+inferior.  If you enable automatic overlay debugging with the
+<CODE>overlay auto</CODE> command (see section <A HREF="gdb_12.html#SEC89">11.2 Overlay Commands</A>), GDB
+looks in the inferior's memory for certain variables describing the
+current state of the overlays.
+</P><P>
+
+Here are the variables your overlay manager must define to support
+GDB's automatic overlay debugging:
+</P><P>
+
+<DL COMPACT>
+
+<DT><CODE>_ovly_table</CODE>:
+<DD>This variable must be an array of the following structures:
+<P>
+
+<TABLE><tr><td>&nbsp;</td><td class=smallexample><FONT SIZE=-1><pre>struct
+{
+  /* The overlay's mapped address.  */
+  unsigned long vma;
+
+  /* The size of the overlay, in bytes.  */
+  unsigned long size;
+
+  /* The overlay's load address.  */
+  unsigned long lma;
+
+  /* Non-zero if the overlay is currently mapped;
+     zero otherwise.  */
+  unsigned long mapped;
+}
+</FONT></pre></td></tr></table></P><P>
+
+<DT><CODE>_novlys</CODE>:
+<DD>This variable must be a four-byte signed integer, holding the total
+number of elements in <CODE>_ovly_table</CODE>.
+<P>
+
+</DL>
+<P>
+
+To decide whether a particular overlay is mapped or not, GDB
+looks for an entry in <CODE>_ovly_table</CODE> whose <CODE>vma</CODE> and
+<CODE>lma</CODE> members equal the VMA and LMA of the overlay's section in the
+executable file.  When GDB finds a matching entry, it consults
+the entry's <CODE>mapped</CODE> member to determine whether the overlay is
+currently mapped.
+</P><P>
+
+In addition, your overlay manager may define a function called
+<CODE>_ovly_debug_event</CODE>.  If this function is defined, GDB
+will silently set a breakpoint there.  If the overlay manager then
+calls this function whenever it has changed the overlay table, this
+will enable GDB to accurately keep track of which overlays
+are in program memory, and update any breakpoints that may be set
+in overlays.  This will allow breakpoints to work even if the 
+overlays are kept in ROM or other non-writable memory while they
+are not being executed.
+</P><P>
+
+<A NAME="Overlay Sample Program"></A>
+<HR SIZE="6">
+<A NAME="SEC91"></A>
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_12.html#SEC90"> &lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_13.html#SEC92"> &gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_12.html#SEC87"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_12.html#SEC87"> Up </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_13.html#SEC92"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_35.html#SEC643">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<H2> 11.4 Overlay Sample Program </H2>
+<!--docid::SEC91::-->
+<P>
+
+When linking a program which uses overlays, you must place the overlays
+at their load addresses, while relocating them to run at their mapped
+addresses.  To do this, you must write a linker script (see section `Overlay Description' in <CITE>Using ld: the GNU linker</CITE>).  Unfortunately,
+since linker scripts are specific to a particular host system, target
+architecture, and target memory layout, this manual cannot provide
+portable sample code demonstrating GDB's overlay support.
+</P><P>
+
+However, the GDB source distribution does contain an overlaid
+program, with linker scripts for a few systems, as part of its test
+suite.  The program consists of the following files from
+<TT>`gdb/testsuite/gdb.base'</TT>:
+</P><P>
+
+<DL COMPACT>
+<DT><TT>`overlays.c'</TT>
+<DD>The main program file.
+<DT><TT>`ovlymgr.c'</TT>
+<DD>A simple overlay manager, used by <TT>`overlays.c'</TT>.
+<DT><TT>`foo.c'</TT>
+<DD><DT><TT>`bar.c'</TT>
+<DD><DT><TT>`baz.c'</TT>
+<DD><DT><TT>`grbx.c'</TT>
+<DD>Overlay modules, loaded and used by <TT>`overlays.c'</TT>.
+<DT><TT>`d10v.ld'</TT>
+<DD><DT><TT>`m32r.ld'</TT>
+<DD>Linker scripts for linking the test program on the <CODE>d10v-elf</CODE>
+and <CODE>m32r-elf</CODE> targets.
+</DL>
+<P>
+
+You can build the test program using the <CODE>d10v-elf</CODE> GCC
+cross-compiler like this:
+</P><P>
+
+<TABLE><tr><td>&nbsp;</td><td class=smallexample><FONT SIZE=-1><pre>$ d10v-elf-gcc -g -c overlays.c
+$ d10v-elf-gcc -g -c ovlymgr.c
+$ d10v-elf-gcc -g -c foo.c
+$ d10v-elf-gcc -g -c bar.c
+$ d10v-elf-gcc -g -c baz.c
+$ d10v-elf-gcc -g -c grbx.c
+$ d10v-elf-gcc -g overlays.o ovlymgr.o foo.o bar.o \
+                  baz.o grbx.o -Wl,-Td10v.ld -o overlays
+</FONT></pre></td></tr></table></P><P>
+
+The build process is identical for any other architecture, except that
+you must substitute the appropriate compiler and linker script for the
+target system for <CODE>d10v-elf-gcc</CODE> and <CODE>d10v.ld</CODE>.
+</P><P>
+
+<A NAME="Languages"></A>
+<HR SIZE="6">
+<TABLE CELLPADDING=1 CELLSPACING=1 BORDER=0>
+<TR><TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_12.html#SEC87"> &lt;&lt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_13.html#SEC92"> &gt;&gt; </A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT"> &nbsp; <TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb.html#SEC_Top">Top</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_toc.html#SEC_Contents">Contents</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_35.html#SEC643">Index</A>]</TD>
+<TD VALIGN="MIDDLE" ALIGN="LEFT">[<A HREF="gdb_abt.html#SEC_About"> ? </A>]</TD>
+</TR></TABLE>
+<BR>  
+<FONT SIZE="-1">
+
+<address>
+
+<p>Please send FSF &amp; GNU inquiries &amp; questions to <a
+href="mailto:gnu@gnu.org">gnu@gnu.org</a>.  There are also <a
+href="http://www.gnu.org/home.html#ContactInfo">other ways to
+contact</a> the FSF.</p>
+
+<p>These pages are maintained by <a
+href="http://www.gnu.org/software/gdb/">the GDB developers</a>.</p>
+
+<p>Copyright Free Software Foundation, Inc., 59 Temple Place - Suite
+330, Boston, MA 02111, USA.</p>
+
+<p>Verbatim copying and distribution of this entire article is
+permitted in any medium, provided this notice is preserved.</p>
+
+</address>
+
+This document was generated
+by <I>GDB Administrator</I> on <I>November, 11  2002</I>
+using <A HREF="http://www.mathematik.uni-kl.de/~obachman/Texi2html
+"><I>texi2html</I></A>
+
+</BODY>
+</HTML>

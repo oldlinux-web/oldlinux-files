@@ -1,0 +1,389 @@
+<html><!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">
+<html>
+
+	<head>
+		<title>80386 Programmer's Reference Manual -- Section 6.3</title>
+	</head>
+
+	<body>
+		<b>up:</b> <a href="C06.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/C06.HTM">Chapter 6 -- Protection</a><br>
+		<b>prev:</b> <a href="S06_02.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/S06_02.HTM">6.2 Overview of 80386 Protection Mechanisms</a><br>
+		<b>next:</b> <a href="S06_04.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/S06_04.HTM">6.4 Page-Level Protection</a>
+		<p>
+		<hr>
+		<p>
+		<h1>6.3 Segment-Level Protection</h1>
+		All five aspects of protection apply to segment translation:
+		<ol>
+			<li>Type checking
+			<li>Limit checking
+			<li>Restriction of addressable domain
+			<li>Restriction of procedure entry points
+			<li>Restriction of instruction set
+		</ol>
+		The segment is the unit of protection, and segment descriptors store protection parameters. Protection checks are performed automatically by the CPU when the selector of a segment descriptor is loaded into a segment register and with every segment access. Segment registers hold the protection parameters of the currently addressable segments.
+		<h2>6.3.1 Descriptors Store Protection Parameters</h2>
+		<a href="#fig6-1">Figure 6-1</a> highlights the protection-related fields of segment descriptors.
+		<p>The protection parameters are placed in the descriptor by systems software at the time a descriptor is created. In general, applications programmers do not need to be concerned about protection parameters.
+		<p>When a program loads a selector into a segment register, the processor loads not only the base address of the segment but also protection information. Each segment register has bits in the invisible portion for storing base, limit, type, and privilege level; therefore, subsequent protection checks on the same segment do not consume additional clock cycles.
+		<p><a name="fig6-1"><img align="center" src="FIG6-1.GIF" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/FIG6-1.GIF" border="0">
+		<p>
+		<h3>6.3.1.1 Type Checking</h3>
+		The TYPE field of a descriptor has two functions:
+		<ol>
+			<li>It distinguishes among different descriptor formats.
+			<li>It specifies the intended usage of a segment.
+		</ol>
+		Besides the descriptors for data and executable segments commonly used by applications programs, the 80386 has descriptors for special segments used by the operating system and for gates. Table 6-1 lists all the types defined for system segments and gates. Note that not all descriptors define segments; gate descriptors have a different purpose that is discussed later in this chapter.
+		<p>The type fields of data and executable segment descriptors include bits which further define the purpose of the segment (refer to <a href="#fig6-1">Figure 6-1</a> ):
+		<ul>
+			<li>The writable bit in a data-segment descriptor specifies whether instructions can write into the segment.
+			<li>The readable bit in an executable-segment descriptor specifies whether instructions are allowed to read from the segment (for example, to access constants that are stored with instructions). A readable, executable segment may be read in two ways:
+			<ol>
+				<li>Via the CS register, by using a CS override prefix.
+				<li>By loading a selector of the descriptor into a data-segment register (DS, ES, FS,or GS).
+			</ol>
+		</ul>
+		Type checking can be used to detect programming errors that would attempt to use segments in ways not intended by the programmer. The processor examines type information on two kinds of occasions:
+		<ol>
+			<li>When a selector of a descriptor is loaded into a segment register. Certain segment registers can contain only certain descriptor types; for example:
+			<ul>
+				<li>The CS register can be loaded only with a selector of an executable segment.
+				<li>Selectors of executable segments that are not readable cannot be loaded into data-segment registers.
+				<li>Only selectors of writable data segments can be loaded into SS.
+			</ul>
+			<li>When an instruction refers (implicitly or explicitly) to a segment register. Certain segments can be used by instructions only in certain predefined ways; for example:
+			<ul>
+				<li>No instruction may write into an executable segment.
+				<li>No instruction may write into a data segment if the writable bit is not set.
+				<li>No instruction may read an executable segment unless the readable bit is set.
+			</ul>
+		</ol>
+		<p>
+		<pre>
+
+
+
+Table 6-1. System and Gate Descriptor Types
+
+Code      Type of Segment or Gate
+
+0       -reserved
+1       Available 286 TSS
+2       LDT
+3       Busy 286 TSS
+4       Call Gate
+5       Task Gate
+6       286 Interrupt Gate
+7       286 Trap Gate
+8       -reserved
+9       Available 386 TSS
+A       -reserved
+B       Busy 386 TSS
+C       386 Call Gate
+D       -reserved
+E       386 Interrupt Gate
+F       386 Trap Gate
+
+</pre>
+		<h3>6.3.1.2 Limit Checking</h3>
+		The limit field of a segment descriptor is used by the processor to prevent programs from addressing outside the segment. The processor's interpretation of the limit depends on the setting of the G (granularity) bit. For data segments, the processor's interpretation of the limit depends also on the E-bit (expansion-direction bit) and the B-bit (big bit) (refer to Table 6-2).
+		<p>When G=0, the actual limit is the value of the 20-bit limit field as it appears in the descriptor. In this case, the limit may range from 0 to 0FFFFFH (2^(20) - 1 or 1 megabyte). When G=1, the processor appends 12 low-order one-bits to the value in the limit field. In this case the actual limit may range from 0FFFH (2^(12) - 1 or 4 kilobytes) to 0FFFFFFFFH(2^(32) - 1 or 4 gigabytes).
+		<p>For all types of segments except expand-down data segments, the value of the limit is one less than the size (expressed in bytes) of the segment. The processor causes a general-protection exception in any of these cases:
+		<ul>
+			<li>Attempt to access a memory byte at an address &gt; limit.
+			<li>Attempt to access a memory word at an address &gt;= limit.
+			<li>Attempt to access a memory doubleword at an address &gt;= (limit-2).
+		</ul>
+		For expand-down data segments, the limit has the same function but is interpreted differently. In these cases the range of valid addresses is from limit + 1 to either 64K or 2^(32) - 1 (4 Gbytes) depending on the B-bit. An expand-down segment has maximum size when the limit is zero.
+		<p>The expand-down feature makes it possible to expand the size of a stack by copying it to a larger segment without needing also to update intrastack pointers.
+		<p>The limit field of descriptors for descriptor tables is used by the processor to prevent programs from selecting a table entry outside the descriptor table. The limit of a descriptor table identifies the last valid byte of the last descriptor in the table. Since each descriptor is eight bytes long, the limit value is N * 8 - 1 for a table that can contain up to N descriptors.
+		<p>Limit checking catches programming errors such as runaway subscripts and invalid pointer calculations. Such errors are detected when they occur, so that identification of the cause is easier. Without limit checking, such errors could corrupt other modules; the existence of such errors would not be discovered until later, when the corrupted module behaves incorrectly, and when identification of the cause is difficult.
+		<pre>
+
+
+
+Table 6-2. Useful Combinations of E, G, and B Bits
+
+Case:                    1         2         3         4
+
+Expansion Direction      U         U         D         D
+G-bit                    0         1         0         1
+B-bit                    X         X         0         1
+
+Lower bound is:
+0                        X         X
+LIMIT+1                                      X
+shl(LIMIT,12,1)+1                                      X
+
+Upper bound is:
+LIMIT                    X
+shl(LIMIT,12,1)                    X
+64K-1                                        X
+4G-1                                                   X
+
+Max seg size is:
+64K                      X
+64K-1                              X
+4G-4K                                        X
+4G                                                     X
+
+Min seg size is:
+0                        X         X
+4K                                           X         X
+
+shl (X, 12, 1) = shift X left by 12 bits inserting one-bits on the right
+
+</pre>
+		<h3>6.3.1.3 Privilege Levels</h3>
+		The concept of privilege is implemented by assigning a value from zero to three to key objects recognized by the processor. This value is called the privilege level. The value zero represents the greatest privilege, the value three represents the least privilege. The following processor-recognized objects contain privilege levels:
+		<ul>
+			<li>Descriptors contain a field called the descriptor privilege level (DPL).
+			<li>Selectors contain a field called the requestor's privilege level (RPL). The RPL is intended to represent the privilege level of the procedure that originates a selector.
+			<li>An internal processor register records the current privilege level (CPL). Normally the CPL is equal to the DPL of the segment that the processor is currently executing. CPL changes as control is transferred to segments with differing DPLs.
+		</ul>
+		The processor automatically evaluates the right of a procedure to access another segment by comparing the CPL to one or more other privilege levels. The evaluation is performed at the time the selector of a descriptor is loaded into a segment register. The criteria used for evaluating access to data differs from that for evaluating transfers of control to executable segments; therefore, the two types of access are considered separately in the following sections.
+		<p><a href="#fig6-2">Figure 6-2</a> shows how these levels of privilege can be interpreted as rings of protection. The center is for the segments containing the most critical software, usually the kernel of the operating system. Outer rings are for the segments of less critical software.
+		<p>It is not necessary to use all four privilege levels. Existing software that was designed to use only one or two levels of privilege can simply ignore the other levels offered by the 80386. A one-level system should use privilege level zero; a two-level system should use privilege levels zero and three.
+		<p><a name="fig6-2"><img align="center" src="FIG6-2.GIF" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/FIG6-2.GIF" border="0">
+		<p>
+		<h2>6.3.2 Restricting Access to Data</h2>
+		To address operands in memory, an 80386 program must load the selector of a data segment into a data-segment register (DS, ES, FS, GS, SS). The processor automatically evaluates access to a data segment by comparing privilege levels. The evaluation is performed at the time a selector for the descriptor of the target segment is loaded into the data-segment register. As <a href="#fig6-3">Figure 6-3</a> shows, three different privilege levels enter into this type of privilege check:
+		<ol>
+			<li>The CPL (current privilege level).
+			<li>The RPL (requestor's privilege level) of the selector used to specify the target segment.
+			<li>The DPL of the descriptor of the target segment.
+		</ol>
+		Instructions may load a data-segment register (and subsequently use the target segment) only if the DPL of the target segment is numerically greater than or equal to the maximum of the CPL and the selector's RPL. In other words, a procedure can only access data that is at the same or less privileged level.
+		<p>The addressable domain of a task varies as CPL changes. When CPL is zero, data segments at all privilege levels are accessible; when CPL is one, only data segments at privilege levels one through three are accessible; when CPL is three, only data segments at privilege level three are accessible. This property of the 80386 can be used, for example, to prevent applications procedures from reading or changing tables of the operating system.
+		<p><a name="fig6-3"><img align="center" src="FIG6-3.GIF" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/FIG6-3.GIF" border="0">
+		<p>
+		<h3>6.3.2.1 Accessing Data in Code Segments</h3>
+		Less common than the use of data segments is the use of code segments to store data. Code segments may legitimately hold constants; it is not possible to write to a segment described as a code segment. The following methods of accessing data in code segments are possible:
+		<ol>
+			<li>Load a data-segment register with a selector of a nonconforming, readable, executable segment.
+			<li>Load a data-segment register with a selector of a conforming, readable, executable segment.
+			<li>Use a CS override prefix to read a readable, executable segment whose selector is already loaded in the CS register.
+		</ol>
+		The same rules as for access to data segments apply to case 1. Case 2 is always valid because the privilege level of a segment whose conforming bit is set is effectively the same as CPL regardless of its DPL. Case 3 always valid because the DPL of the code segment in CS is, by definition, equal to CPL.
+		<h2>6.3.3 Restricting Control Transfers</h2>
+		With the 80386, control transfers are accomplished by the instructions <a href="JMP.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/JMP.HTM">JMP</a>, <a href="CALL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/CALL.HTM">CALL</a>, <a href="RET.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/RET.HTM">RET</a>, <a href="INT.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/INT.HTM">INT</a>, and <a href="IRET.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/IRET.HTM">IRET</a>, as well as by the exception and interrupt mechanisms . Exceptions and interrupts are special cases that <a href="C09.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/C09.HTM">Chapter 9</a> covers. This chapter discusses only <a href="JMP.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/JMP.HTM">JMP</a>, <a href="CALL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/CALL.HTM">CALL</a>, and <a href="RET.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/RET.HTM">RET</a> instructions.
+		<p>The &quot;near&quot; forms of <a href="JMP.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/JMP.HTM">JMP</a>, <a href="CALL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/CALL.HTM">CALL</a>, and <a href="RET.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/RET.HTM">RET</a> transfer within the current code segment, and therefore are subject only to limit checking. The processor ensures that the destination of the <a href="JMP.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/JMP.HTM">JMP</a>, <a href="CALL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/CALL.HTM">CALL</a>, or <a href="RET.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/RET.HTM">RET</a> instruction does not exceed the limit of the current executable segment. This limit is cached in the CS register; therefore, protection checks for near transfers require no extra clock cycles.
+		<p>The operands of the &quot;far&quot; forms of <a href="JMP.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/JMP.HTM">JMP</a> and <a href="CALL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/CALL.HTM">CALL</a> refer to other segments; therefore, the processor performs privilege checking. There are two ways a <a href="JMP.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/JMP.HTM">JMP</a> or <a href="CALL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/CALL.HTM">CALL</a> can refer to another segment:
+		<ol>
+			<li>The operand selects the descriptor of another executable segment.
+			<li>The operand selects a call gate descriptor. This gated form of transfer is discussed in a later section on call gates.
+		</ol>
+		As <a href="#fig6-4">Figure 6-4</a> shows, two different privilege levels enter into a privilege check for a control transfer that does not use a call gate:
+		<ol>
+			<li>The CPL (current privilege level).
+			<li>The DPL of the descriptor of the target segment.
+		</ol>
+		Normally the CPL is equal to the DPL of the segment that the processor is currently executing. CPL may, however, be greater than DPL if the conforming bit is set in the descriptor of the current executable segment. The processor keeps a record of the CPL cached in the CS register; this value can be different from the DPL in the descriptor of the code segment.
+		<p>The processor permits a <a href="JMP.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/JMP.HTM">JMP</a> or <a href="CALL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/CALL.HTM">CALL</a> directly to another segment only if one of the following privilege rules is satisfied:
+		<ul>
+			<li>DPL of the target is equal to CPL.
+			<li>The conforming bit of the target code-segment descriptor is set, and the DPL of the target is less than or equal to CPL.
+		</ul>
+		An executable segment whose descriptor has the conforming bit set is called a conforming segment. The conforming-segment mechanism permits sharing of procedures that may be called from various privilege levels but should execute at the privilege level of the calling procedure. Examples of such procedures include math libraries and some exception handlers. When control is transferred to a conforming segment, the CPL does not change. This is the only case when CPL may be unequal to the DPL of the current executable segment.
+		<p>Most code segments are not conforming. The basic rules of privilege above mean that, for nonconforming segments, control can be transferred without a gate only to executable segments at the same level of privilege. There is a need, however, to transfer control to (numerically) smaller privilege levels; this need is met by the <a href="CALL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/CALL.HTM">CALL</a> instruction when used with call-gate descriptors, which are explained in the next section. The <a href="JMP.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/JMP.HTM">JMP</a> instruction may never transfer control to a nonconforming segment whose DPL does not equal CPL.
+		<p><a name="fig6-4"><img align="center" src="FIG6-4.GIF" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/FIG6-4.GIF" border="0">
+		<p>
+		<h2>6.3.4 Gate Descriptors Guard Procedure Entry Points</h2>
+		To provide protection for control transfers among executable segments at different privilege levels, the 80386 uses gate descriptors. There are four kinds of gate descriptors:
+		<ul>
+			<li>Call gates
+			<li>Trap gates
+			<li>Interrupt gates
+			<li>Task gates
+		</ul>
+		This chapter is concerned only with call gates. Task gates are used for task switching , and therefore are discussed in <a href="C07.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/C07.HTM">Chapter 7</a>. <a href="C09.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/C09.HTM">Chapter 9</a> explains how trap gates and interrupt gates are used by exceptions and interrupts. <a href="#fig6-5">Figure 6-5</a> illustrates the format of a call gate. A call gate descriptor may reside in the GDT or in an LDT, but not in the IDT. A call gate has two primary functions:
+		<ol>
+			<li>To define an entry point of a procedure.
+			<li>To specify the privilege level of the entry point.
+		</ol>
+		Call gate descriptors are used by call and jump instructions in the same manner as code segment descriptors. When the hardware recognizes that the destination selector refers to a gate descriptor, the operation of the instruction is expanded as determined by the contents of the call gate.
+		<p>The selector and offset fields of a gate form a pointer to the entry point of a procedure. A call gate guarantees that all transitions to another segment go to a valid entry point, rather than possibly into the middle of a procedure (or worse, into the middle of an instruction). The far pointer operand of the control transfer instruction does not point to the segment and offset of the target instruction; rather, the selector part of the pointer selects a gate, and the offset is not used. <a href="#fig6-6">Figure 6-6</a> illustrates this style of addressing.
+		<p>As <a href="#fig6-7">Figure 6-7</a> shows, four different privilege levels are used to check the validity of a control transfer via a call gate:
+		<ol>
+			<li>The CPL (current privilege level).
+			<li>The RPL (requestor's privilege level) of the selector used to specify the call gate.
+			<li>The DPL of the gate descriptor.
+			<li>The DPL of the descriptor of the target executable segment.
+		</ol>
+		The DPL field of the gate descriptor determines what privilege levels can use the gate. One code segment can have several procedures that are intended for use by different privilege levels. For example, an operating system may have some services that are intended to be used by applications, whereas others may be intended only for use by other systems software.
+		<p>Gates can be used for control transfers to numerically smaller privilege levels or to the same privilege level (though they are not necessary for transfers to the same level). Only <a href="CALL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/CALL.HTM">CALL</a> instructions can use gates to transfer to smaller privilege levels. A gate may be used by a <a href="JMP.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/JMP.HTM">JMP</a> instruction only to transfer to an executable segment with the same privilege level or to a conforming segment.
+		<p>For a <a href="JMP.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/JMP.HTM">JMP</a> instruction to a nonconforming segment, both of the following privilege rules must be satisfied; otherwise, a general protection exception results.
+		<pre>
+
+
+
+MAX (CPL,RPL) &lt;= gate DPL
+target segment DPL = CPL
+</pre>
+		For a <a href="CALL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/CALL.HTM">CALL</a> instruction (or for a <a href="JMP.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/JMP.HTM">JMP</a> instruction to a conforming segment), both of the following privilege rules must be satisfied; otherwise, a general protection exception results.
+		<pre>
+
+
+
+MAX (CPL,RPL) &lt;= gate DPL
+target segment DPL &lt;= CPL
+</pre>
+		<p><a name="fig6-5"><img align="center" src="FIG6-5.GIF" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/FIG6-5.GIF" border="0">
+		<p>
+		<hr>
+		<p><a name="fig6-6"><img align="center" src="FIG6-6.GIF" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/FIG6-6.GIF" border="0">
+		<p>
+		<hr>
+		<p><a name="fig6-7"><img align="center" src="FIG6-7.GIF" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/FIG6-7.GIF" border="0">
+		<p>
+		<h3>6.3.4.1 Stack Switching</h3>
+		If the destination code segment of the call gate is at a different privilege level than the CPL, an interlevel transfer is being requested.
+		<p>To maintain system integrity, each privilege level has a separate stack. These stacks assure sufficient stack space to process calls from less privileged levels. Without them, a trusted procedure would not work correctly if the calling procedure did not provide sufficient space on the caller's stack.
+		<p>The processor locates these stacks via the task state segment (see <a href="#fig6-8">Figure 6-8</a>). Each task has a separate TSS, thereby permitting tasks to have separate stacks. Systems software is responsible for creating TSSs and placing correct stack pointers in them. The initial stack pointers in the TSS are strictly read-only values. The processor never changes them during the course of execution.
+		<p>When a call gate is used to change privilege levels, a new stack is selected by loading a pointer value from the Task State Segment (TSS). The processor uses the DPL of the target code segment (the new CPL) to index the initial stack pointer for PL 0, PL 1, or PL 2.
+		<p>The DPL of the new stack data segment must equal the new CPL; if it does not, a stack exception occurs. It is the responsibility of systems software to create stacks and stack-segment descriptors for all privilege levels that are used. Each stack must contain enough space to hold the old SS:ESP, the return address, and all parameters and local variables that may be required to process a call.
+		<p>As with intralevel calls, parameters for the subroutine are placed on the stack. To make privilege transitions transparent to the called procedure, the processor copies the parameters to the new stack. The count field of a call gate tells the processor how many doublewords (up to 31) to copy from the caller's stack to the new stack. If the count is zero, no parameters are copied.
+		<p>The processor performs the following stack-related steps in executing an interlevel <a href="CALL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/CALL.HTM">CALL</a>.
+		<ol>
+			<li>The new stack is checked to assure that it is large enough to hold the parameters and linkages; if it is not, a stack fault occurs with an error code of 0.
+			<li>The old value of the stack registers SS:ESP is pushed onto the new stack as two doublewords.
+			<li>The parameters are copied.
+			<li>A pointer to the instruction after the <a href="CALL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/CALL.HTM">CALL</a> instruction (the former value of CS:EIP) is pushed onto the new stack. The final value of SS:ESP points to this return pointer on the new stack.
+		</ol>
+		<a href="#fig6-9">Figure 6-9</a> illustrates the stack contents after a successful interlevel call.
+		<p>The TSS does not have a stack pointer for a privilege level 3 stack, because privilege level 3 cannot be called by any procedure at any other privilege level.
+		<p>Procedures that may be called from another privilege level and that require more than the 31 doublewords for parameters must use the saved SS:ESP link to access all parameters beyond the last doubleword copied.
+		<p>A call via a call gate does not check the values of the words copied onto the new stack. The called procedure should check each parameter for validity. A later section discusses how the <a href="ARPL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/ARPL.HTM">ARPL</a>, <a href="VERR.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/VERR.HTM">VERR</a>, <a href="VERR.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/VERR.HTM">VERW</a>, <a href="LSL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/LSL.HTM">LSL</a>, and <a href="LAR.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/LAR.HTM">LAR</a> instructions can be used to check pointer values.
+		<p><a name="fig6-8"><img align="center" src="FIG6-8.GIF" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/FIG6-8.GIF" border="0">
+		<p>
+		<hr>
+		<p><a name="fig6-9"><img align="center" src="FIG6-9.GIF" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/FIG6-9.GIF" border="0">
+		<p>
+		<h3>6.3.4.2 Returning from a Procedure</h3>
+		The &quot;near&quot; forms of the <a href="RET.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/RET.HTM">RET</a> instruction transfer control within the current code segment and therefore are subject only to limit checking. The offset of the instruction following the corresponding <a href="CALL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/CALL.HTM">CALL</a>, is popped from the stack. The processor ensures that this offset does not exceed the limit of the current executable segment.
+		<p>The &quot;far&quot; form of the <a href="RET.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/RET.HTM">RET</a> instruction pops the return pointer that was pushed onto the stack by a prior far <a href="CALL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/CALL.HTM">CALL</a> instruction. Under normal conditions, the return pointer is valid, because of its relation to the prior <a href="CALL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/CALL.HTM">CALL</a> or <a href="INT.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/INT.HTM">INT</a>. Nevertheless, the processor performs privilege checking because of the possibility that the current procedure altered the pointer or failed to properly maintain the stack. The RPL of the CS selector popped off the stack by the return instruction identifies the privilege level of the calling procedure.
+		<p>An intersegment return instruction can change privilege levels, but only toward procedures of lesser privilege. When the <a href="RET.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/RET.HTM">RET</a> instruction encounters a saved CS value whose RPL is numerically greater than the CPL, an interlevel return occurs. Such a return follows these steps:
+		<ol>
+			<li>The checks shown in Table 6-3 are made, and CS:EIP and SS:ESP are loaded with their former values that were saved on the stack.
+			<li>The old SS:ESP (from the top of the current stack) value is adjusted by the number of bytes indicated in the <a href="RET.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/RET.HTM">RET</a> instruction. The resulting ESP value is not compared to the limit of the stack segment. If ESP is beyond the limit, that fact is not recognized until the next stack operation. (The SS:ESP value of the returning procedure is not preserved; normally, this value is the same as that contained in the TSS.)
+			<li>The contents of the DS, ES, FS, and GS segment registers are checked. If any of these registers refer to segments whose DPL is greater than the new CPL (excluding conforming code segments), the segment register is loaded with the null selector (INDEX = 0, TI = 0). The <a href="RET.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/RET.HTM">RET</a> instruction itself does not signal exceptions in these cases; however, any subsequent memory reference that attempts to use a segment register that contains the null selector will cause a general protection exception. This prevents less privileged code from accessing more privileged segments using selectors left in the segment registers by the more privileged procedure.
+		</ol>
+		<h2>6.3.5 Some Instructions are Reserved for Operating System</h2>
+		Instructions that have the power to affect the protection mechanism or to influence general system performance can only be executed by trusted procedures. The 80386 has two classes of such instructions:
+		<ol>
+			<li>Privileged instructions -- those used for system control.
+			<li>Sensitive instructions -- those used for I/O and I/O related activities.
+		</ol>
+		<pre>
+
+
+
+Table 6-3. Interlevel Return Checks
+
+SF = Stack Fault
+GP = General Protection Exception
+NP = Segment-Not-Present Exception
+
+Type of Check                                  Exception   Error Code
+
+ESP is within current SS segment               SF          0
+ESP + 7 is within current SS segment           SF          0
+RPL of return CS is greater than CPL           GP          Return CS
+Return CS selector is not null                 GP          Return CS
+Return CS segment is within descriptor
+  table limit                                  GP          Return CS
+Return CS descriptor is a code segment         GP          Return CS
+Return CS segment is present                   NP          Return CS
+DPL of return nonconforming code
+  segment = RPL of return CS, or DPL of
+  return conforming code segment &lt;= RPL
+  of return CS                                 GP          Return CS
+ESP + N + 15 is within SS segment
+N   Immediate Operand of RET N Instruction     SF          Return SS
+SS selector at ESP + N + 12 is not null        GP          Return SS
+SS selector at ESP + N + 12 is within
+  descriptor table limit                       GP          Return SS
+SS descriptor is writable data segment         GP          Return SS
+SS segment is present                          SF          Return SS
+Saved SS segment DPL = RPL of saved
+  CS                                           GP          Return SS
+Saved SS selector RPL = Saved SS
+  segment DPL                                  GP          Return SS
+</pre>
+		<h3>6.3.5.1 Privileged Instructions</h3>
+		The instructions that affect system data structures can only be executed when CPL is zero. If the CPU encounters one of these instructions when CPL is greater than zero, it signals a general protection exception. These instructions include:
+		<ul>
+			<li><a href="CLTS.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/CLTS.HTM">CLTS -- Clear Task-Switched Flag</a>
+			<li><a href="HLT.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/HLT.HTM">HLT -- Halt Processor</a>
+			<li><a href="LGDT.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/LGDT.HTM">LGDT -- Load GDL Register</a>
+			<li><a href="LGDT.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/LGDT.HTM">LIDT -- Load IDT Register</a>
+			<li><a href="LLDT.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/LLDT.HTM">LLDT -- Load LDT Register</a>
+			<li><a href="LMSW.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/LMSW.HTM">LMSW -- Load Machine Status Word</a>
+			<li><a href="LTR.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/LTR.HTM">LTR -- Load Task Register</a>
+			<li><a href="MOVRS.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/MOVRS.HTM">MOV to/from CRn -- Move to Control Register n</a>
+			<li><a href="MOVRS.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/MOVRS.HTM">MOV to /from DRn -- Move to Debug Register n</a>
+			<li><a href="MOVRS.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/MOVRS.HTM">MOV to/from TRn -- Move to Test Register n</a>
+		</ul>
+		<h3>6.3.5.2 Sensitive Instructions</h3>
+		Instructions that deal with I/O need to be restricted but also need to be executed by procedures executing at privilege levels other than zero. The mechanisms for restriction of I/O operations are covered in detail in <a href="C08.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/C08.HTM">Chapter 8</a>, &quot;Input/Output&quot;.
+		<h2>6.3.6 Instructions for Pointer Validation</h2>
+		Pointer validation is an important part of locating programming errors. Pointer validation is necessary for maintaining isolation between the privilege levels. Pointer validation consists of the following steps:
+		<ol>
+			<li>Check if the supplier of the pointer is entitled to access the segment.
+			<li>Check if the segment type is appropriate to its intended use.
+			<li>Check if the pointer violates the segment limit.
+		</ol>
+		Although the 80386 processor automatically performs checks 2 and 3 during instruction execution, software must assist in performing the first check. The unprivileged instruction <a href="ARPL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/ARPL.HTM">ARPL</a> is provided for this purpose. Software can also explicitly perform steps 2 and 3 to check for potential violations (rather than waiting for an exception). The unprivileged instructions <a href="LAR.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/LAR.HTM">LAR</a>, <a href="LSL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/LSL.HTM">LSL</a>, <a href="VERR.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/VERR.HTM">VERR</a>, and <a href="VERR.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/VERR.HTM">VERW</a> are provided for this purpose.
+		<p><a href="LAR.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/LAR.HTM">LAR</a> (Load Access Rights) is used to verify that a pointer refers to a segment of the proper privilege level and type. <a href="LAR.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/LAR.HTM">LAR</a> has one operand selector for a descriptor whose access rights are to be examined. The descriptor must be visible at the privilege level which is the maximum of the CPL and the selector's RPL. If the descriptor is visible, <a href="LAR.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/LAR.HTM">LAR</a> obtains a masked form of the second doubleword of the descriptor, masks this value with 00FxFF00H, stores the result into the specified 32-bit destination register, and sets the zero flag. (The x indicates that the corresponding four bits of the stored value are undefined.) Once loaded, the access-rights bits can be tested. All valid descriptor types can be tested by the <a href="LAR.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/LAR.HTM">LAR</a> instruction. If the RPL or CPL is greater than DPL, or if the selector is outside the table limit, no access-rights value is returned, and the zero flag is cleared. Conforming code segments may be accessed from any privilege level.
+		<p><a href="LSL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/LSL.HTM">LSL</a> (Load Segment Limit) allows software to test the limit of a descriptor. If the descriptor denoted by the given selector (in memory or a register) is visible at the CPL, <a href="LSL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/LSL.HTM">LSL</a> loads the specified 32-bit register with a 32-bit, byte granular, unscrambled limit that is calculated from fragmented limit fields and the G-bit of that descriptor. This can only be done for segments (data, code, task state, and local descriptor tables); gate descriptors are inaccessible. (Table 6-4 lists in detail which types are valid and which are not.) Interpreting the limit is a function of the segment type. For example, downward expandable data segments treat the limit differently than code segments do. For both <a href="LAR.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/LAR.HTM">LAR</a> and <a href="LSL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/LSL.HTM">LSL</a>, the zero flag (ZF) is set if the loading was performed; otherwise, the ZF is cleared.
+		<pre>
+
+
+
+Table 6-4. Valid Descriptor Types for LSL
+
+Type   Descriptor Type             Valid?
+Code
+
+0      (invalid)                   NO
+1      Available 286 TSS           YES
+2      LDT                         YES
+3      Busy 286 TSS                YES
+4      286 Call Gate               NO
+5      Task Gate                   NO
+6      286 Trap Gate               NO
+7      286 Interrupt Gate          NO
+8      (invalid)                   NO
+9      Available 386 TSS           YES
+A      (invalid)                   NO
+B      Busy 386 TSS                YES
+C      386 Call Gate               NO
+D      (invalid)                   NO
+E      386 Trap Gate               NO
+F      386 Interrupt Gate          NO
+
+</pre>
+		<h3>6.3.6.1 Descriptor Validation</h3>
+		The 80386 has two instructions, <a href="VERR.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/VERR.HTM">VERR</a> and <a href="VERR.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/VERR.HTM">VERW</a>, which determine whether a selector points to a segment that can be read or written at the current privilege level. Neither instruction causes a protection fault if the result is negative.
+		<p><a href="VERR.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/VERR.HTM">VERR</a> (Verify for Reading) verifies a segment for reading and loads ZF with 1 if that segment is readable from the current privilege level. <a href="VERR.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/VERR.HTM">VERR</a> checks that:
+		<ul>
+			<li>The selector points to a descriptor within the bounds of the GDT or LDT.
+			<li>It denotes a code or data segment descriptor.
+			<li>The segment is readable and of appropriate privilege level.
+		</ul>
+		The privilege check for data segments and nonconforming code segments is that the DPL must be numerically greater than or equal to both the CPL and the selector's RPL. Conforming segments are not checked for privilege level.
+		<p><a href="VERR.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/VERR.HTM">VERW</a> (Verify for Writing) provides the same capability as <a href="VERR.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/VERR.HTM">VERR</a> for verifying writability. Like the <a href="VERR.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/VERR.HTM">VERR</a> instruction, <a href="VERR.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/VERR.HTM">VERW</a> loads ZF if the result of the writability check is positive. The instruction checks that the descriptor is within bounds, is a segment descriptor, is writable, and that its DPL is numerically greater or equal to both the CPL and the selector's RPL. Code segments are never writable, conforming or not.
+		<h3>6.3.6.2 Pointer Integrity and RPL</h3>
+		The Requestor's Privilege Level (RPL) feature can prevent inappropriate use of pointers that could corrupt the operation of more privileged code or data from a less privileged level.
+		<p>A common example is a file system procedure, FREAD (file_id, n_bytes, buffer_ptr). This hypothetical procedure reads data from a file into a buffer, overwriting whatever is there. Normally, FREAD would be available at the user level, supplying only pointers to the file system procedures and data located and operating at a privileged level. Normally, such a procedure prevents user-level procedures from directly changing the file tables. However, in the absence of a standard protocol for checking pointer validity, a user-level procedure could supply a pointer into the file tables in place of its buffer pointer, causing the FREAD procedure to corrupt them unwittingly.
+		<p>Use of RPL can avoid such problems. The RPL field allows a privilege attribute to be assigned to a selector. This privilege attribute would normally indicate the privilege level of the code which generated the selector. The 80386 processor automatically checks the RPL of any selector loaded into a segment register to determine whether the RPL allows access.
+		<p>To take advantage of the processor's checking of RPL, the called procedure need only ensure that all selectors passed to it have an RPL at least as high (numerically) as the original caller's CPL. This action guarantees that selectors are not more trusted than their supplier. If one of the selectors is used to access a segment that the caller would not be able to access directly, i.e., the RPL is numerically greater than the DPL, then a protection fault will result when that selector is loaded into a segment register.
+		<p><a href="ARPL.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/ARPL.HTM">ARPL</a> (Adjust Requestor's Privilege Level) adjusts the RPL field of a selector to become the larger of its original value and the value of the RPL field in a specified register. The latter is normally loaded from the image of the caller's CS register which is on the stack. If the adjustment changes the selector's RPL, ZF (the zero flag) is set; otherwise, ZF is cleared.
+		<p>
+		<hr>
+		<p><b>up:</b> <a href="C06.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/C06.HTM">Chapter 6 -- Protection</a><br>
+		<b>prev:</b> <a href="S06_02.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/S06_02.HTM">6.2 Overview of 80386 Protection Mechanisms</a><br>
+		<b>next:</b> <a href="S06_04.HTM" tppabs="http://webster.cs.ucr.edu/Page_TechDocs/Doc386/S06_04.HTM">6.4 Page-Level Protection</a>
+	</body>
+

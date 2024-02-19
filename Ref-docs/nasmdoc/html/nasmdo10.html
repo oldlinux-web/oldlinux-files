@@ -1,0 +1,178 @@
+<html><head><title>NASM Manual</title></head>
+<body><h1 align=center>The Netwide Assembler: NASM</h1>
+
+<p align=center><a href="nasmdoca.html">Next Chapter</a> |
+<a href="nasmdoc9.html">Previous Chapter</a> |
+<a href="nasmdoc0.html">Contents</a> |
+<a href="nasmdoci.html">Index</a>
+<h2><a name="chapter-10">Chapter 10: Troubleshooting</a></h2>
+<p>This chapter describes some of the common problems that users have been
+known to encounter with NASM, and answers them. It also gives instructions
+for reporting bugs in NASM if you find a difficulty that isn't listed here.
+<h3><a name="section-10.1">10.1 Common Problems</a></h3>
+<h4><a name="section-10.1.1">10.1.1 NASM Generates Inefficient Code</a></h4>
+<p>We sometimes get `bug' reports about NASM generating inefficient, or
+even `wrong', code on instructions such as
+<code><nobr>ADD ESP,8</nobr></code>. This is a deliberate design feature,
+connected to predictability of output: NASM, on seeing
+<code><nobr>ADD ESP,8</nobr></code>, will generate the form of the
+instruction which leaves room for a 32-bit offset. You need to code
+<code><nobr>ADD ESP,BYTE 8</nobr></code> if you want the space-efficient
+form of the instruction. This isn't a bug, it's user error: if you prefer
+to have NASM produce the more efficient code automatically enable
+optimization with the <code><nobr>-On</nobr></code> option (see
+<a href="nasmdoc2.html#section-2.1.16">section 2.1.16</a>).
+<h4><a name="section-10.1.2">10.1.2 My Jumps are Out of Range</a></h4>
+<p>Similarly, people complain that when they issue conditional jumps (which
+are <code><nobr>SHORT</nobr></code> by default) that try to jump too far,
+NASM reports `short jump out of range' instead of making the jumps longer.
+<p>This, again, is partly a predictability issue, but in fact has a more
+practical reason as well. NASM has no means of being told what type of
+processor the code it is generating will be run on; so it cannot decide for
+itself that it should generate <code><nobr>Jcc NEAR</nobr></code> type
+instructions, because it doesn't know that it's working for a 386 or above.
+Alternatively, it could replace the out-of-range short
+<code><nobr>JNE</nobr></code> instruction with a very short
+<code><nobr>JE</nobr></code> instruction that jumps over a
+<code><nobr>JMP NEAR</nobr></code>; this is a sensible solution for
+processors below a 386, but hardly efficient on processors which have good
+branch prediction <em>and</em> could have used
+<code><nobr>JNE NEAR</nobr></code> instead. So, once again, it's up to the
+user, not the assembler, to decide what instructions should be generated.
+See <a href="nasmdoc2.html#section-2.1.16">section 2.1.16</a>.
+<h4><a name="section-10.1.3">10.1.3 <code><nobr>ORG</nobr></code> Doesn't Work</a></h4>
+<p>People writing boot sector programs in the <code><nobr>bin</nobr></code>
+format often complain that <code><nobr>ORG</nobr></code> doesn't work the
+way they'd like: in order to place the <code><nobr>0xAA55</nobr></code>
+signature word at the end of a 512-byte boot sector, people who are used to
+MASM tend to code
+<p><pre>
+        ORG 0 
+
+        ; some boot sector code 
+
+        ORG 510 
+        DW 0xAA55
+</pre>
+<p>This is not the intended use of the <code><nobr>ORG</nobr></code>
+directive in NASM, and will not work. The correct way to solve this problem
+in NASM is to use the <code><nobr>TIMES</nobr></code> directive, like this:
+<p><pre>
+        ORG 0 
+
+        ; some boot sector code 
+
+        TIMES 510-($-$$) DB 0 
+        DW 0xAA55
+</pre>
+<p>The <code><nobr>TIMES</nobr></code> directive will insert exactly enough
+zero bytes into the output to move the assembly point up to 510. This
+method also has the advantage that if you accidentally fill your boot
+sector too full, NASM will catch the problem at assembly time and report
+it, so you won't end up with a boot sector that you have to disassemble to
+find out what's wrong with it.
+<h4><a name="section-10.1.4">10.1.4 <code><nobr>TIMES</nobr></code> Doesn't Work</a></h4>
+<p>The other common problem with the above code is people who write the
+<code><nobr>TIMES</nobr></code> line as
+<p><pre>
+        TIMES 510-$ DB 0
+</pre>
+<p>by reasoning that <code><nobr>$</nobr></code> should be a pure number,
+just like 510, so the difference between them is also a pure number and can
+happily be fed to <code><nobr>TIMES</nobr></code>.
+<p>NASM is a <em>modular</em> assembler: the various component parts are
+designed to be easily separable for re-use, so they don't exchange
+information unnecessarily. In consequence, the
+<code><nobr>bin</nobr></code> output format, even though it has been told
+by the <code><nobr>ORG</nobr></code> directive that the
+<code><nobr>.text</nobr></code> section should start at 0, does not pass
+that information back to the expression evaluator. So from the evaluator's
+point of view, <code><nobr>$</nobr></code> isn't a pure number: it's an
+offset from a section base. Therefore the difference between
+<code><nobr>$</nobr></code> and 510 is also not a pure number, but involves
+a section base. Values involving section bases cannot be passed as
+arguments to <code><nobr>TIMES</nobr></code>.
+<p>The solution, as in the previous section, is to code the
+<code><nobr>TIMES</nobr></code> line in the form
+<p><pre>
+        TIMES 510-($-$$) DB 0
+</pre>
+<p>in which <code><nobr>$</nobr></code> and <code><nobr>$$</nobr></code>
+are offsets from the same section base, and so their difference is a pure
+number. This will solve the problem and generate sensible code.
+<h3><a name="section-10.2">10.2 Bugs</a></h3>
+<p>We have never yet released a version of NASM with any <em>known</em>
+bugs. That doesn't usually stop there being plenty we didn't know about,
+though. Any that you find should be reported firstly via the
+<code><nobr>bugtracker</nobr></code> at
+<a href="https://sourceforge.net/projects/nasm/"><code><nobr>https://sourceforge.net/projects/nasm/</nobr></code></a>
+(click on "Bugs"), or if that fails then through one of the contacts in
+<a href="nasmdoc1.html#section-1.2">section 1.2</a>.
+<p>Please read <a href="nasmdoc2.html#section-2.2">section 2.2</a> first,
+and don't report the bug if it's listed in there as a deliberate feature.
+(If you think the feature is badly thought out, feel free to send us
+reasons why you think it should be changed, but don't just send us mail
+saying `This is a bug' if the documentation says we did it on purpose.)
+Then read <a href="#section-10.1">section 10.1</a>, and don't bother
+reporting the bug if it's listed there.
+<p>If you do report a bug, <em>please</em> give us all of the following
+information:
+<ul>
+<li>What operating system you're running NASM under. DOS, Linux, NetBSD,
+Win16, Win32, VMS (I'd be impressed), whatever.
+<li>If you're running NASM under DOS or Win32, tell us whether you've
+compiled your own executable from the DOS source archive, or whether you
+were using the standard distribution binaries out of the archive. If you
+were using a locally built executable, try to reproduce the problem using
+one of the standard binaries, as this will make it easier for us to
+reproduce your problem prior to fixing it.
+<li>Which version of NASM you're using, and exactly how you invoked it.
+Give us the precise command line, and the contents of the
+<code><nobr>NASMENV</nobr></code> environment variable if any.
+<li>Which versions of any supplementary programs you're using, and how you
+invoked them. If the problem only becomes visible at link time, tell us
+what linker you're using, what version of it you've got, and the exact
+linker command line. If the problem involves linking against object files
+generated by a compiler, tell us what compiler, what version, and what
+command line or options you used. (If you're compiling in an IDE, please
+try to reproduce the problem with the command-line version of the
+compiler.)
+<li>If at all possible, send us a NASM source file which exhibits the
+problem. If this causes copyright problems (e.g. you can only reproduce the
+bug in restricted-distribution code) then bear in mind the following two
+points: firstly, we guarantee that any source code sent to us for the
+purposes of debugging NASM will be used <em>only</em> for the purposes of
+debugging NASM, and that we will delete all our copies of it as soon as we
+have found and fixed the bug or bugs in question; and secondly, we would
+prefer <em>not</em> to be mailed large chunks of code anyway. The smaller
+the file, the better. A three-line sample file that does nothing useful
+<em>except</em> demonstrate the problem is much easier to work with than a
+fully fledged ten-thousand-line program. (Of course, some errors
+<em>do</em> only crop up in large files, so this may not be possible.)
+<li>A description of what the problem actually <em>is</em>. `It doesn't
+work' is <em>not</em> a helpful description! Please describe exactly what
+is happening that shouldn't be, or what isn't happening that should.
+Examples might be: `NASM generates an error message saying Line 3 for an
+error that's actually on Line 5'; `NASM generates an error message that I
+believe it shouldn't be generating at all'; `NASM fails to generate an
+error message that I believe it <em>should</em> be generating'; `the object
+file produced from this source code crashes my linker'; `the ninth byte of
+the output file is 66 and I think it should be 77 instead'.
+<li>If you believe the output file from NASM to be faulty, send it to us.
+That allows us to determine whether our own copy of NASM generates the same
+file, or whether the problem is related to portability issues between our
+development platforms and yours. We can handle binary files mailed to us as
+MIME attachments, uuencoded, and even BinHex. Alternatively, we may be able
+to provide an FTP site you can upload the suspect files to; but mailing
+them is easier for us.
+<li>Any other information or data files that might be helpful. If, for
+example, the problem involves NASM failing to generate an object file while
+TASM can generate an equivalent file without trouble, then send us
+<em>both</em> object files, so we can see what TASM is doing differently
+from us.
+</ul>
+<p align=center><a href="nasmdoca.html">Next Chapter</a> |
+<a href="nasmdoc9.html">Previous Chapter</a> |
+<a href="nasmdoc0.html">Contents</a> |
+<a href="nasmdoci.html">Index</a>
+</body></html>

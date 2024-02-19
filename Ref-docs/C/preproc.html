@@ -1,0 +1,957 @@
+<HTML><HEAD><TITLE>Preprocessing</TITLE></HEAD><BODY BGCOLOR="#FFFFFF">
+
+<H1><A NAME="Preprocessing">Preprocessing</A></H1><HR>
+
+<P><B>
+<A HREF="#Phases of Translation">Phases of Translation</A>
+&#183; <A HREF="#White Space">White Space</A>
+&#183; <A HREF="#Preprocessing Tokens">Preprocessing Tokens</A>
+&#183; <A HREF="#Include Directives">Include Directives</A>
+&#183; <A HREF="#Define Directives">Define Directives</A>
+&#183; <A HREF="#Expanding Macros">Expanding Macros</A>
+&#183; <A HREF="#Creating String Literals">Creating String Literals</A>
+&#183; <A HREF="#Conditional Directives">Conditional Directives</A>
+&#183; <A HREF="#Conditional Expressions">Conditional Expressions</A>
+&#183; <A HREF="#Restrictions on Conditional Expressions">Restrictions on Conditional Expressions</A>
+&#183; <A HREF="#Other Conditional Directives">Other Conditional Directives</A>
+&#183; <A HREF="#Other Directives">Other Directives</A>
+&#183; <A HREF="#Predefined Macros">Predefined Macros</A>
+</B></P>
+<HR>
+
+<P>The translator processes each source file in a series of phases. 
+<B>Preprocessing</B> constitutes the earliest phases, which produce a
+<B><A NAME="translation unit">translation unit</A></B>.
+Preprocessing treats a source file as a sequence of
+<A HREF="lib_file.html#text lines" tppabs="http://ccs.ucsd.edu/c/lib_file.html#text lines">text lines</A>. You can specify
+<B><A NAME="directives">directives</A></B> and
+<B><A NAME="macros">macros</A></B> 
+that insert, delete, and alter source text.</P>
+
+<P>This document describes 
+the operations that you can perform during preprocessing. It shows 
+how the translator parses the program as
+<A HREF="#White Space">white space</A> and
+<A HREF="#Preprocessing Tokens">preprocessing tokens</A>,
+carries out the directives that you specify, and expands the 
+macros that you write in the source files.</P>
+
+<H2><A NAME="Phases of Translation">Phases of Translation</A></H2>
+
+<P>Preprocessing translates each source file in a series of distinct 
+phases. The translator performs the following steps, in order:</P>
+
+<OL>
+<LI>terminates each line with a newline character (<CODE><I>NL</I></CODE>), 
+regardless of the external representation of a
+<A HREF="lib_file.html#text lines" tppabs="http://ccs.ucsd.edu/c/lib_file.html#text lines">text line</A>
+
+<LI>converts <A HREF="charset.html#Trigraphs" tppabs="http://ccs.ucsd.edu/c/charset.html#Trigraphs">trigraphs</A>
+to their single-character equivalents
+
+<LI><B><A NAME="line concatenation">concatenates each line</A></B>
+ending in a backslash (<CODE>\</CODE>) with the line following
+
+<LI>replaces each
+<B><A NAME="comments">comment</A></B>
+(beginning with <CODE>/*</CODE> that is not inside a
+<A HREF="#character constant">character constant</A>, a
+<A HREF="#string literal">string literal</A>, or a
+<A HREF="lib_over.html#standard header" tppabs="http://ccs.ucsd.edu/c/lib_over.html#standard header">standard header</A>
+name and ending with a <CODE>*/</CODE>) with a
+<CODE><I>space</I></CODE> character
+
+<LI>parses each resulting
+<B><A NAME="logical line">logical line</A></B>
+as preprocessing tokens and white space
+
+<LI>recognizes and carries out directives (that are not skipped) 
+and expands macros in all non-directive lines (that are not skipped)
+
+<LI>replaces
+<A HREF="charset.html#Escape Sequences" tppabs="http://ccs.ucsd.edu/c/charset.html#Escape Sequences">escape sequences</A>
+within character constants and string 
+literals with their single-character equivalents
+
+<LI><A NAME="string-literal concatenation">concatenates</A>
+adjacent string literals
+
+<LI>converts the remaining
+<A HREF="#Preprocessing Tokens">preprocessing tokens</A> to
+<A HREF="syntax.html#C Tokens" tppabs="http://ccs.ucsd.edu/c/syntax.html#C Tokens">C tokens</A> and discards any
+white space to form the
+<A HREF="#translation unit">translation unit</A>
+</OL>
+
+<P>The remainder of the translator then parses the resulting
+<A HREF="#translation unit">translation unit</A>
+as one or more
+<A HREF="declare.html" tppabs="http://ccs.ucsd.edu/c/declare.html">declarations</A> and translates each one. At
+<B><A NAME="link time">link time</A></B>), you combine
+one or more separately processed
+<A HREF="#translation unit">translation units</A>,
+along with the
+<A HREF="index.html#Standard C Library" tppabs="http://ccs.ucsd.edu/c/index.html#Standard C Library">Standard C library</A>, to form the
+<B><A NAME="program">program</A></B>.</P>
+
+<P>A <A HREF="#translation unit">translation unit</A>
+can contain entire
+<A HREF="#include file">include files</A>,
+which can contain entire
+<A HREF="#if-group">if-groups</A>,
+which can contain entire directives and macro invocations, 
+which can contain entire comments,
+character constants, string literals, and other
+<A HREF="#Preprocessing Tokens">preprocessing tokens</A>.</P>
+
+<P>You cannot write a comment inside a string literal, as in:</P>
+
+<PRE>
+"hello /* ignored */"           <B>comment is NOT ignored</B></PRE>
+
+<P>You cannot write a macro to begin comments, as in:</P>
+
+<PRE>
+#define BEGIN_NOTE /*           <B>still inside comment</B></PRE>
+
+<P>You cannot include a source file that contains an
+<A HREF="#if directive"><I>if</I> directive</A>
+without a balancing
+<A HREF="#endif directive"><I>endif</I> directive</A>
+within the same file. Nor can you include a source file
+that contains only part of a
+<A HREF="#macro invocation">macro invocation</A>.</P>
+
+<P>You write a directive on one
+<A HREF="#logical line">logical line</A>.
+(Use <A HREF="#line concatenation">line concatenation</A>
+to represent a long directive on multiple source lines.)
+Every directive begins with a number character (<CODE>#</CODE>). 
+You can write any number of <CODE><I>space</I></CODE>
+and <CODE><I>HT</I></CODE> characters (or comments)
+before and after the <CODE>#</CODE>.
+You cannot write <CODE><I>FF</I></CODE> or <CODE><I>VT</I></CODE>
+characters to separate tokens on a directive line. Every 
+line that begins with a <CODE>#</CODE> must match one
+of the forms described in this document.</P>
+
+<H2><A NAME="White Space">White Space</A></H2>
+
+<P>Preprocessing parses each input line as
+<A HREF="#Preprocessing Tokens">preprocessing tokens</A>
+and <B>white space</B>. You use white space for one or more purposes.</P>
+
+<UL>
+<LI>to separate two tokens that the translator might otherwise parse 
+as a single token, as in:
+
+<PRE>
+case 3:
+</PRE>
+
+<LI>to separate the macro name and a macro definition that begins 
+with a left parenthesis, to signal that there are no macro parameters, 
+as in:
+
+<PRE>
+#define neg_pi (-3.1415926535)
+</PRE>
+
+<LI>to separate two tokens of a macro argument that you are using 
+to create a string literal, to create a <CODE><I>space</CODE> in the string 
+literal, as in:
+
+<PRE>
+#define str(x)	#x
+str(hello there)                <B>which becomes "hello there"
+</PRE>
+
+<LI>to improve readability
+</UL>
+
+<P>White space takes one of three distinct forms:</P>
+
+<UL>
+<LI><I>vertical white space</I> (the characters
+<CODE><I>FF</I></CODE> and <CODE><I>VT</I></CODE>), 
+which you can use within any non-directive line:
+</UL>
+
+<P><IMG SRC="vert_ws.gif" tppabs="http://ccs.ucsd.edu/c/gif/vert_ws.gif"></P>
+
+<UL>
+<LI><I>horizontal white space</I> (comments and
+the characters <CODE><I>space</I></CODE> and <CODE><I>HT</I></CODE>),
+which you can use in any line:
+</UL>
+
+<P><IMG SRC="horiz_ws.gif" tppabs="http://ccs.ucsd.edu/c/gif/horiz_ws.gif"></P>
+
+<UL>
+<LI><I>end of line</I> (the character <CODE><I>NL</I></CODE>), which you use 
+to terminate directives or to separate tokens on non-directive lines:
+</UL>
+
+<P><IMG SRC="end_line.gif" tppabs="http://ccs.ucsd.edu/c/gif/end_line.gif"></P>
+
+<P>For a directive, you can write horizontal white space wherever 
+an arrow appears in its
+<A HREF="intro.html#Railroad-Track Diagrams" tppabs="http://ccs.ucsd.edu/c/intro.html#Railroad-Track Diagrams">railroad-track diagram</A>.</P>
+
+<H2><A NAME="Preprocessing Tokens">Preprocessing Tokens</A></H2>
+
+<P>A <B>preprocessing token</B> is the longest sequence of characters 
+that matches one of the following patterns.</P>
+
+<P>A <B><A NAME="name">name</A></B> is a sequence of letters,
+underscores, and digits that begins with a letter or underscore.
+<B><A NAME="distinct names">Distinct names</A></B>
+must differ within the first 31 characters.</P>
+
+<P><IMG SRC="name.gif" tppabs="http://ccs.ucsd.edu/c/gif/name.gif"></P>
+
+<P>Some valid names, all of which are distinct, are:</P>
+
+<PRE>
+abc           Version13     old_sum
+ABC          _Abc           X1_Y2_Z3</PRE>
+
+<P>A <B><A NAME="preprocessing number">preprocessing number</A></B>
+subsumes all
+<A HREF="syntax.html#integer constant" tppabs="http://ccs.ucsd.edu/c/syntax.html#integer constant">integer</A> and
+<A HREF="syntax.html#floating-point constant" tppabs="http://ccs.ucsd.edu/c/syntax.html#floating-point constant">floating-point</A>
+constants, plus a number of other forms:
+
+<P><IMG SRC="number.gif" tppabs="http://ccs.ucsd.edu/c/gif/number.gif"></P>
+
+<P>Some valid preprocessing numbers are:</P>
+
+<PRE>
+0            .123           3E
+123          123E0F         3e+xy
+123LU        0.123E-005     2for1</PRE>
+
+<P>The third column shows several of the additional forms.
+You use the additional forms:</P>
+
+<UL>
+<LI>to build string literals
+from macro arguments during macro expansion
+
+<LI>to build other tokens by concatenating tokens during macro expansion
+
+<LI>as part of text that you skip with
+<A HREF="#Conditional Directives">conditional directives</A>
+</UL>
+
+<P>Some valid preprocessing numbers are:</P>
+
+<PRE>
+314          3.14           .314E+1
+0xa5         .14E+          1z2z</PRE>
+
+<P>A <B><A NAME="character constant">character constant</A></B>
+consists of one or more multibyte 
+characters enclosed in single quotes.
+A backslash (<CODE>\</CODE>) within a character constant
+begins an <A HREF="charset.html#Escape Sequences" tppabs="http://ccs.ucsd.edu/c/charset.html#Escape Sequences">escape sequence</A>.
+To make a
+<B><A NAME="wide-character constant">wide-character constant</A></B>,
+precede the character constant with an <CODE>L</CODE>.</P>
+
+<P><IMG SRC="char_con.gif" tppabs="http://ccs.ucsd.edu/c/gif/char_con.gif"></P>
+
+<P>Some valid character constants are:</P>
+
+<PRE>
+'a'          '\n'           L'x'
+'abc'        '\0'           L'<$B0>'</PRE>
+
+<P>A <B><A NAME="string literal">string literal</A></B>
+consists of zero or more
+<A HREF="charset.html#Multibyte Characters" tppabs="http://ccs.ucsd.edu/c/charset.html#Multibyte Characters">multibyte characters</A>
+enclosed in double quotes (<CODE>"</CODE>). To make a
+<B><A NAME="wide-character string literal">
+wide-character string literal</A></B>,
+precede the string literal with an <CODE>L</CODE>:</P>
+
+<P><IMG SRC="str_lit.gif" tppabs="http://ccs.ucsd.edu/c/gif/str_lit.gif"></P>
+
+<P>Some valid string literals are:</P>
+
+<PRE>
+""           "Good Night!\n"   L"Kon ban wa"
+"abc"        "\5hello\0Hello"  L"exit is <$B0>"</PRE>
+
+<P>The following table lists all valid
+<B><A NAME="operator token">operator</A></B> or
+<B><A NAME="punctuator token">punctuator</A></B> tokens.
+Tokens in the rightmost column are added by
+<A HREF="lib_over.html#Amendment 1" tppabs="http://ccs.ucsd.edu/c/lib_over.html#Amendment 1">Amendment 1</A>:</P>
+
+<PRE>
+...   &amp;&amp;   -=   &gt;=   ~   +   ;   ]    &lt;:
+&lt;&lt;=   &amp;=   -&gt;   &gt;&gt;   %   ,   &lt;   ^    :&gt;
+&gt;&gt;=   *=   /=   ^=   &amp;   -   =   {    &lt;%
+!=    ++   &lt;&lt;   |=   (   .   &gt;   |    %&gt;
+%=    +=   &lt;=   ||   )   /   ?   }    %:
+##    --   ==   !    *   :   [   #    %:%:</PRE>
+
+<P>Any character standing alone
+<B><A NAME="other token">other</A></B> than one from the
+<A HREF="charset.html#basic C character set" tppabs="http://ccs.ucsd.edu/c/charset.html#basic C character set">basic C character set</A>
+forms a preprocessing token by itself. For example, 
+some other characters often found in character sets
+are <CODE>@</CODE> and <CODE>$</CODE>.</P>
+
+<P>You use other characters for one of two purposes:</P>
+
+<UL>
+<LI>to build string literals, when you create string literals from 
+macro arguments during
+<A HREF="#Expanding Macros">macro expansion</A>
+
+<LI>as part of text that you skip with
+<A HREF="#Conditional Directives">conditional directives</A>
+</UL>
+
+<P>Thus, almost any form that you write will be recognized as a 
+valid preprocessing token. Do not, however, write an unbalanced single 
+or double quote alone on a source line and outside other enclosing 
+quotes, as in:</P>
+
+<PRE>
+#define str(x) #x
+char *name1 = str(O'Brien);     <B>INVALID</B>
+char *name2 = "O'Brien";        <B>valid</B></PRE>
+
+<H2><A NAME="Include Directives">Include Directives</A></H2>
+
+<P>You include the contents of an
+<B><A NAME="include file">include file</A></B> --
+a standard header or another source file --
+in a translation unit by writing an
+<B><A NAME="include directive"><I>include</I> directive</A></B>.
+The contents of the specified
+<A HREF="lib_over.html#standard header" tppabs="http://ccs.ucsd.edu/c/lib_over.html#standard header">standard header</A> or
+<A HREF="charset.html#source file" tppabs="http://ccs.ucsd.edu/c/charset.html#source file">source file</A>
+replace the <I>include</I> directive:</P>
+
+<P><IMG SRC="include.gif" tppabs="http://ccs.ucsd.edu/c/gif/include.gif"></P>
+
+<P>Following the directive name <CODE>include</CODE>, write one of the 
+following:</P>
+
+<UL>
+<LI>a standard header name between angle brackets
+
+<LI>a <A HREF="lib_over.html#filename" tppabs="http://ccs.ucsd.edu/c/lib_over.html#filename">filename</A> between double quotes
+
+<LI>any other form that expands to one of the two previous forms 
+after macro replacement
+</UL>
+
+<P>Some examples are:</P>
+
+<PRE>
+#include &lt;stdio.h&gt;              <B>declare I/O functions</B>
+#include "mydecs.h"             <B>and custom ones</B>
+#include MACHDEFS               <B>MACHDEFS defined earlier</B></PRE>
+
+<P>A standard header name:</P>
+
+<UL>
+<LI>cannot contain a right angle bracket (<CODE>&gt;</CODE>)
+
+<LI>should not contain the sequence that begins a comment (<CODE>/*</CODE>)
+</UL>
+
+<P>A filename:</P>
+
+<UL>
+<LI>cannot contain a double quote (<CODE>"</CODE>)
+
+<LI>should not contain the sequence that begins a comment (<CODE>/*</CODE>)
+</UL>
+
+<P>For maximum portability, filenames should consist of from one 
+to six lowercase letters, followed by a dot (<CODE>.</CODE>), followed by 
+a lowercase letter. Some portable filenames are:</P>
+
+<PRE>
+"salary.c"   "defs.h"       "test.x"</PRE>
+
+<H2><A NAME="Define Directives">Define Directives</A></H2>
+
+<P>You define a macro by writing a
+<B><A NAME="define directive"><I>define</I> directive</A></B>.
+Following the directive name <CODE>define</CODE>,
+you write one of two forms:</P>
+
+<UL>
+<LI>A name <I>not</I> immediately followed by a left parenthesis, 
+followed by any sequence of preprocessing tokens -- to define a 
+macro without parameters.
+
+<LI>A name immediately followed by a left parenthesis with <I>no</I> 
+intervening white space, followed by zero or more distinct
+<B><A NAME="macro parameter">macro parameter</A></B> names
+separated by commas, followed by a right parenthesis, followed 
+by any sequence of preprocessing tokens -- to define a macro with 
+as many parameters as names that you write inside the parentheses:
+</UL>
+
+<P><IMG SRC="define.gif" tppabs="http://ccs.ucsd.edu/c/gif/define.gif"></P>
+
+<P>Three examples are:</P>
+
+<PRE>
+#define MIN_OFFSET  (-17)       <B>no parameters</B>
+#define quit()      exit(0)     <B>zero parameters</B>
+#define add(x, y)   ((x) + (y)) <B>two parameters</B></PRE>
+
+<P>Write a <I>define</I> directive that defines a name currently 
+defined as a macro <I>only</I> if you write it with the identical 
+sequence of preprocessing tokens as before. Where white space is present 
+in one definition, white space must be present in the other. (The 
+white space need not be identical.)</P>
+
+<P>To remove a macro definition, write an
+<B><A NAME="undef directive"><I>undef</I> directive</A></B>:</P>
+
+<P><IMG SRC="undef.gif" tppabs="http://ccs.ucsd.edu/c/gif/undef.gif"></P>
+
+<P>You might want to remove a macro definition
+so that you can define it differently with a
+<A HREF="#define directive"><I>define</I> directive</A>
+or to
+<A HREF="lib_over.html#masking macro" tppabs="http://ccs.ucsd.edu/c/lib_over.html#masking macro">unmask</A>
+any other meaning given to the name.</P>
+
+<P>The name whose definition you want to remove follows the directive 
+name <CODE>undef</CODE>. If the name is not currently defined as a macro, 
+the <I>undef</I> directive has no effect.</P>
+
+<H3><A NAME="Expanding Macros">Expanding Macros</A></H3>
+
+<P>Preprocessing <I>expands</I> macros in all non-directive lines 
+and in parts of some directives that are not skipped as part of an 
+if-group. In those places where macros are expanded, you
+<B><A NAME="macro invocation">invoke</A></B>
+a macro by writing one of the two forms:</P>
+
+<UL>
+<LI>the name of a macro without parameters
+
+<LI>the name of a macro with parameters, followed by a 
+left parenthesis, followed by zero or more
+<B><A NAME="macro argument">macro arguments</A></B> 
+separated by commas, followed by a right parenthesis.
+</UL>
+
+<P>A macro argument consists of one or more preprocessing tokens. 
+You must write parentheses only in balanced pairs within a macro argument. 
+You must write commas only within these pairs of parentheses. For 
+example, using the macros defined in the previous example, you can 
+write:</P>
+
+<PRE>
+    if (MIN_OFFSET &lt; x)         <B>invokes MIN_OFFSET</B>
+        x = add(x, 3);          <B>invokes add</B></PRE>
+
+<P>Following the name of a macro with parameters, you <I>must</I> 
+write one macro argument for each parameter and you <I>must</I> write 
+at least one preprocessing token for each macro argument. Following 
+the name of a macro with parameters, you <I>must not</I> write any 
+directives within the invocation and you <I>must not</I> write the 
+invocation across more than one file. Following the name of a macro 
+with parameters, you <I>can</I> write arbitrary white space before 
+the left parenthesis and you <I>can</I> write the invocation across 
+multiple source lines.</P>
+
+<P>The translator expands a macro invocation by replacing the preprocessing 
+tokens that constitute the invocation with a sequence of zero or more 
+preprocessing tokens. It determines the replacement sequence in a 
+series of steps. This example illustrates most of the steps:</P>
+
+<PRE>
+#define sh(x) printf("n" #x "=%d, or %d\n",n##x,alt[x])
+#define sub_z  26
+    sh(sub_z)                   <B>macro invocation</B></PRE>
+
+<P>The steps, in order, are:</P>
+
+<OL>
+<LI>The translator takes the replacement list from the sequence 
+of any preprocessing tokens (and intervening white space) in the macro 
+definition. It does not include leading and trailing white space as 
+part of the list.
+
+<PRE>
+    printf("n" #x "=%d, or %d\n",n##x,alt[x])</PRE>
+
+<LI>A macro parameter name must follow each <CODE>#</CODE> token
+(or <CODE>%:</CODE> token, with
+<A HREF="lib_over.html#Amendment 1" tppabs="http://ccs.ucsd.edu/c/lib_over.html#Amendment 1">Amendment 1</A>)
+in the replacement list. The translator replaces 
+the <CODE>#</CODE> token and parameter name with a
+<A HREF="#Creating String Literals">created string literal</A>
+made from the corresponding (unexpanded) macro argument.
+
+<PRE>
+    printf("n" "sub_z" "=%d, or %d\n",n##x,alt[x])</PRE>
+
+<LI>Preprocessing tokens must both precede and follow
+each <CODE>##</CODE> token (or <CODE>%:%:</CODE> token, with
+<A HREF="lib_over.html#Amendment 1" tppabs="http://ccs.ucsd.edu/c/lib_over.html#Amendment 1">Amendment 1</A>) in the replacement 
+list. If either token is a macro parameter name, the translator replaces 
+that name with the corresponding (unexpanded) macro argument. The 
+translator then replaces the <CODE>##</CODE> token and its preceding and 
+following tokens with a single preprocessing token that is the
+<B><A NAME="token concatenation">concatenation</A></B>
+of the preceding and following tokens. The result must be a valid 
+preprocessing token.
+
+<PRE>
+    printf("n" "sub_z" "=%d, or %d\n",nsub_z,alt[x])</PRE>
+
+<LI>For any remaining macro parameter names in the replacement list, 
+the translator expands the corresponding macro argument. The translator 
+replaces the macro parameter name in the replacement list with the 
+resulting sequence.
+
+<PRE>
+    printf("n" "sub_z" "=%d, or %d\n",nsub_z,alt[26])</PRE>
+
+<LI>The translator remembers not to further expand
+the macro (<CODE>sh</CODE> in the example) while it rescans
+the replacement list to detect macro invocations
+in the original replacement list or that it may have constructed 
+as a result of any of these replacements. The replacement list can 
+provide the beginning of an invocation of a macro with parameters, 
+with the remainder of the invocation consisting of preprocessing tokens 
+following the invocation.
+</OL>
+
+<P>In the example shown, no further expansion occurs. After string 
+literal concatenation, the resulting text is:</P>
+
+<PRE>
+    printf("nsub_z=%d, or %d\n",nsub_z,alt[26])</PRE>
+
+<P>You can take advantage of rescanning by writing macros such as:</P>
+
+<PRE>
+#define add(x, y)       ((x) + (y))
+#define sub(x, y)       ((x) - (y))
+#define math(op, a, b)  op(a, b)
+    math(add, c+3, d)           <B>becomes ((c+3) + (d))</B></PRE>
+
+<H3><A NAME="Creating String Literals">Creating String Literals</A></H3>
+
+<P>The translator creates a
+<A HREF="#string literal">string literal</A> from a
+<A HREF="#macro argument">macro argument</A>
+(when its corresponding
+<A HREF="#macro parameter">macro parameter</A>
+follows a <CODE>#</CODE> token in the macro definition)
+by performing the following steps, in order:</P>
+
+<OL>
+<LI>The translator discards leading and trailing white space.
+
+<LI>Each preprocessing token in the macro argument appears in the 
+string literal exactly as you spelled it, except that the translator 
+adds a <CODE>\</CODE> before each <CODE>\</CODE> and <CODE>"</CODE>
+within a
+<A HREF="#character constant">character constant</A>
+or string literal.
+
+<LI>Any white space between preprocessing tokens in the macro argument 
+appears in the string literal as a <CODE><I>space</I></CODE> character.
+</OL>
+
+<P>For example:</P>
+
+<PRE>
+#define show(x)  printf(#x "= %d\n", x)
+    show(a   +/* same as space */-1);
+<B>becomes:</B>
+    printf("a + -1= %d\n", a + -1);</PRE>
+
+<P>You can also create a
+<A HREF="#wide-character string literal">
+wide-character string literal</A>:</P>
+
+<PRE>
+#define wcsl(x)  L ## #x
+    wcsl(arigato)               <B>becomes L"arigato"</B></PRE>
+
+<H2><A NAME="Conditional Directives">Conditional Directives</A></H2>
+
+<P>You can selectively skip groups of lines within source files 
+by writing <B>conditional</B> directives. The conditional directives 
+within a source file form zero or more
+<B><A NAME="if-group">if-groups</A></B>:</P>
+
+<P><IMG SRC="if_grp.gif" tppabs="http://ccs.ucsd.edu/c/gif/if_grp.gif"></P>
+
+<P>Within an if-group, you write conditional directives
+to bracket one or more groups of lines, or 
+<B><A NAME="line-group">line-groups</A></B>:</P>
+
+<P><IMG SRC="line_grp.gif" tppabs="http://ccs.ucsd.edu/c/gif/line_grp.gif"></P>
+
+<P>The translator retains no more than one line-group within an if-group. 
+It skips all other line-groups. An if-group has the following general 
+form:</P>
+
+<UL>
+<LI>It begins with an
+<A HREF="#if directive"><I>if</I> directive</A>,
+<A HREF="#ifdef directive"><I>ifdef</I> directive</A>, or
+<A HREF="#ifndef directive"><I>ifndef</I> directive</A>,
+followed by the first line-group that you want to selectively skip.
+
+<LI>Zero or more
+<A HREF="#elif directive"><I>elif</I> directives</A>,
+follow this first line-group, each followed by a line-group
+that you want to selectively skip.
+
+<LI>An optional
+<A HREF="#else directive"><I>else</I> directive</A>,
+follows all line-groups controlled by <I>elif</I> directives,
+followed by the last line-group you want to selectively skip.
+
+<LI>An if-group ends with an
+<A HREF="#endif directive"><I>endif</I> directive</A>.
+</UL>
+
+<P>A <I>line-group</I> is zero or more occurrences 
+of either an if-group or any line other than an <I>if, ifdef, ifndef, 
+elif, else,</I> or <I>endif</I> directive. The translator retains no 
+more than one alternative line-group:
+
+<UL>
+<LI>If the condition is true in the leading <I>if, ifdef,</I> or 
+<I>ifndef</I> directive, the translator retains the first line-group 
+and skips all others.
+
+<LI>Otherwise, if a condition is true in a subsequent <I>elif</I> 
+directive, the translator retains its alternative line-group and skips 
+all others.
+
+<LI>Otherwise, if an <I>else</I> directive is present, the translator 
+retains its alternative line-group.
+
+<LI>Otherwise, the translator skips all line-groups within the if-group.
+</UL>
+
+<P>For example, to retain a line-group in a header file at most 
+once, regardless of the number of times the header is included:</P>
+
+<PRE>
+#ifndef _SEEN
+#define _SEEN
+/* body of header */
+#endif</PRE>
+
+<P>And to retain only one of three line-groups, depending on the 
+value of the macro <CODE>MACHINE</CODE> defined earlier in the translation 
+unit:</P>
+
+<PRE>
+#if MACHINE == 68000
+    int x;
+#elif MACHINE == 8086
+    long x;
+#else    /* all others */
+    #error UNKNOWN TARGET MACHINE
+#endif</PRE>
+
+<H3><A NAME="Conditional Expressions">Conditional Expressions</A></H3>
+
+<P>For an
+<B><A NAME="if directive"><I>if</I> directive</A></B> (or an
+<A HREF="#elif directive"><I>elif</I> directive</A>),
+you write a
+<B><A NAME="conditional expression">conditional expression</A></B> 
+following the directive name <CODE>if</CODE>:</P>
+
+<P><IMG SRC="if.gif" tppabs="http://ccs.ucsd.edu/c/gif/if.gif"></P>
+
+<P>If the expression you write has a nonzero value, then the 
+translator retains as part of the translation unit the line-group 
+immediately following the <I>if</I> directive. Otherwise, the translator 
+skips this line-group.
+The translator evaluates the expression you write by performing 
+the following steps. This example illustrates most of the steps, in 
+order:</P>
+
+<PRE>
+#define VERSION  2
+#if defined x || y || VERSION &lt; 3</PRE>
+
+<OL>
+<LI>The translator replaces each occurrence of the name
+<B><A NAME="defined operator"><CODE>defined</CODE></A></B>, 
+followed by another name or by another name enclosed in parentheses. 
+The replacement is <CODE>1</CODE> if the second name is defined as a macro; 
+otherwise, the replacement is <CODE>0</CODE>.
+
+<PRE>
+#if          0 || y || VERSION &lt; 3</PRE>
+
+<LI>The translator expands macros in the expression.
+
+<PRE>
+#if          0 || y || 2 &lt; 3</PRE>
+
+<LI>The translator replaces each remaining name with <CODE>0</CODE>.
+
+<PRE>
+#if          0 || 0 || 2 &lt; 3</PRE>
+
+<LI>The translator converts preprocessing tokens to
+<A HREF="syntax.html#C Tokens" tppabs="http://ccs.ucsd.edu/c/syntax.html#C Tokens">C tokens</A> and 
+then parses and evaluates the expression.
+
+<PRE>
+#if          1</PRE>
+</OL>
+
+<P>Thus, in this example, the translator retains
+the line-group following the <I>if</I> directive.</P>
+
+<H3><A NAME="Restrictions on Conditional Expressions">Restrictions on Conditional Expressions</A></H3>
+
+<P>In the
+<B><A NAME="if expression">expression</A></B> part of an
+<A HREF="#if directive"><I>if</I> directive</A>,
+you write only
+<A HREF="express.html#integer constant expression" tppabs="http://ccs.ucsd.edu/c/express.html#integer constant expression">
+integer constant expressions</A>, with the following 
+additional considerations:</P>
+
+<UL>
+<LI>You cannot write the
+<A HREF="express.html#sizeof operator" tppabs="http://ccs.ucsd.edu/c/express.html#sizeof operator"><I>sizeof</I></A> or
+<A HREF="express.html#Type Cast" tppabs="http://ccs.ucsd.edu/c/express.html#Type Cast">type cast</A> operators.
+(The translator expands all macro names,
+then replaces each remaining name with 0,
+before it recognizes keywords.)
+
+<LI>The translator may be able to represent a broader range of integers 
+than the target environment.
+
+<LI>The translator represents type <I>int</I> the same as <I>long,</I> 
+and <I>unsigned int</I> the same as <I>unsigned long.</I>
+
+<LI>The translator can translate
+<A HREF="#character constant">character constants</A>
+to a set of code values different from the set
+for the target environment.
+</UL>
+
+<P>To determine the properties of the target environment by writing 
+<A HREF="#if directive"><I>if</I> directives</A>,
+test the values of the macros defined in
+<A HREF="limits.html" tppabs="http://ccs.ucsd.edu/c/limits.html"><CODE>&lt;limits.h&gt;</CODE></A>.</P>
+
+<H3><A NAME="Other Conditional Directives">Other Conditional Directives</A></H3>
+
+<P>The <B><A NAME="ifdef directive"><I>ifdef</I> directive</A></B>
+tests whether a macro name is defined:</P>
+
+<P><IMG SRC="ifdef.gif" tppabs="http://ccs.ucsd.edu/c/gif/ifdef.gif"></P>
+
+<P>The directive:</P>
+
+<PRE>
+#ifdef xyz</PRE>
+
+<P>is equivalent to:</P>
+
+<PRE>
+#if defined xyz</PRE>
+
+<P>The <B><A NAME="ifndef directive"><I>ifndef</I> directive</A></B>
+tests whether a macro name is <I>not</I> defined:</P>
+
+<P><IMG SRC="ifndef.gif" tppabs="http://ccs.ucsd.edu/c/gif/ifndef.gif"></P>
+
+<P>The directive:</P>
+
+<PRE>
+#ifndef xyz</PRE>
+
+<P>is equivalent to:</P>
+
+<PRE>
+#if !defined xyz</PRE>
+
+<P>You can provide an alternative line-group
+within an if-group by writing an
+<B><A NAME="elif directive"><I>elif</I> directive</A></B>:</P>
+
+<P><IMG SRC="elif.gif" tppabs="http://ccs.ucsd.edu/c/gif/elif.gif"></P>
+
+<P>Following the directive name <CODE>elif</CODE>,
+you write an expression just as for an
+<A HREF="#if directive"><I>if</I> directive</A>.
+The translator retains the alternative 
+line-group following the <I>elif</I> directive if the expression is 
+true and if no earlier line-group has been retained
+in the same if-group.</P>
+
+<P>You can also provide a last alternative line-group by writing an
+<B><A NAME="else directive"><I>else</I> directive</A></B>:</P>
+
+<P><IMG SRC="else.gif" tppabs="http://ccs.ucsd.edu/c/gif/else.gif"></P>
+
+<P>You terminate the last alternative line-group
+within an if-group by writing an
+<B><A NAME="endif directive"><I>endif</I> directive</A></B>:</P>
+
+<P><IMG SRC="endif.gif" tppabs="http://ccs.ucsd.edu/c/gif/endif.gif"></P>
+
+<H2><A NAME="Other Directives">Other Directives</A></H2>
+
+<P>You alter the source
+<A HREF="#source line number">line number</A> and
+<A HREF="#source line number">filename</A> by writing a
+<B><A NAME="line directive"><I>line</I> directive</A></B>.
+The translator uses the line number and filename
+to alter the values of the predefined macros
+<A HREF="#__FILE__"><CODE>__FILE__</CODE></A> and
+<A HREF="#__LINE__"><CODE>__LINE__</CODE></A>:</P>
+
+<P><IMG SRC="line.gif" tppabs="http://ccs.ucsd.edu/c/gif/line.gif"></P>
+
+<P>Following the directive name <CODE>line</CODE>, write one of the following:</P>
+
+<UL>
+<LI>a decimal integer (giving the new line number of the line following)
+
+<LI>a decimal integer as before, followed by a string literal (giving 
+the new line number and the new source filename)
+
+<LI>any other form that expands to one of the two previous forms 
+after macro replacement
+</UL>
+
+<P>You generate an unconditional diagnostic message by writing an
+<B><A NAME="error directive"><I>error</I> directive</A></B>:</P>
+
+<P><IMG SRC="error.gif" tppabs="http://ccs.ucsd.edu/c/gif/error.gif"></P>
+
+<P>Following the directive name <CODE>error</CODE>, write any text 
+that the translator can parse as preprocessing tokens. The translator 
+writes a diagnostic message that includes this sequence of preprocessing 
+tokens. For example:</P>
+
+<PRE>
+#if !defined  VERSION
+ #error You failed to specify a VERSION
+#endif</PRE>
+
+<P>You convey additional information to the translator by writing a
+<B><A NAME="pragma directive"><I>pragma</I> directive</A></B>:</P>
+
+<P><IMG SRC="pragma.gif" tppabs="http://ccs.ucsd.edu/c/gif/pragma.gif"></P>
+
+<P>Following the directive name <CODE>pragma</CODE>, write any text 
+that the translator can parse as preprocessing tokens. Each translator 
+interprets this sequence of preprocessing tokens in its own way and 
+ignores those <I>pragma</I> directives that it does not understand.</P>
+
+<P>You introduce comments or additional white space
+into the program by writing a
+<B><A NAME="null directive"><I>null</I> directive</A></B>:</P>
+
+<P><IMG SRC="null.gif" tppabs="http://ccs.ucsd.edu/c/gif/null.gif"></P>
+
+<P>The <I>null</I> directive is the only directive that does not 
+have a directive name following the <CODE>#</CODE> token. For example:</P>
+
+<PRE>
+#
+#  /* this part for testing only */  <B>valid</B>
+#define comment  /* comment only */
+#
+#    comment                         <B>INVALID</B></PRE>
+
+<H2><A NAME="Predefined Macros">Predefined Macros</A></H2>
+
+<P>The translator predefines several macro names.</P>
+
+<P>The macro
+<B><A NAME="__DATE__"><CODE>__DATE__</CODE></A></B>
+expands to a string literal that gives 
+the date you invoked the translator.
+Its format is <CODE>"Mmm dd yyyy"</CODE>. 
+The month name <CODE>Mmm</CODE> is the same as for dates
+generated by the library function
+<A HREF="time.html#asctime" tppabs="http://ccs.ucsd.edu/c/time.html#asctime"><CODE>asctime</CODE></A>.
+The day part <CODE>dd</CODE> ranges from <CODE>" 1"</CODE> to <CODE>"31"</CODE> (a leading <CODE>0</CODE>
+becomes a <CODE><I>space</I></CODE>).</P>
+
+<P>The macro
+<B><A NAME="__FILE__"><CODE>__FILE__</CODE></A></B>
+expands to a string literal that gives the remembered
+<B><A NAME="source filename">filename</A></B>
+of the current source file. You can alter 
+the remembered filename by writing a
+<A HREF="#line directive"><I>line</I> directive</A>.</P>
+
+<P>The macro
+<B><A NAME="__LINE__"><CODE>__LINE__</CODE></A></B>
+expands to a decimal integer constant that gives the remembered
+<B><A NAME="source line number">line number</A></B>
+within the current source file. 
+You can alter the remembered line number by writing a
+<A HREF="#line directive"><I>line</I> directive</A>.</P>
+
+<P>The macro
+<B><A NAME="__STDC__"><CODE>__STDC__</CODE></A></B>
+expands to the decimal integer constant <CODE>1</CODE>.
+The translator should provide another value (or leave the 
+macro undefined) when you invoke it for other than a Standard C environment. 
+For example, you can write:</P>
+
+<PRE>
+#if __STDC__ != 1
+ #error NOT a Standard C environment
+#endif</PRE>
+
+<P>The macro
+<B><A NAME="__STDC_VERSION__"><CODE>__STDC_VERSION__</CODE></A></B>
+expands to the decimal integer constant <CODE>199409L</CODE>.
+The translator should provide another value 
+(or leave the macro undefined) when you invoke it for other than a 
+Standard C environment that incorporates
+<A HREF="lib_over.html#Amendment 1" tppabs="http://ccs.ucsd.edu/c/lib_over.html#Amendment 1">Amendment 1</A>.</P>
+
+<P>The macro
+<B><A NAME="__TIME__"><CODE>__TIME__</CODE></A></B>
+expands to a string literal that gives 
+the time you invoked the translator. Its format is <CODE>"hh:mm:ss"</CODE>, 
+which is the same as for times generated by the library function
+<A HREF="time.html#asctime" tppabs="http://ccs.ucsd.edu/c/time.html#asctime"><CODE>asctime</CODE></A>.</P>
+
+<P>You cannot write these macro names, or the name
+<A HREF="#defined operator"><CODE>defined</CODE></A>, in an
+<A HREF="#undef directive"><I>undef</I> directive</A>.
+Nor can you redefine these names with a
+<A HREF="#define directive"><I>define</I> directive</A>.</P>
+
+<HR>
+<P>See also the
+<B><A HREF="index.html#Table of Contents" tppabs="http://ccs.ucsd.edu/c/index.html#Table of Contents">Table of Contents</A></B> and the
+<B><A HREF="_index.html" tppabs="http://ccs.ucsd.edu/c/_index.html">Index</A></B>.</P>
+
+<P><I>
+<A HREF="crit_pb.html" tppabs="http://ccs.ucsd.edu/c/crit_pb.html">Copyright</A> &#169; 1989-1996
+by P.J. Plauger and Jim Brodie. All rights reserved.</I></P>
+
+</BODY></HTML>
