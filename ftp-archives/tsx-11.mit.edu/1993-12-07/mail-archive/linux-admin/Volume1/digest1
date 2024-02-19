@@ -1,0 +1,679 @@
+From:     Digestifier <Linux-Admin-Request@senator-bedfellow.mit.edu>
+To:       Linux-Admin@senator-bedfellow.mit.edu
+Reply-To: Linux-Admin@senator-bedfellow.mit.edu
+Date:     Mon, 16 Aug 93 20:06:35 EDT
+Subject:  Linux-Admin Digest #1
+
+Linux-Admin Digest #1, Volume #1                 Mon, 16 Aug 93 20:06:35 EDT
+
+Contents:
+Newsgroups: comp.os.linux.admin,comp.os.linux.misc,comp.os.linux
+  Soundcard Compiling... (Garrett D'Amore)
+  Re: Linux and Reliability (Olaf Titz)
+  Re: * [A] SLIP Question: UDP works but TCP doesn't (SLS 1.0.3) (Joe Battle)
+  Re: SLS cron perms are insecure (Juan Marchini)
+  Re: German keymap with pl11 doesn't work? (system admin)
+  Install to /dev/sdb? (PERUCCI, PHILIP A.)
+  Re: Install to /dev/sdb? (Byron A Jeff)
+  Welcome to the comp.os.linux.* hierarchy! (Matt Welsh)
+  Why use shadow? (Eugene Kim)
+  NEW USERS: How to get the Linux FAQ (please read) (Matt Welsh)
+
+----------------------------------------------------------------------------
+
+Path: senator-bedfellow.mit.edu!bloom-beacon.mit.edu!usc!cs.utexas.edu!utnut!torn!spartan.ac.BrockU.CA!dboese
+From: dboese@spartan.ac.BrockU.CA (Darcy Boese)
+Subject: Finally got networking working with SLS 1.03!
+Message-ID: <1993Aug12.160940.15822@spartan.ac.BrockU.CA>
+Organization: Brock University, St. Catharines Ontario
+X-Newsreader: TIN [version 1.1 PL9]
+Date: Thu, 12 Aug 1993 16:09:40 GMT
+Lines: 97
+Xref: senator-bedfellow.mit.edu comp.os.linux.admin:1 comp.os.linux.misc:1 comp.os.linux:55858
+
+Hmm.  Looks like some of those new linux groups were finally created.  I
+suppose that comp.os.linux should become dead soon...  Ah well, I suppose
+I should cross-post this a bit then...
+
+In any case, I finally got my Linux box to network outside the local zone now.
+The fix?  It seems that the "route" command is very order sensitive.  So I put
+everything in a certain particular order and now it works.
+
+But some things don't work:  I can't do an nslookup on addresses in the
+/etc/hosts file, although I can use that file for aliasing.  And the fingering
+doesn't work right:  Nobody on my system has logged in.  Bull.  And solutions
+for that?
+
+Here is my rc.local file:
+---------------------------- rc.local -----------------------------------------
+if [ -x /etc/rc.inet1 ]; then 
+        /bin/hostname -S `cat /etc/host`
+        /etc/rc.inet1 
+        (sleep 2;          # wait for daemons to get a foothold 
+        mount -av -t nfs)&
+else
+        /bin/hostname -S shemp.cosc.brocku.ca
+fi 
+
+if [ -f /etc/lilo/bootargs ]; then
+        (cd /etc/lilo; /bin/sh ./bootargs)
+fi
+if [ -x /etc/clock ]; then
+        /etc/clock -s
+fi
+
+if [ -x /etc/syslogd ]; then
+        syslogd  # turn on logging of su's, logins etc.
+fi
+
+if [ -x /etc/syslogk ]; then
+        syslogk on > /usr/log/kernel&  # log all kernel messages.
+fi
+
+if [ -x /etc/lpd ]; then
+        /etc/lpd        # printer daemon
+fi
+------------------ end of rc.local --------------------------------------------
+
+Notice that I put in /etc/rc.inet1 instead of /etc/rc.net.  Doing that cleared
+up a few problems, as I followed through most of the NET-2 FAQ, and _it_ used
+rc.inet1 and rc.inet2, so _I_ used them.
+
+Here is my (slightly edited) rc.inet1 file:
+------------------------------ rc.inet1 ---------------------------------------
+#!/bin/sh
+# rc.inet1: configure the network interface
+
+# IF YOU HAVE AN ETHERNET CONNECTION, use these lines below to configure the
+# eth0 interface. If you're only using loopback or SLIP, don't include the
+# rest of the lines in this file.
+
+# Edit for your setup.
+IPADDR="my.site.address"  # REPLACE with YOUR IP address!
+NETMASK="my.network.mask"  # REPLACE with YOUR netmask!
+NETWORK="my.network.address"  # REPLACE with YOUR network address!
+BROADCAST="my.broadcast.address"  # REPLACE with YOUR broadcast address, if you
+                           # have one. If not, leave blank and edit below.
+GATEWAY="my.gateway.address"  # REPLACE with YOUR gateway address!
+
+/etc/ifconfig eth0 ${IPADDR} netmask ${NETMASK} broadcast ${BROADCAST}
+# If you don't have a broadcast address, change the above line to just:
+#/etc/ifconfig eth0 ${IPADDR} netmask ${NETMASK}
+
+/etc/route add default gw ${GATEWAY} metric 1
+#/etc/route add ${NETWORK}
+/etc/route add ${IPADDR}
+
+/etc/ifconfig lo 127.0.0.1
+/etc/route add 127.0.0.1
+
+/etc/rc.inet2
+# End of rc.inet1
+------------------------ end of rc.inet1 --------------------------------------
+Notice that all of the addresses are put in this file explicitly, rather than
+figured out from the /etc/hosts file.  For some reason the rc.net script that
+came with the initial SLS 1.03 file mucked up the broadcast address.  Mine was
+aa.bb.cc.255, but it set it to aa.bb.255.255.
+
+Also note that I put the gateway first, skipped the network, then put in the
+local machine, and finally the loopback.  Having skipped over the network seems
+to be what fixed up the seeing-outside-my-zone problem.
+
+I call the rc.inet2 file from rc.inet1.  The file contains almost exactly the
+stuff from the NET-2 FAQ (ie. I copied it from the distribution files into
+/etc instead of /conf/net.  It doesn't matter where it resides as long as it
+can be found.) except that I uncommented the named stuff.  However, doing this
+didn't fix up doing an nslookup on entries in the /etc/hosts file so I'm
+probably going to comment it out again.
+
+I hope this helps some of you other Linuxers get your machines working on the
+network...
+From: garrett@haas.berkeley.edu (Garrett D'Amore)
+Subject: Soundcard Compiling...
+Date: 13 Aug 1993 17:16:44 GMT
+
+I spent part of last night trying to compile soundcard support into the
+kernel.  Unfortunately it did not work.  I was using
+snd-driv-1.0c.tar.gz obtained from sunsite.  I am using kernel pl10
+(from the MCC release).  I have *completely* messed up my source code
+kernel at this point.  Before I try this again, can someone tell me what
+kernel patchlevel the 1.0c distribution is for?  How about 1.0b?  There
+was no doc giving info on kernel releases in the dist files, so this
+might be a wise thing to add, to whoever is maintaining the soundcard
+support drivers... :-)  Thanks!
+
+Oh, while I'm here, I have a simple question.  It relates to WorkMan.
+I don't have OpenLook installed on my system, but I'd like to use
+WorkMan.  I got the binaries off of sunsite, but under XFree86 1.3 and
+pl10 kernel, it seg faulted.  Anyone know, does the program actually
+work?  (Oh, I have a mitsumi CD-ROM, and the 0.3 driver.  I did tell 
+Workman to use /dev/mcd, but to no avail.)  Do I need to recompile it
+for my libs and kernel?  Does it even work with a mitsumi drive?  Hmmm...
+
+Thanks again!
+
+====================================================================
+Garrett D'Amore                 |     garrett@haas.berkeley.edu
+Software Co-Ordinator           |     68 Barrows Hall, UC Berkeley
+Haas Computing Services         |     Ph: 510-643-5923 Fax: 642-4769
+====================================================================
+
+------------------------------
+
+From: s_titz@ira.uka.de (Olaf Titz)
+Crossposted-To: comp.os.linux
+Subject: Re: Linux and Reliability
+Date: 13 Aug 1993 18:24:30 GMT
+
+In article <CBCyLy.4LB@vti.com> johnw@vti.com (John Wiegley) writes:
+> My main question is one of reliability.  What have others experienced
+> using Linux?  pl9-10?  What I need is a system that I can plug in
+
+As for my experience, I can confirm that the system I run - the most
+important applications are UUCP based mail/news and TeX - is
+rock-solid.  Currently I have Linux 0.99.9 installed, but I'm using it
+since 0.11 or so and never had stability problems. Once I got it to
+run, it always kept running.
+
+My advice on configuring a system is: Use only known good hardware,
+i.e. check the compatibility list before purchase even if some may find
+this over-careful. (I think it over-careful myself but if reliability
+is the main concern...) IDE disks are best wrt. headache-less-ness
+(and cheapest, btw.)
+And use only known good software, i.e. the second-newest kernel
+release after having scanned c.o.l. for the most frequently reported
+problems.
+
+Olaf
+
+-- 
+        olaf titz     o       olaf@bigred.ka.sub.org          praetorius@irc
+  comp.sc.student    _>\ _         s_titz@ira.uka.de      LINUX - the choice
+karlsruhe germany   (_)<(_)      uknf@dkauni2.bitnet     of a GNU generation
+what good is a photograph of you? everytime i look at it it makes me feel blue
+
+------------------------------
+
+From: battlej@panix.com (Joe Battle)
+Subject: Re: * [A] SLIP Question: UDP works but TCP doesn't (SLS 1.0.3)
+Date: 13 Aug 1993 21:10:53 -0400
+
+In <LUC.93Aug13114958@krait.es.ele.tue.nl> luc@krait.es.ele.tue.nl (Luc Cluitmans) writes:
+question:
+>>I recently installed LINUX on my 486 machine. Last weekend I tried to get SLIP
+>>working. It works only half: I can get UDP connections but I cannot get TCP
+>>connections! 
+answer:
+>> I'll lay you any odds that it's SLIP header compression. 99pl11 added
+>> header compression (CSLIP). So yourassociates are not using CSLIP and
+>> you are. If you are talking to a SLIP server which doesn't do CSLIP,
+>> only UDP datagrams will get through (they never get their headers
+>> compressed). The fix is to go to linux/net/inet/slip.c
+
+Anyway, 
+        I have had 'similar' problems recently. Using pl11 with CSLIP configed,
+I can use telnet, ftp, and other tcp functions. But, I could not use NFS. This
+was a big problem for me. Experimentation and recompilation showed me that with
+CSLIP off ( just using SLIP ) the amount of error in each packet decreased
+significantly, yet, there was still some error. I believe this error is 
+associated with the calculation of packet lenghts.
+        But, using pl10 kernels, or, using a pl10 client and pl11 server, I can
+use NFS. But, without CSLIP on both ends, I can't use tcp, only udp.
+
+Has anyone else noticed this problem? As soon as I find a fix, I'll post.
+
+regards,
+
+Joe Battle
+battlej@panix.com
+
+
+
+------------------------------
+
+From: marchini@ds18.scri.fsu.edu (Juan Marchini)
+Subject: Re: SLS cron perms are insecure
+Date: Sat, 14 Aug 1993 05:13:06 GMT
+
+In article <24g1md$1ee@urmel.informatik.rwth-aachen.de> klausf@messua.informatik.rwth-aachen.de (Klaus Frank) writes:
+>If you did install from SLS and plan to run the cron daemon on your system, be
+>sure to change the permissions of the directories /usr/spool/cron and 
+>/usr/spool/cron/crontabs from 1777 to 700.
+
+[...stuff deleted...]
+
+just out of curiosity, what should the permissions on the other
+directories in /usr/spool be?  i've got:
+
+777 for ftpd (and for msgs, a directory inside ftpd)
+
+        and
+777 for smail (and for log, a directory inside smail)
+
+it doesn't seem that these should be ther permissions, but there might
+be something i don't realize about these directories, i.e. they might
+need to be set this way.
+
+juan
+
+------------------------------
+
+From: root@hydra.basl.rwth-aachen.de (system admin)
+Subject: Re: German keymap with pl11 doesn't work?
+Date: 14 Aug 1993 14:31:06 GMT
+
+
+In article <24g05fINNb5d@unidoct.Chemietechnik.Uni-Dortmund.DE> sn@plato.chemietechnik.uni-dortmund.de (sn) writes:
+
+>   Hi, I installed SLS 1.02 on my system and upgraded to the pl 11 Kernel,
+>   gcc 2.4.5 and libc 4.4.1
+>   I also got kbd.tar.gz off some ftp server. It contains loadkeys and dump-
+>   keys binary and source.
+>   I can't get the files compiled myself and the binaries don't work either.
+>   The error I'm getting when I try to compile them is
+>   "KEYBD_ALT_GR undefined"
+>   "KEYBD_SHIFT undefined"
+>   etc (some other special keys). I looked in /usr/include/linux/keyboard.h
+>   and there are only things like "KEYBD_L_ALT"/"KEYBD_R_ALT" etc.
+>   Do I need a newer version of the keyboard.tar for pl11?
+>
+>   Any help is appreciated.
+
+There are different versions of loadkey etc. for linux 0.99pl10 and
+pl11. You have to use the right set of utilities for your kernel.
+
+Hope this helps
+
+Tom.
+
+--
+
+
+==========================================================================
+Thomas Voss                                        Phone: +49 0241/807893
+Institute of Semiconductor Electronics - II        Fax:   +49 0241/86165
+Technical University Aachen
+Germany
+
+------------------------------
+
+Crossposted-To: comp.os.linux
+From: SSB1PZP@imcvms.med.navy.mil (PERUCCI, PHILIP A.)
+Subject: Install to /dev/sdb?
+Date: Sat, 14 Aug 1993 14:31:53 GMT
+
+Can both SLS v1.03 and Slackware be installed to the SECOND DRIVE (in my
+case /dev/sdb)?  I have OS/2, and the fine Microsoft offerings on /dev/sda...
+
+===========================================================================
+ Phil Perucci, Systems Programmer   | "I don't speak for any organization
+ ssb1pzp@imcvms.med.navy.mil        |  and no organization speaks for me"
+===========================================================================
+
+------------------------------
+
+Crossposted-To: comp.os.linux
+From: byron@cc.gatech.edu (Byron A Jeff)
+Subject: Re: Install to /dev/sdb?
+Date: Sat, 14 Aug 1993 16:48:45 GMT
+
+In article <CBr716.BuD@nocusuhs.nnmc.navy.mil>,
+PERUCCI, PHILIP A. <SSB1PZP@imcvms.med.navy.mil> wrote:
+>Can both SLS v1.03 and Slackware be installed to the SECOND DRIVE (in my
+>case /dev/sdb)?  I have OS/2, and the fine Microsoft offerings on /dev/sda...
+
+Yes. When you run doinstall just specify whatevery partition you want
+as root (and usr if it's a separate partition) on the command line.
+Type the command by itself to see the possible options.
+
+Also you'll need to set up LILO yourself unless you're using the OS/2
+Bootmanager.
+
+BAJ
+>
+>---------------------------------------------------------------------------
+> Phil Perucci, Systems Programmer   | "I don't speak for any organization
+> ssb1pzp@imcvms.med.navy.mil        |  and no organization speaks for me"
+>---------------------------------------------------------------------------
+
+
+---
+Another random extraction from the mental bit stream of...
+Byron A. Jeff - PhD student operating in parallel!
+Georgia Tech, Atlanta GA 30332   Internet: byron@cc.gatech.edu
+
+------------------------------
+
+From: mdw@TC.Cornell.EDU (Matt Welsh)
+Crossposted-To: comp.os.linux.announce,comp.os.linux.help,comp.os.linux.development,comp.os.linux.misc,comp.os.linux
+Subject: Welcome to the comp.os.linux.* hierarchy!
+Date: 14 Aug 1993 20:47:50 -0400
+
+                 Welcome to the comp.os.linux.* hierarchy!
+
+Background
+=========================================================================
+        This posting is an introduction to the comp.os.linux.* hierarchy 
+        of USENET newsgroups. 
+
+        Linux is a free implementation of UNIX for 80386/80486 machines 
+        covered by the GNU GPL. Most of the development of the Linux 
+        kernel has been done by Linus Torvalds, an internationally 
+        reknowned UNIX wizard from Helsinki, Finland.
+
+        For the past two years or so, the newsgroup comp.os.linux has 
+        grown be one of the most popular groups on USENET. Late in 1992, 
+        a CFV for splitting comp.os.linux was posted; the only group which 
+        passed was comp.os.linux.announce, a moderated newsgroup for Linux 
+        announcements and patches.
+
+        Six months later, during the summer of 1993, another CFV for 
+        splitting comp.os.linux was posted. The voting period for the 
+        comp.os.linux reorganization results ended at 23:59:59 UTC on 
+        4 August 1993 (4:59PM US Pacific Time, 7:59PM US Eastern Time.) 
+        The results are as follows:
+
+        comp.os.linux reorganization results - 1842 votes
+
+         Yes   No  : 2/3? >100? : Pass? : Group
+         ---- ---- : ---- ----- : ----- : -------------------------------
+         1692  135 :  Yes   Yes :   Yes : comp.os.linux.admin
+         1741   90 :  Yes   Yes :   Yes : comp.os.linux.development
+         1647  177 :  Yes   Yes :   Yes : comp.os.linux.help
+         1660  155 :  Yes   Yes :   Yes : comp.os.linux.misc
+
+
+        Because of this split, the newsgroup comp.os.linux will be 
+        deleted on 11 November 1993. The new newsgroups will be created 
+        on 11 August 1993. This posting describes these newsgroups, 
+        including comp.os.linux.announce, which will remain entact.
+
+
+General Policy
+=========================================================================
+        The general policy for the Linux newsgroups is simple. Who sets
+        the policy? We all do. All of us on USENET are interested in
+        communicating openly about a number of topics. That's why we
+        have USENET. If you want the Linux newsgroups to work for you,
+        a few suggestions:
+
+        * Read the Linux FAQ and follow the newsgroups for some time 
+          before posting questions. This is very important. comp.os.linux 
+          suffered from HUGE amounts of noise and traffic because much 
+          of the growing readership never bothered to READ the newsgroup;
+          they only posted questions.
+          
+          The same thing will happen with the new newsgroups unless you 
+          read the FAQ (found on sunsite.unc.edu in the file 
+          pub/Linux/docs/FAQ) and read the newsgroup for some time before 
+          posting questions. Chances are, your question has already been
+          recently answered, and a simple browsing of the newsgroup
+          will answer it. We suggest using a threaded newsreader such as
+          "trn" which will allow you to browse and mark articles by 
+          subject, so you don't have to read each and every article in
+          each newsgroup.
+
+        * Crossposting between the Linux newsgroups is STRONGLY 
+          discouraged. If you do crosspost questions between Linux 
+          newsgroups, expect to be flamed to oblivion. The reason we
+          have a newsgroup split is to categorize discussions into 
+          separate newsgroups. Crossposting negates this effect. 
+          If your posting cannot fit into ONE of the newsgroups
+          c.o.l.admin, c.o.l.help, or c.o.l.development, then you 
+          should post it to c.o.l.misc. 
+
+          The one exception is for announcements. Occasionally, an
+          important announcement (such as this one) will be crossposted
+          between c.o.l.announce and one or more of the other c.o.l.*
+          groups. These announcements must be approved by the .announce
+          moderator; see below.
+
+        * Reply to questions via e-mail if at all possible. While 
+          discussion in the newsgroups is encouraged, if someone is
+          asking a simple question to which the answer is well-known,
+          there is no reason to post the reply. Don't assume that 
+          the person posting the question actually reads the newsgroup
+          or will even note your followup if they do. Reply via e-mail
+          unless the reply is of general interest. 
+
+        * Don't flame newbies. Over the course of the past few months,
+          the Linux community has developed an oversensitive ego and
+          a reputation for being unfriendly towards newcomers, mostly
+          because of unwarranted flaming by a handful of righteous 
+          individuals. If someone posts, saying, "Hi! I'm new to
+          this group! What is Linux?" (which will inevitably happen
+          as the new newsgroups are propagated), DO NOT FLAME THEM.
+          When someone sees a new newsgroup pop up within "rn", they
+          are justifiably curious about the new group and probably
+          don't know that well over 80,000 people who know EVERYTHING
+          about Linux read the group. Right? 
+
+          Instead of being rude, you can send a polite note to the
+          poster, saying, "Hello, Linux is a free implementation of
+          UNIX for the 386 and 486. You can get the FAQ from 
+          sunsite.unc.edu in /pub/Linux/docs. Let me know if I can
+          be of help!". That's all. Not difficult, eh? You can even
+          save your stock reply in a file and simply send form-letters
+          to newbies if you wish. But there is very little point in
+          flaming or ever being rude. It goes against everything that
+          Linux can and should be. 
+
+          Just remember that nobody knows everything---not even Linus---
+          and that you were a newbie once, too. :)
+
+
+comp.os.linux.announce
+=========================================================================
+        Comp.os.linux.announce is a moderated newsgroup for Linux 
+        announcements and source patches. The purpose of this group was
+        to get all of the ``important'' Linux information out of the
+        regular newsgroup and into a place where all Linux users could see
+        the important announcements without having to wade through a 
+        jungle of other postings. So far, this group has been very 
+        successful. 
+
+        The moderators for this group are myself (Matt Welsh, 
+        mdw@tc.cornell.edu) and Lars Wirzenius (wirzeniu@cc.helsinki.fi). 
+        We will be sharing the moderator duty, and backing each other up 
+        to make sure that postings to this group will be approved as soon 
+        as possible after they're submitted.
+
+        Submissions to this group should be mailed to the address:
+                linux-announce@tc.cornell.edu
+
+        If you have any problems or questions about c.o.l.announce, please 
+        send mail to the moderators at
+                linux-announce-request@tc.cornell.edu
+        Or simply mail us directly. This is not a request address for 
+        mailing list subscription; see below.
+
+        A separate posting details the guidelines for submitting to this 
+        group.  I plan to approve just about anything that's posted to this 
+        group, except for questions or discussions about Linux. So, please, 
+        post away.  :)
+
+        There are also archives of comp.os.linux.announce available at a 
+        number of Linux FTP sites: check 
+                sunsite.unc.edu:/pub/Linux/docs/linux-announce.archive
+
+        There is a mailing list mirror of the comp.os.linux.announce 
+        newsgroup; to join, send mail to
+                linux-activists-request@niksula.hut.fi
+        With the line
+                X-Mn-Admin: join ANNOUNCE
+        at the top of the body (not in the subject). Approved postings to 
+        c.o.l.announce will automatically be mailed to this mailing list 
+        channel.
+
+
+comp.os.linux.admin     
+=========================================================================
+        This newsgroup was created simply to thwart the unique newsgroup
+        acronym "c.o.l.a", previously used by c.o.l.announce. However,
+        this newsgroup is also used for discussions and questions about
+        running Linux systems, either in a single-user or multi-user
+        environment.
+
+        Clearly, there is no large distinction between c.o.l.admin and
+        c.o.l.help. However, .admin should be mostly used for discussions
+        about RUNNING Linux, not USING or PROGRAMMING it. Unfortunately,
+        especially with Linux, the line between system administrator and
+        system user is very fuzzy. In short, we anticipate c.o.l.admin
+        to be mostly about questions with installing, setting up, and
+        configuring Linux systems, as well as other discussions relating
+        to system administration. 
+
+
+comp.os.linux.development
+=========================================================================
+        c.o.l.development, or "c.o.l.d" for short, is a newsgroup for 
+        questions and discussions about Linux kernel and systems-level 
+        development. Please note that this is a newsgroup about 
+        development OF Linux, not development FOR Linux. In other words, 
+        c.o.l.d isn't for questions about programming or porting software 
+        to Linux. Instead, this is a newsgroup for discussions about 
+        developing the Linux kernel itself, including writing device 
+        drivers, adding new features, and so on. In addition, discussions
+        about development of shared libraries, and other essential 
+        systems-level projects, are welcome here. 
+
+        Hopefully, this newsgroup will embody some of the content and
+        scope of the linux-activists mailing list channels such as GCC, 
+        KERNEL, SCSI, and NET.
+
+
+comp.os.linux.help
+=========================================================================
+        Comp.os.linux.help is perhaps the most general of Linux 
+        newsgroups. It is for any general user, programming, or 
+        setup questions and discussion about Linux. If your question
+        is about Linux development, post to c.o.l.development. If
+        it is about system administration, post to c.o.l.admin. 
+        However, if your question is of a more general nature, such
+        as "How do I set up Linux for use with an NE2000 card?",
+        c.o.l.help is your place. 
+
+        Remember that you should not crosspost between .help and
+        other Linux newsgroups. This means that if you are asking for
+        help in .development, that's fine, but .help is for those
+        questions which don't fit into .admin and .development.
+
+
+comp.os.linux.misc
+=========================================================================
+        This group is the canonical ``catch-all'' for discussions and 
+        questions which don't fit into the other Linux newsgroups.
+        While c.o.l.help is generally for questions, c.o.l.misc is for
+        discussions of a general nature about Linux, such as setting up
+        a file hierarchy standard, questions about Linus' personal life
+        and virtual beer, and the inevitable flame war. Again, it should 
+        be noted that crossposting between c.o.l.misc and other Linux 
+        newsgroups is strongly discouraged. If your posting or question 
+        does not fit into ONLY ONE of the other Linux newsgroups, post 
+        it to .misc.
+
+
+Comments
+=========================================================================
+        If you have questions or comments about this document, please
+        direct them to mdw@tc.cornell.edu. Flames to /dev/null; cheques
+        and money orders to Linus Torvalds. Thanks.
+
+-- 
+Matt Welsh, mdw@tc.cornell.edu
+"On the Internet, nobody knows you're a dog."
+
+------------------------------
+
+Subject: Why use shadow?
+From: eekim@husc11.harvard.edu (Eugene Kim)
+Date: 14 Aug 93 23:39:18 EDT
+
+I installed a version of SLS Linux ages ago.  It used the normal
+passwd stuff for login, etc.  When I installed a more recent
+version of of SLS, I noticed it had switched to using shadow
+passwords.
+
+What is the advantage to using shadow versus just passwd?  I
+actually seemed to have more trouble with shadow; when I use
+useradd, shadow automatically creates a password for me
+(a problem I got around by making the password expire 
+immediately).
+
+Using shadow also prevents me from just editing the passwd
+file to add new users.  Does anyone know why shadow is better
+than passwd?
+
+-- 
+Eugene Kim '96                     |   "Give me a place to stand, and I will
+INTERNET: eekim@husc.harvard.edu   |    move the earth."        --Archimedes
+
+------------------------------
+
+From: mdw@TC.Cornell.EDU (Matt Welsh)
+Crossposted-To: comp.os.linux.help,comp.os.linux.development,comp.os.linux.misc
+Subject: NEW USERS: How to get the Linux FAQ (please read)
+Date: 15 Aug 1993 08:58:04 -0400
+
+NEW USERS: WHERE TO GET THE LINUX FAQ (please read)
+
+PLEASE: EVERYONE read the FAQ for this group before posting questions. Many 
+people (myself included) worked hard to produce the FAQ to accurately answer 
+all of your questions. The new version of the FAQ (with many updates, 
+clarifications, etc.) will only come out every month! So you won't see it 
+posted that often. In the meantime you'll have to get it in one of the
+following ways:
+
+1)  ftp to tsx-11.mit.edu. It's the directory /pub/linux/docs/FAQ. 
+    It's split up into 5 files: the table of contents and the four parts of
+    the FAQ itself. Each part is about 50K.
+
+or  ftp to sunsite.unc.edu. It's the file /pub/Linux/docs/FAQ. This is one
+    big ASCII file containing the entire FAQ (about 200K).
+
+or  ftp to any news.answers archive site. For example, you can find 
+    Linux-related postings from news.answers in the directory
+    /usenet/comp.os.linux and /usenet/comp.os.linux.announce on ftp.uu.net.
+
+2)  If you don't have FTP access, you can retrieve it via the mailserver at
+    rtfm.mit.edu. Send mail to mail-server@rtfm.mit.edu with the word "help" 
+    in the body.
+or  If you simply can't find the FAQ, I will mail it to you myself. Just
+    send me mail (mdw@tc.cornell.edu).
+
+3)  The most recent FAQ will be posted to comp.os.linux, comp.os.linux.announce,
+    and news.answers every month (if you want to wait...).
+
+FOR FURTHER INFORMATION: Read the "Meta-FAQ" posted weekly to c.o.l.announce
+(also available from the various FTP sites). It gives you all of the pointers 
+on where to look for Linux information.
+
+Thanks.
+
+mdw
+
+-- 
+Matt Welsh, mdw@tc.cornell.edu
+"On the Internet, nobody knows you're a dog."
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Admin-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.admin) via:
+
+    Internet: Linux-Admin@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Admin Digest
+******************************

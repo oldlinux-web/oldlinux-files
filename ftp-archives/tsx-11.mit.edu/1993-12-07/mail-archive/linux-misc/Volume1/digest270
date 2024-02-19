@@ -1,0 +1,620 @@
+From:     Digestifier <Linux-Misc-Request@senator-bedfellow.mit.edu>
+To:       Linux-Misc@senator-bedfellow.mit.edu
+Reply-To: Linux-Misc@senator-bedfellow.mit.edu
+Date:     Thu, 4 Nov 93 05:13:21 EST
+Subject:  Linux-Misc Digest #270
+
+Linux-Misc Digest #270, Volume #1                 Thu, 4 Nov 93 05:13:21 EST
+
+Contents:
+  Re: Hurd status and call for volunteers (Michael I Bushnell)
+
+----------------------------------------------------------------------------
+
+From: mib@geech.gnu.ai.mit.edu (Michael I Bushnell)
+Crossposted-To: gnu.misc.discuss
+Subject: Re: Hurd status and call for volunteers
+Date: 04 Nov 1993 03:54:46 GMT
+
+In article <SBO.93Nov3112602@bcars656.bnr.ca> sbo@bcars656.bnr.ca (Stephane Boucher) writes:
+
+   Where can one get this paper?
+
+Here is the most recent.  As it happens, this also addresses some of
+the politics of operating system design.
+
+--- Yo!  Emacs!  This is -*- Text -*- ! ---
+
+PART 1 -- What we are doing
+
+                TOWARDS A NEW STRATEGY OF OPERATING SYSTEM DESIGN
+
+The fundamental purpose of an operating system is to enable a variety
+of programs to share a single computer efficiently.  Efficiency
+demands things such as memory protection, preemptively scheduled
+timesharing, and coordinated access to I/O peripherals.  In addition,
+operating systems can allow a variety of users to share a computer
+efficiently.  The same general areas apply here as well: preventing
+users from harming each other, enabling them to share without prior
+arrangement, and mediating access to physical devices.
+
+On today's computer systems, implementing these goals usually involves
+a large program, called the kernel, which mediates all these
+exchanges.  Since this program must be accessible to all user
+programs, it becomes a natural place to add functionality to the
+system.  As time goes by, more and more gets added to the kernel,
+because the only model for interaction between processes is that of
+specific, individual services provided by the kernel.
+
+The traditional system allows users to add components to the mammoth
+shared library "vmunix" only if they understand most of that library,
+and only if they have a privileged status within the system.  Testing
+these new components requires a much more painful edit-compile-debug
+cycle than other programs, and cannot be done while others are using
+the system.  Bugs usually cause fatal system crashes, further
+disrupting others' use of the system.  All of the kernel is usually
+non-pageable, [fn: There are systems with pageable kernels.  However,
+deciding what can be pageable is difficult and error prone.  As well,
+the mechanisms are usually quite complex, making them difficult to use
+by people wanting to add simple extensions.] further adding to the
+cost of adding functions to it.
+
+Because of these restrictions, functionality which properly belongs
+"behind" the wall of the traditional kernel is usually left out of
+systems unless it is absolutely mandatory.  Many good ideas, best
+implemented with an open/read/write interface cannot be implemented
+because of the problems inherent in the monolithic nature of
+traditional systems.  Further, even for those with the endurance to
+implement such ideas, only those who are privileged users of their
+computers can do so.  The software copyright system, preventing
+unlicensed people from even reading the kernel source, only compounds
+the problem still more.
+
+Some systems have addressed these difficulties.  Smalltalk-80 and the
+Lisp Machine both represent one method of getting around the problem.
+System code is not distinguished from user code; all of the system is
+accessible to the user, and can be changed as need be.  Both systems
+were built around languages that facilitated such easy replacement and
+extension, and were moderately successful.  These systems, however,
+were fairly poor at insulating users and programs from each other,
+thus failing one of the principle goals of operating system design.  
+
+Most projects using the Mach 3.0 kernel today carry on the same
+tradition of operating system design.  The internal structure of the
+system has changed, but the same heavy barrier between user and system
+remains.  The single-servers, while fairly easy to construct, inherit
+quite naturally all the deficiencies of the monolithic kernels from
+which they came.
+
+Most multi-server projects do somewhat better.  Much more of the
+system is pageable.  The system is more easily debugged, and testing
+of new system components need not interfere with other users.  But
+there is still a wall between the user and the system, and no user can
+cross that wall without special privilege.
+
+The GNU Hurd, by contrast, is designed to make the area of "system"
+code as limited as possible.  Users are only required to communicate
+with the kernel; the rest of the system is replacable dynamically.
+Users can use whatever parts of the remainder of the system they want,
+and can add components themselves, easily, for other users to take
+advantage of.  No mutual trust need exist in advance for users to use
+each other's services, nor does the system become vulnerable by
+trusting the services of arbitrary users.
+
+We have done this by identifying those components of the system which
+users must use in order to communicate with each other.  One of these
+is a mechanism responsible for identifying users' identities.  This
+program is called the authentication server.  Programs must
+communicate, each with an authentication server they trust, in order
+to establish each other's identities.  The other is a mechanism for
+establishing control over system components by the superuser, and
+global bookkeeping operations.  This server is called the process
+server.  
+
+No user program needs to communicate with the process server at all;
+it is only necessary for users which require its services.  The
+authentication server is only necessary for programs which wish to
+establish their identity to another agent.  All remaining services in
+the system carry no special status.  This includes the network
+implementation, the filesystems, the exec mechanism (including
+setuid), and so forth.
+
+
+
+                THE TRANSLATOR MECHANISM
+
+The Hurd uses Mach ports primarily as methods for communicating
+between users and servers.  Each port implements a particular set of
+protocols, representing operations that can be undertaken on the
+underlying object represented by the port.  Some of the protocols
+specified by the Hurd are the I/O protocol, used for generic I/O
+operations; the file protocol, used for filesystem operations; the
+socket protocol, used for network operations; the process protocol,
+used for manipulating processes; and so forth.  
+
+Most servers are accessed by opening files.  Normally, opening a file
+results in a port associated with that file, owned by the same server
+as the directory containing the file.  For example, a disk based
+filesystem would normally be serving a large number of ports, each
+representing an open file or directory.  When a new file is opened the
+server creates a new port, associates it with the file, and returns a
+send right to the user.
+
+However, a file can have a "translator" associated with it.  In this
+case, rather than returning its own port referring to the contents of
+the file, the server executes a program, called the translator.  This
+program is provided a port to the actual contents of the file, and is
+then asked to return a port to the original user to complete the open
+operation.  
+
+This mechanism is used quite obviously for mount.  A mount point would
+have a translator associated with it.  When a user opens the mount
+point, the translator, in this case, a program which understands the
+disk format of the mounted filesystem, is executed, and returns a port
+to the user.  Once the translator is started, it need not be run
+again, unless it dies; the parent filesystem retains a port to the
+translator to use in further requests.  Translators are guaranteed
+that new programs will not be started for further open operations.
+
+Translators can be associated with files by the owner of the file,
+needing no additional permission.  As a result, any program can be
+specified as a translator.  Obviously the system will not work
+properly if the translator does not implement the file protocol
+correctly, or at all.  The system is so constructed, however, to cause
+an interruptible hang to be the worst possible result.  
+
+One way to use translators, then, is to access hierarchically
+structured data using the file protocol.  All the complexity of the
+user interface to the ftp program, for example, is then removed.
+Users need only know that a particular directory represents FTP, and
+can use all the standard file manipulation commands, ls, cp, mv, and
+so forth, to access the remote system, rather than learning a new set.
+Similarly, the complexity of tar can be eased by a simple translator.
+[fn: Such transparent access to tar would not necessarily be cheap,
+though it would be convenient.]
+
+
+                GENERIC SERVICES
+
+Another way to use translators is to use the filesystem as a
+rendezvous for interfaces which are not similar to files.  Consider a
+service which implements some version of the X protocol using Mach
+messages as an underlying transport.  For each X display, a file can
+be created with the appropriate program as its translator.  X clients
+would open that file.  At that point, most file operations (read and
+write, for example) would not be useful, but new operations
+(XCreateWindow or XDrawText) might become meaningful.  In this kind of
+case, the filesystem protocol is used further only to manipulate
+characteristics of the node used for the rendezvous.  The node need
+not support I/O operations, though it should reply to any such
+messages with a "message not understood" return code.  (If MiG stubs
+are used to demultiplex messages, this will happen automatically.)
+
+This technique is used to contact most of the services in the Hurd
+which are not structured like hierarchical filesystems.  For example,
+the password server, which hands out authorization tags in exchange
+for passwords, is contacted this way.  Network protocol servers as
+well are contacted in this fashion.  Roland McGrath thought up this
+use of translators.
+
+
+                CLEVER FILESYSTEM PICTURES
+
+The third common method of using translators in the Hurd is to present
+a filesystem-like view of another part of the filesystem, with some
+semantics changed.  For example, it might be nice to have a filesystem
+which cannot be changed, but records changed versions of its files
+elsewhere.  (This might be useful for source code management.)  A
+translator is available which presents "that directory" with all
+changes going "over there instead".  
+
+Similarly, a translator is available which creates a directory which
+is a conceptual union of a number of other directories, with collision
+resolution rules of various sorts.  A variety of other ideas have been
+presented which do similar things.
+
+
+                WHAT THE USER CAN DO
+
+None of these translators gain extra privilege by virtue of being
+hooked into the filesystem.  Translators run with the uid of the owner
+of the file being translated, and can only be set or changed by that
+owner.  The I/O and filesystem protocols are carefully designed to
+allow their use by mutually untrusting clients and servers.
+
+Translators are just ordinary programs.  There are a variety of
+facilities in the GNU C library to make common sorts of translators
+easier to write.  Some translators which might appear to need special
+privilege are those which allow setuid exec or the password server
+referred to above.  In fact, these translators could be run by anyone.
+Only if they are set on a root-owned node, however, would they be able
+to successfully provide all their services.  This is analogous to
+letting any user call the reboot system call, but only honoring it if
+that user is root.
+
+
+                WHY THIS IS SO DIFFERENT
+
+What this system organization lets users do is completely novel in the
+Unixoid world.  To this point, operating systems have kept huge
+portions of this functionality in the realm of system code, thus
+preventing its modification and extension, except in cases of extreme
+need.  Individual users cannot replace parts of the system in their
+programs no matter how much easier that would make their task, and
+system managers are loath to install random tweaks off the net into
+their kernels.
+
+In our system, users can change almost all of the things which are
+decided for them in advance by traditional systems.  In combination
+with the tremendous control given by the Mach kernel over task address
+spaces and so forth, for the first time we have a system in which
+users will be able to replace parts of the system they dislike,
+without disrupting other users of the same system.
+
+Most Mach-based operating systems to date have concentrated, instead,
+on implementing a wider set of the "same old" Unix semantics in a new
+environment.  By contrast, we are extending those semantics in ways
+that allow users to bypass or replace them, virtually arbitrarily.
+
+
+PART 2 -- What we are doing, in detail
+
+                THE AUTHENTICATION SERVER
+
+One of the most central servers in the Hurd is the authentication
+server.  Each port to the authentication server identifies a user, and
+is associated by the authentication server with an "id block".  Each
+id block contains a set of user ids and a set of group ids.  Either
+set may be empty.  This server is not the same as the "password
+server" referred to above.
+
+There are three services exported by the authentication server.
+First, the authentication server provides simple boolean operations on
+authentication ports.  Given a two authentication ports, the
+authentication server will provide a third port representing the union
+of the two sets of uids and gids.  
+
+Second, the authentication server allows any user with a uid of zero
+to create an arbitrary authentication port.
+
+Finally, the authentication server provides RPC's which allow mutually
+untrusting clients and servers to establish identity and pass initial
+information on each other.  This is crucial to the security of the
+filesystem and I/O protocols, for example.
+
+Any user could write a program which implements the authentication
+protocol.  This does not, however, violate the security of the system.
+When a given service needs to authenticate a user, it communicates
+with its trusted authentication server.  If that user is using a
+different authentication server, the transaction will fail, and the
+server can refuse to communicate further.  Because, in effect, this
+forces all programs on the system to use the same authentication
+server, we have designed its interface to make any safe operation
+possible, and to include no extraneous operations.  (This is why
+passwords are implemented in a different server.)
+
+
+                THE PROCESS SERVER
+
+The process server has undergone much change in the system design.
+Originally it was to be responsible for much of the mechanics of
+signal delivery, process creation and destruction, and so forth.  We
+realized, however, that virtually all of these features did not need
+to be in a global system server.  
+
+The process server, in the final design, acts as an information
+categorization repository.  There are four main services supported by
+the process server.
+
+First, the process server keeps track of generic host-level
+information not handled by the Mach kernel.  The hostname, the hostid,
+the system version, and so forth are maintained by the process server.
+
+Second, the process server maintains the Posix notions of sessions and
+process groups, for the convenience of programs which wish to use
+Posix features.
+
+Third, the process server maintains a one-to-one mapping between tasks
+and processes.  Every task is assigned a pid.  Processes can register
+a message port with the process server, which will then be given out
+to any other program which requests it.  The process server makes no
+attempt to keep these message ports private, so user programs need to
+implement whatever security they need themselves.  (The C Library,
+which normally implements reception of messages on the message port,
+provides convenient functions for doing so.)  Processes can tell the
+process server their current argv and envp values; the process server
+will then provide to those requesting it a vector of the arguments and
+environment for any process.  This is useful in writing ps-like
+programs, as well as making it easier to hide or change this
+information.  None of these features is mandatory.  Programs are free
+to disregard all of this if they wish, and never register themselves
+with the process server at all.  They will still have a pid assigned,
+however.
+
+Finally, the process server implements "process collections", which
+are used to collect a number of process message ports at the same
+time.  Also, facilities are provided for converting between pids,
+process server ports, and Mach task ports, all the while ensuring the
+security of the ports managed.
+
+It is important to stress that that the process server is optional.
+Because of restrictions in Mach, programs must run as root in order to
+identify all the tasks in the system, but given that, multiple process
+servers could co-exist, each with their own clients, giving their own
+model of the universe.  Those process server features which do not
+require root privileges to be implemented could be done as per-user
+servers, for those user programs which wish to do recordkeeping in
+that fashion.  The user's hands are not tied.
+
+
+                TRANSPARENT FTP
+
+Transparent FTP is an intriguing idea whose time has come.  The
+popular ange-ftp package available for GNU Emacs makes access to FTP
+files virtually transparent to all the emacs file manipulation
+functions.  Transparent FTP does the same thing, but in a system wide
+fashion.  This server is not yet written; the details of its access
+remain to be fleshed out, and will doubtless change when we have
+experience using the server.
+
+In a BSD kernel, a transparent FTP filesystem would be no harder to
+write than it is in the Hurd.  But mention the idea to a BSD kernel
+hacker, and the response is that "such a thing doesn't belong in the
+kernel".  In a sense, this is correct.  It violates all the layering
+principles of such a system to place such a thing in the kernel.  The
+unfortunate side effect, however, is that the design methodology
+(which is based on preventing users from changing things they don't
+like) is being used to prevent system designers from making things
+better.  
+
+In the Hurd, there are no obstacles to doing transparent FTP.  A
+translator will be provided for the node /ftp.  The contents of /ftp
+will not be directly listable, though further subdirectories will.
+The will have a variety of possible formats.  If I want to access some
+files on uunet, for example, I might do
+`cd /ftp/ftp.uu.net:anonymous:mib@gnu'.  If I want to access some
+files on an account I have elsewhere, I might do 
+`cd /ftp/unmvax.cs.unm.edu:mike:my-password-here'.  Parts of this
+could be left out, and the transparent FTP program would read them
+from my .netrc file.  In the last case, this would allow me to do
+simply `cd /ftp/unmvax.cs.unm.edu'; the rest of the information is
+present in my .netrc file already.
+
+There is no need to do a `cd' first--I can use any file commands I
+want.  If I want to implement RFC 1097 (the Telnet Subliminal Message
+Option), I can just type `more /ftp/ftp.uu.net/inet/rfc/rfc1097'.  I
+can use a copy command if I will need it frequently, or just directly
+load the file into my emacs.
+
+
+                FILESYSTEMS
+
+We are implementing ordinary filesystems as well.  The initial release
+of the system will contain a filesystem upward compatible with the
+Fast File System as found in BSD 4.4.  In addition to the ordinary
+semantics, we will provide the recording of translators, thirty-two
+bit user ids and group ids, and a new id per file, called the "author"
+of the file, which can be arbitrarily set by the owner.  In addition,
+because users in the Hurd can have multiple uids, or even none, there
+is an additional set of permission bits providing access control for
+"unknown user" (no uids) as distinct from "known but arbitrary user"
+(some uids).  The latter category is the existing "world" category of
+file permissions.
+
+We plan to implement the Network File System protocol, using the 4.4
+BSD implementation as a starting point.  We will also implement a
+log-structured filesystem, using the same ideas as the work at Sprite,
+but probably not the same format.  We may design our own network file
+protocol as well, or we may just extend NFS to rid it of deficiencies.
+We will also implement various "little" filesystems, such as the MSDOS
+filesystem, to help people move files between GNU and other operating
+systems on the same hardware.
+
+
+                TERMINALS
+
+We will have an I/O server to implement the terminal semantics of
+Posix.  The C Library has features for keeping track of the
+controlling terminal and arranging to have the proper job control
+signals sent at the proper times, as well as obeying keyboard and
+hangup signals from the terminal driver.  
+
+Programs will be able to insert the terminal driver into
+communications channels in a variety of ways.  Servers like rlogind,
+for example, will be able to insert the terminal protocol onto their
+network communication port.  Pseudo-terminals will not be necessary,
+though the will be provided for backward compatibility with older
+programs--no programs in GNU will depend on them.  
+
+Nothing about the terminal driver is forced upon users.  The terminal
+driver allows a user to get at the underlying communications channel
+easily, and to either bypass the terminal driver on an as-needed
+basis, or entirely, or even substitute a different terminal
+driver-like program.  In the latter case, provided the alternate
+program implements the necessary interfaces, it will be used by the C
+Library exactly as if it were the ordinary terminal driver.
+
+Because of this flexibility, the original terminal driver will not
+provide complex line editing features, restricting itself to the
+behavior found in Posix and BSD.  We plan, eventually, to have a
+readline-like terminal driver, which will provide complex line-editing
+features for those users who wish to use it.
+
+The terminal driver will probably not support high-volume rapid data
+transmission (such as is required by UUCP or slip) very well.  Those
+programs, however, do not need any of its features, and will be
+modified to use the underlying Mach device ports for terminals, which
+do efficiently support moving large amounts of data.
+
+
+                EXECUTING PROGRAMS
+
+The mechanics of implementing the execve call are distributed between
+three programs.  The library handles marshalling the argument and
+environment vectors.  It then sends a message to the file server
+holding the file to be executed.  The file server checks execute
+permissions, making whatever changes it desires in the exec call.  For
+example, if the file is marked setuid and the fileserver has the
+ability, it will change the user identification going to the new
+image appropriately.  The file server also decides if programs which
+had access to the old task should continue to have access to the new
+task.  If the file server is augmenting permissions, or executing an
+unreadable image, for example, then the exec needs to take place in a
+new Mach task to maintain security.  (The process server contains some
+special features to allow the new task to keep the pid of the old task
+in this case, thus preserving Posix semantics.)
+
+After deciding the policy associated with the new image, the
+filesystem calls the exec server to load the task.  The exec server,
+written using the GNU BFD (Binary File Descriptor) library, loads the
+image.  BFD supports a large number of object file formats; almost any
+object file format it supports will be executable.  The exec server
+also recognizes scripts starting with `#!' and does the right thing
+for them.  
+
+It was thought that it would be nice to make it easy for users to have
+their own exec servers.  Roland McGrath thought of the following
+technique.  The standard exec server also looks at the environment of
+the new image; if it contains a variable EXEC_SERVERS then it uses the
+programs specified there as exec servers instead of the system
+default.  (This is, of course, not done for execs that the file server
+has requested be kept secure.)
+
+The new image starts running in the C Library, which sends a message
+to the exec server to get the arguments, environment, and other state
+(umask, current directory, etc.).  None of this additional state is
+special to the file server or the exec server; if programs wish, they
+can use it in a different manner than the C Library.
+
+
+                NEW PROCESSES
+
+The fork call is implemented almost entirely in the C Library.  The
+new task is created by Mach kernel calls.  The C Library arranges to
+have its image inherited properly.  The new task is registered with
+the process server (though this is not mandatory).  The C Library
+provides vectors of functions to be called at fork time: one vector to
+be called before the fork, one after in the parent, and one after in
+the child.  This should not be used to replace the normal sequence of
+calling fork; it is intended for libraries which need to close ports
+or clean up lock state before a fork occurs.  The library will
+implement both fork calls specified by the draft Posix.4a (the threads
+extension to the real-time extension).
+
+Nothing forces the user to create new tasks this way.  If a program
+wants to use almost the normal fork, but with some special
+characteristics, then it can do so.  Hooks will be provided by the C
+Library; in addition, the function can even be completely replaced if
+desired.  None of this is possible in a Unix system.
+
+
+                ASYNCHRONOUS MESSAGES
+
+As mentioned above, the process server maintains a "message port" for
+each task registered with it.  These ports are public, and are used to
+send asynchronous messages to the task.  Signals, for example, are
+sent to the message port.  The signal message also provides a port as
+an indication that the sender should be trusted to send the signal.
+The C Library maintains a variety of ports in a table, each of which
+identifies a set of signals that can be sent by anyone who posesses
+that port.  For example, if the user possess the task's kernel port,
+it is allowed to send any signal.  If the user possesses a special
+"terminal id" port, it is allowed to send the keyboard and hangup
+signals.  Users can add arbitrary new entries into the C Libraries
+signal permissions table.
+
+When a process's process group changes, the process server will send
+it a message indicating the new process group.  In this case, the
+process server proves its authority by providing the task's kernel
+port.  
+
+The library also implements messages to add and delete uids currently
+used by the process.  If new uids are sent to the program, the library
+adds them to its current set, and then exchanges message with all the
+I/O servers it knows about, proving to them its new authorization.
+Similarly, uids can be deleted with a message.  In the latter case,
+the caller must provide the process's task port.  (You can't harm a
+process by giving it extra permission, but you can harm it by taking
+permission away.)  We will provide user programs to send these
+messages to processes.  This will enable the `su' command to cause all
+the programs in your current login session to gain a new uid, rather
+than spawn a subshell.
+
+The library will allow programs to add asynchronous messages they wish
+to recognize, as well as prevent recognition of the standard set.
+
+
+                MAKING IT LOOK LIKE UNIX
+
+The C Library will implement all the calls from BSD and Posix, as well
+as some obvious extensions to them.  This enables users to replace
+those calls they dislike, or bypass them entirely, whereas in Unix,
+the calls must be used "as they come", with no alternatives possible.
+
+On some environments, we will support binary compatibility as well.
+This works by building a special version of the library.  This is then
+loaded somewhere in the address space of the process.  (On, a Vax, for
+example, it would be tucked in above the stack.)  A feature of Mach,
+called system call redirection is then used to trap Unix system calls
+and turn them into jumps into this special version of the library.
+(On almost all machines, the cost of such a redirection is very small;
+this is a highly optimized path of Mach.  On a 386 it's about two
+dozen instructions.)  This is only slightly worse than a simple
+procedure call.
+
+Many features of Unix, such as signal masks and vectors, are handled
+completely by the library.  This makes such calls significantly
+cheaper than in Unix.  It is now reasonable to use sigblock
+extensively to protect critical sections, rather than seeking out some
+other, less expensive method.
+
+
+                NETWORK PROTOCOLS
+
+We are writing a library that will make it very easy to port 4.4 BSD
+protocol stacks into the Hurd.  This will enable operation, virtually
+for free, of all the protocols supported by BSD.  Currently, this
+includes the CCITT protocols, the TCP/IP protocols, the Xerox NS
+protocols, and the ISO protocols.
+
+For maximal performace, some work would be necessary to take advantage
+of Hurd features that provide for very high speed I/O.  Generally, for
+most protocols, this would require some thought, but not too much
+time.  We intend to spend effort making the TCP/IP protocols run as
+efficiently as possible.
+
+As an interesting example of the flexibility of the Hurd design,
+consider the case of IP trailers, used extensively in BSD for
+performance.  While the Hurd will be willing to send and receive
+trailers, it will gain fairly little advantage in doing so, because
+there is no requirement that data be copied *ever*, so avoiding copies
+for page-aligned data is not important.
+
+
+--
++1 617 623 3248 (H)      |     He shall give his angels charge over you,
++1 617 253 8568 (W)     -+-      to keep you in all your ways.
+1105 Broadway            |     They shall bear you in their hards,
+Somerville, MA 02144     |       lest you dash your foot against a stone.
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Misc-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.misc) via:
+
+    Internet: Linux-Misc@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Misc Digest
+******************************

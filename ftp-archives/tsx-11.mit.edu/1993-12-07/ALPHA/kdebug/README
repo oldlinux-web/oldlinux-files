@@ -1,0 +1,151 @@
+
+	This is version 0.1 of the combined kernel debuggers.  The remote
+and local are mostly independent although they need to be aware of one
+another's existence.  The remote debugger basically lets you run gdb
+on the kernel as though it were a normal user process.  The catch 
+is that you need a second computer capable of running GDB hooked up
+to your linux box via a serial line.
+
+	The first part of local debugger combines some of the features
+of GDB with the features of the old Kernel Debugger and a few others.
+It modifies /dev/cmem to allow GDB to access both global and local
+variables.  The catch to this one is you must set a break point at the
+place where you want to examine the local variables, and then wait for
+it to be hit.  The breakpoint does not stop, but rather saves a copy
+of the kernel stack and the registers in a location which GDB knows
+about.  To use this you must start a modified gdb with the symbol-file
+tools/system and then use target kernel.  Beyond that GDB works much
+like you expect, however the kernel is never (not quite see below)
+stopped.
+
+	The second portion of the local debugger is the kernel
+resident debugger.  It allows you to stop the kernel and
+examine/change memory and registers.  It has only limited symbol
+capabilities (specified at compile time.)  It does however include a
+disassembler and is automatically entered whenever the kernel would
+otherwise die.  It can also be entered at any time by pressing the
+SysRq key.  The best feature of this debugger is probably the break
+points which there is unfortunately no real interface to.  They can
+be one-shot, conditional (bit test only), code/data breakpoints which
+can call a function, save state, send a signal or cause the kernel
+debugger to become active (or any combination.)  Currently the only
+interfaces to the break points are GDB which can only set state-saving
+breakpoints, and the kernel debugger which can only set break points
+which cause the debugger to be reentered.  You can however edit the
+break point structure using the kernel debugger, and use the
+other features.
+
+Installation
+
+	The diffs are verses .99pl6.  If you have added the remote
+kernel debugger patches, you should back them out with patch -R before
+adding these.  Afterwards a make config; make dep; make clean will be
+needed to recompile the kernel (you may want to edit the CFLAGS first,
+see below.)  To take advantage of the GDB/kernel debugger interface
+you will need to put the file lkernel.c in the gdb-4.6 source
+directory and add lkernel.c and lkernel.o to the makefile, and then do
+a make.  That will add the kernel as a debugging target.  To use the
+remote kernel debugger you will need to compile the program kpt.c to
+get kpt.
+
+Using the Remote GDB.
+
+	Make sure the machine which will be running GDB has the source
+and tools/system file which you used to compile the kernel on the
+remote machine (you should remote -fomit-frame-pointer and add -g to
+the CFLAGS).  Then you initialize the serial device (I use kermit) and
+run kpt (kpt /dev/tty65 (real old device name) in my case).  Kpt will
+activate the kernel ptrace facilities and then wait for a signal.
+When it receives a signal it will deactivate the kernel ptrace
+facilities and exit.  On the GDB end you start GDB on the file
+tools/system (or use the file or symbol-file command), and then use
+target remote (You need to set your baud rate first.  GDB provides a
+way of doing so, but I have not bothered to figure out how yet.)  The
+linux kernel should then stop and you should be able to debug it as
+though it were a normal program.  When you are done make sure the
+kernel is running, and then ctrl-c out of kpt.  I would suggest
+syncing and rebooting at this point in case you did some damage to the
+kernel.
+
+Using the Local Kernel Debugger with GDB.
+
+	To use the local kernel debugger with GDB, recompile the
+kernel with out the -fomit-frame-pointer, and with -g in the CFLAGS.
+Then run GDB on the file tools/system.  After it reads the symbol
+table, type target kernel (if you get an error here, you probably did
+not rebuild GDB with the lkernel.c file.)  GDB will then claim the
+kernel has stopped at address 0.  This actually means that it has not
+yet hit a sate saving breakpoint.  In fact if you have already used
+GDB on the kernel in this manner with out rebooting, you should see
+the results of your last break point.  You set breaks as you normally
+do with GDB, and then use the continue command.  GDB will stop soon
+after the break point has been hit (It may be hit more than once, but
+GDB removes the break point soon after it gets control again so it
+should not occur too many times.)  You will then be able to examine
+the state of the local variables at the time the LAST break point was
+hit.  You then proceed with GDB as though you were debugging a normal
+program.  However you should remember that the kernel has not stopped,
+so global variables may have changed since the break point was
+encountered. (The kernel debugger has the ability to store up to 500
+long words (4000 bytes) of global data when it saves state; however,
+GDB does not yet have the ability to take advantage of this.)
+
+Using the Local Kernel Debugger
+
+	The local kernel debugger is entered whenever you press the
+SysRq key (On most keyboards you must actually press Alt-SysRq.)  or
+when something bad happens to the kernel (a panic, or a NULL
+dereference or ...) You can get a list of kernel debugger commands by
+typing help, or more information about a command by prefixing it with
+help.  Since the kernel debugger just uses an array of names, and
+addresses to dispatch commands, it is not too difficult to add your own
+commands.  It is also possible to add symbols to the internal
+"symbol table" by editing the globals array.  I believe most of the
+commands are self explanatory, however I have included a list of them
+here.
+
+help -- prints out a list of commands or gives more information about
+	a particular command.
+
+regs --	Displays or edits the registers.
+
+run --	Resumes normal execution of the kernel
+
+reboot -- Calls hard_reboot_now which reboots on most systems.
+
+tasks -- lists the tasks
+
+mem  --	prints out memory information
+
+dump --	displays a region of memory
+
+list -- disassembles a region of memory
+
+break -- manipulates the 4 possible break points (numbered 0-4)
+
+edit --	Allows the changing of a region of memory
+
+stack -- displays the contents of the stack.
+
+step -- single step
+
+current -- print out the current task
+
+outb -- send a byte to an i/o port
+
+inb -- read from an i/o port
+
+print -- display the contents/value of a symbol/type as defined in the
+	 globals array.
+
+
+
+It is only necessary to type enough of the command so that it is unique
+(Actually that is not quite true; the debugger executes the first
+command it finds which matches as much as you typed.)  A lot more could
+be put into the debugger (like a way to load the full symbol table into
+memory, or keep in on a device such as a floppy.)  but there is enough
+here to be very useful.  Please send bugs/comments/questions to
+
+Ross Biro
+bir7@leland.stanford.edu.

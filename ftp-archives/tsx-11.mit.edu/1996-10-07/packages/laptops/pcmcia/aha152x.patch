@@ -1,0 +1,103 @@
+diff -u v1.1.89/linux/kernel/ksyms.c linux/kernel/ksyms.c
+--- v1.1.89/linux/kernel/ksyms.c	Tue Feb  7 12:50:55 1995
++++ linux/kernel/ksyms.c	Tue Feb  7 12:55:22 1995
+@@ -61,6 +64,7 @@
+ #ifdef CONFIG_SCSI
+ #include "../drivers/scsi/scsi.h"
+ #include "../drivers/scsi/hosts.h"
++#include "../drivers/scsi/constants.h"
+ #endif
+ 
+ extern int sys_tz;
+@@ -305,6 +314,7 @@
+ 	X(scsi_register),
+ 	X(scsi_unregister),
+ 	X(scsicam_bios_param),
++	X(print_command),
+ #endif
+ 	/* Added to make file system as module */
+ 	X(set_writetime),
+diff -u v1.1.89/linux/drivers/scsi/aha152x.c linux/drivers/scsi/aha152x.c
+--- v1.1.89/linux/drivers/scsi/aha152x.c	Sun Jan 22 12:13:38 1995
++++ linux/drivers/scsi/aha152x.c	Wed Feb  8 11:31:43 1995
+@@ -215,6 +215,11 @@
+ /* DEFINES */
+ 
+ 
++/* For PCMCIA cards, always use AUTOCONF */
++#ifdef PCMCIA
++#define AUTOCONF
++#endif
++
+ /* If auto configuration is disabled, IRQ, SCSI_ID and RECONNECT have to
+    be predefined */
+ #if !defined(AUTOCONF)
+@@ -530,7 +535,7 @@
+ {
+   int i;
+ 
+-  if(check_region(port_base, TEST-SCSISEQ))
++  if(check_region(port_base, 0x20))
+     return 0;
+ 
+   SETPORT( DMACNTRL1, 0 );          /* reset stack pointer */
+@@ -551,6 +556,7 @@
+   aha152x_config      conf;
+ #endif
+   int                 interrupt_level;
++  struct Scsi_Host    *hreg;
+   
+   if(setup_called)
+     {
+@@ -580,6 +586,7 @@
+       aha152x_debug   = setup_debug;
+ #endif
+ 
++#ifndef PCMCIA
+       for( i=0; i<PORT_COUNT && (port_base != ports[i]); i++)
+         ;
+ 
+@@ -588,13 +595,19 @@
+           printk("unknown portbase 0x%03x\n", port_base);
+           panic("aha152x panics in line %d", __LINE__);
+         }
++#endif
+ 
+       if(!aha152x_porttest(port_base))
+         {
+           printk("portbase 0x%03x fails probe\n", port_base);
++#ifdef PCMCIA
++	  return 0;
++#else
+           panic("aha152x panics in line %d", __LINE__);
++#endif
+         }
+ 
++#ifndef PCMCIA
+       i=0;
+       while(irqs[i] && (interrupt_level!=irqs[i]))
+         i++;
+@@ -603,7 +616,8 @@
+           printk("illegal IRQ %d\n", interrupt_level);
+           panic("aha152x panics in line %d", __LINE__);
+         }
+-
++#endif
++      
+       if( (this_host < 0) || (this_host > 7) )
+         {
+           printk("illegal SCSI ID %d\n", this_host);
+@@ -735,7 +749,12 @@
+          can_disconnect ? "enabled" : "disabled",
+          can_doparity ? "enabled" : "disabled");
+ 
+-  request_region(port_base, TEST-SCSISEQ, "aha152x");        /* Register */
++  request_region(port_base, 0x20, "aha152x");        /* Register */
++
++  hreg = scsi_register(tpnt, 0);
++  hreg->io_port = port_base;
++  hreg->n_io_port = 0x20;
++  hreg->irq = interrupt_level;
+   
+   /* not expecting any interrupts */
+   SETPORT(SIMODE0, 0);

@@ -1,0 +1,958 @@
+From:     Digestifier <Linux-Development-Request@senator-bedfellow.mit.edu>
+To:       Linux-Development@senator-bedfellow.mit.edu
+Reply-To: Linux-Development@senator-bedfellow.mit.edu
+Date:     Sun, 19 Sep 93 23:13:21 EDT
+Subject:  Linux-Development Digest #111
+
+Linux-Development Digest #111, Volume #1         Sun, 19 Sep 93 23:13:21 EDT
+
+Contents:
+  Re: Sample Curser code for Ncurses?? (Ed Carp)
+
+----------------------------------------------------------------------------
+
+From: erc@khijol.uucp (Ed Carp)
+Subject: Re: Sample Curser code for Ncurses??
+Date: Mon, 20 Sep 1993 02:26:00 GMT
+
+Raving Lunatic (trl@clydes.clark.net) wrote:
+
+: I was just wondering if anyone might have a small bit of sample source for
+: Ncurses that shows a basic menu with a pointer that moves up and down via
+: use of the arrow keys...?
+
+#! /bin/sh
+#
+# Created by shar, version 0.5 - 04/10/91
+#
+# This is a shell archive, meaning:
+# 1. Remove everything about the #! /bin/sh line.
+# 2. Save the resulting text in a file.
+# 3. Execute the file with /bin/sh to create:
+#
+#        length  name
+#        ------  -------------------------------------
+#           407  menu/Makefile
+#           520  menu/README
+#         19188  menu/menu.c
+#
+
+if test ! -d menu ; then
+   mkdir menu
+fi
+#
+# Archive number 1
+# This archive created Sun Sep 19 19:25:39 1993
+#
+
+echo "shar: extracting menu/Makefile - (407 characters)"
+if test -f 'menu/Makefile' ; then
+   echo shar: will not over-write existing file menu/Makefile
+else
+sed 's/^X//' << \SHAR_EOF > 'menu/Makefile'
+X#
+X# Makefile generated with genmake - version 1.0.b  10/30/91
+X#
+X# genmake is Copyright 1990 by Edwin R. Carp
+X#
+X# genmake -Sp [files]
+X#
+X
+XCFLAGS = -s -O2
+XLDFLAGS = -lncurses -ltermcap
+XSOURCES = menu.c 
+XOBJECTS = menu.o 
+XPROGRAMS = menu 
+X
+Xall: $(PROGRAMS) 
+X
+Xmenu: menu.o
+X       $(CC) $(CFLAGS) -o menu menu.o $(LDFLAGS)  -O
+X       chmod 755 menu
+X
+Xclean:
+X       /bin/rm -f menu.o 
+X
+Xclobber:
+X       /bin/rm -f menu.o 
+X       /bin/rm -f menu 
+SHAR_EOF
+if test 407 -ne "`wc -c < 'menu/Makefile'`" ; then
+   echo "shar: ***** error transmitting file menu/Makefile (should have been 407 characters, but was "`wc -c < 'menu/Makefile'`" characters) *****"
+fi
+fi
+
+touch 0801013193 menu/Makefile
+chmod 0644 menu/Makefile
+
+echo "shar: extracting menu/README - (520 characters)"
+if test -f 'menu/README' ; then
+   echo shar: will not over-write existing file menu/README
+else
+sed 's/^X//' << \SHAR_EOF > 'menu/README'
+XThis is menu, a simple ASCII menuing system for System V curses.  To make,
+Xtype "make".
+X
+XThe menus are all ASCII files:
+X
+XFirst line is the menu title. Lines 2-19 are like this:
+XMenu Prompt<TAB>command
+X
+Xcommand can be preceded by a '*', '-', or a '&'.
+XThe '*' means that the program is actually another menu file to load and
+Xrun.  The '-' means not to wait for a key press after executing the program.
+XThe '&' means to run the program and exit.
+X
+XLines beginning with '#' are ignored.
+X
+XWritten by Ed Carp (erc@apple.com).
+SHAR_EOF
+if test 520 -ne "`wc -c < 'menu/README'`" ; then
+   echo "shar: ***** error transmitting file menu/README (should have been 520 characters, but was "`wc -c < 'menu/README'`" characters) *****"
+fi
+fi
+
+touch 0302234493 menu/README
+chmod 0600 menu/README
+
+echo "shar: extracting menu/menu.c - (19188 characters)"
+if test -f 'menu/menu.c' ; then
+   echo shar: will not over-write existing file menu/menu.c
+else
+sed 's/^X//' << \SHAR_EOF > 'menu/menu.c'
+Xstatic char version[] = "0.0.s  03/02/93";
+X
+X/*
+X * menu file: Title text <TAB> program -or- *menu file -program (don't wait
+X * on return) &program (run & exit) Lines beginning with '#' are ignored.
+X *
+X * TO DO:
+X *
+X * 1.  Help screen. 2.  Make # of sels memory-dependent.  3.  inter-menu msgs.
+X *
+X * Written by Ed Carp (erc@apple.com) - Copyright 1991, by Ed Carp
+X */
+X#define YES 1
+X#define NO 0
+X
+X#define DATEPOS_X 60
+X#define DATEPOS_Y 1
+X#define WAITPOS_X 70
+X#define WAITPOS_Y 3
+X#define FIRST_SEL_Y 4
+X#define MAX_MENU_SELS 19       /* FIXME */
+X#define MAILLINE LINES-2
+X#define LASTLINE LINES-1
+X#define DEFAULT_MENU "/usr/lib/menu/default.menu"
+X#define DEFAULT_MENU_2 "%s/default.menu"
+X#define LKPASS ".menupasswd"   /* lock menu screen encrypted password file */
+X#define MINLEN 3               /* minimum password length */
+X#define VERSTART (COLS-3)-strlen(version)
+X#define PASSWD_TIMER 5         /* # of seconds to wait before asking for a
+X                                * password - default is 5 minutes */
+X
+X#include <stdio.h>
+X#include <curses.h>
+X#include <ctype.h>
+X#include <sys/types.h>
+X#ifdef BSD
+X#include <sys/time.h>
+X#else
+X#include <time.h>
+X#endif
+X#include <sys/stat.h>
+X#include <signal.h>
+X#include <string.h>
+X#include <pwd.h>
+X#undef NULL
+X#define NULL (0)
+X
+X#ifdef linux
+X#define nodelay(x,y)
+X#endif
+X
+X/* globals */
+X
+Xchar current_menu[128];
+Xchar title[128];
+Xchar menusels[MAX_MENU_SELS][128];
+Xchar menuexecs[MAX_MENU_SELS][128];
+Xchar *pwfname, *getpwfile (), *getpass ();
+Xint init = YES;                        /* initialize screen? */
+Xint exec = NO;                 /* selection executed? */
+Xint ysave, xsave;              /* cursor position */
+Xint len_sel;                   /* max length of menu selection */
+Xint cur_sel = 0;               /* current menu selection */
+Xint cur_max_sel = MAX_MENU_SELS - 1;   /* maximum menu selection */
+Xint newmailctr = 0;
+Xlong mailsize = 0L;
+Xlong mailtime = 0L;
+Xlong menutime = 0L;
+Xlong nmenutime = 0L;
+Xlong lastkeyhit;
+Xlong curtime;
+Xlong get_menu_time ();
+Xlong sizefile ();
+Xint num_letters = 0;           /* number of mail messages */
+Xint xpos, ypos;                        /* for screen saver */
+Xint m_timeout;
+Xint display_time ();
+Xint do_nothing ();
+Xint disp_blank_time ();
+Xchar hostname[25];
+Xchar *cmp;
+Xchar *massage ();
+Xchar *getenv (), *strchr ();
+Xstruct passwd *pwd, *getpwuid ();
+Xextern char *optarg;
+Xextern int optind;
+Xextern int errno;
+Xextern char *sys_errlist[];
+X
+Xmain (argc, argv)
+Xint argc;
+Xchar **argv;
+X{
+X  int i, c;
+X  char d, scratch[9];
+X
+X  m_timeout = PASSWD_TIMER;
+X  while ((d = getopt (argc, argv, "ct:")) != EOF)
+X  {
+X    switch (d)
+X    {
+X    case 'c':                         /* change password */
+X      change_pass ();
+X      exit (0);
+X      break;
+X
+X    case 't':                         /* change m_timeout */
+X      m_timeout = atoi (optarg);
+X      if (m_timeout < 1)
+X       m_timeout = PASSWD_TIMER;
+X      break;
+X
+X    case '?':
+X      fprintf (stderr, "usage: %s [-c] [-t m_timeout] [menu-file]\n", argv[0]);
+X      fprintf (stderr, "       -c = change lock password\n");
+X      fprintf (stderr, "       -t = change keyboard m_timeout\n");
+X      fprintf (stderr, "            default is %d minutes\n\n", PASSWD_TIMER);
+X      sprintf (current_menu, DEFAULT_MENU_2, getenv ("HOME"));
+X      fprintf (stderr, "default menu files are '%s'\nand '%s', in that order.\n",
+X              DEFAULT_MENU, current_menu);
+X      exit (1);
+X    }
+X  }
+X  mesg ('n');
+X  if (optind < argc)
+X    strcpy (current_menu, argv[optind]);
+X  else
+X    strcpy (current_menu, DEFAULT_MENU);
+X  if (access (current_menu, 0) == EOF)
+X  {
+X    sprintf (current_menu, DEFAULT_MENU_2, getenv ("HOME"));
+X    if (access (current_menu, 0) == EOF)
+X    {
+X      perror (current_menu);
+X      exit (1);
+X    }
+X  }
+X  if (access (getpwfile (), 0) == EOF)
+X    change_pass ();                   /* get a password */
+X  get_mail_size ();                   /* get initial time for mail file */
+X  num_letters = numlets (getenv ("MAIL"));     /* how many letters in the
+X                                                * mailbox? */
+X  gethostname (hostname, 25);         /* get host name */
+X  if (strchr (hostname, '.') == (char *) NULL)
+X    strcat (hostname, ".uucp");
+X  initscr ();
+X  while (1)
+X  {
+X    if (menutime < (nmenutime = get_menu_time (current_menu)))
+X    {
+X      if (load_menu (current_menu) != EOF)
+X       display_menu ();               /* display menu */
+X      time (&lastkeyhit);
+X      display_time ();
+X      menutime = nmenutime;
+X    }
+X    if (init)
+X    {
+X#ifndef BSD
+X      keypad (stdscr, TRUE);
+X#endif
+X      display_host ();                /* display host and user name */
+X      display_menu ();                /* display menu */
+X      time (&lastkeyhit);
+X      init = NO;
+X      exec = YES;
+X    }
+X    if (exec)
+X    {
+X      exec = NO;
+X      display_time ();
+X    }
+X    standout ();
+X    mvaddstr (FIRST_SEL_Y + cur_sel, (COLS - len_sel) / 2, menusels[cur_sel]);
+X    standend ();
+X
+X    cbreak ();
+X    noecho ();
+X    display_frame ();                 /* display frame for menu */
+X    move (FIRST_SEL_Y + cur_sel, (COLS - len_sel) / 2);
+X    refresh ();
+X    c = wgetch (stdscr);
+X    nocbreak ();
+X    echo ();
+X
+X    /*
+X     * mvprintw(LINES-2, COLS-10, "0x%x", c); refresh();
+X     */
+X
+X    move (FIRST_SEL_Y + cur_sel, (COLS - len_sel) / 2);
+X    time (&curtime);
+X    lastkeyhit = curtime;
+X    /* switch statement goes here */
+X    switch (c)
+X    {
+X    case 0:
+X    case EOF:
+X      break;
+X
+X      /* case KEY_END: */
+X    case KEY_F0 + 3:
+X    case 'Q':
+X      clear ();
+X      refresh ();
+X      endwin ();
+X      mesg ('y');
+X      exit (0);
+X      break;
+X
+X    case 0xd:                         /* execute selection */
+X    case 0xa:
+X    case KEY_ENTER:
+X      if (*menuexecs[cur_sel] == '*')
+X      {
+X       cmp = &menuexecs[cur_sel][1];
+X       if (cmp[strlen (cmp) - 1] == '\n')
+X         cmp[strlen (cmp) - 1] = NULL;
+X       if (load_menu (cmp) == EOF)
+X         break;
+X       strcpy (current_menu, &menuexecs[cur_sel][1]);
+X       display_menu ();               /* display menu */
+X       display_host ();               /* display host and user name */
+X       display_frame ();              /* display frame for menu */
+X       display_time ();
+X       cur_sel = 0;
+X       break;
+X      }
+X      else
+X      {
+X       alarm (0);                     /* turn alarm off */
+X       clear ();
+X       refresh ();
+X       /* savetty (); */
+X       endwin ();
+X       puts ("Please wait...");
+X       fflush (stdout);
+X       if (*menuexecs[cur_sel] == '&')
+X         exit (system (menuexecs[cur_sel] + 1));
+X       if (*menuexecs[cur_sel] == '-')
+X         system (menuexecs[cur_sel] + 1);
+X       else
+X       {
+X         system (menuexecs[cur_sel]);
+X         puts ("Press ENTER/RETURN for menu.");
+X         fflush (stdout);
+X         fgets (scratch, 2, stdin);
+X       }
+X       initscr ();
+X       resetty ();
+X       /* nodelay (stdscr, FALSE); */
+X      }
+X      init = exec = YES;
+X      break;
+X
+X    case KEY_DOWN:                    /* down arrow */
+X      standout ();
+X      mvaddch (FIRST_SEL_Y + cur_sel, (COLS - len_sel) / 2, *menusels[cur_sel]);
+X      standend ();
+X      mvaddstr (FIRST_SEL_Y + cur_sel, 1 + ((COLS - len_sel) / 2), 1 + menusels[cur_sel]);
+X      cur_sel++;
+X      while (*menusels[cur_sel] == NULL && cur_sel < MAX_MENU_SELS)
+X       cur_sel++;
+X      if (cur_sel == MAX_MENU_SELS)
+X       cur_sel = 0;
+X      standout ();
+X      mvaddstr (FIRST_SEL_Y + cur_sel, (COLS - len_sel) / 2, menusels[cur_sel]);
+X      standend ();
+X      break;
+X
+X    case KEY_UP:                      /* up arrow */
+X      standout ();
+X      mvaddch (FIRST_SEL_Y + cur_sel, (COLS - len_sel) / 2, *menusels[cur_sel]);
+X      standend ();
+X      mvaddstr (FIRST_SEL_Y + cur_sel, 1 + ((COLS - len_sel) / 2), 1 + menusels[cur_sel]);
+X      cur_sel--;
+X      if (cur_sel < 0)
+X       cur_sel = MAX_MENU_SELS - 1;
+X      while (*menusels[cur_sel] == NULL && cur_sel >= 0)
+X       cur_sel--;
+X      standout ();
+X      mvaddstr (FIRST_SEL_Y + cur_sel, (COLS - len_sel) / 2, menusels[cur_sel]);
+X      standend ();
+X      break;
+X
+X    default:                          /* handle other keys pressed */
+X      for (i = 0; i < MAX_MENU_SELS; i++)
+X      {
+X       if (*menusels[i] == NULL)
+X         continue;
+X       if (c == tolower (*menusels[i]))
+X       {
+X         standout ();
+X         mvaddch (FIRST_SEL_Y + cur_sel, (COLS - len_sel) / 2, *menusels[cur_sel]);
+X         standend ();
+X         mvaddstr (FIRST_SEL_Y + cur_sel, 1 + ((COLS - len_sel) / 2), 1 + menusels[cur_sel]);
+X         cur_sel = i;
+X         standout ();
+X         mvaddstr (FIRST_SEL_Y + cur_sel, (COLS - len_sel) / 2, menusels[cur_sel]);
+X         standend ();
+X         break;
+X       }
+X      }
+X      break;
+X    }
+X  }
+X}
+X
+Xint
+Xload_menu (s)
+Xchar *s;
+X{
+X  FILE *in;
+X  char buf[256], *ptr;
+X  int i, len;
+X
+X  if ((in = fopen (s, "r")) == (FILE *) NULL)
+X  {
+X    sprintf (buf, "%s: %s", s, sys_errlist[errno]);
+X    disperr (buf);
+X    return (EOF);
+X  }
+X  if (fgets (buf, 128, in) == NULL)
+X  {
+X    sprintf (buf, "No title in menu '%s' - not loaded", s);
+X    disperr (buf);
+X    return (EOF);
+X  }
+X  strcpy (title, buf);
+X  len_sel = 0;
+X  for (i = 0; i < MAX_MENU_SELS; i++)
+X  {
+X    *menusels[i] = *menuexecs[i] = NULL;
+X    if (fgets (buf, 253, in) == (char *) NULL)
+X      break;
+X    ptr = buf;
+X    if (*ptr == '#')
+X    {
+X      i--;
+X      continue;
+X    }
+X    strcpy (menusels[i], strtok (ptr, "\011"));
+X    ptr = NULL;
+X    strcpy (menuexecs[i], strtok (ptr, "\011"));
+X    len = strlen (menusels[i]);
+X    if (len > len_sel)
+X      len_sel = len;
+X  }
+X  cur_max_sel = i;
+X  for (i = cur_max_sel; i < MAX_MENU_SELS; i++)
+X    *menusels[i] = *menuexecs[i] = NULL;
+X  fclose (in);
+X  return (NULL);
+X}
+X
+Xdisplay_host ()
+X{
+X  char *ptr, *cuserid (), *getlogin ();
+X
+X  if ((ptr = cuserid ((char *) NULL)) == (char *) NULL)
+X  {
+X    if ((ptr = getlogin ()) == (char *) NULL)
+X    {
+X      pwd = getpwuid (getuid ());
+X      ptr = pwd->pw_name;
+X    }
+X  }
+X  mvprintw (1, 2, "%s@%s\n", ptr, hostname);
+X  /* refresh(); */
+X}
+X
+Xdisplay_time ()
+X{
+X  struct tm *localtime (), *tm;
+X  char ampm;
+X  long secs;
+X  int x, ys, xs;
+X
+X  time (&secs);
+X  curtime = secs;
+X  getyx (stdscr, ys, xs);             /* save away cursor */
+X  if (curtime > lastkeyhit + (long) (m_timeout * 60))
+X  {
+X    clear ();
+X    refresh ();
+X    cmp_exist (1);                    /* loop 'til we get a good password */
+X    clear ();
+X    refresh ();
+X    display_host ();
+X    display_menu ();
+X    display_frame ();
+X    standout ();
+X    mvaddstr (FIRST_SEL_Y + cur_sel, (COLS - len_sel) / 2, menusels[cur_sel]);
+X    standend ();
+X    cbreak ();
+X    time (&lastkeyhit);
+X  }
+X  time (&secs);
+X  tm = localtime (&secs);
+X  if (tm->tm_hour > 11)
+X    ampm = 'p';
+X  else
+X    ampm = 'a';
+X#ifdef STARDATE
+X  x = ((float) tm->tm_hour * 60.0 + (float) tm->tm_min) / (2.4 * 60.0);
+X  mvprintw (FIRST_SEL_Y - 1, COLS - 10, "%d%03d.%01d", tm->tm_year - 60,
+X           (int) ((1.0 + (float) tm->tm_yday) / .366), x);
+X#endif
+X  if (tm->tm_hour > 12)
+X    tm->tm_hour -= 12;
+X  if (tm->tm_hour == 0)
+X    tm->tm_hour = 12;
+X  mvprintw (DATEPOS_Y, DATEPOS_X, "%02d/%02d/%02d  %2d:%02d%cm",
+X           tm->tm_mon + 1, tm->tm_mday, tm->tm_year,
+X           tm->tm_hour, tm->tm_min, ampm);
+X  display_mail ();
+X  signal (SIGALRM, display_time);
+X  alarm (60 - tm->tm_sec);
+X  move (ys, xs);
+X  refresh ();
+X}
+X
+Xdisplay_menu ()
+X{
+X  int i;
+X
+X  mvaddstr (1, (COLS - strlen (title)) / 2, title);
+X  for (i = 0; i < MAX_MENU_SELS; i++)
+X  {
+X    mvaddch (FIRST_SEL_Y + i, 2, '\n');
+X    if (i < cur_max_sel)
+X    {
+X      standout ();
+X      mvaddch (FIRST_SEL_Y + i, (COLS - len_sel) / 2, *menusels[i]);
+X      standend ();
+X      mvaddstr (FIRST_SEL_Y + i, 1 + ((COLS - len_sel) / 2), 1 + menusels[i]);
+X    }
+X  }
+X  mvaddstr (FIRST_SEL_Y - 1, 2, "Press F3 (or 'Q') to quit");
+X  move (FIRST_SEL_Y, (COLS - len_sel) / 2);
+X  /* refresh(); */
+X}
+X
+Xdisplay_frame ()
+X{
+X  int i;
+X
+X  getyx (stdscr, ysave, xsave);               /* save away cursor */
+X  attron (A_ALTCHARSET);
+X  for (i = 0; i < LASTLINE; i++)
+X  {
+X
+X    mvaddch (i, 0, ACS_VLINE);
+X    mvaddch (i, COLS - 2, ACS_VLINE);
+X  }
+X  for (i = 1; i < COLS - 2; i++)
+X  {
+X    mvaddch (0, i, ACS_HLINE);
+X    mvaddch (2, i, ACS_HLINE);
+X    mvaddch (LASTLINE, i, ACS_HLINE);
+X  }
+X  mvaddch (0, 0, ACS_ULCORNER);
+X  mvaddch (2, 0, ACS_LTEE);
+X  mvaddch (LASTLINE, 0, ACS_LLCORNER);
+X  mvaddch (0, COLS - 2, ACS_URCORNER);
+X  mvaddch (2, COLS - 2, ACS_RTEE);
+X  mvaddch (LASTLINE, COLS - 2, ACS_LRCORNER);
+X  attron (A_NORMAL);
+X  mvaddstr (LASTLINE - 1, VERSTART, version);
+X  move (ysave, xsave);
+X  /* refresh(); */
+X}
+X
+Xdisplay_mail ()
+X{
+X  FILE *mail;
+X  char *mailfile;
+X  char buf[256];
+X  int i;
+X  struct stat mbuf;
+X
+X  mailfile = getenv ("MAIL");
+X  getyx (stdscr, ysave, xsave);               /* save away cursor */
+X  if ((mail = fopen (mailfile, "r")) == (FILE *) NULL)
+X  {
+X    for (i = 2; i < VERSTART; i++)
+X      mvaddch (MAILLINE, i, ' ');
+X    move (ysave, xsave);
+X    /* refresh(); */
+X    return;
+X  }
+X  fclose (mail);
+X  if (stat (mailfile, &mbuf) == EOF)
+X    return;
+X  if (mbuf.st_size != mailsize)
+X  {
+X    getyx (stdscr, ysave, xsave);      /* save away cursor */
+X    mvaddstr (LINES - 2, (COLS / 2) - 7, "Please Wait...");
+X    move (ysave, xsave);
+X    refresh ();
+X    if (newmailctr == 0)
+X      newmailctr = num_letters;
+X    num_letters = numlets (mailfile);
+X    getyx (stdscr, ysave, xsave);      /* save away cursor */
+X    if (mbuf.st_size > mailsize && (num_letters - newmailctr) > 0)
+X      mvprintw (MAILLINE - 1, 2, "You have %d new mail message%s.     ",
+X               num_letters - newmailctr,
+X               (num_letters - newmailctr > 1 ? "s" : ""));
+X    else
+X      newmailctr = 0;
+X    mvaddstr (LINES - 2, (COLS / 2) - 7, "              ");
+X    move (ysave, xsave);
+X  }
+X  else
+X    newmailctr = 0;
+X  mailtime = mbuf.st_mtime;
+X  mailsize = mbuf.st_size;
+X  if (num_letters > 0)
+X  {
+X    mvprintw (MAILLINE, 2, "You have %d message%s. ",
+X             num_letters, (num_letters > 1 ? "s" : ""));
+X  }
+X  else
+X  {
+X    if (num_letters == -1)
+X    {
+X      mvprintw (MAILLINE, 2, "You have many messages. ");
+X    }
+X    else
+X      mvprintw (MAILLINE, 2, "                        ");
+X  }
+X  move (ysave, xsave);
+X  refresh ();
+X}
+X
+Xlong
+Xget_menu_time (s)
+Xchar *s;
+X{
+X  struct stat buf;
+X
+X  if (stat (s, &buf) == EOF)
+X    return (0L);
+X  return (buf.st_mtime);
+X}
+X
+X/*
+X * display_new_mail () { char *mailfile, *getenv (); struct stat buf; int
+X * tmplet;
+X *
+X * mailfile = getenv ("MAIL"); if (stat (mailfile, &buf) == EOF) return; time
+X * (&curtime); fprintf (stderr, "DISPLAY_NEW_MAIL: (%s): buf.st_size=%ld,
+X * mailsize=%ld, buf.st_time=%ld, mailtime=%ld\n", massage (ctime
+X * (&curtime)), buf.st_size, mailsize, buf.st_mtime, mailtime); if
+X * (buf.st_mtime != mailtime) { if (num_letters < (tmplet = numlets
+X * (mailfile))) { mailsize = buf.st_size; num_letters = tmplet; mailtime =
+X * buf.st_mtime; getyx (stdscr, ysave, xsave); mvaddstr (MAILLINE - 1, 2,
+X * "You have new mail."); move (ysave, xsave); refresh (); new_mail = YES; }
+X * } else new_mail = NO; }
+X */
+X
+Xget_mail_size ()
+X{
+X  char *mailfile, *getenv ();
+X  struct stat buf;
+X
+X  mailfile = getenv ("MAIL");
+X  if (stat (mailfile, &buf) == EOF)
+X    return;
+X  mailsize = buf.st_size;
+X}
+X
+X/*
+X * int system (s) char *s; { int status, pid, w; register int (*istat) (),
+X * (*qstat) (); char *shell, *shellpath, *flags, *getenv (), *strrchr ();
+X *
+X * shellpath = getenv ("SHELL"); if (shellpath == NULL || strlen (shellpath) ==
+X * 0) shellpath = "/bin/sh"; shell = strrchr (shellpath, '/') + 1; if
+X * (!strcmp (shell, "sh")) flags = "-c"; else flags = "-c";
+X *
+X * signal (SIGINT, SIG_DFL); signal (SIGQUIT, SIG_DFL); if ((pid = fork ()) ==
+X * 0) { setgid (getgid ()); execl (shellpath, shell, flags, s, 0); _exit
+X * (127); } signal (SIGINT, SIG_IGN); signal (SIGQUIT, SIG_IGN); while ((w =
+X * wait (&status)) != pid && w != -1) sleep (1); if (w == -1) status = -1;
+X * signal (SIGINT, SIG_DFL); signal (SIGQUIT, SIG_DFL); return (status); }
+X */
+X
+Xchar *
+Xmassage (s)
+Xchar *s;
+X{
+X  s[strlen (s) - 1] = NULL;
+X  return (s);
+X}
+X
+X/* compare an existing password with what the user types */
+Xint
+Xcmp_exist (f)
+Xint f;
+X
+X{
+X  register char *p;
+X  char *pwfname,               /* password file name */
+X       pw[BUFSIZ],             /* full password typed by user */
+X       pwbuf[10],              /* 1st 8 chars of password typed by user */
+X      *encpt;                  /* encrypted passwd typed by user */
+X  static char encptpw[BUFSIZ]; /* encrypted passwd from passwd file */
+X  FILE *pwf;
+X
+X  char *crypt ();
+X
+X  /* void perror (); */
+X
+X  pwfname = getpwfile ();
+X  pwf = fopen (pwfname, "r");
+X  fgets (encptpw, BUFSIZ, pwf);
+X  fclose (pwf);
+X  p = encptpw;
+X  while (*p++ != '\n')                /* get rid of the newline */
+X    ;
+X  *(--p) = '\0';
+X  while (1)
+X  {
+X    if (f)
+X      strncpy (pwbuf, getpass ("Enter password to unlock: "), 8);
+X    else
+X      strncpy (pwbuf, getpass ("Enter old password: "), 8);
+X    encpt = crypt (pwbuf, encptpw);
+X    if (strcmp (encpt, encptpw) == 0)
+X      break;
+X    if (f)
+X      continue;
+X    else
+X    {
+X      fprintf (stderr, "Sorry.\n");
+X      exit (1);
+X    }
+X  }
+X}
+X
+X/* from passwd.c */
+Xint
+Xchange_pass ()
+X{
+X  char *crypt (), *pwfname, nupwbuf[10], *p, nu1pwbuf[10], *nuencptpw,
+X       saltc[2];
+X  int nupwlen, flags, ok, c, i;
+X  long salt;
+X  FILE *pwf;
+X
+X  long time ();
+X
+X  pwfname = getpwfile ();
+X  if (access (pwfname, 0) == -1)
+X  {
+X    fprintf (stderr, "Creating new menu password...\n");
+X  }
+X  else
+X  {
+X    fprintf (stderr, "Changing menu password...\n");
+X    cmp_exist (0);
+X  }
+X  strcpy (nupwbuf, getpass ("New Password: "));
+X  nupwlen = strlen (nupwbuf);
+X  if (nupwlen <= MINLEN)
+X  {
+X    fprintf (stderr, "Password too short; try again\n");
+X    return (0);
+X  }
+X  flags = 0;
+X  ok = 0;
+X  p = nupwbuf;
+X  while (c = *p++)
+X  {
+X    if (c >= 'a' && c <= 'z')
+X      flags |= 2;
+X    else if (c >= 'A' && c <= 'Z')
+X      flags |= 4;
+X    else if (c >= '0' && c <= '9')
+X      flags |= 1;
+X    else
+X      flags |= 8;
+X  }
+X  if (flags >= 7 && nupwlen >= 4)
+X    ok = 1;
+X  if (flags == 2 || flags == 4 && nupwlen >= 6)
+X    ok = 1;
+X  if (flags == 3 || flags == 5 || flags == 6 && nupwlen >= 5)
+X    ok = 1;
+X  if (!ok)
+X  {
+X    if (flags == 1)
+X      fprintf (stderr, "Please use at least one non-numeric character.\n");
+X    else
+X      fprintf (stderr, "Please use a longer password.\n");
+X    return (0);
+X  }
+X  strcpy (nu1pwbuf, getpass ("Re-enter new password: "));
+X  if (strcmp (nu1pwbuf, nupwbuf) != 0)
+X  {
+X    fprintf (stderr, "They don't match; try again.\n");
+X    return (0);
+X  }
+X  salt = (time ((long *) 0) + (long) getpid ());
+X  saltc[0] = salt & 077;
+X  saltc[1] = (salt >> 6) & 077;
+X  for (i = 0; i < 2; i++)
+X  {
+X    c = saltc[i] + '.';
+X    if (c > '9')
+X      c += 7;
+X    if (c > 'Z')
+X      c += 6;
+X    saltc[i] = c;
+X  }
+X  nuencptpw = crypt (nupwbuf, saltc);
+X  if ((pwf = fopen (pwfname, "w")) == NULL)
+X  {
+X    perror (pwfname);
+X    exit (1);
+X  }
+X  fprintf (pwf, "%s\n", nuencptpw);
+X  fclose (pwf);
+X}
+X
+Xchar *
+Xgetpwfile ()
+X
+X{
+X  static char file[BUFSIZ];
+X  char *home;
+X
+X  if ((home = getenv ("HOME")) == NULL)
+X    return (NULL);
+X  sprintf (file, "%s/%s", home, LKPASS);
+X  return (file);
+X}
+X
+Xmesg (c)
+Xchar c;
+X{
+X  char *ttyname ();
+X
+X  switch (c)
+X  {
+X  case 'y':
+X    chmod (ttyname (0), 0666);
+X    break;
+X  case 'n':
+X    chmod (ttyname (0), 0600);
+X    break;
+X  }
+X}
+X
+X/*
+X * numlets - return number of letters in mailbox.  Returns -1 if we have more
+X * than a certain number of messages in the mailbox.
+X *
+X * Written by Ed Carp  (erc@apple.com)
+X */
+X#include <stdio.h>
+X#define SIZEBUF 1024
+X#define LIMIT 500              /* return -1 if more than this number of
+X                                * messages */
+X#define MATCH "From "
+X
+Xint
+Xnumlets (mb)
+Xchar *mb;                      /* mailbox, usually $MAIL */
+X{
+X  FILE *tmb;
+X  char lbuf[SIZEBUF];
+X  int count = 0, len;
+X
+X  if ((tmb = fopen (mb, "r")) == (FILE *) NULL)
+X    return (-1);
+X  len = strlen (MATCH);
+X  while (fgets (lbuf, SIZEBUF - 2, tmb))
+X  {
+X    if (strncmp (lbuf, MATCH, len) == 0)
+X      count++;
+X    if (count > LIMIT)
+X      break;
+X  }
+X  fclose (tmb);
+X  if (count > LIMIT)
+X    return (-1);
+X  return (count);
+X}
+X
+Xdisperr (s)
+Xchar *s;
+X{
+X  int l, ys, xs;
+X
+X  l = strlen (s);
+X  getyx (stdscr, ys, xs);             /* save away cursor */
+X  mvaddstr (MAILLINE - 1, COLS - (l + 3), s);
+X  move (ys, xs);
+X}
+SHAR_EOF
+if test 19188 -ne "`wc -c < 'menu/menu.c'`" ; then
+   echo "shar: ***** error transmitting file menu/menu.c (should have been 19188 characters, but was "`wc -c < 'menu/menu.c'`" characters) *****"
+fi
+fi
+
+touch 0919192593 menu/menu.c
+chmod 0600 menu/menu.c
+echo End of all shell archives
+exit 0
+-- 
+Ed Carp, N7EKG                  erc@apple.com                   510/659-9560
+                            anon-0001@khijol.uucp
+If you want magic, let go of your armor.  Magic is so much stronger than
+steel!        -- Richard Bach, "The Bridge Across Forever"
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

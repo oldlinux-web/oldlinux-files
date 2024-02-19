@@ -1,0 +1,580 @@
+From:     Digestifier <Linux-Admin-Request@senator-bedfellow.mit.edu>
+To:       Linux-Admin@senator-bedfellow.mit.edu
+Reply-To: Linux-Admin@senator-bedfellow.mit.edu
+Date:     Mon, 29 Nov 93 20:35:32 EST
+Subject:  Linux-Admin Digest #193
+
+Linux-Admin Digest #193, Volume #1               Mon, 29 Nov 93 20:35:32 EST
+
+Contents:
+  Patches to lilo 0.12 to avoid infinite recursion (Norman Ramsey)
+  Re: /etc/securetty? (su from tty) (Christopher Shaulis)
+  Re: trouble building kernel 0.99 pl 13 with CD-ROM fs (Christopher Shaulis)
+  getty_ps: uugetty w/scheduling... (Gary Moyer)
+  cat /dev/null > /dev/rmt0 dangerous? (Joern Jensen)
+  Re: cat /dev/null > /dev/rmt0 dangerous? (K J MacDonald)
+  Re: Watcher... (Daniel Z. Davidson)
+  Re: /etc/securetty? (su from tty) (Matthew Donadio)
+  Working NIS anywhere? (Kjetil Torgrim Homme)
+  Re: Difference between cua and ttyS (Intellection)
+  Disk troubles (Shekhar Mahadevan)
+  Re: getty_ps: uugetty w/scheduling... (John Paul Morrison)
+  Can't telnet to my machine (Michael C Landauer)
+  Re: Can't telnet to my machine (David Barr)
+
+----------------------------------------------------------------------------
+
+From: norman@flaubert.bellcore.com (Norman Ramsey)
+Subject: Patches to lilo 0.12 to avoid infinite recursion
+Date: Mon, 29 Nov 1993 06:24:31 GMT
+
+
+I found a simple cure, namely not to follow symbolic links.  There may
+be other problems lurking elsewhere, your mileage may vary, etc, but
+this beats the /dev/fd -> /proc/self/fd problem.
+
+*** device.c.dist       Mon Nov 29 00:54:06 1993
+--- device.c    Mon Nov 29 01:21:07 1993
+***************
+*** 31,38 ****
+      *(start = strchr(parent,0)) = '/';
+      while (dir = readdir(dp)) {
+        strcpy(start+1,dir->d_name);
+!       if (stat(parent,&dev->st) < 0)
+!           die("stat %s: %s",parent,strerror(errno));
+        if (S_ISBLK(dev->st.st_mode) && dev->st.st_rdev == number) return 1;
+        if (S_ISDIR(dev->st.st_mode) && strcmp(dir->d_name,".") &&
+          strcmp(dir->d_name,"..") && scan_dir(dev,parent,number)) return 1;
+--- 31,38 ----
+      *(start = strchr(parent,0)) = '/';
+      while (dir = readdir(dp)) {
+        strcpy(start+1,dir->d_name);
+!       if (lstat(parent,&dev->st) < 0)
+!           die("lstat %s: %s",parent,strerror(errno));
+        if (S_ISBLK(dev->st.st_mode) && dev->st.st_rdev == number) return 1;
+        if (S_ISDIR(dev->st.st_mode) && strcmp(dir->d_name,".") &&
+          strcmp(dir->d_name,"..") && scan_dir(dev,parent,number)) return 1;
+*** geometry.c.dist     Mon Nov 29 01:17:11 1993
+--- geometry.c  Mon Nov 29 01:20:53 1993
+***************
+*** 82,88 ****
+        die("opendir %s: %s",parent,strerror(errno));
+      while (dir = readdir(dp)) {
+        sprintf(name,"%s/%s",parent,dir->d_name);
+!       if (stat(name,&st) < 0) die("stat %s: %s",name,strerror(errno));
+        if (S_ISBLK(st.st_mode) && MAJOR(st.st_rdev) == major &&
+          (MINOR(st.st_rdev) & (increment-1)) == 0) {
+            this = MINOR(st.st_rdev)/increment+1;
+--- 82,88 ----
+        die("opendir %s: %s",parent,strerror(errno));
+      while (dir = readdir(dp)) {
+        sprintf(name,"%s/%s",parent,dir->d_name);
+!       if (lstat(name,&st) < 0) die("lstat %s: %s",name,strerror(errno));
+        if (S_ISBLK(st.st_mode) && MAJOR(st.st_rdev) == major &&
+          (MINOR(st.st_rdev) & (increment-1)) == 0) {
+            this = MINOR(st.st_rdev)/increment+1;
+
+------------------------------
+
+From: cjs@netcom.com (Christopher Shaulis)
+Subject: Re: /etc/securetty? (su from tty)
+Date: Mon, 29 Nov 1993 07:19:46 GMT
+
+philp@universe.digex.net (Phil Perucci) writes:
+
+>How do you set permissions so you can only "su root" from a 
+>local console?  I DON'T want remote logins to be able to
+>switch to root.  I thought it was /etc/securetty...
+
+>I removed all entries except "console" from /etc/securetty, but
+>remote logins can still su to root.
+
+SOB! That does work.. I would have figured some interaction with 
+/etc/securetty myself. If I were in your shoes then my thinking would 
+probably go along the lines of "in a secure enviroment users, with the
+exception of adminstration, have no business changing IDs without 
+going through login/out procedures".. and I'd change su's owner, group,
+and permissions accordingly. That or I'd make use of all this wonderful
+source code to add /etc/securetty checking and post a patch to the net. :)
+
+Christopher
+cjs@netcom.com
+
+------------------------------
+
+From: cjs@netcom.com (Christopher Shaulis)
+Subject: Re: trouble building kernel 0.99 pl 13 with CD-ROM fs
+Date: Mon, 29 Nov 1993 07:34:46 GMT
+
+norman@flaubert.bellcore.com (Norman Ramsey) writes:
+
+>I downloaded and successfully compiled the kernel release 0.99
+>patchlevel 13, but the kernel doesn't have the iso9660 CD-ROM file
+>system even though I asked for that at `make config' time, and the
+>file .config contains the following line:
+
+>CONFIG_ISO9660_FS = CONFIG_ISO9660_FS
+
+Did you make the kernel once before without ISO 9660 support? Did you 
+install the new sources over the old ones? Try doing a 'make clean'. 
+Then do a make depend, config, and zimage in that order. My thinking is
+that you've got old stuff from the previous kernel sitting around.
+
+>I was also surprised that the kernel seemed to do an fsck of the root
+>file system at boot time; I brought down the system cleanly, and the
+>boot disk I made from the Yggdrasil distribution doesn't do such
+>checking.  I assume that ROOT=CURRENT in the makefile means use
+>whatever the root file system is now (in my case /dev/sda1), but
+>perhaps it means something else?
+
+When your root file system is ext2fs, it doesn't appear to be marked
+clean at shut-down. When I used the Yggdrasil CD as root they always 
+were but as soon as I switched it to the hard drive, I started having
+to sit through efscks every time I booted up. My solution was to
+remove the commands from /etc/rc because there was obviously nothing
+wrong. Go ahead and set your ROOT= to /dev/sda1 or whatever you like.
+Make sure you get what you want.
+
+Christopher
+cjs@netcom.com
+
+
+
+------------------------------
+
+From: gary@mojo.uu.pdx.edu (Gary Moyer)
+Subject: getty_ps: uugetty w/scheduling...
+Date: 29 Nov 1993 00:31:04 -0800
+
+I've been (vainly) trying to get uugetty to work with scheduling with no
+luck whatsoever.  I've grabbed the latest sources off sunsite (2.07b) and
+compiled it.  
+
+I'm using the supplied /etc/default/uugetty.<device> file (w/ tweaks only
+to the time schedule).  With the uugetty running I see activity on the
+(via the panel) but answer never goes on.  Here's the script (w/ comments
+removed):
+
+/etc/default/uugetty.cua2:
+ALTLOCK=cua2
+
+SCHED=0:2:17-0:8:00 1:0:00-1:8:00 2:0:00-2:8:00 3:0:00-3:8:00 4:0:00-4:8:00 5:00:00-5:8:00 6:18:45-6:18:50
+
+OFF="" \d+++\dAT\r OK\r\n ATH0\r OK\r\n AT\sM0\sE1\sQ0\sV1\sX4\sS0=0\r OK\r\n
+
+TIMEOUT=60
+
+INIT="" \d+++\dAT\r OK\r\n ATH0\r OK\r\n AT\sM0\sE1\sQ0\sV1\sX4\sS0=1\r OK\r\n
+
+DELAY=1
+
+Oh yeah, modem is a Practical Peripherals 9600 Hayes compatible.  
+Has anyone got this working ?
+
+Thanks!
+
+  -g.m.
+-- 
+===============================================================================
+ Gary Moyer  gary@mojo.uu.pdx.edu, gary@rodney.cs.pdx.edu [LINUX]
+             gary@acacia.cs.pdx.edu [386BSD]  moyerg@cs.pdx.edu
+             "Linux: more than an OS -- it's a social movement"
+
+------------------------------
+
+From: jornj@edb.tih.no (Joern Jensen)
+Subject: cat /dev/null > /dev/rmt0 dangerous?
+Date: Mon, 29 Nov 1993 08:58:21 GMT
+
+We have this scsci-tapedrive here, and I needed to rewind my tape
+automatically in a script. (I haven't compiled mt yet..)
+Now, when I use cat /dev/null > /dev/rmt0, will that do any harm to
+the data on the tape? (I guess it will, if it's in the middle of a
+f.x. a tar-file).
+
+Is there any better way to do this in an 'easy' way with the standard
+utils or commands?
+
+//jornj
+
+------------------------------
+
+From: kenny@festival.ed.ac.uk (K J MacDonald)
+Subject: Re: cat /dev/null > /dev/rmt0 dangerous?
+Date: Mon, 29 Nov 1993 09:25:30 GMT
+
+Joern Jensen (jornj@edb.tih.no) wrote:
+: We have this scsci-tapedrive here, and I needed to rewind my tape
+: automatically in a script. (I haven't compiled mt yet..)
+: Now, when I use cat /dev/null > /dev/rmt0, will that do any harm to
+: the data on the tape? (I guess it will, if it's in the middle of a
+: f.x. a tar-file).
+
+: Is there any better way to do this in an 'easy' way with the standard
+: utils or commands?
+
+        The 'mt' command has a whole collection of useful things you can
+do to a tape, includeing rewind it.
+
+        `mt -f /dev/rmt0 rewind`
+
+        Hope this helps :)
+
+                Kenny.
+
+-- 
+==============================================================================
+Kenneth MacDonald                E-mail: kenny@ed
+Dept. of Geology & Geophysics   "Allow me to introduce myself, Major Dennis
+University of Edinburgh          Bloodnok, International Christmas Pudding
+
+------------------------------
+
+From: danield@nevada.edu (Daniel Z. Davidson)
+Subject: Re: Watcher...
+Date: Mon, 29 Nov 1993 10:42:43 GMT
+
+
+In article <2d37ro$qk2@jacobs.jacobs.mn.org> root@jacobs.mn.org (Mike Horwath) writes:
+>Why do you need to 'spy' on them?
+
+I have been Followong this thread, and I guess it's time to add my two cents
+worth.  
+
+"Spying" is not the only use for such a program.  When I ran a networked
+bbs and users had problems, they would often page me and ask for help
+in doing somehting with the BBS. I found it much easier for them to
+show me a problem (especialy whne It was a bug in my BBS software that I
+couldn't re-produce) than try and tell me about it.
+
+You may not want to 'spy' in them.  However, sometimes it is useful to see
+what a person is doing so you can help them with a problem.
+
+>Can't a user have some privacy?  Or you are so worried what the user is
+>doing that you need to watch so you can reset your modem if he does
+>something questionable?  (oh wow, memory protection and permissions are
+>NOT enough, we have to 'watch' the user and keep him in check)
+
+Sure, the user can have privacy all they want.  I have never been one
+to deney that to users. However, It is nice to be able to watch and help
+users when they ask for help.
+
+Daniel 
+
+
+------------------------------
+
+From: donadio@mxd120.rh.psu.edu (Matthew Donadio)
+Subject: Re: /etc/securetty? (su from tty)
+Date: 29 Nov 1993 17:22:37 GMT
+
+Christopher Shaulis (cjs@netcom.com) wrote:
+: SOB! That does work.. I would have figured some interaction with 
+: /etc/securetty myself. If I were in your shoes then my thinking would 
+: probably go along the lines of "in a secure enviroment users, with the
+: exception of adminstration, have no business changing IDs without 
+: going through login/out procedures".. and I'd change su's owner, group,
+: and permissions accordingly. That or I'd make use of all this wonderful
+: source code to add /etc/securetty checking and post a patch to the net. :)
+
+I _believe_ that su is behaving correctly.  There are times when you
+might need to su remotely, such as when you hang console or X.  There
+is a version of su floating around.  that checks to see what groups
+you belong to and will not let you su to a user that is a memeber of
+group that you aren't.  I think it is in with Rik Faith's util stuff.
+So you can make all trusted users and root members of this group, and
+if a non-trusted user knows the root password and tries to su root,
+then he will get an error message "Cannot su to groups you are not a
+member of."
+
+--
+Beaker aka Matt Donadio   | Life is short,     ---   __ o    __~o    __ o
+donadio@mxd120.rh.psu.edu |    ride like    ----    _`\<,   _`\<,   _`\<,
+--- Penn State Cycling ---|      the wind.    ---  ( )/( ) ( )/( ) ( )/( )
+
+------------------------------
+
+From: kjetilho@ifi.uio.no (Kjetil Torgrim Homme)
+Crossposted-To: comp.os.linux.development
+Subject: Working NIS anywhere?
+Date: 29 Nov 1993 19:03:51 +0100
+
+We're trying to set up a cluster of PC running Linux here at the
+University. We started out with SLS 1.03, and have upgraded the kernel
+to 0.99.13s, libc to 4.4.4, and installed the binaries from the
+yp-linux package (the lib-source in yp-linux seems to have been folded
+into libc by now). gcc is 2.4.5.
+
+Okay, so things are working great for an hour or so. Then we get
+things like:
+
+> bash$ ypmatch kjetilho passwd
+> yp_match: clnt_call: RPC: Timed out
+> clntudp_create: RPC: Port mapper failure - RPC: Timed out
+
+NFS still works. ypbind is running, and gets answered every minute by
+the NIS-server. ypwhich works correctly.
+
+However, portmapper produces a lot of zombies (we've mostly tried
+/etc/portmap, not /etc/rpc.portmap, but the latter has not been any
+better).
+
+I've tried to kill all net-related processes, rm /var/yp/binding/* and
+restarting them (ie. portmap, inetd, named, ypbind - almost anything
+except init and getty :-)
+
+I've looked at NYS, but it isn't near a finished state. Peter Erikson
+suggested I replaced yp-linux code (partially) with NYS, but this
+isn't trivial, so that would be my absolutely last option.
+
+So... Are anyone using NIS on their Linux-machines? Any clues to
+offer?
+
+
+Kjetil T.
+
+------------------------------
+
+From: intell@metronet.com (Intellection)
+Subject: Re: Difference between cua and ttyS
+Date: Mon, 29 Nov 1993 18:35:53 GMT
+
+root@jacobs.mn.org (Mike Horwath) writes:
+
+>ttyS? and cua? are different like this:
+>ttyS? block on an open call if carrier detect is low, meaning that the modem
+>is in an idle state and no one is attached.
+>cua? will not block and is the device to use when you wish to dial out, like
+>in UUCP using uucico, or kermit, or minicomm.
+
+There are two additional facts which confuse people.  First, this
+behavior of the terminal driver is new.  Some people may be running
+the old terminal driver and not getting what you describe.
+
+Second, some programs are written to code around the ttyS? block by
+opening O_NBLOCK.  I believe from what I've read that the old getty
+did this.  Therefore even somebody with the new terminal driver but
+old serial line software may not be getting what you describe.
+
+Moral: Anybody who is running into conflicts on the serial line ought
+to be sure they have the latest versions of software.  Anybody who is
+writing for the serial line ought to be sure they are using the new
+driver as it's intended to be used.  No finger pointing, just a
+reminder.
+
+Regards, Ed
+
+------------------------------
+
+From: mahadev@Erc.MsState.Edu (Shekhar Mahadevan)
+Subject: Disk troubles
+Date: 29 Nov 93 13:53:10
+
+
+I am running Linux 0.99pl13r on my 486. A few days ago, my filesystem
+started to misbehave. Whatever space was freed was not becoming
+available for use. ie. No matter how much space I free, I don't have a
+block to write on. I tried to fix this problem using e2fsck (I even
+tried the latest version available from tytso@mit.edu.) No luck.
+
+Can somebody tell me how to fix this problem without having to go to
+extreme measures like backing up and/or reinstalling?
+
+Thanks
+
+Shekhar
+--
+
+------------------------------
+
+From: jmorriso@rflab.ee.ubc.ca (John Paul Morrison)
+Subject: Re: getty_ps: uugetty w/scheduling...
+Date: 29 Nov 1993 21:26:03 GMT
+
+In article <1993Nov28.104754.9143@mojo.uu.pdx.edu>,
+Gary Moyer <gary@mojo.uu.pdx.edu> wrote:
+>I've been (vainly) trying to get uugetty to work with scheduling with no
+>luck whatsoever.  I've grabbed the latest sources off sunsite (2.07b) and
+>compiled it.  
+>
+>I'm using the supplied /etc/default/uugetty.<device> file (w/ tweaks only
+>to the time schedule).  With the uugetty running I see activity on the
+>(via the panel) but answer never goes on.  Here's the script (w/ comments
+>removed):
+
+Quite simple, the getty scheduling is broken. I sent patches to the
+author several months ago, but I don't think there have been any updates
+to gettyps in a long time. (last month I had to make more changes, daylight
+savings!).
+
+Scheduling with gettyps will work if you live in England ;-)
+I think if you set the schedule to GMT it will work.
+
+You might try this patch:
+
+*** /tmp/getty_ps/main.c        Tue Apr 20 09:51:44 1993
+--- main.c      Fri Nov 12 18:30:03 1993
+***************
+*** 168,178 ****
+  {
+        time_t          t_cur, t_base, t_begin, t_end;
+        int             s_dow, s_hr, s_min, e_dow, e_hr, e_min, count;
+  
+  /* set up the time base
+  */
+!       (void) time(&t_cur);
+        t_base = t_cur - ((t_cur + 4 * 86400) % 604800);
+  
+  /* parse the sched line
+  */
+--- 168,187 ----
+  {
+        time_t          t_cur, t_base, t_begin, t_end;
+        int             s_dow, s_hr, s_min, e_dow, e_hr, e_min, count;
++       long int        tz_s;
++       struct tm       *tm;
+  
+  /* set up the time base
+  */
+!       (void) time(&t_cur);  
+!       tm = localtime (&t_cur);
+!       debug3(D_SCH, "time is now: %d\n", t_cur);
+!       
+! /*    tz_s = timezone - (daylight ? 3600 : 0) ; */
+!       tz_s = timezone - (tm->tm_isdst ? 3600 : 0) ; 
+!       
+        t_base = t_cur - ((t_cur + 4 * 86400) % 604800);
++       debug3(D_SCH, "t_base is now: %d\n", t_base);
+  
+  /* parse the sched line
+  */
+***************
+*** 181,192 ****
+        while(sscanf(nextword(p, &count), "%d:%d:%d-%d:%d:%d",
+          &s_dow, &s_hr, &s_min, &e_dow, &e_hr, &e_min) == 6) {
+                p += count;
+!               t_begin = t_base + (s_dow % 7) * 86400 + s_hr * 3600
+!                 + s_min * 60;
+!               t_end = t_base + (e_dow % 7) * 86400 + e_hr * 3600
+!                 + e_min * 60;
+  
+! /* hadle week overlaps
+  */
+  
+                if(t_end < t_begin) {
+--- 190,201 ----
+        while(sscanf(nextword(p, &count), "%d:%d:%d-%d:%d:%d",
+          &s_dow, &s_hr, &s_min, &e_dow, &e_hr, &e_min) == 6) {
+                p += count;
+!               t_begin = t_base + ((s_dow % 7) * 86400 + s_hr * 3600
+!                 + s_min * 60 + tz_s) % 604800;
+!               t_end = t_base + ((e_dow % 7) * 86400 + e_hr * 3600
+!                 + e_min * 60 + tz_s) % 604800;
+  
+! /* handle week overlaps
+  */
+  
+                if(t_end < t_begin) {
+***************
+*** 483,489 ****
+  /* set the line owned by root
+  */
+  
+!       (void) chmod(devname, 0666);
+        if (! stat(devname, &st)) (void) chown(devname, 0, st.st_gid);
+  
+  
+--- 492,498 ----
+  /* set the line owned by root
+  */
+  
+!       (void) chmod(devname, 0660);
+        if (! stat(devname, &st)) (void) chown(devname, 0, st.st_gid);
+  
+  
+>-- 
+>===============================================================================
+> Gary Moyer  gary@mojo.uu.pdx.edu, gary@rodney.cs.pdx.edu [LINUX]
+>             gary@acacia.cs.pdx.edu [386BSD]  moyerg@cs.pdx.edu
+>             "Linux: more than an OS -- it's a social movement"
+
+
+-- 
+___________________________________________________________________________
+ John Paul Morrison                         
+ University of British Columbia, Canada    
+ Electrical Engineering                   
+ jmorriso@rflab.ee.ubc.ca        VE7JPM  
+
+ Day 35 of Canada held hostage: the socialist Liberal tax & spend tyranny
+
+------------------------------
+
+From: mlandaue@ux4.cso.uiuc.edu (Michael C Landauer)
+Subject: Can't telnet to my machine
+Date: 29 Nov 1993 21:41:23 GMT
+
+I'm having trouble telnetting to my machine.  I can't even do
+telnet 127.0.0.1
+
+I can do it once it I run:
+telnetd -debug &
+
+How do I get telnetd to load at bootup, and stay loaded for more
+than one connection?
+
+-- 
+Michael Landauer          |     IMPEACH THE SGA NOW!!!!!!
+mlandaue@ux4.cso.uiuc.edu |
+
+
+------------------------------
+
+From: barr@pop.psu.edu (David Barr)
+Crossposted-To: comp.os.linux.help
+Subject: Re: Can't telnet to my machine
+Date: 29 Nov 1993 22:09:35 GMT
+
+In article <2ddqa3$ne0@vixen.cso.uiuc.edu>,
+Michael C Landauer <mlandaue@ux4.cso.uiuc.edu> wrote:
+>I'm having trouble telnetting to my machine.  I can't even do
+>telnet 127.0.0.1
+>
+>I can do it once it I run:
+>telnetd -debug &
+
+Check your /etc/inetd.conf.  It should have something like this in it:
+
+telnet stream  tcp     nowait  root    /usr/etc/telnetd        telnetd
+
+Also make sure that you are running inetd.  (typically out of /etc/rc.net
+or rc.local)
+
+followups redirected to the appropriate newsgroup.
+
+--Dave
+-- 
+"No man is good enough to govern another man without that other's consent"
+- Abraham Lincoln
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Admin-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.admin) via:
+
+    Internet: Linux-Admin@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Admin Digest
+******************************

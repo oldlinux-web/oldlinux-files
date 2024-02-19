@@ -1,0 +1,669 @@
+From:     Digestifier <Linux-Development-Request@senator-bedfellow.mit.edu>
+To:       Linux-Development@senator-bedfellow.mit.edu
+Reply-To: Linux-Development@senator-bedfellow.mit.edu
+Date:     Sun, 16 Oct 94 17:13:15 EDT
+Subject:  Linux-Development Digest #318
+
+Linux-Development Digest #318, Volume #2         Sun, 16 Oct 94 17:13:15 EDT
+
+Contents:
+  Linux filesystem layout (Jake Pusey)
+  Re: IS anyone reading users' complaints? (root)
+  Re: kstat.dk_drive isn't incremeneted (Nick Holloway)
+  Re: WANTED: Xerion bin or ported source (Rafal Kustra)
+  Making generic SCSI stuff work. (M. K. Shenk)
+  Re: Making generic SCSI stuff work. (M. K. Shenk)
+  Re: We a FAQ: Linux vs. *BSD!!! (Dan Yergeau)
+  Re: Filesystem idea (Kai Petzke)
+  Re: 1.1.53 - fdformat - IOCTL error still there (Andre Schoorl)
+  Re: Mathematical functions with c (David Cure)
+  Re: Optimizing the NFS server (Kevin Martinez)
+  Re: Writing to OS/2 HPFS...how soon? (Martin Spott)
+  Re: A badly missed feature in gcc (Jeff Kesselman)
+  Re(2): Linux For Mac (Robert A. Piacente)
+  Re: Improving SLIP latency under Linux (Matthew Dillon)
+
+----------------------------------------------------------------------------
+
+From: jake@clark.net (Jake Pusey)
+Crossposted-To: comp.os.linux.help
+Subject: Linux filesystem layout
+Date: 12 Oct 1994 17:45:29 GMT
+
+    I need help on the layout of the linux filessytem.  I
+know that the third block contains an inode bitmap, but
+how many inodes does it represent?  I coudlnt get the
+numbers to match dumpe2fs.
+
+    Do the inodes begin at the start of the 4th block?
+Please give me any info on inode, inodelist, and datablock
+that you can spare.  I am getting frustrated by the
+whole thing!!!:}
+
+    Seriously, I would like to know how to decrypt
+the inodes (I am taking a class in Unix systems programming)
+so this is crucial.  Textual descriptions preferred, code is
+okay but I don't want too much (have tolearn...).
+
+  Any help is greatly appreciated.
+
+Jake
+
+
+------------------------------
+
+From: root@vorlon.mit.edu (root)
+Subject: Re: IS anyone reading users' complaints?
+Date: 16 Oct 1994 19:41:42 GMT
+Reply-To: jered@mit.edu
+
+Perhaps there is a need for comp.os.linux.bugs? I should go check what
+the reorganization RFC is saying.
+
+
+------------------------------
+
+From: Nick.Holloway@alfie.demon.co.uk (Nick Holloway)
+Subject: Re: kstat.dk_drive isn't incremeneted
+Date: Sun, 16 Oct 1994 00:36:04 +0000
+
+In <1994Oct13.165858.29816@news.wrc.xerox.com> leisner@batman (Marty Leisner 25733) writes:
+> I'm running procinfo, and the disk information isn't getting incremented...
+> [...]
+> Looking more carefully, it appears the 0are
+> kstat.dk_drive[0-3] isn't being incremented anywhere...
+
+They aren't.  They never have done (in a production kernel).  Randy
+Appleton produced a patch that did this, but this would be unable to
+distuinguish between hda and sda.  I believe that this was on sunsite
+at some stage, and may still be.
+
+I also wrote a patch that I sent to Linus and Linux Activists.  I would
+expect it to be easily modified for the current kernel, despite it being
+relative to 1.0.  Here it is if you (or anybody else) wants it.
+
+-- 
+Nick Holloway |  `O O'  | Home: Nick.Holloway@alfie.demon.co.uk
+[aka `Alfie'] | // ^ \\ | Work: Nick.Holloway@parallax.co.uk
+
+-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+Here is a patch relative to v1.1.0
+
+The placing of the code to do the collection for disk statistics came
+from Randy Appleton's patch, but this uses a different approach.  His
+approach had the disadvantage that hda and sda would be lumped together
+-- probably not a too uncommon occurance.
+
+This will collect statistics for drives in the order they are first
+accessed.  It does this by keeping a table of drives.  Although this is
+searched linearly there are only 4 entries.
+
+It considers devices on the same drive as equivalent by munging the
+device to strip out the sub-drive bits.  It should be done using MAJOR,
+MINOR and MAKEDEV macros, but this doesn't get optimised into the form
+used.
+
+It currently collects statistics for hd, hd1, xd, sd, and fd.  It could
+easily be extended to include CDROMS too.  I'm not sure of the worth of
+collecting for floppy drives, but I've only got two hard disks, so it
+helps fill up the table :-)
+
+        Nick Holloway
+
+--- 1.1 1994/04/08 16:29:46
++++ drivers/block/ll_rw_blk.c   1994/04/09 10:35:44
+@@ -152,6 +152,48 @@
+ static void add_request(struct blk_dev_struct * dev, struct request * req)
+ {
+        struct request * tmp;
++       static dev_t drivetbl[DK_NDRIVE];
++       dev_t drive = 0;
++       int i;
++
++       /* Disk usage statistics.
++        *   If we want statistics for a device, we fold it into a single
++        * drive, and update the statistics.  The drives are in the order
++        * we first see them.  I would expect this wouldn't change much on
++        * many systems -- possible exeception could be fd0 vs fd1.
++        *   We could keep drivetbl in kstat, and make it visible via /proc
++        * so that we can work out what the devices really are, but is this
++        * worth it?
++        *      Nick Holloway, 8th April 1994.
++        */
++       switch (MAJOR(req->dev)) {
++               case SCSI_DISK_MAJOR:
++                       drive = req->dev & 0xFFF0;
++                       break;
++               case HD_MAJOR:
++#ifdef HD1_MAJOR
++               case HD1_MAJOR:
++#endif
++               case XT_DISK_MAJOR:
++                       drive = req->dev & 0xFFC0;
++                       break;
++               case FLOPPY_MAJOR:
++                       drive = req->dev & 0xFF03;
++                       break;
++       }
++       if (drive != 0) {
++           for (i = 0; i < DK_NDRIVE; i++) {
++               if (drivetbl[i] == drive) {
++                   kstat.dk_drive[i]++;
++                   break;
++               } else if (drivetbl[i] == 0) {
++                   /* printk("kstat.dk_drive[%d] is drive %04x\n", i, drive); */
++                   drivetbl[i] = drive;
++                   kstat.dk_drive[i]++;
++                   break;
++               }
++           }
++       }
+ 
+        req->next = NULL;
+        cli();
+
+
+------------------------------
+
+From: rafal@cs.toronto.edu (Rafal Kustra)
+Subject: Re: WANTED: Xerion bin or ported source
+Date: 14 Oct 94 21:05:09 GMT
+
+>>>>> "Greg" == Greg Bruell <gbruell@wellfleet.com> writes:
+In article <37fjcc$e6l@paperboy.wellfleet.com> gbruell@wellfleet.com (Greg Bruell) writes:
+
+
+    Greg> I know this has been posted before but I couldn't remember
+    Greg> when. If anyone has a working linux port of xerion binaries
+    Greg> or source I would greatly appreciate them. This seems like a
+    Greg> good thing to put on sunsite. I'm sure it would be accepted
+    Greg> into Incoming and I don't think it would break any copying
+    Greg> agreements. Thanks.
+
+
+    Greg> Gregory Bruell Wellfleet Communications, Inc.
+
+
+
+
+
+Funny, I just compiled xerion (which we use for assignement, here at
+UofT), yesterday (actually today, since I finished at 2am). Compiles
+without a hitch once you have tcl/tk installed with all extensions.
+Only problem I had was when I compiled it DLL with new 3.1 Xlibs -
+since tcl/tk is also DLL with 2.1.1 Xlibs. Solution was to use old
+Xlibs.
+
+I have the freshest sources, which fixed a bad memory leak, just few
+days ago (so we could do an assignement in a course -:).
+
+I will ask the guys in Neural Net whether its OK to upload it to
+sunsite - copyright notice would indicate it would be no problem.
+
+
+
+                        Rafal
+
+------------------------------
+
+From: mkshenk@u.washington.edu (M. K. Shenk)
+Subject: Making generic SCSI stuff work.
+Date: 14 Oct 1994 11:59:11 GMT
+
+A couple of folks wanted this.
+
+Ok, if you've got SCSI devices that are not being seen on bootup, it's
+because your device type does not have a case in a switch statement
+in /usr/src/linux/drivers/scsi/scsi.c (or wherever it is for you.) and
+the switch is defaulting and assigning a -1 to the variable 'type.'  The
+quick and dirty fix would be to comment this out.   I personally am
+setting up a scanner, and did this:  in scsi.h there are a bunch of
+#defines for various types of SCSI devices.  I put in a #define TYPE_SCANNER
+0x06 and then added an empty case in the switch so we wouldn't default.
+Don't see any real reason not to add this #define to scsi.h in the standard
+kernel...  I also had to do something you might also have to do:  my scanner
+is a bit addled and responds to all LUNs when it is being detected.  The
+fix for this problem, or your device hanging when polled for LUNs > 0, is
+to give it an entry in the 'blacklist' in scsi.c, so it's only polled
+for LUN 0.  Mine was {"UMAX", "UC840", "V1.4"}.  Search for 'blacklist'
+it's pretty self-explanatory.  
+
+Now-- major # for generic devices is 21 (a lot of folks will already have
+entries /dev/sg[a-h] with major 21, minors 0-7) and the minor depends on
+the device's RELATIVE position on the scsi bus...not it's id.  This will
+also be the order of detection on bootup... Note that ALL scsi devices
+will get an entry...tapes, disks, CD-ROMs, etc.  So someone with devices
+on scsi id#1, 2, and 5 would have the dev. on 1 at 21,0, #2 at 21,1, and
+#3 on 21,2.  Or /dev/sg[a-c].  
+
+Here's a bit of code to do an inquiry once you think you have stuff
+set up right.  Execute with a.out /dev/whatever.  It's a quick hack, no
+real error checking...  
+
+
+#include "/usr/src/linux/drivers/scsi/sg.h"  /* or wherever */
+#include <stdio.h>
+#include <fcntl.h>
+
+#define REPLY_LEN 36
+
+int main(int argc, char **argv)
+{
+int fd;
+static unsigned char inquiry[]={0x12,0,0,0,REPLY_LEN,0};
+
+struct sg_command
+ {
+  struct sg_header header;
+  unsigned char bytes[4095-sizeof(struct sg_header)];
+ } sg_command;
+
+sg_command.header.pack_len = 6 + sizeof(struct sg_header);
+sg_command.header.reply_len = REPLY_LEN + sizeof(struct sg_header);
+sg_command.header.pack_id=0;
+sg_command.header.result=0;
+memcpy(sg_command.bytes, inquiry, 6);         
+
+if((fd=open(argv[1], O_RDWR, NULL))==-1)
+   {
+    printf("Can't open %s.\n",argv[1]);
+    exit(1);
+   }
+
+if (write(fd, &sg_command, sg_command.header.pack_len) < 
+sg_command.header.pack_len)
+   {
+    puts("Didn't write all (any?) bytes.\n");
+   }
+
+if (read(fd, &sg_command, sg_command.header.reply_len)==-1)
+   {
+    puts("Read error.\n");
+   }
+
+printf("%s\n",&sg_command.bytes[8]);
+}          
+
+This, along with a look at struct sg_header in sg.h, should get you going.
+
+
+-Craig
+
+
+------------------------------
+
+From: mkshenk@u.washington.edu (M. K. Shenk)
+Subject: Re: Making generic SCSI stuff work.
+Date: 14 Oct 1994 12:02:50 GMT
+
+In article <37lrqf$qjl@nntp1.u.washington.edu>,
+M. K. Shenk <mkshenk@u.washington.edu> wrote:
+>A couple of folks wanted this.
+...
+>
+>also be the order of detection on bootup... Note that ALL scsi devices
+>will get an entry...tapes, disks, CD-ROMs, etc.  So someone with devices
+>on scsi id#1, 2, and 5 would have the dev. on 1 at 21,0, #2 at 21,1, and
+>#3 on 21,2.  Or /dev/sg[a-c].  
+
+Oops.  I'm such a goof.  I meant #5 on 21,2.  Sorry.
+
+-Craig.
+
+
+
+------------------------------
+
+From: yergeau@leland.Stanford.EDU (Dan Yergeau)
+Crossposted-To: comp.os.386bsd.development,comp.sys.unix
+Subject: Re: We a FAQ: Linux vs. *BSD!!!
+Date: 14 Oct 1994 18:02:42 GMT
+
+In article <JKH.94Oct13042845@freefall.cdrom.com>, jkh@freefall.cdrom.com (Jordan K. Hubbard) writes:
+|> 
+|> The only way we're going to stop this silliness is to simply start
+|> ignoring the querants.  If someone asks "Which is better?" ...
+|> and everybody just flat
+|> out _ignores_ the question and goes about their business as if nothing
+|> happened, folks will eventually get the point and stop asking.
+
+IMNSHO, the question is usually asked by relative newbies.  These
+people have not seen the question asked and ignored, so ignoring
+the question will not make it go away.  And, there will always be
+enough newbies around to get a thread going.
+
+[flame wars argument deleted]
+
+As there is no "reasonable" standard response, everyone tries to
+interject their opinions, point out inaccuracies (often
+inaccurately), etc.  Of course it degrades into a flame war.
+
+|> No FAQ will ever satisfy the two sides, and would rapidly become
+|> obsolete even if it did.
+
+A Linux *vs.* BSD FAQ is probably not the best idea, but a short
+and *neutral* information sheet comparing capabilities could work.
+The biggest problem I see is how to handle the features of different
+distributions of Linux/*BSD.
+
+Of course, the issues of who has the superior filesystem, VM,
+networking, etc. would have to be ignored, unless they are issues
+that directly affect users.  Most *users* don't care about most of
+these technical issues anyway.  It is only the geeky CS-types that
+care and will get into flame wars about it.
+
+Examples of issues that may directly affect users are: 
+ - Archived Linux binaries always seem to require a specific
+   version of a shared library.  Does this mean that I need several
+   different versions to support different binaries?
+ - How easy is it to increase swap?  Do I have to repartition my
+   drive? 
+
+|> One German magazine reviewer who compared FreeBSD
+|> to Linux ended up making an unfavorable judgement of FreeBSD because
+|> _it didn't have enough shells_ bundled in by default!  
+
+Most magazine writers are idiots who would be more impressed if the
+OS could run DOOM but crashed every 4 hours than if it were stable
+and didn't trash their critical project the day before it was due.
+Just look at Byte's Pournelle and the weenies that treat his column
+and recommendations like the word of God.
+
+|> This almost perfectly exemplifys the average querant - they don't
+|> really want to know which is better in general (as if "better in
+|> general" meant anything anyway), they want to know which is better for
+|> THEM, and how the hell are we supposed to know that?
+
+A neutral feature comparison would go a long way to answering that
+question for THEM.  They would probably realize that they wouldn't
+be disappointed with any choice.
+
+And, if they did have specific concerns not answered directly by the
+FAQ, the presence of a FAQ may help them to more carefully formulate
+their questions.
+
+--
+Dan Yergeau                         You are in a twisty little passage
+yergeau@gloworm.Stanford.EDU        of standards, all conflicting.
+#include <std.disclaimer>
+
+------------------------------
+
+From: wpp@marie.physik.tu-berlin.de (Kai Petzke)
+Subject: Re: Filesystem idea
+Date: 14 Oct 94 12:07:45 GMT
+
+s931306@minyos.xx.rmit.EDU.AU (Albert Hui) writes:
+
+>tim@morgoth.derwent.co.uk. (Tim Morley) writes:
+>>Jeffrey Charles Schave <schave@PROBLEM_WITH_INEWS_GATEWAY_FILE> wrote:
+>>>Riku Saikkonen (riku.saikkonen@compart.fi) wrote:
+>>>> [automagically delete temporary file]
+
+>>>,whatever(via cron). This script could check the amount of free space
+>>>left on the drive, and if necessary, destroy any .o files.
+
+>>You have to be a bit careful about this, I know of a system where
+>>someone implemented this, and it was fine until a reboot was required,
+>>with some strange and insignificant .o file the system refused to
+>>boot....
+
+>I heard of a story about a system (for non-programmers) deletes all
+>core files every night.  Then a scientist wrote a paper and named the
+>file "core"...
+
+There is also the story of a poor guy named John Core, user name "core",
+whose mail (from /var/spool/core) got deleted regularly.
+
+I like the idea of a file attribute "temporary".  It could easily be
+added to the ext2 filesystem, which already supports a set of other
+file attributes.
+
+Then you can easily add a daemon, which scans the filesystem and deletes
+the oldest temporary stuff, after free space falls under a certain
+pre-defined threshold.
+
+
+
+
+Kai
+-- 
+Kai Petzke                      | How fast can computers get?
+Technical University of Berlin  |
+Berlin, Germany                 | Warp 9, of course, on Star Trek.
+wpp@marie.physik.tu-berlin.de   |
+
+------------------------------
+
+From: aschoorl@uglz.UVic.CA (Andre Schoorl)
+Subject: Re: 1.1.53 - fdformat - IOCTL error still there
+Date: Wed, 12 Oct 94 22:34:44 GMT
+
+In article <37cp82$e3v@renux.frmug.fr.net>,
+Rene COUGNENC <cougnenc@blaise.ibp.fr> wrote:
+>Ce brave Vincent Fatica ecrit:
+>
+>> Very shortly after patch52 came out, a few persons observed an IOCTL error
+>> when using fdformat. I figured it would be better in 1.1.53, 
+
+I have no problems with 1.1.53.  I can use fdformat, mformat, mount, etc...
+just fine.  I'm running on a Dell 486 DX2 66.
+
+I can't wait til 1.1.54 :^)
+
+
+-- 
+Andre Schoorl <aschoorl@engr.uvic.ca>   PGP key available via finger/keyserver
+C.Eng Student, U.Vic, Canada.  -> LINUX! <-  http://www-engr.uvic.ca/~aschoorl
+
+------------------------------
+
+From: dcure@ifremer.fr (David Cure)
+Subject: Re: Mathematical functions with c
+Reply-To: dcure@ifremer.fr
+Date: Wed, 12 Oct 94 11:26:06 GMT
+
+In article 1rg@news.alcatel.ch, kuemin@srapc101.alcatel.ch (Norbert Kuemin) writes:
+>Does anyone now which library i must link to use the definitions from
+>/usr/include/math.h ???
+>
+
+        use -lm (libm.a) in command line of compil.
+
+                David.
+
+---
+
+   _/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/
+   David Cure - Ifremer/Brest - SISMER - BP70 - 29280 PLOUZANE - FRANCE
+     Email : David.Cure@ifremer.fr / Tel : 98.22.46.42 - 98.22.42.10
+
+   " Apres avoir vu la lumiere, on ne retourne pas dans les tenebres "
+
+
+
+------------------------------
+
+From: Kevin Martinez <lps@rahul.net>
+Subject: Re: Optimizing the NFS server
+Date: Sun, 16 Oct 1994 05:29:35 GMT
+
+ig25@fg70.rz.uni-karlsruhe.de (Thomas Koenig) writes:
+
+>What about he NFS server?  It's also far from fast, at the moment;
+>I see several bottlenecks:
+
+>- Other Unices have the advantage of being able to server multiple
+>  requests by having multiple in-kernel NFS servers, which can serve
+>  multiple requests concurrently.  For example, this means that one
+>  process can do the CPU work to check a request while another one
+>  is waiting for data to come from the disk.  Linux nfsd, which is
+>  a user-level daemon, can't do this (being single - threaded).
+
+NFS client performance has come a long way! I'd love to see similar 
+effort on the server side. How much would multiple nfsd processes help if 
+the server ran as a kernel level process? I've tried multiple user level 
+nfsd processes but only one ever gets used. Linux doesn't seem to need 
+the SunOS style biod daemons.... 
+
+I am using a Linux machine as a NFS server for industrial processes. I  
+see great potential in this - especially if I could run a few more NFS  
+clients per server.
+
+Any interest in a nfswatch port?
+
+
+
+
+-- 
+========================================================================
+ Kevin Martinez           Fear the Government  that fears your Scanner!
+ lps@rahul.net            I owe all my success to Roly Poly Fish Heads!
+========================================================================
+
+------------------------------
+
+From: sk001sp@unidui.uni-duisburg.de (Martin Spott)
+Subject: Re: Writing to OS/2 HPFS...how soon?
+Date: 12 Oct 1994 17:03:28 GMT
+
+: Does anyone know when support for writing to an OS/2 HPFS will be
+: available?
+As far as I know it will take too long time to fait for it.
+
+Martin.
+--
+
+EMail:                 bevorzugt privat: Martin@smigel.mitropa.com
+             notfalls auch "dienstlich": Martin.Spott@uni-duisburg.de
+
+------------------------------
+
+From: jeffpk@netcom.com (Jeff Kesselman)
+Subject: Re: A badly missed feature in gcc
+Date: Sat, 15 Oct 1994 01:52:18 GMT
+
+In article <hpa.50200000.Just.say.no.to.DOS@ahab.eecs.nwu.edu>,
+H. Peter Anvin <hpa@nwu.edu> wrote:
+>One thing: would people stop sending me compiler samples?  I *know*
+>that it is not in the current version of the C standard, and I know
+>there are people out there who think ANSI C, the 1990 version, is the
+>Word of God[TM], but all I did was mention that:
+>
+>a) A number of C compilers support it as an extension,
+>b) It has been proposed for inclusion in a future version of the ANSI
+>   C standard,
+>c) There have yet surfaced a *non-artificial* example of code that it
+>   would break (which would, if such code existed, make (b) a Bad
+>   Thing[TM]).
+>
+>Please let's put this thread to rest.
+>
+>       /hpa
+>-- 
+>INTERNET: hpa@nwu.edu             --- Allah'u'abha ---
+>IBM MAIL: I0050052 at IBMMAIL     HAM RADIO:   N9ITP or SM4TKN
+>FIDONET:  1:115/511 or 1:115/512  STORMNET:    181:294/1 or 181:294/101
+>Laughter is the best medicine -- Quayle in '94.
+
+
+I think, perhapse, you are missing the point of the examples because of 
+possibly not having studied compiler theory (no shame in that, we all 
+have to make choices as to what to study.)  There really is no such 
+thing as an 'artificial example'.  A language syntax is defined by the 
+set of legal programs that can be written with it.  There are no 'better 
+or worse' programs as far as the synatx is concerned, all that is legal 
+has equal standing.  This is pretty basic to language theory.  Thsu the 
+examples are legal syntax, that woudl become illegal, and thats all that 
+really matters.
+
+
+Jeff Kesselman
+
+------------------------------
+
+Date: 16 Oct 1994 16:44:18 -0000
+From: Robert_A._Piacente@eastnet.com (Robert A. Piacente)
+Reply-To: Robert_A._Piacente@eastnet.com
+Subject: Re(2): Linux For Mac
+
+Is there a port being worked ? I've asked this before. At the Unix Expo I was
+told that no Mac
+or Mac/PPC would be worked. On the other hand they would be an IBM PPC port
+..... someone had donated the equipment and teck.
+
+------------------------------
+
+From: dillon@apollo.west.oic.com (Matthew Dillon)
+Subject: Re: Improving SLIP latency under Linux
+Date: 16 Oct 1994 01:33:43 -0700
+
+:In article <1994Oct13.135301.15921@inca.comlab.ox.ac.uk> callahan@maths.ox.ac.uk (Michael Callahan) writes:
+:>In article <377ijq$96@ulowell.uml.edu>,
+:>John Richardson <jrichard@cs.uml.edu> wrote:
+:>>In article <374crv$6mp@gate.noris.de>,
+:>>Matthias Urlichs <urlichs@smurf.noris.de> wrote:
+:>>>The reasonable thing to do here is to increase the baud rate you use when
+:..
+:Actually, what you would really like is to have a SLOW baud rate
+:for transmitting to the modem, and a FAST baud rate for receiving
+:from it.  The problem with having a FAST baud rate for transmitting
+:to the modem is that the Linux host can fill up the modem's 
+:transmit buffer rapidly, at which point the modem has a couple
+:seconds of data to send, so _no matter what the Linux host does_,
+:a new interactive packet will have to wait a couple of seconds
+:for delivery.
+:
+:I wouldn't be surprised if a 9600 baud connection to a 14.4
+:modem session gave the best latency results for interactive
+:traffic with simultaneous bulk traffic.  On the other hand,
+:it's slow.
+:
+:Michael
+:---
+:Michael Callahan
+:callahan@maths.ox.ac.uk
+
+    Actually, Mike, latency goes through the roof.  The problem is that
+    an error correcting modem will packetize your data for transmission
+    and, of course, receives data from the other modem in packets.  It
+    must then transfer the 'packet' to the computer via the host serial
+    port.
+
+    You basically want as FAST a connection as possible to reduce this
+    latency.  The difference between 38400 and 57600 (or 76800) is VERY 
+    noticable even if the modem itself is only a 14.4, *especially*
+    for small interactive packets.
+
+                                                -Matt
+
+-- 
+
+    Matthew Dillon              dillon@apollo.west.oic.com
+    1005 Apollo Way             ham: KC6LVW (no mail drop)
+    Incline Village, NV. 89451  Obvious Implementations Corporation
+    USA                         Sandel-Avery Engineering
+    [always include a portion of the original email in any response!]
+
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

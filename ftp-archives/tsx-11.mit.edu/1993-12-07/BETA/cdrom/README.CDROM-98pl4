@@ -1,0 +1,260 @@
+
+		ANNOUNCING - CDROM support for linux (beta 0.7).
+
+	CDROM support for linux is now ready for beta testing.  You
+must have a CDROM drive, a SCSI adapter and a ISO9660 format disc
+before this will be of any use to you.  You will also need to have the
+source tree for linux 0.98pl4 kernel sources available.  This
+filesystem will not work with a pre pl4 kernel, because one of the arguments
+to the iget function changed in pl4, and a new include file is now required.
+
+	With the patch level 0.98 kernel, the scsi cdrom support is
+now in the distribution, so there are no longer any special scsi
+patches for the cdrom.  The filesystem is not yet a part of the kernel
+because it is eventually envisioned (by Linus) that this will be
+installable at run time once the installable driver/filesystem code is
+working in the kernel.  The door lock/unlock functions are now part of
+the stock scsi drivers, so these functions have been removed from the
+filesystem.
+
+	To install, unpack the archive in your linux kernel directory 
+(usually /usr/src.  This will add a number of new files to the linux
+source tree).  You will then need to apply the patches found in cdrom.diff
+with the following command:
+
+patch -p0 < cdrom.diff
+ 
+and then build the kernel.  Once you have booted the system, you will need
+to add a device with major=11, minor=0 for the first cdrom drive, minor=1 for
+the second and so forth.  You can use a command something like:
+
+	mknod -m 500 /dev/cdrom b 11 0
+
+To mount a disc, use a command something like:
+
+	mount -t iso9660 /dev/cdrom /mnt
+
+I would be interested in hearing about any successes or failures with this
+code.
+
+CHANGES SINCE 0.6:
+
+	Various minor changes to mirror changes in the kernel as a whole.
+
+CHANGES SINCE 0.5:
+
+	Door locking functions removed from filesystem, since those
+operations are now handled automatically by the scsi code.
+
+	In inode.c, set a value for s->s_blocksize, so that execve can 
+execute binaries off of a CDROM.
+
+CHANGES SINCE 0.4:
+
+	No functional changes to filesystem, scsi code is now part of
+distribution kernel as of pl5.
+
+CHANGES SINCE 0.3:
+
+	The main difference is that the filesystem has been updated to
+work with 0.97pl4.
+
+	Also, one new mount option has been added, "norock", which will
+inhibit the rock ridge protocol.
+
+CHANGES SINCE 0.2:
+
+	Support has been added for the older (and now obsolete) variant
+of the iso9660 filesystem, which is known as High Sierra.  There are apparently
+a number of discs still out there that are in this format, and High Sierra
+is actually nearly identical to iso9660, so I added support.
+
+	Mount options have been added which can disable filename mapping,
+and control the conversion of text files.  The options are
+
+	map=off
+	map=normal
+	conv=binary
+	conv=text
+	conv=mtext
+
+The effect that these options have is described later on in this document.
+
+	One small scsi error was fixed which would result in the driver
+hanging if there were an unusual error of any kind.
+
+CHANGES SINCE 0.1:
+
+	Error detection/correction have been improved.  You should not
+get any more multiply queued commands, and I increased the timeout
+period such that the drive no longer times out.  My drive is fairly
+fast, so other drives may have timeout problems.  I need to know this
+so that I can increase the timeout period to a workable value for all
+drives.  The error detection/correction should be pretty solid now.
+
+	Support for Rock Ridge extensions has been added to the filesystem.
+This means:
+
+	* Longer filenames (My implementation limits it to 256 chars).
+	* Mixed case filenames, Normal unix syntax availible. 
+	* Files have correct modes, number of links, and uid/gid
+	* Separate times for atime, mtime, and ctime.
+	* Symbolic links.
+	* Block and Character devices (Untested).
+	* Deep directories (Untested).
+
+	I was able to implement this because Adam Richter was kind
+enough to lend me the Andrew Toolkit disc, which has the Rock Ridge
+extensions.  I should point out that the block and character devices
+and the deep directories have not been tested, since they do not
+appear on the disc that I have.  If anyone has some pre-mastering software,
+and could throw together a *very* small volume (i.e. one floppy disc)
+that has some of these things, I could use the floppy to test and debug
+these features.
+
+	A single element cache was added that sits between the readdir
+function and the lookup function.  Many programs that traverse the
+directory tree (i.e. ls) also need to know the inode number and find
+information about the file from the inode table.  For the CDROM this
+is kind of silly, since all of the information is in one place, but we
+have to make it look kind of like unix.  Thus the readdir function
+returns a name, and then we do a stat, given that name and have to
+search the same directory again for the file that we just extracted in
+readdir.  On the Andrew toolkit disc, there is one directory that
+contains about 700 files and is nearly 80kb long - doing an ls -l in
+that directory takes several minutes, because each lookup has to
+search the directory.  Since it turns out that we often call lookup
+just after we read the directory, I added a one element cache to save
+enough information so as to eliminate the need to search the directory
+again.
+
+	Scatter-gather for the cdrom is now enabled.  This should lead
+to slightly faster I/O.
+
+
+KNOWN PROBLEMS:
+
+	None.
+
+             ********************************************
+
+Some general comments are in order:
+
+	On some drives, there is a feature where the drive can be
+locked under software control to essentially deactivate the eject
+button.  The iso9660 filesystem activates this feature on drives so
+equipt, so you may be unable to remove the disc while it is mounted.
+The eject button will be re-enabled once the disc is dismounted.
+
+	Since it is impossible to corrupt a CDROM, it is unlikely that
+a bug in the iso9660 filesystem will lead to data corruption on your
+hard disk, with the possible exception of files copied from the CDROM
+to the hard disk.  Nonetheless, it is a good idea to have a backup or
+your hard disk, just in case.  Then again, I really did not need to
+say that, did I :-)
+
+	There were several bugs in error handling in the scsi code.
+Previously when a command failed, the higher level drivers would not
+receive the correct sense data from the failed command, or would misinterpret
+the data that they did get.  These has been fixed.
+
+	Up until now, SCSI devices were either discs or tapes (and the
+tapes have not been fully implemented).  CDROM drives are now a third
+category.  There are several reasons why we do not want to treat then
+the same as a regular hard disk, and it was cleaner to make a third
+type of device.  One reason was that.....
+
+	The CDROM has a sector size of 2048 bytes, but the buffer
+cache has buffer sizes of 1024 bytes.  The SCSI high level driver for
+the cdrom must perform buffering of all of the I/O in order to satisfy
+the request.  At some point in the near future support will be present
+in the kernel for buffers in the buffer cache which are != 1024 bytes,
+at which time this code will be remove.
+
+	Both the ISO 9660 filesystem and the High Sierra are
+supported.  The High Sierra format is just an earlier version of
+ISO9660, but there are minor differences between the two.  Sometimes
+people use the two names interchangably, but nearly all newer discs
+are the ISO9660 format.
+
+	The inode numbers for files are essentially just the byte
+offset of the beginning of the directory record from the start of the
+disc.  A disc can only hold about 660 MB, so the inode numbers will
+be somewhere between about 60K and 660M.   Any tool that performs
+a stat() on the CDROM obviously needs to be recompiled if it was
+compiled before 32 bit inode support was in the kernel.
+
+	A number of ioctl functions have been provided, some of which
+are only of use when trying to play an audio disc.  An attempt has
+been made to make the ioctls compatible with the ioctls on a Sun, but
+we have been unable to get any of the audio functions to work.  My
+NEC drive and David's Sony reject all of these commands, and we currently
+believe that both of these drives implement the audio functions using
+vendor-specific command codes rather than the universal ones specified
+in the SCSI-II specifications.
+
+	The filesystem has been tested under a number of conditions,
+and has proved to be quite reliable so far.  This filesystem is
+considerably simpler than a read/write filesystem (Files are
+contiguous, so no file allocation tables need to be maintained, there
+is no free space map, and we do not need to know how to rename, create
+or delete files).
+
+	Text files on a CDROM can have several types of line
+terminators.  Lines can be terminated by LF, CRLF, or a CR.  The
+filesystem scans the first 1024 bytes of the file, searching for out
+of band characters (i.e. > 0x80 or some control characters), and if it
+finds these it assumes the the file is a binary format.  If there are
+no out of band characters the filesystem will assume that the file is
+a text file (keeping track of whether the lines are terminated by a
+CR, CRLF, or LF), and automatically converts the line terminators to a
+LF, which is the unix standard.  In the case of CRLF termination, the
+CR is converted to a ' '.  The heuristic can be explicitly overridden
+with the conv= mount option, which tells the filesystem that *all* files
+on the volume are the specified type.
+
+	Rock Ridge extensions can be inhibited with the "norock" mount
+option.  This could be of use if you have scripts that work with the
+non-Rock Ridge filenames, or if you encounter a bug in the filesystem
+which really screws you up.
+
+
+                  ***************************************
+                  ***************************************
+
+The remaining comments *only* apply to discs *without* the Rock Ridge
+extensions:
+
+	The find command does not work without the -noleaf switch.
+The reason for this is that the number of links for each directory file
+is not easily obtainable, so it is set to 2.  The default behavior for
+the find program is to look for (i_links-2) subdirectories in each
+directory, and it then assumes that the rest are regular files.  The
+-noleaf switch disables this optimization.
+
+	The filesystem currently has the execute permission set for
+any non-directory file that does not have a period in its name.  This
+is a crude assumption for now, but it kind of works.  There is not an
+easy way of telling whether a file should be executable or not.
+Theoretically it is possible to read the file itself and check for a
+magic number, but this would considerably degrade performance.
+
+	The filesystem does not support block or character devices,
+fifos, or symbolic links.  Also, the setuid bit is never set for any
+program.  The main reason for this is that there is no information in
+the directory entry itself which could be used to indicate these
+special types of files.
+
+	Filenames under ISO9660 are normally all upper case on the
+disc but the filesystem maps these to all lower case.  The filenames
+on the disc also have a version number (like VMS) which appears at the
+end of the filename, and is separated from the rest of the filename by
+a ';' character.  The filesystem strips the version numbers from the
+filename if the version number is 1, and replaces the ';' by a '.' if
+the version number is >1.  The mount option map=off will disable all
+of the name mapping, and when this is in effect, all filenames will be
+in upper case, and the semicolons and version numbers will always appear.
+
+eric@tantalus.nrl.navy.mil
+ericy@gnu.ai.mit.edu
+

@@ -1,0 +1,402 @@
+From:     Digestifier <Linux-Development-Request@senator-bedfellow.mit.edu>
+To:       Linux-Development@senator-bedfellow.mit.edu
+Reply-To: Linux-Development@senator-bedfellow.mit.edu
+Date:     Fri, 23 Sep 94 13:13:10 EDT
+Subject:  Linux-Development Digest #212
+
+Linux-Development Digest #212, Volume #2         Fri, 23 Sep 94 13:13:10 EDT
+
+Contents:
+  NFS patch (Florian la Roche)
+  Re: [STATUS] Linus Floppy Driver Development (Bill Davidsen)
+
+----------------------------------------------------------------------------
+
+From: flla@coli.uni-sb.de (Florian la Roche)
+Subject: NFS patch
+Date: 23 Sep 1994 11:36:40 +0200
+
+
+Please report the release date of 23. sept 94 of this patch in any email.
+I really should wait 2 days before posting anything to the net.
+
+
+STILL MISSING THINGS:      23. Sep 1994
+=====================
+
+Some people report problems, when executing programs mounted from /usr.
+I haven't looked into this, but probably it has something got to do with
+the root uid being changed to something else and with suid-root
+programs. (I remember X11 to be one problem...)
+
+With my patches, all maybe data corruption problems should be solved.
+Such problems are detected and immediately printed as kernel error messages.
+If any such messages come up, we have to think again about the correct memory
+sizes for nfs packets...
+
+(Anyway, hardware problems seem to be bother the Linux community much more
+than any bugs left in the kernel...   :-)
+
+
+CHANGES FROM PREVIOUS PATCHES:
+==============================
+
+I added a missing detection about wrong memory sizes in sock.c. Now
+you should see a kernel-printk-line, if NFS still uses too small
+buffers... Data corruption could have happened here in the kernel.
+More detailed report:
+A udp datagram was too big to fit in the offered memory, so just the
+first part was copied. Since it doesn't return a negative value, the code
+in the nfs part goes on working. It will just use the memory directly after
+the kmalloced memory for the rest of the data. Since that is normally user
+data, it doesn't have to be checked further and may be copied up to user
+level...  This is only the case for reading, so no memory in the kernel
+could be corrupted by this, but just user data.
+
+Now, I have also added some more checks about the used memory sizes.
+Previously, just assumptions were made about the size of the next packet.
+(If the server disagrees, you might get screwed up...)
+
+The biggest change in this version is a suggested buf-fix from Peter Eriksson.
+Linux should now be less often confused and talk much better to the NFS-server.
+Please look into the linux/fs/nfs/ directory after applaying the patch.
+I have included the original message from Peter.
+
+
+NFS read-ahead and improved code:
+=================================
+
+Here is a patch to the kernel version 1.1.51. It can be applied also
+to most other kernel versions since that part didn't change in the
+last time...
+
+I recoded the existing patch that implements read-ahead for NFS. That old patch
+sometimes crashes the machine, since it copied data to the user level with
+interrupts turned off. (And if the page isn't present, you will get...)
+I put in also a timeout for that cache. Since the cache only contains up
+to 5 entries, this will normally not be a problem, but I wanted to make this
+100% sure...
+
+There should be also some further speed improvements from better coding
+technics and less copying of the data in the kernel. (Though parts of the
+code look now more ugly.)
+
+Note that read requests that are done via mmap are not cached. Most times,
+that will be only for shared libraries. Also linux will then do nearly all
+requests with a size of 4096 (PAGE_SIZE) and will not fetch such a
+page a second time without need for it. So enhancing read-ahead for mmap
+requests also is not a big win...
+(But it is a big win to set rsize to at least 4096...)
+
+
+Data corruption with NFS?
+=========================
+
+You can speed up NFS by specifying rsize=8192 and wsize=4096. Without any
+mount options, this patch won't make Linux faster.
+(mount nfs.server.edu:/export/linux/usr  /usr -o rsize=8192,wsize=4096)
+
+Please try the following, to see, that data from your nfs server is copied
+100% correct:
+        (cd /nfs/mounted/directory; tar cf - .) | tar xf -
+and then doing several times (on 2 consoles?)
+        (cd /nfs/mounted/directory; tar cf - .) | tar df -
+People used to report data corruption here... Please also have a look at the
+kernel messages, when you run this test...
+(I use sysklogd version 1.2 and just put "*.*  /dev/tty8" to monitor all
+such warnings on my VC 8)
+
+
+What about implementing real caching of NFS?
+============================================
+
+The buffer cache uses the device number and the block number of that device
+to do the buffer caching. For nfs, we would also need to make buffer entries
+with device(mount point?), inode number, offset. These entries also need
+some (user adjustable) timeout value (3 seconds?).
+(Hi Olaf, this is described just the other way round in your great nag 1.0,
+if I am not totally wrong here. But I will send you some other small problems
+soon as well...)
+I might start implementing this...
+
+
+Speed improvements by doing read-ahead:
+=======================================
+
+I use always rsize=8192 and wsize=4096.
+
+I mounted the kernel source and did a "make config; touch .depend; make".
+I got 12454 read requests, 2662 could be taken out of the cache.
+That is 21% less requests over the net...
+
+Mounting /usr/X386 via NFS, doing one "startx" with fvwm and one xterm window,
+without that additional stuff that fvwm normally prints on startup, I get:
+245 read requests, where 171 can be taken out of the cache. (Sounds horrible
+good so far...) (Note that mmapping the shared libries for X11 doesn't count
+in these statistics.)
+
+Well, I got several pretty enthusiastic emails. (One saying from minimum 2 up
+to more than 3 times faster. Others believe in a 3 up to 4 times faster...)
+I am too lazy to copy parts of those email right now, but people seem to like
+this patch...
+
+
+INSTALLATION:
+=============
+
+Go into the kernel source tree (.../linux/) and do a "patch -s -p0 < this_file".
+Then recompile the kernel...
+
+Florian  La Roche               flla@coli.uni-sb.de
+
+
+begin 644 nfs.patch.gz
+M'XL("-_Y@2X"`VYF<RYP871C:`#$6VMSVT:R_4S^BK9299,""?$AZFEY)<NR
+MHXUL:44[26TVQ8*(@8@0!!`\+#-;_MO[^9[N&8`@1<EV]MX;QY9(8&;Z=?HQ
+M/9-VNTUNXG]42;IU$T3CZ9871'$\M\=UR[(>>%7K[N]O;W7VMWH]ZNX=='<.
+MNKOUXV-J]W:[_=8N6>;W\7&=_EVGFA]F>J4C>G5]_N-9PP\C5[5?^*/$51^;
+MAW6JMVN^U_#\(&Z_\$8SO*6GU&O6K>(Q/7U*]U]3K>:E\W`\PC+W%\5<:M"'
+M5]=#S')'B?+H.75D5O7A4>>PWH8:O'0KQ+^7']X,1?;*]P<%[K0Z9'5;VQV6
+MU;I241PHNO.S";U[/225)%&2'M2MG_S`([JU[_`[2MQCI>PT3Q(UMYVQG4_K
+MUM]5%-[2A5+T&W\*CL?1+!M/;%\Y-CYBA2CP$F=&;X+H5B64[\Y[/>?F.,W#
+MF>,'=I#\T9[E*AQ/5&B[JF[Q?Z^3:$:N$ZAC3P7^)]OUDW$48CV0)'J=^#14
+M,5&/.ML'W<'!8(]8S+IUK<8*QG(/R.,5UDR^F=-$)3.5VLD?=A[Z[?0&5.FC
+M[]#P[?LK:NSWN]UNQQZ^.;??70[?7Y]?;>WW.SN=KOUA^)+-"C60%P0.^2Z=
+MG/2ZV[W!(;/4`CO,U?[V@BNKT^MT[K&5)7Z:.:']X</I%3.TADTQA+P7*MWM
+M[O:@;A$U!O;.[LW6^:N3=M<>$/.29KF[D.0)L]9<8HA50YT^V[[7!TO=-2R=
+M#R\#5]FL\H6B"CXK3S5CZ2R+H8G&A1_FGVC(=NS;7;NW9W?IN]Z@R4S/.K_?
+M#N[&[4ZGTYM>G![2^TG>HFZIHMV#[3UZ.7Q?904T[S/R(!5V,4UGY^5+IO/W
+M-S_?I[-WT.EK.F]5FCJWJGT.2L]7IAW?H_NB;KUR,G7P\'H,T@.*Q\<RJ6J^
+MNO4^.A"0'"];AQJO@RCQG9`N'+J.@'E(<1ZVKU4<S-L/3'J6TDRS3I%'O7TZ
+MR6^U4>'0X*>W6^!LF-_\IL;9`87J3MPX=N"**L6;S,GR]("N+]F]SFGB?%04
+M1ID_5BXY%"?13:!FI?^WZ&[BCR?DIY1-G(PD0*5TJS(:.UC1K5OJHPKQ,LIO
+M)R0Q-B4W"I]E-D%CBA*5YD&V6,"C-)HA0$"&D/@7J-2M<>`K1-CQQ`EO%0]5
+M%,,[_33UHS#EH0['3NB-D:X^.3-$J::,TW/`<1#4+4A"Z22ZHSR6]3$@(;UX
+M*D[B$(R3^JY*'`A*F3_#FBED2)R`9@!8QEKBJ>.QP\2;-BOJ_00"X*_H9:J2
+M4`74!0:[>X?DBW1Q!%YE21$S@V93<H)$.>Z<;I0*ZY;G?U*NK?6>3?QP*OS?
+MP(B8KYP4CA9!7["!FX_!UF]Y6JA$"U]12=W*4Q_QEC5HE.>$+D4WJ4I@4?%E
+M)Q3YFRW0$,W/HUP;W)@YI?.ZQ8JC5&$ROYY%B2)79?"Q5%AM_Z_]X>22*?L4
+MY@GONPJ5?S88-E<`%;0R\V\GF0\;0JNAJ.L?.?C=X!#X-7^0$Z&%<#Z+<JBL
+MFB,!NQ'R8C5-FD=?RI2[VY(IOR1L$1=8Z(3.$G^:IL#5\YB_'_O>S`[\W$[5
+MBXJ[Z@C'#ELX!-<)0,C?BB#T-@H1A*KQO'/0[QX,MN'Z?79]C58%*Z:*+0Q(
+MW2CQN67G9EVN)6?3.7P;<`42%6BZP9QFSA3^FB=FQDV$?^K6#X'6+''"=.9G
+M&:.1EV+$X\?ON4JSNM68P?O]V+A:^J1)U7BA70?11&8#WA[4`'H?G<#G16*P
+MI6'8./>T4\4Q0U5<(X2?,^@A"I3"/\'Z790';NE>VA7O'!C_1HV=/%4B>*BR
+MNRB90LX$B0,NI8.?,YXBL+6UNQ3$1(61EXD'1X+$S+;MIO;C(G0*J3O-0F*@
+M.HP"!YF3>G:?-M(PBN*-DK(3.L'\#TA=MV"66ZZ+),@-KTZN3Y%L,Y^_0K@[
+MB=PB)/*PXWG^F&XC5M<-ED)<8;O4K85A>!+6R4/:WMK>[U`CR<.0Q^/1Y9"V
+M$;7ZHP_=%H7.#.MNI+&33.<;30)FC0#0%VC->1)D]WP.+#F+-[\/`M!!=1<'
+MCB]$G!N,/&#=U!@,,^>3&)ZG`Q@B"01[IHD^6]'A722&NTU;$M?*U./0!GQ@
+M@U`?TPSH\-5=TUC>*5-+W9)LP`X#IMV(KJ].%_@TB817,-Z>(E798Y0HX3A"
+M'<NX8\P7>-9)2*\A6.8`ZK,44J2`J="\1<;6+L5.4ZY&/Y^_`I0TQU$,[4!N
+M7[(3`U0`G"*HAXQW_S;DN.M+$*];`5`H,(V2&=+2LA"BSP3@#-U`HSGULUP`
+M`]?-G@'JR"4^5I5\P[64$',%-%#E;21I9I2J`'P>;I"CJ;%?H:[`1P%ZHTD!
+M(&O2GS*Y5.Q39G,)*X$SQPL8'HEE0VMU0]Z(QZ,L=1+69L3:;4.&7'.M8X6H
+M-M7&C#(G*)0AV,.HI4A@[,SPO%4A4C:BTQ,Z?S:KH!6:AJAWV@-1*(P%>!QY
+MM?/Z$@J0!7V&<@,JQP:*Z8XH#:*[U"!0KR'^L(B4#"Z>C<B7ZEQMY'%*D)@:
+M0R7(H*&NAQ@#IGIAK<"\3H*,'N:S&^B--2YZNE$>8Z`(AF"XC-.A^L2Q.><P
+M&GG@0)=9;4+9,H?NPHBEUY7*D$V2SM,,@=X//4800T-<DE4N]4%R4`D0Z^-#
+M$5)F<%H_1.;Q^WL[6]N=%NV]?<E<7Y^\;1F]<"4TX#>=;I\4XR24`C'1U<Y2
+M@@D]_S9/-$\(-=A:,$8!+NK^\%)PL(??)3`:QL4Y-LW%U(5NY<4"2(ND4YC%
+M`-7E4(*AC@9JW3)(70H#&RU:C>6^84DK6_++BB<*H`NB\"H2,+A4&#YE->U)
+MP8E!&:)&P:)):1)H=1T:<;H6>)+C<<%P3H[KFK@OU;OQ,!XI+(M'I5D4RQ`G
+MSR*V])BE7PH7VJ67(IG$`Y,/H8]PZ:4.9727\':>@Q@S::*>VRS#09'()#P+
+M#@.NU>"_0>2X$N856P_**!#1U&LS=1VLO2B`R[&=#,JP5I;I+-$(X5](&RI)
+MFSJ?=.T*:-OWX%KKV<O9<WAQNFY8?V58EP<M,C5&;&M"_:V]93I=O<#`IN^O
+M:!\;1E1A"8>EW>Y@J]_'V.^OVA]^IGV[8Y8Q/D-7S$G55\H]1<4WBO*,-PZ\
+M86"S)<I$E("MH7<K[",S)YSK!1F$`0*<`D33""D$NT3>!6DZ[3168Q\U@S;<
+MEA2CNG;5Y?BCE6FM!A+3_\1LH0^AM-'\;-Y"D)'XDM*)BRV3GP)O6934\.>5
+M0F+/9BP.<'<UF:?^&(R!UB3B(&)M[Q!B1&^OM[NW4VN\=CZ5S[K]W<'.7K,V
+M;`_VNK37IY)VBX9WRN7Z2__WA<J[4N1ST#5MP*4G#Y;X_=8.6?T6"FQN_-$F
+M_R,ZC>)YPNBFQFF3R^X>T;6/R#X,''>JYC+2DI%F`WMOQC;GX=4]OYX#:+R*
+MQ&9CS"+7R1SXMJDYR8$3A!)3V&/TUM,N)YZ'!*E&+-5(8J")4GD2<NK,I5,P
+M11&!>,2.C'TY=I0*=:Z[6.2*RUW.4:@H&1%B9QTY9$V4`=.V,^&/-[GG*4[.
+M-EU"/A]5+&$S[9BU2`*XSYMSQH!V,`C^D^/3D'Z(I@2L3J/I';</PSRUTUMA
+M0ZL9DH#@;0Y?U.E2:AP&GY>'XTRVO1BX52?=J>WJ/BU,QL82?QX3-VJ75-(`
+M//.Q:5W0)KQ$?Q<*^(H-=L*_,9$[KNN6N4O\3/V7ZW"/]_$E,*N-1`\+E[-F
+M,R=>F:1_KTR57^6SC[.1`\E'YNLF'CC2H2Z8JLP=1;'2V3A=R%MY=B3=[W<?
+M+BY:<.^M30J0IZ8`C:L\AQL[,`<;8R">,]AK];7KR!0]`\3",4HUL=QGYL/"
+MT\MPK#36N;."#)F@F&MQ"8S-)Y)'P%T34$$M+,\]KMU'2%A'1YVFS6M91@PV
+M\DBZ4>#5XDY]K::''@K],;>I=9D=$I[^32;7\C!%I:E<":TUT>H(-=DA3]&Z
+M-A6:C(X\;X1U13UQE,HHW9.)$!,9YC),B*.HUY13_P]Q0!%S#5&.YWHD?VKI
+M]`]6D4PYZ19:T5,UOFHUN*">LUA5J.+YB`D>5BEK?Y51T#QBYW>P&Q(M79^=
+MO!J=GIQ^?S8:GO_SC`:+5V<_7YU?G^F7U/C^GP!0ORD4ITK%"%3"?-&3Z:-P
+M087CID*D;BU)R"H<E;7<$74.UPT0VXTF?CF$35MZ#[>BY#ESH"MAL36J]<PT
+MS`)GK`SY9817H"$_?UD1^U?!MU7[-Z%ZQ=]VMV4^">*I0Y];?^%K$IM]32A9
+M%Q3X9U.?7IF,`-VRK^YT6]T.6?L]<[[UE9'S(1I%Z`/66GPP59.5L%U!(&3R
+M;3D\TWW@0_-MDH?3XK-??`@/-9;-V):,@NNW*&PA?_-QF"$N;*)41)[@G_Q&
+M\\`^P=_$7=DWM<2[^RT4&5:WL]O:V]/QJ=!)^^S\W8\G%SSI,_YA"C#!8O$Q
+MG2S0ED.XRB.RM'3T@LH#.W8X?=9'C4>'@+)^<[3\!B%5J.DC/SWD^9$YZUO8
+MSZI95M6I^`GJQT;ST)Q(-7QQ%O+I^:J3XZ%E,9-"HJ$]PO_5+F,?'568P@<9
+M6WOZE!9CBP#(O.'78R,L*I\A(M(+F5`H9C'1N4D;O_F>QX5T>S&%(V*3J53#
+M45-/NP$ZIX=&VVL$;8I30U,5$24?\-,T,]HRFEQ$'WDX4[-Q/!]ED9<V&-$+
+MCO`-W+,,%38+:5M&+%FCW5Y'>`E!1WJ\O##6+1]\QC_#)=5"F),;T\.SZQ_/
+MKO4)<;/](I%0#VQ*%CB"_@7_S:+8:\!EWKR^&OUP=OWN[()+BWOHT/3P$<R$
+M37'4&GL<&=ZX>\7S1,ORX@7&\8-B6+@.=,7<L+JT8%@.@H[$>;'7&>L8<T^V
+MEHC[^OORJU`4%>MXP!*WZ*EX?K-DT"S/I^-:E-K42Y0:I0T]/M2FT0N%?"3B
+M%8NTJ*M?KJPCP<P89Q&^8)[V&IAH*GJ8&*YF[%S,)$G1*T^6*!9&J/G54>TJ
+MX)=1=*1#!C]FI28*$J>3D2BN8<)UJ2=K(0S6KS+Q66)?>]W2[;5:](I$+?P_
+M::Q@<#T$F\8KS6`N8\0K>*UN`?L_"Q)>J;!L%1^<-YH%H\L0,?9^XID@MA8N
+M*];73-YWDI7U>8`L:D8NIDLF20WY>_J&671BM+[2H!5[%A.9P0?`*6R)_1XD
+M3%]!MUV274H^DK8D[''%5D0^3BE5=5='@+5EU:^\+&)O^4"G4)%\Y0W$T*G_
+M_BN=74VPJBUS6.:]I;1W;V"9TA8.5WW-V:UJY*67TK,Y(I/ARC!C65+7(BFN
+MYB[12%GTLD6Q:>8^W7J(ENGL'A;H<V7+]\7][-=7=_\GY9VI?1ZJ[]I+]9U>
+M3T\Q!=,3'0ATJHD3O)\V-I8%/C"B'DF!_:]PHZF+PVY_T.KND=7KX/>VK@ZK
+M%9\7.+<I/:7+T<G5U=F[5\TBN*]4<(]DZ[MOS=;TY6Q-Z[(U5;,U#Q23+=+U
+M(G/Q#0&O@)(XFPD/:U.U1LQ?DJOU0I5T_6VY>I&(BPA7I.'R>ZDQDX(%%(.!
+M=)=Z7=->*M(D?6V:_)I02I50"G>M="ZY\[/<N=1/'NQ<#K:97_FIV5VNVI9A
+M\%^48ZL6+J'<B/EBDD5^<Z7H^+K!V/`V[Y=$QK"F_KE?5%4TQC(L:TP_>5!C
+M^]RQVN>ML.[U$O?/G8P"AT]!E/2AY+:,J\8JS!I^.N$;1PG?7(AS;G![Y)">
+MR><%^F3-KC2#(U=.\F+D`/B_*\W1<:`<[G[D\;J.L&G*OHLX7)WQW4O3S4W)
+M251E*0X/;)C+'Q97M+BY*T<_`1^,\E5&O1I;F-,`"H*12I(P:I@K094+#C>J
+MO*PD+63I79<;$U=5VK2O_4]OP=U/?".$1_%IN^X<.7R/2-^"2CFPR?&_I%^P
+MJR>;T]7`G\I1I\1X.6]C\3(_G)M;&/I(V-S7T%.CP.4I(_$TP4^:Y;"!'"KY
+MF:T;^#MLU>V.<8/O_'`<Y`CZSP,^+-D2\>W)B_MOD'FXK;WNE1_R8VOQV$EG
+M6ZFZY1:W3.`I'G0@%KFZOCP=O3KCNT6Z3SWH26MTM[4O+&&P"EV@?&N3GBQ/
+MT+UM[HZ^A66D\<WWN,I[N.7MA@V18Z/R5'=$BQ:>O!YAWMGU]>C\DL[.+U<:
+M29L2G.+QB-OZ*FG(LUBZUWP0-59NGBC]-<E]=Z6C7<X&X'UO;F:O:7LOPXZ?
+M\I/FH@_5)6MGO]7K&Q^$_*P@(X8$HXN3TQ]&PZN3T[-:K=OI;7,;\#U?%:`(
+MU*=\>VUS2VOMR9,G])(=%U$W#TP_E8]?,R>4>R)R8RB`F^>I/J?51ZFV;<N%
+M,D#:7,\P-R@P%S0$XGP^HZ_<R2V-N5R48R^<17Q+CP_@L(RVX$(+`8NQI#&=
+M[T43NA_$"9`_6D<KXNHN[PD?D9J["_JL>YPX,3DI0A1$Y[/"LL=;5N;:(.5&
+MC)=O+=47`+-'?)CYC12L1RA8*_RO4C15K*D)^407@8NO=#Z1.N<;5RRVDQ"@
+M*/<P^@"6X.N,?(2<!TJ*/,UWK7BFJ^7/E8I9F&.77"V9Q7H?(]^EPGH<>PJT
+MZ\[B7FL'M>/^7FNWP'!Y,<L<:B,Z\IVUXHKF)S?1K7M]-R.UBS.MTGO_\>'D
+MU<79NP;V%<B4#?W;HGZ37KR0_Z-@+<"P[DB%'`M&GKX<5#IUM:J>H*S7KTUO
+M>+/16'G?I+@)@Q3CN+R).>F*32*DYW*%!5>5;6%<V8U@7BF.GKV8W#Q<J^]2
+M&*3=;Q?&?&7VU\KU5PEC+*.S3"F+Q":SP=*O*ENJ@&\U_IX[+I\GX1G^ZITF
+M1N)#PTS@5V84>Q'_J@AB%4NMF:??+>96<:<=-/[%O/U5;T:AX!CU%6KG+`H#
+M,[!MMA2-LKK35I*3^\J05&6-RAC6MXCX[%^=9R@-"SZ>/P?&L9LI9HJU*FJH
+M&L80OD=OR63E7#%0^W&TK1JH8AJ=#5'2,(W*$=6WKU,>@547%+LOO=$"EV8/
+MLV@2--@`(N'JT-41>A,KG?<%C7*/Q%O@BND*SJHF+%2Y,J1\([MU//K%X(/M
+MN'"O%1Q^T:$,M<]+IW^/J+:WHMOURMUDA,DN9*W.+4XAFVO5R\K;7-:>M:(]
+M3-5$JSOZA^3;-$IC#'XQ@'-^6)%/;RR-K2M1HD3WX]Y,M2^$B3_OZIJS_P]'
+M+YH6*T3_O+<_JF>V6/Q-3O]MRVE<\G=N07_1_67^(V'@D5'?%`HTQ_<#P5<Y
+MMNEOKQZDZ34K,:7H:"[1C-<:=`7'JTW-I5*!MY-K"P799V[JKH2Y/+3=Z@[(
+MZO7W6UW=X>'+G?,#/@,V79'*]BCN2!]$MFIOSMZ?O']_W2HW1C)A3?D%'HKR
+MH#A%;J3R_U]5"'"]VM"M`VC@?]J[VJ:VD23\V?]"R54XV[*")<N2#9?L<EE?
+M+4G`')"K5&UM409,<(%?"L%R7"K__?IM1B-9\AO&M:YU/L1"THQZ9KI[9GJZ
+MGX;/C&!EJX\H9BU3$>N#'`S&55ARDJ#6KJ.J,O%1!W/5ZO";3W/,YLO^#DJ5
+MZ.1/DZ+WEG*F*K>=U,X3:\:QME(-B;FSA"<$;,E0UEOIS<2@8E]JHUGAZ'C_
+M\/03K?C%`5]L"6S5Y6V!_EJ5M@#<1"+FN[(SO<(AQ+A<\1%RWE]%>`</+1*W
+M\>8K.<D@]JE583MO>_5`V8]`E,6Q'KA('ZOE4PK-@<T/?,IZ<PE45X3<4JH_
+MQS?1^CUNT/CH:HF<5-@>XP`2++5O)X-@Q)2:RVCF,EC)"/-E+\8KW$=^DT4L
+M#)2(31.MDX5$:^RM2+%,I.W.JQ&^Q[^F\$4K%KZ@3L+7K,TM?-':"!\ZW3Z,
+MYI"]R]Y=<D.)\5TBB8T&2J!=<\.*&\XDB9_;[4]?CF821/APIA#R#FC$@6:;
+M&?`90IBM]!:35>:K58EJK5JOU$+@O!K\UN>35:9T#405CTU@/W"SR$3IX($Z
+M_F.9O>ORXIG6L&5D[*F[VPG6!+42AHK4H;EJAIS:TR"**P^]K*[XO8KQ!IZT
+MFX-$AE9+M9T9RE$"5#4D2.RY2>DL:>>A\BPO)_PU4:9DL>Y,TV/H7?%Y__"3
+MUF1V5HGRQ"(OM\!WLG333#JO/$'I96@WAQR\%M5NN>7*7'"I^D]\!/A[XQ:U
+M$3G9\:GTP=[7H[W37V%WJ(\#)A3U4G;"BA*6DJC=A-](0K)WK&\]/$(:=>ZO
+M<393W)X['4SN#W8AI#TPUC&N^M1WK3<1Z3Q4"U0OEDGJ[(H<;TRHA:E=KE[W
+M:^0S4PM=_)U+K^O&+46S.R^MV1?6ZCT*@KN")6<E=IE*VH5R313VL\KS^V)5
+MLI+3@)68!JS4-.`8QP6P'`!.0T[H,7;*MXL+'6_"UJG\.0'&U/I9#:Q0SHW1
+M]JC9I@D^U*]7O"IP&ZSX/8DO2E@GC9H3]Y5/=O9MBX*3.I<4O].Y)3IO+\D5
+M8O`DX7-TJKI9MRYG\YBGVLENJHVZ6Z2;>8PFJO7<8N3U.UFK*XU.)['8\7Q4
+MO!2=+GJ:*8]+L<3D:FHE+,H$JOW-EJ6R&P'NFGUW?I,5D??RZW#-93%;_42Z
+M:.?9BCSA\3JO(<NO-LB0Y<>VXKG4SXQZ9FR9F>1OI<LVMJP7M641IZQJ>^Q[
+M/LGD`F9DHG,--L<7=P@B-:<=BSO'KY/5R@\;":O5\ZQ0&V/Q>MBIF&]6)HB!
+M1X+8G%\0F="U,%/UAW]TGVM1YA6YWZABK(1==^LX-<YB43YN';3_TUI+B_+Z
+M2VK6F@ZY867RU:0CFWK-76#QB82NA7PA6TZ0+_8&QS,8E)RZGY"<3#X?WEZ>
+MY<U;AKP,NH]GTV4&7MK(S1+D)C8`OKS<U&LT+]7#Z@)R@X2NPTGG@D<GU#]U
+MCZ6IZ>9)TVPN`YO99Z52%)NE5R!#`8;>V$$UG%N&EF>F?EE'G:?^G$*D-UEU
+M=`T``0J\YO3I*'<+I=_``Y+-)NN%A4>&>U7R$U1K)#^X'9_7W88I70,1ZM^`
+M2"PB0('GDY4B",*-E>(O9Z4@MEF9(/HN"6)C?D$D.M=A#]6?7PQS3!1!O4DS
+M6UCU9S91'/RR?[RQ4/Q9=EK]5<I62);XT%M@H]5?$]D"AI]/NA);+50[(?10
+M3<$&SN]7T)OJ5=#3%0F@"EYWAU>[$DL?-!L(SFN'N!CQYMGOI0[FAC>]C/N"
+M+[0Y\9]5:K/!WT#0\'W&&Y13^,P3?,(ZQ9&B"_R"1%6[A.T;UAL:SN2'%O'1
+MQ(-]X'!UMH]`+<OQUK(*AIXI8-CP.VKVN[C!KXB1I.72"E`FL#(,866H6@&%
+ML:6_.>[O;[D:=Y)/`"J6-Y?*"ZRG`)CH'Q;_R7H-/Z^M'>NUJ,FX*;U=$[1&
+MR&>R&J3JPL4<`5:C[#)]`7I+\`3`1U?1HDHP]`-R!0B;]7G#QDY.]TXQH=8F
+M:FPEJ_P(DU^(MVANW`KQPJJ6&"&?,39<;_Y]-!'ZYUQC;)>I=0T/=;7=")M:
+MV9GZ.68+I9T[#YA`4'E>C<6CLF\GAYRF0Y7QI@H+'6A_PN(@S2/0^\='('E?
+M/GQHG9QD@,.95&$.#/)?Y%[>49T\R"".&NPSC'*CZ0E$F%4F!)7;(53#$#SL
+MW!,)0E._\T0P,N>2M@>F)@W^X?RM=S5`"*'6+__^TCZ%OQ4:-_U=:!VV3XX^
+MP&T&*G'26.[?C0687C<A"4)LW:/1:>K1^:[@HPJ%*O!=1=U""3QJ'1_`_1;^
+MII\=MEN'I_B0+NBI$S_=;^.C_3;=MU/W4U*>KO@K%\;?]$?W<`#Q(5VDG[:^
+M[I\0273!),6X8`SQ8^*"\1T3%\QS=VK>3BU@Z#>$?+-=-T8&HZ'=&UC_[5&V
+ML#ZE8XEQT"F/2B2I%SB)"B-JW=]UHFO,M*`@P5(9-QPKF2Z*4(F@*&;)0>@K
+M2?`!!=,X85!4Y3)3%2BL+<+*QXF:TSU)4C/**R4Y&E+_"!")I8#*8J6/UT/$
+MMN>R.B$)ULI8267%MV-@69SA!V&QV(<'V<Y7RSB4D"$S/T^Z.!3=^U@*C,#N
+MR^%9<N;*G[%I(T)YIN0:A*24`)%_9F5\I0&;-$YE#)-I@%>:@)J",`DJPD.>
+M:@;*?QGQEZI9Z@C)VR%N4)PF^E$DW]9SADK@)5H=9J^/K8__W/YX<F1YV^%V
+MTX>;.%#P'\+9$92=R3#`S90RAKP[@8AAXBF#ZB/;4`4**^F>*W7PWJ^8GN81
+M4P$QV]X@O!8G)/M?%[0\)?H;6N38G3)5$"`<54)^;)&%^6O-M0AM#9&RZ*V%
+M64Y&=YT+S,Z$]0/C$UK<=9>K($5JT37?V"<F?J*W4.$J;<LY`CLRJ2)IXD87
+MYSX"_7\NU78$Q`Z$`!H&4P(!OE&740Y#&$%NRS\L)OE1PX<-,*$HU\))!R6I
+M"RH%_"(F=ADAS&`R[YH"VBH^#&Z[4<3IPJB6\SM,>779Z7>^=<<2K&#RSH@R
+M]&&.*\PMQJV*">^6WAK=\Z_]KP>M'>A612XG0./QP^2IYSU#<U".*AS"OU]:
+MF%VG8&@1*0]-B1`6C?+N*4%C1+H"+Z,8K_$=BKOS?CB*8)2[%W\@G$<1[U6L
+M(L%LE4LB>+1;@YU.DB?L-")<Q7+CC`FT_<$R_"IBQ8T_WQ:VY=1+9EV@V"H@
+M)!<W3#%5M07;G3OED)T`IBRK)^SEG8`@X[RM'0)'Y%0^S$@D:/UN?WCW1$32
+M%[N8SAA[[K!U2LE>!]U;O2+5()T<]6:3H.L%)B49H_4@^HGT.Q%!9$8(D1@5
+MKR(37U3A95(TL%<CPZC\BEY6N0PIX:92QVKG]`PE_-PJQE2OB3:,\2<"(J<X
+M!?N$(N"BVVYW=#8<%+>TYNGTV$G;?)>WX$[<U6-3A=X6$EW8JET3J7SZ^Q5+
+M[$IC7R:[V6/GIGOV,,J@,XUG:RQJ^&`MM:Y1-Z>EMVHLF-VJS?"CK'4N\E-=
+M9>6YBE,\J4-!G=V)TBH:B9U<GQ9@00Z&)T[KF3B=_7[V;=)>*0C/,=#/,>C*
+M=%2O3MHT)=$3Y;0[RRR9_KLW8$87?V<<&-L/!"=TYGKI#"0+S%M9BR@8[+:C
+M`,Q,G&]Y'^..&:+8B!PF<-$8>ON.T<OUDXI5!EV6A42VJ[,54:0F_N^QK,;?
+M$11N'0N&!RK*%%^O8";SH%FIU126\>CAOJC.7.)(X,_M]I':*4+-6<#:R3!1
+MG!;&\F(PB.J[C'CNZ7C7*C#S.75L03?2Y+1%W<5Q3*GP5AT5C'VY0#O97@(=
+MGC5?P4Y&9J7>(,UK>BI2+31G(J2([LO6FH:)F[6;&C8GQOC."-]%>ODS]%(1
+MR$D,M;"B960WH)Z06.`8-2KRDFAT=JK"%(5Z*L6FGI$MU[9-GAB.N@/RFNPQ
+MV2Q&+$*:E]5QH)U3S)M2+I,.QS%AQ2?UF?&.E_.2E>[('[,K/"%59P&X4C,U
+M7">A!GI:65SL)G7(C&K#,E6-1O8_.=L_^7SXJ:C!]K$;2TI;-!G'R\537@'O
+M5ZS)!%KOT\(D&/`<Y9I\MINO2:3$VF@0&9XQKG>28IL6S+B9++5)QA$L`$L7
+M'\^81/R1$,L"?!Z6I&?G3_?=(H,`RD;'CM]1[1=&^)&1L$A(HVQ3G'#CM][O
+M)<EJY20_<U'A3Q#^G3.QB68V$U-;V.-"@RLP64)L\PJ"$[*]O:9U6/:CC-58
+M@WWOR"$1D<%=5]F#$0DDC>&3>R(A!?*BR('D5#[)9<"5%%)P);L:QG!&P))<
+M.,X)]"Y"JTY%-SF(GMN4WX?VA,<ZT#Z'](7#3N-$*U.(YQ?SJ2?C+UOFE>D7
+H3?86LVC"("I[OE0[%M[Z0<\MJ2IC"[B;13YI-D7__P&>A%YB#HP``%OF
+`
+end
+
+
+------------------------------
+
+From: davidsen@usenety1.news.prodigy.com (Bill Davidsen)
+Subject: Re: [STATUS] Linus Floppy Driver Development
+Date: 23 Sep 1994 09:20:18 -0400
+
+In article <CwJ7yy.D07@murdoch.acc.Virginia.EDU>,
+Larry Doolittle <doolittle@cebaf.gov> wrote:
+
+:: This is not bloat, it's an important issue for some people.
+:
+:OK, it's an issue.  But it's bloat if it goes in the Kernel.
+:This situation cries out for a Kernel hook, and the ability
+:to have a floppy_mount_daemon that gets activated when the
+:user puts in a floppy (periodic disk-change check?).
+
+:Personally, I would never run such a daemon.  I know people
+:who would, though.  Any volunteers to write such a beast?
+
+Or you could put it in the floppy driver and make it loadable.
+I'm about 80% sure the floppy driver is a loadable one, I just
+don't have a system handy to check.
+-- 
+Speaking *from* but never *for* Prodigy
+        "Pain builds moral fiber"  -my dad
+        "Pain hurts"  -me
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

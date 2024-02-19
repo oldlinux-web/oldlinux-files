@@ -1,0 +1,677 @@
+From:     Digestifier <Linux-Misc-Request@senator-bedfellow.mit.edu>
+To:       Linux-Misc@senator-bedfellow.mit.edu
+Reply-To: Linux-Misc@senator-bedfellow.mit.edu
+Date:     Thu, 18 Nov 93 07:13:32 EST
+Subject:  Linux-Misc Digest #311
+
+Linux-Misc Digest #311, Volume #1                Thu, 18 Nov 93 07:13:32 EST
+
+Contents:
+  possible bug in select call? (Gautam H. Thaker)
+  Re: Tape Backups H/W (George de Bouter)
+  linux IRQ 5, com3 (Eugene  Mondrus)
+  Re: XFREE and OAK Video Board (Lawrence Houston)
+  Re: Why Pascal is not... (was: WANTED: COBOL compiler) (Shun-Chang Tsai)
+  Re: OS/2 and X-Windows (Khan M. Klatt)
+  TLI (Transport Layer Interface) for Linux (EXT Andreas Gerlich)
+  Re: Why Pascal is not... (was: WANTED: COBOL compiler) (Mike Gallo)
+  Re: NIS/YP ?? (Byron A Jeff)
+  Re: New electronic magazine with Linus Torvalds interview (Scott Alfter)
+  intercal & linux (Chris Osborne)
+  Summary of replies: Debugging malloc library available? (Jan Newmarch)
+
+----------------------------------------------------------------------------
+
+From: gthaker@atl.ge.com (Gautam H. Thaker)
+Subject: possible bug in select call?
+Date: 17 Nov 1993 19:29:06 GMT
+
+
+The following simple program that calls select() with no
+file descriptors to wait on but with a valid timeout ranging
+from 0 to 14000 usec (in 1000 usec) steps does not seem to
+wait appropriate amount of time. select() seems to just
+return right away. On SUN OS (and on Intel Paragon) the output
+is as shown below.
+
+#include <stdio.h>
+#include <sys/time.h>
+
+#define NTRIALS 50
+
+void add_timevals(), sub_timevals();
+
+main()
+{
+  struct timeval start,end,wait;
+  float time;
+  int i,j;
+  char *port;
+
+/* "i" is the number of micro seconds we wish to sleep. Select uses microseconds, 
+ * isis_sleep_ms() uses ms. 
+ *
+ * We sleep for NTRIALS and take an average.
+ */
+  for (i=0;i< 14000;i+= 1000) {
+    wait.tv_sec = 0;
+    wait.tv_usec = i;
+    gettimeofday(&start,NULL);
+    for(j=0;j<NTRIALS;j++) {
+      if (select(64 /*256 on Linux */,NULL,NULL,NULL,&wait) == -1)
+        perror("select failed");
+    }
+    gettimeofday(&end,NULL);
+    sub_timevals(&end,&start);
+    time = (float) end.tv_sec + (float) end.tv_usec/1000000.0;
+    printf("select timeout: %d micro_sec  - after %d trials, %.4f ms per select\n",i, NTRIALS, (time/NTRIALS)*1000.0);
+  }
+}
+
+
+
+
+/* add time2 to time1 */
+void add_timevals(time1,time2)
+     register struct timeval *time1,*time2;
+{
+  time1->tv_usec+=time2->tv_usec;
+  time1->tv_sec +=time2->tv_sec;
+  if (time1->tv_usec >= 1000000) {
+    time1->tv_usec-=1000000;
+    ++time1->tv_sec;
+  }
+}
+
+
+
+/* subtract time2 from time1 */
+void sub_timevals(time1,time2)
+     register struct timeval *time1,*time2;
+{
+  time1->tv_usec-=time2->tv_usec;
+  time1->tv_sec -=time2->tv_sec;
+  if (time1->tv_usec < 0) {
+    time1->tv_usec+=1000000;
+    --time1->tv_sec;
+  }
+  if (time1->tv_sec < 0) time1->tv_sec = time1->tv_usec = 0;
+}
+
+
+
+/* returns -1,0,1 if time1 if < = > time2 */
+int cmp_timevals(time1,time2)
+     register struct timeval *time1,*time2;
+{
+  if (time1->tv_sec > time2->tv_sec) return 1;
+  if (time1->tv_sec < time2->tv_sec) return -1;
+  if (time1->tv_usec > time2->tv_usec) return 1;
+  if (time1->tv_usec < time2->tv_usec) return -1;
+  return 0;
+}
+
+============= Output on Linux ===========================
+Linux> time select_t
+select timeout: 0 micro_sec  - after 50 trials, 0.0292 ms per select
+select timeout: 1000 micro_sec  - after 50 trials, 0.2930 ms per select
+select timeout: 2000 micro_sec  - after 50 trials, 0.3960 ms per select
+select timeout: 3000 micro_sec  - after 50 trials, 0.3961 ms per select
+select timeout: 4000 micro_sec  - after 50 trials, 0.3945 ms per select
+select timeout: 5000 micro_sec  - after 50 trials, 0.3974 ms per select
+select timeout: 6000 micro_sec  - after 50 trials, 0.3957 ms per select
+select timeout: 7000 micro_sec  - after 50 trials, 0.3973 ms per select
+select timeout: 8000 micro_sec  - after 50 trials, 0.3957 ms per select
+select timeout: 9000 micro_sec  - after 50 trials, 0.3974 ms per select
+select timeout: 10000 micro_sec  - after 50 trials, 0.3957 ms per select
+select timeout: 11000 micro_sec  - after 50 trials, 0.5965 ms per select
+select timeout: 12000 micro_sec  - after 50 trials, 0.5964 ms per select
+select timeout: 13000 micro_sec  - after 50 trials, 0.5966 ms per select
+real        1.0
+user        0.0
+sys         0.0
+
+====================== output on SUNOS 4.1.3 ====================
+SunOS> time select_t
+select timeout: 0 micro_sec  - after 50 trials, 0.0774 ms per select
+select timeout: 1000 micro_sec  - after 50 trials, 9.9269 ms per select
+select timeout: 2000 micro_sec  - after 50 trials, 9.9901 ms per select
+select timeout: 3000 micro_sec  - after 50 trials, 9.9930 ms per select
+select timeout: 4000 micro_sec  - after 50 trials, 9.9398 ms per select
+select timeout: 5000 micro_sec  - after 50 trials, 9.9979 ms per select
+select timeout: 6000 micro_sec  - after 50 trials, 9.9608 ms per select
+select timeout: 7000 micro_sec  - after 50 trials, 10.0299 ms per select
+select timeout: 8000 micro_sec  - after 50 trials, 9.8313 ms per select
+select timeout: 9000 micro_sec  - after 50 trials, 9.9955 ms per select
+select timeout: 10000 micro_sec  - after 50 trials, 9.8548 ms per select
+select timeout: 11000 micro_sec  - after 50 trials, 19.9973 ms per select
+select timeout: 12000 micro_sec  - after 50 trials, 19.8562 ms per select
+select timeout: 13000 micro_sec  - after 50 trials, 19.8612 ms per select
+        8.4 real         0.0 user         0.0 sys  
+--
+Gautam H. Thaker (gthaker@atl.ge.com) 609-866-6412 (fax x6397. Dialcom 8-777)
+Martin Adv. Tech. Lab., MS 145-2; Route 38; Moorestown, NJ 08057. 767-4396 (H)
+
+------------------------------
+
+Crossposted-To: comp.sys.ibm.pc.hardware,sci.electronics
+From: s414557@kub.nl (George de Bouter)
+Subject: Re: Tape Backups H/W
+Date: Wed, 17 Nov 93 16:38:52 GMT
+
+In article <2cbtmi$lv5@crl.crl.com> rjust@crl.com (Randy Just) writes:
+>Thomas Monk (tmonk@cse.dnd.ca) wrote:
+
+[...]
+>:      I was wondering if anybody would know if there is a piece
+>: of hardware for a PC that can be used for accessing a VCR, for tape
+>: back ups.
+>:      Or if someone would know where I could find a schematic for
+>: building one?
+[...]
+
+>This project can be found in the Circuit Cellar Project file, Volume One.  It
+And can someone tell me what it that is and where I can find it?
+
+
+>included a schematic and source code (assembler and C).  It is designed to
+>work off the expansion port.  As to how fast it backs up...  Well, you might
+>time it with a calendar I would guess.
+>
+>Have fun.
+Well, it's a cheap and safe way.
+
+------------------------------
+
+From: em119@merhaba.cc.columbia.edu (Eugene  Mondrus)
+Subject: linux IRQ 5, com3
+Date: 16 Nov 93 01:10:58 GMT
+
+I have installed Linux on CD-Rom in the past couple of days, and have had
+some problems. I have not been able to connect to my modem on the Com3 port
+it uses IRQ5 and the standard IO address for com 3. However when Linux
+boots it only recognizes COM3 on IRQ 4. I have tried to recompile the 
+kernel, butwith no sucess. First I kept getting kicked out when it
+it tried to access the domainname file. And then after I remed that part out
+and recomplied my dependencies it kicked me out with a complie error in one
+of the scripts. HELP !!!!!!!!!!!!!!!!
+
+------------------------------
+
+From: houston@norton.geog.mcgill.ca (Lawrence Houston)
+Subject: Re: XFREE and OAK Video Board
+Date: 16 Nov 93 07:39:52 GMT
+
+From article <1993Nov15.183020.22773@matuc2.mat.uc.pt>, by arsenio@mobix.uc.pt ():
+> I 've installed Linux and i am configuring XFREE, but i can't 
+> get my videoboard chipset right, i 've a OAK videoboard with
+> 1 Mb of memory. Could someone tell me what chipset to
+> use in the Xconfig file, email me any help. Thanx. 
+
+Arsenio:
+
+If you have XFree86 2.0, then support for the OAK Chipset is built into 
+XF86_SVGA and should be identified as something like oit067 or oit077.  If
+you are running XFree86 1.3 then you will need the XF86_SVGA Server which 
+Steve Goldman has kindly made available on ns.encore.com
+(/pub/development/languages/C), to which he has added support for the OAK 
+Chipsets.  In fact it was his support for the OAK Chipset which was added 
+to the XFree86 2.0 Distribution!
+
+Lawrence Houston  -  (houston@norton.geog.mcgill.ca)
+
+------------------------------
+
+Crossposted-To: comp.lang.misc
+Subject: Re: Why Pascal is not... (was: WANTED: COBOL compiler)
+From: stsai@scws1.harvard.edu (Shun-Chang Tsai)
+Date: 17 Nov 93 16:58:09 GMT
+
+You can ftp Kerbighan's "Why Pascal is Not My Favorite Language"
+from quartz.rutgers.edu:/pub/computer/langauges.
+
+
+
+------------------------------
+
+Crossposted-To: comp.sys.ibm.pc.hardware,comp.os.os2.misc,comp.unix.misc
+From: n9044144@gonzo.cc.wwu.edu (Khan M. Klatt)
+Subject: Re: OS/2 and X-Windows
+Date: 18 Nov 93 00:07:53 GMT
+
+coult@magellan (COULT  NICHOLAS ASHTON) writes:
+
+>I have heard that, with the proper software, it is possible under OS/2 to run an X-server
+>which serves applications remotely over a modem connection.
+>I have some questions regarding this.
+
+>1. Is it really possible?
+
+I've never heard of this being possible... if so I, too, would appreciate 
+answers to the following questions.
+
+>2. What software is needed to do this?
+>3. How fast would the modem have to be for this to be useable?                     
+>4. Is there any special software/hardware which would be needed on the other
+>end of the connection?             
+
+>Any help is greatly appreciated.  If you know of a good place to look for this
+>information, please let me know.
+
+Indeed, me too.
+
+>-Nick
+
+Khan
+
+n9044144@henson.cc.wwu.edu
+-- 
+-Khan M. Klatt---n9044144@henson.cc.wwu.edu---Western Washington University
+        "It takes about a month for women to get used to me. Kinda like a 
+         skittish animal.. they have to sniff you for a while, walk around
+         you until they get comfortable."       -Andrew Ghali
+
+------------------------------
+
+From: gerlich@felix.rz.fh-ulm.de (EXT Andreas Gerlich)
+Subject: TLI (Transport Layer Interface) for Linux
+Date: 17 Nov 1993 22:59:30 GMT
+Reply-To: gerlich@felix.rz.fh-ulm.de
+
+
+Hello Linux-Users,
+
+I am looking for TLI (Transport Layer Interface) library for Linux.
+Do you have any kind idea where it can be found?
+
+Andreas
+
+--
+Andreas Gerlich, FH-Ulm, Germany,     email: gerlich@fh-ulm.de
+
+------------------------------
+
+From: mikeg@psg.com (Mike Gallo)
+Crossposted-To: comp.lang.misc
+Subject: Re: Why Pascal is not... (was: WANTED: COBOL compiler)
+Date: 17 Nov 93 10:13:05 GMT
+
+In article <2cb2sk$fp7@nz12.rz.uni-karlsruhe.de> ig25@fg70.rz.uni-karlsruhe.de (Thomas Koenig) writes:
+>
+>You're quite right there.  It also would seem that Nikolaus Wirth
+>agreed, as well; the deficiencies pointed out by Kernighan are all fixed
+>in Modula-2, especially the "There is no escape" clause.  Using the
+>SYSTEM.ADDRESS type, you can convert from and to pointers as freely as
+>in C; it just takes more verbiage, and effort.
+
+        Indeed, Prof. Wirth never intended for Pascal to be a 
+"real world" programming language.  It was intended to be a 
+teaching tool only.  That Pascal has spread so far beyond it's 
+original domain reflects very well upon its clean design, IMHO.
+
+-- 
+
+                A penny saved is a Congressional oversight.
+
+------------------------------
+
+From: byron@cc.gatech.edu (Byron A Jeff)
+Subject: Re: NIS/YP ??
+Date: Thu, 18 Nov 1993 01:05:44 GMT
+
+In article <jocke.753546944@fizban>,
+Jocke Berglund <jocke@krynn.solace.mh.se> wrote:
+>Do anyone out there hav nis or yp for linux ??
+>I'm setting up a network with linux boxes connected to a sun server and
+>it would be very nice if i could use nis/yp for the passwd..
+
+====== Begin included text from a couple of saved files ===========
+Yes.  There is a port of NIS to Linux on ftp.uni-paderborn.de
+pcsoft2/linux-local/yp/yp-linux.tar.gz.  I use it for over a month by
+now without any major problems.  I did find a bug in ypset (which is rearely
+used anyway) but I don't know if it was integrated into the release.  I heard
+(and tried to help to) people with troubles running this package.  I suspect
+that the main problem might stam from the binaries/libraries compiled with
+somewhat old versions.
+
+I will be glad to hear what is up with this package from its author.
+
+Cheers,
+
+--Amos
+--
+--Amos Shapira (Jumper Extraordinaire) |  "It is true that power corrupts,
+
+
+******
+I am running a number of Linux workstations (SLS1.03 PL12 kernel)
+with (NIS) yp on them and an IBM RS/6000 running as an NIS server.
+
+The NIS (yp) I obtained came from:
+
+ftp.huji.ac.il         /pub/linux/packages/yp
+============================= End of included text =======================
+
+So it does exist. However when I pulled it down I found to my horror of horrors
+that the libraries are 4.4.2. My slick new Slackware 1.1.10 has 4.4.4. 
+
+I'm afraid that if I downgrade my libraries that other stuff (like X 2.0)
+will start to break.
+
+So my question is: Is ther a NIS compiled with lib 4.4.4? Barring that is
+there anything I'd have to worry about downgraing to lib 4.4.2?
+
+
+Thanks
+
+BAJ
+---
+Another random extraction from the mental bit stream of...
+Byron A. Jeff - PhD student operating in parallel!
+Georgia Tech, Atlanta GA 30332   Internet: byron@cc.gatech.edu
+
+------------------------------
+
+From: sknkwrks@blind-lemon.cs.unlv.edu (Scott Alfter)
+Subject: Re: New electronic magazine with Linus Torvalds interview
+Date: 18 Nov 1993 01:15:32 GMT
+
+In article <2c5qqn$h4a@blaze.cs.jhu.edu> bogstad@blaze.cs.jhu.edu (Bill Bogstad) writes:
+>In article <STEVEV.93Nov13185423@miser.uoregon.edu>,
+>Steve VanDevender <stevev@miser.uoregon.edu> wrote:
+>>An interesting note: Ghostview 1.5 with Ghostscript 2.6.1 will
+>>only see the first four pages of the Meta magazine Postscript
+>>document.  Ghostview 1.4.1 sees the entire document.
+>
+> I had the same problem using Ghostview on a Sun.  Looks like
+>it is not specific to Linux...
+
+Trying to read Meta with Preview on a NeXT is even worse...it crashes
+the system!  Ghostscript 2.6.1 on the same NeXT (or on a Sun) works
+fine...or at least it works fine here.
+
+  _/_   Scott Alfter (sknkwrks@cs.unlv.edu)       Ask me about SoftDAC--digital
+ / v \  Call the Skunk Works BBS today!           audio for your Apple IIe/IIc!
+(IIGS(  (702) 894-9619 300-14400 V.32bis 1:209/263 Apple II, IBM, Trek, & more!
+ \_^_/  ---===#### Why be politically correct when you can be RIGHT? ####===---
+
+------------------------------
+
+Crossposted-To: alt.lang.intercal,connect.audit
+From: boris@ibmpcug.co.uk (Chris Osborne)
+Subject: intercal & linux
+Date: Wed, 17 Nov 1993 21:29:22 GMT
+
+
+To all linux users,
+
+INTERCAL is arguably the most important language compiler to have on your
+system. It offers a mature software development paradigm together with
+mental stimulation for both you and your processor.
+
+Unfortunately the standard release of C-intercal ( version 0.9 ) will not
+operate correctly under linux. This is mainly because of differences between
+BISON & FLEX and the standard yacc/lex used in its implementation. 
+
+The following differences should allow YOU to compile intercal & reap the
+attendant benefits. These diffs have been extensively tested ( over 3000 man-
+seconds of testing effort ) So you can see how reliable they must be.
+
+Intercal0.9 is available from rochester.edu ( ftp.lle.rochester.edu I think,
+but have lost my original reference ).
+
+After loading the 0.9 release, go to the src subdirectory, use patch to
+apply the diffs:
+         patch < thisdoc        ( whatever you saved this post as )
+edit the Makefile & away you go....
+
+N.B. don't worry about the apparently reversed dates below, I did this a
+while ago & had to re-load the original stuff to calculate the diffs.
+
+  Chris Osborne                                 boris@ibmpcug.co.uk
+                Warning! this file contains invisible smileys.
+...........................................................................
+
+*** ick.y       Tue Nov 16 18:40:35 1993
+--- ick.y.new   Mon Sep 13 18:26:34 1993
+***************
+*** 76,89 ****
+
+  /* A program description consists of a sequence of statements */
+  program       :    /* EMPTY */
+!       |    program statemnt
+        ;
+
+- statemnt:    command
+-       |    error
+-               {splat(); lose(yylineno,E017);}
+-       ;
+-
+  /*
+   * Each command consists of an optional label, followed by a preamble,
+   * followed by an optional probability, followed by the statement body.
+--- 76,84 ----
+
+  /* A program description consists of a sequence of statements */
+  program       :    /* EMPTY */
+!       |    program command
+        ;
+
+  /*
+   * Each command consists of an optional label, followed by a preamble,
+   * followed by an optional probability, followed by the statement body.
+***************
+*** 103,108 ****
+--- 98,104 ----
+  /* There are two forms of preamble returned by the lexer */
+  please        :    DO                 {$$ = 1;}
+        |    DO NOT             {$$ = -1;}
++       |    error              {lose( E017,yylineno,(char *)0 );}
+        ;
+
+  /* Here's how to parse statement bodies */
+***************
+*** 123,128 ****
+--- 119,125 ----
+        |    READ_OUT outlist           {ACTION($$, READ_OUT,  $2);}
+        |    GIVE_UP                    {ACTION($$, GIVE_UP,   0);}
+        |    COME_FROM LABEL            {NEWFANGLED {TARGET($$,COME_FROM,$2)}}
++       |    BADCHAR                    {$$=splat();}
+        |    error                      {$$=splat();}
+        ;
+
+*** lexer.l     Tue Nov 16 18:40:58 1993
+--- lexer.l.new Wed Sep  8 17:40:27 1993
+***************
+*** 1,10 ****
+--- 1,25 ----
+  %{
+  #include <stdio.h>
+  #include <ctype.h>
++ #include <string.h>
+  #include "ick.h"
+  #include "y.tab.h"
+  #include "lose.h"
+
++ #ifdef        FLEX_SCANNER
++ #define YYLMAX        1024
++ #undef  yywrap
++ extern        FILE    *yyin;
++       int     yylineno = 1;
++ #undef        YY_INPUT
++ #undef        getc
++ #define       YY_INPUT( buf, result, max ) \
++       {\
++               int c = getc( stdin );\
++               result = ( c == EOF ) ? YY_NULL : ( buf[0] = c, 1 );\
++       }
++ #endif        /* FLEX_SCANNER */
++
+  #ifdef MAIN
+  YYSTYPE       yylval;
+  #endif /* MAIN */
+***************
+*** 88,93 ****
+--- 103,111 ----
+        {
+            do {
+                c = fgetc(fp);
++ #ifdef        FLEX_SCANNER
++               if( c == '\n' ) yylineno++;
++ #endif        /* FLEX_SCANNER */
+            } while
+                (c != '\\' && isspace(c));
+        }
+***************
+*** 107,117 ****
+        }
+        else if (c == '\n')
+        {
+-           extern char *strcpy(),*malloc();
+-
+            *lineptr = '\0';
+            lineptr = linebuf;
+            textlines[yylineno] = strcpy(malloc(1+strlen(linebuf)),linebuf);
+            return('\n');
+        }
+        else
+--- 125,138 ----
+        }
+        else if (c == '\n')
+        {
+            *lineptr = '\0';
+            lineptr = linebuf;
++ #ifdef        FLEX_SCANNER
++           textlines[yylineno++] =
++                               strcpy(malloc(1+strlen(linebuf)),linebuf);
++ #else /* FLEX_SCANNER */
+            textlines[yylineno] = strcpy(malloc(1+strlen(linebuf)),linebuf);
++ #endif        /* FLEX_SCANNER */
+            return('\n');
+        }
+        else
+***************
+*** 221,227 ****
+  }
+  #endif /* MAIN */
+
+! static int yywrap()
+  {
+      return(EOF);
+  }
+--- 242,248 ----
+  }
+  #endif /* MAIN */
+
+! int yywrap()
+  {
+      return(EOF);
+  }
+*** lose.c      Tue Nov 16 18:41:28 1993
+--- lose.c.new  Wed Sep  8 16:12:13 1993
+***************
+*** 16,22 ****
+        (void) fprintf(stderr, m + 4, s, n);
+      else
+        (void) fprintf(stderr, m + 4, n);
+!     (void) fprintf(stderr, "        CORRECT SOURCE AND RESUBNIT\n");
+      exit(atoi(m));
+  }
+
+--- 16,22 ----
+        (void) fprintf(stderr, m + 4, s, n);
+      else
+        (void) fprintf(stderr, m + 4, n);
+!     (void) fprintf(stderr, "        CORRECT SOURCE AND RESUBMIT\n");
+      exit(atoi(m));
+  }
+
+*** perpetrate.c        Tue Nov 16 18:42:25 1993
+--- perpetrate.c.new    Wed Sep  8 16:26:29 1993
+***************
+*** 115,121 ****
+      }
+
+      (void) signal(SIGSEGV, abend);
+!     (void) signal(SIGBUS, abend);
+
+      (void) sprintf(buf2,"%s/%s",includedir,SKELETON);
+
+--- 115,121 ----
+      }
+
+      (void) signal(SIGSEGV, abend);
+! /*    (void) signal(SIGBUS, abend); */
+
+      (void) sprintf(buf2,"%s/%s",includedir,SKELETON);
+
+***************
+*** 321,327 ****
+      (void) fclose(ifp);
+  }
+
+! static void
+  print_usage(prog,options)
+  char *prog, *options;
+  {
+--- 321,327 ----
+      (void) fclose(ifp);
+  }
+
+! void
+  print_usage(prog,options)
+  char *prog, *options;
+  {
+
+------------------------------
+
+From: jan@pandonia.canberra.edu.au (Jan Newmarch)
+Subject: Summary of replies: Debugging malloc library available?
+Date: 18 Nov 93 00:28:30 GMT
+
+In <jan.753085076@pandonia> jan@pandonia.canberra.edu.au (Jan Newmarch) writes:
+
+
+>I have been using the dbmalloc library from Conor P. Cahill on a Sun
+>quite successfully. I tried to build it on Linux and ran into all sorts
+>of problems. Has anyone successfully built this library or any other
+>debugging malloc one?
+
+Johannes Grosen <grosen@argv.cs.ndsu.nodak.edu> suggested using a malloc
+package called Checker that is on sunsite under "devel". This looked
+pretty nice (a GNU Purify) but had dificulties with multiple libraries, not
+seeming to recognise the -L option and other problems.
+
+Gustaf Neumann <neumann@watson.ibm.com> suggested a malloc library from
+ftp.cs.toronto.edu under the /pub/moraes directory. This worked fine
+(after fixing one type error in the source) and found my memory bug.
+
+Thanks!
+                                Jan
+--
+  Jan Newmarch, Information Science and Engineering,
+  University of Canberra, PO Box 1, Belconnen, Act 2616
+  Australia. Tel: (Aust) 6-2012422. Fax: (Aust) 6-2015041
+  AARnet: jan@ise.canberra.edu.au
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Misc-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.misc) via:
+
+    Internet: Linux-Misc@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Misc Digest
+******************************

@@ -1,0 +1,135 @@
+This is the second release [release-2] of my tape driver for QIC-02 tape
+drives. There are probably quite a few bugs left, so if you find one, please
+let me know. I'm also very interested to hear whether it works at all with
+your drive. I have a Wangtek 5150EQ which appears to work quite well.
+
+USER PROGRAMS SUPPLIED: [Compiled with gcc2.2.2 with shared libs.]
+
+	(g)mt	-- used for moving the tape (rewind, wind, etc)
+		   With the new patches, mt can now do `ras1', `ras2' and
+		   `reset' as well. The `ras' commands tell the drive
+		   to perform some self testing. These may not work on
+		   all drives. When the tape drive is busy, you can still
+		   reset it by using a tape device file with minor
+		   number 255 (``mt -f /dev/tape-reset reset'').
+
+	(g)cpio	-- "copy files to and from achives." different from tar.
+		   I don't use this one much myself. There may remain some
+		   bugs in this port. Somebody should check my diffs.
+
+	mtreset	-- [my own] this is used for telling the driver to
+		   reset the drive. I know it's not very nice to allow
+		   any user to do this [maybe I'll put in a check to
+		   disallow it for anyone other than root] but this is
+		   very useful to avoid having to reboot your entire system
+		   when something goes wrong with the drive(r). You should
+		   install this program with permission 550.
+		   -- no longer needed since mt can do this now. --
+
+	tapetest -- [mine too] (writes, then) reads a tape and times the
+		   time needed to read each block. Blocks that need retries
+		   are detected because of the extra time needed. Blocks
+		   near the ends are detected too, because the tape needs
+		   to change directions there. You could use this to validate
+		   a tape or to figure out how many blocks it can hold.
+		   Because of the timing, you'll need a `quiet' machine to
+		   run this on, or maybe set the delay treshold time higher.
+		   If a block is totally unreadable, the driver should return
+		   a read error to the tapetest program, which should stop
+		   on such errors.
+		   NOTE: the current version of the driver
+		   may fail when tapetest tries to rewind the tape after
+		   writing it with the test pattern. This is a "known bug"
+		   and will hopefully be fixed in the next release. In the
+		   meantime, do ``mt reset; mt rewind'' after the writing
+		   phase, then do the read-phase.
+
+FILES:
+	include/sys/ioctl.h	-- defines the generic ioctl() interface
+	include/sys/mtio.h	-- ioctl commands for tape drivers
+	include/sys/file.h	-- needed for mt.c [taken from linux-0.95c*]
+				   Somehow, this got left out from the
+				   gcc includes...
+
+	kernel/chr_drv/tpqic02.c	-- the driver itself
+	include/linux/tpqic02.h		-- header file for driver
+
+
+
+USE WITH:
+	Linux-0.98 patchlevel 3.
+	Apply the patches, install the new files and type ``make dep''.
+	I'm assuming you have gcc version 2.2.2 or later.
+	You may have to put links in the /usr/include/sys direcory to 
+	/usr/src/linux/include/sys/{ioctl.h,mtio.h,file.h}, in case you want
+	to recompile mt, cpio or tar.
+
+CHANGES:
+
+   release-2:
+
+	Tape devices with the the highest minor bit reset will now no
+	longer print any `unnecessary stuff' to the screen. If you want
+	that info, use a tape device with the highest minor bit set.
+	In that case, you may also want to define TDEBUG during compilation.
+	Make a new device file `/dev/tape-d' or whatever the same way
+	you made `/dev/tape' except you should add 128 to the minor number.
+	Some debugging info is still printed always.
+
+	I found the bug that caused the root floppy to be zapped, when
+	booting	from a floppy root fs. It was caused by data overruns/
+	underruns in the floppy controller. The new floppy driver should
+	fix this, as well as adding better diagnostic messages.
+
+	Added `reset', `ras1' and `ras2' (selftests) to mt(1).
+	mtreset(1) is no longer required. The selftests may not
+	work on all tape drives because they use optional QIC-02
+	commands. `ras1' is supposed to be non-destructive, `ras2'
+	may erase data on tape.
+	Resulting status codes are "vendor unique". :-( Any info on
+	these very much appreciated!
+
+	Use ``mt -f /dev/tape-reset reset'' (minor 255) for resetting when
+	the driver is busy. This resets, but doesn't open the device
+	succesfully.
+
+	Added `tapetest' for testing tapes for bad blocks. [Not pretty,
+	but hey, it's better than nothing...] Please report to me whether
+	this is useable on 386SX machines, I've only tested it on
+	my 486/33.
+
+	Major device number has changed. (Was 10, now 12 -- check
+	config*.h to make sure.) The change was necessary because
+	other driver(s) were using the same major numbers. If and when
+	QIC-02 support is added by Linus, the major number will be fixed.
+	For now, we'll just have to be on the lookout for conflicting
+	major numbers... :-(
+
+	Changes to use the new `irqaction' stuff (0.96c-pl1 or higher).
+	Changed my `include/linux/system.h' to `include/asm/dma.h'.
+
+
+  release-2c:
+
+	Better delay routine, DMA allocator.
+
+        Added support for Archive SC402/499R interface cards, based on
+	info+patches by Eddy Olk. Note that I have no access to an Archive
+	drive, so I cannot test	that myself. Select Archive/Wangtek 
+	interface card in config.site.h.
+
+        Changed read/write routines to do the entire user
+	buffer in one go, rather than splitting it up into kernel-buffer-
+	sized blocks. This means that it should no longer be necessary
+	to use `dd'. Instead `tar -b 3000 -cvf /dev/tape /` should be
+	sufficient to make a full dump with a blocking size of 1500k.
+
+	EOF handling changed. It should now be possible to interrupt a
+	`tar -v' listing and continue on the same file. Note that due to
+	tar-EOF handling and blocking, tar may not actually read the
+	entire file on tape. If you have more than one file on tape, you
+	will probably have to use `mt fsf' to skip over the padding-blocks
+	to the beginning of the next file.
+
+	My DMA allocator is now (0.98.3) in the standard Linux distribution.
+	

@@ -1,0 +1,766 @@
+From:     Digestifier <Linux-Development-Request@senator-bedfellow.mit.edu>
+To:       Linux-Development@senator-bedfellow.mit.edu
+Reply-To: Linux-Development@senator-bedfellow.mit.edu
+Date:     Fri, 14 Oct 94 13:13:15 EDT
+Subject:  Linux-Development Digest #307
+
+Linux-Development Digest #307, Volume #2         Fri, 14 Oct 94 13:13:15 EDT
+
+Contents:
+  Re: ext2fs vs. Berkeley FFS ("Theodore Ts'o")
+  Re: Shared Libs: working toward a permanent solution? ("Theodore Ts'o")
+  accept() not functioning 100%? (Robert Simons)
+  Re: Improving SLIP latency under Linux (Frank Lofaro)
+  Re: Status of Linux and Distributions security (Bernd Eckenfels)
+  [Q] touch-thru-glass keypad driver suggestions (Joe Desbonnet)
+  Re: Suggestion: comp.os.linux.channelecho.* (Matthias Urlichs)
+  A/D-board with Linux-driver?? (Sebastian Egner)
+  Re: libg++-2.6: builtinbuf undefined (David Fox)
+  Re: Shared Libs: working toward a permanent solution? (Bryan Ford)
+  Re: A badly missed feature in gcc (Dan Pop)
+  Re: Status of Mac Linux & PPC Linux? (Thomas G. McWilliams)
+  ypbind didn't work (Ari Widodo)
+  1.1.52 Kernel Panics (Christopher Wiles)
+  .52 & .52 Hangs in heavy FTP'ing.. (Thomas Lundquist)
+  Re: LINUX Logical volumes (Werner Almesberger)
+  Re: 3c505 driver ? (John Huang)
+  Term blocks modem, switching to VT and back restores? (Rafal Kustra)
+
+----------------------------------------------------------------------------
+
+From: "Theodore Ts'o" <tytso@MIT.EDU>
+Subject: Re: ext2fs vs. Berkeley FFS
+Date: 14 Oct 1994 09:17:48 -0400
+Reply-To: tytso@MIT.EDU
+
+   From: mike@majestix.cs.uoregon.edu (Mike Haertel)
+   Date: 03 Oct 1994 20:46:49 GMT
+
+   I'd rather have garbage in a file than have a file whose blocks
+   are also in the free list and will soon be allocated to another
+   file as well.  Of course, fsck is supposed to fix these situations.
+   But if you're using a filesystem wherein the actual disk updates
+   are trailing way behind file system activity, and are not constrained
+   to be written in the order they were made, then a crash at a disk-intensive
+   time could leave fsck extremely confused.
+
+   This is why BSD ffs does its updates in what somebody called the "wrong"
+   order, but which strikes me as exactly the _right_ order.
+
+ext2 doesn't use a free list, but rather uses a bitmap of used/free
+blocks.  Making sure this bitmap is correct is perhaps the easiest job
+e2fsck has to do.  That's *not* what's going to get it confused.
+
+The one place where a lagged write of the meta data might get the e2fsck
+confused is if indirect block of a deleted file gets overwritten by
+something else, probably another data block, before the inode table gets
+flushed to disk.  In this case, e2fsck *will* notice the inconsistency;
+however, it will probably call for human intervention in order to fix
+the problem.  
+
+Of course, I've tried to make e2fsck such that the human intervention is
+as painless as possible.  For example, e2fsck can automatically take
+care of cloning cross-linked files so that each file has its own copy of
+blocks claimed by two different inodes.  Of course, at least one of
+those files will have garbaged blocks (consisting of data from the other
+file) after this operation, but at least the filesystem is stable.  The
+human being simply has to examine both of the files and see which one
+should be discarded.
+
+In any case, it's a good idea to optimize for the common case, not the
+exception case.  Thus, I believe ext2fs made a pretty good tradeoff.
+Not doing syncronous meta-data writes gives the ext2fs a blinding speed
+advantage over the FFS.  From my experience with both FFS and ext2fs,
+ext2fs is just as reliable --- if not more --- than FFS in surviving
+unclean shutdowns.
+
+                                                - Ted
+
+------------------------------
+
+From: "Theodore Ts'o" <tytso@MIT.EDU>
+Subject: Re: Shared Libs: working toward a permanent solution?
+Date: 14 Oct 1994 09:22:09 -0400
+Reply-To: tytso@MIT.EDU
+
+
+The real problem with this sort of solution is that you have to educate
+GCC about segment registers, and you have to include the segment number
+into a pointer.  Otherwise, how is GCC supposed to know whether a
+pointer was pointing at memory from the library's data segment, or at
+memory passed in from the caller?  
+
+I've discussed this problem with GCC hackers who were also Multics
+weanies, and this is a very difficult problem.  If it could be solved,
+then we could indeed put shared libraries (and even shared memory!) into
+separate segments, ala Multics.  This would be very clean from an OS
+architectural issue --- unfortunately, it requires a lot of compiler
+support that just doesn't exist right now.  
+
+It would also break a lot of programs, since a pointer would be 48 bits,
+instead of 32 bits, and there are a lot of programs that assume that the
+width of pointer is the same as the width of an integer, or a long.
+(This isn't a portable assumption --- but there are still a lot of
+programs left over from the "All the world's a Vax" days.)
+
+                                        - Ted
+
+------------------------------
+
+From: Robert_Simons@sedl.com (Robert Simons)
+Subject: accept() not functioning 100%?
+Date: 12 Oct 94 07:03:04 +0500 EST
+
+
+According to every manual I have ever read, the accept() system call will load
+the passwed sockaddr structure with information about the connecting client. 
+According to my tests, this doesn't happen under Linux.  Consider:
+
+#define ADDRESS 3012       /* Some unused user-defined port */
+
+dumb_func()
+ {
+    char c;
+    FILE *fp;
+    int fromlen;
+    register int i, s, ns, len;
+    struct sockaddr_un saun, fsaun;
+ 
+    for(;;)
+    {
+       /* Set up signal handler for kill 15 and Interrupt */
+       signal(SIGTERM, cleanup);
+       signal(SIGINT, cleanup);
+ 
+       /* Get a socket to work with.  The socket will be in the UNIX
+          domain, and will be a stream socket  
+       */
+ 
+       if ((s = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) 
+       {
+          perror("server: socket");
+          exit(1);
+       }
+ 
+       /* Create the address we will be binding to */
+       saun.sun_family = AF_UNIX;
+       strcpy(saun.sun_path, ADDRESS);
+ 
+       /* Try to bind the address to the socket.  We
+          unlink the name first, so that the bind won't fail.
+          The third argument indicates the "length" of the 
+          structure, not just the length of the socket name!
+       */
+ 
+       unlink(ADDRESS);
+       len = sizeof(saun.sun_family) + strlen(saun.sun_path);
+       /* fromlen = sizeof(fsaun.sun_family) + strlen(fsaun.sun_path); */
+       fromlen = sizeof(fsaun);
+ 
+       if (bind(s, &saun, len) < 0)
+       {
+          perror("server: bind");
+          exit(1);
+       }
+ 
+       /* Listen on the socket */
+       if (listen(s, 5) < 0)
+       {
+          perror("server: listen");
+          exit(1);
+       }
+ 
+       printf("\nWaiting for connection: \n");
+ 
+       /* Accept connections.  When we accept one, ns will be connected
+          to the client.  fsaun will contain the address of the client.
+       */
+ 
+       if ((ns = accept(s, (struct sockaddr_un *)&fsaun, (int *)&fromlen)) < 0)
+       {
+          perror("server: accept");
+          exit(1);
+       }
+ 
+       printf("Connection from: %s\n", fsaun.sun_path);
+       printf("Connection flen: %d\n", fromlen);
+    
+       /* We'll use stdio for reading the socket */
+       fp = fdopen(ns, "r");
+ 
+       /* We can simply use close() to terminate the connection, since we
+             are done with both sides 
+       */
+    
+       close(s);
+    }
+ 
+    exit(0);
+ }
+
+In the above example, the fsaun instance of sockaddr_un is not getting loaded
+properly.  Any ideas?  Everything seems to work fine, it just doesn't load the
+client information into the sockaddr structure... 
+
+---
+rsimons@sedl.com
+
+
+[Computer Online Services (COS) - Clique.com]
+[3606 10th Ave North. Palm Springs, FL 33461]
+[Voice.............407-641-7454]
+[Modem.............407-641-7484]
+[FAX...............407-641-7226]
+
+------------------------------
+
+From: ftlofaro@unlv.edu (Frank Lofaro)
+Subject: Re: Improving SLIP latency under Linux
+Date: Fri, 14 Oct 94 02:51:57 GMT
+
+In article <37981n$9bs@gate.noris.de> urlichs@smurf.noris.de (Matthias Urlichs) writes:
+>Oops, I meant "-2- or -3-". (Rationale: There should be a link-level
+>checksum. The modem error correction isn't end-to-end, but it's better than
+>no error correction at all.)
+>
+
+Huh??? You need link-level checksums when you already have TCP and UDP 
+checksums?
+
+
+------------------------------
+
+From: ukd1@rzstud1.rz.uni-karlsruhe.de (Bernd Eckenfels)
+Subject: Re: Status of Linux and Distributions security
+Date: 14 Oct 1994 02:40:54 GMT
+
+Cees de Groot (cg@tricbbs.fn.sub.org) wrote:
+: In article <36o1rs$8bh@vixen.cso.uiuc.edu>,
+: Daniel L. Marks <dlm40629@uxa.cso.uiuc.edu> wrote:
+: >How do the recent linux kernels (1.1.45+) and the various distributions
+: >(Slackware, SLS, Debian) compare to commercial UNIX offerings such as
+: >SCO, UnixWare, and BSDI for the number of security holes each is known
+: >to have?
+There is a Problem with the memory management. If u request huge
+amounts of memory without writing to it, u can request more memory
+than virtually are available. If u now start to write into those
+pages, the free memory will decrease, the system will swap more and
+more, until it is really locked up. Something like SIGWARN (from AIX)
+should be impemented, or at least some appropirate (on user basis)
+rlimits.
+
+Greetings
+Bernd
+
+PS: i patched a quick and drity RLIMIT_NPROC without hte use of an
+structure for user-informations. I think it is time to invent an
+structure wich is allocated once for each user (a process is running
+for), wich can be used to restrict the maximu numbers of processes
+for an user, or the maximum amount of virtual memory. This is not
+possible on an process-basis.
+--
+  (OO)        --  Bernd_Eckenfels@Wittumstrasse13.76646Bruchsal.de  --
+ ( .. )    +4972573817   ecki@lina.ka.sub.org   ukd1@rz.uni-karlsruhe.de
+  o--o            *QUAK* Jetzt auch mit Plueschtier in der .Sig!  
+(O____O)   <A href=http://rzstud1.rz.uni-karlsruhe.de/~ukd1/>Eckes@IRC</A>
+
+
+
+------------------------------
+
+From: joe@iol.ie (Joe Desbonnet)
+Subject: [Q] touch-thru-glass keypad driver suggestions
+Date: 12 Oct 1994 08:50:29 GMT
+
+I'm writing a driver for a touch-thru-glass keypad.
+The unit sends codes via a serial line and I have
+successfully written code to decode this. However
+I need suggestions as to how I can effectivly press
+a key on the keyboard so that this will work with
+applications without modifying them. I guess it
+should be possible to program this in user mode(?).
+
+Thanks,
+
+Joe Desbonnet.
+
+
+------------------------------
+
+From: urlichs@smurf.noris.de (Matthias Urlichs)
+Subject: Re: Suggestion: comp.os.linux.channelecho.*
+Date: 12 Oct 1994 08:37:46 +0100
+
+In comp.os.linux.development, article <hpa.2db30000.Linux.is.free@ahab.eecs.nwu.edu>,
+  hpa@nwu.edu (H. Peter Anvin) writes:
+> 
+> Forge a message using 
+> /usr/lib/sendmail -f from-address linux-activists-request@niksula.hut.fi
+> 
+> Note: requires root access, and you to type in all relevant headers.
+> 
+I know that. Tried it, didn't work. (Not even a peep out of the list
+processor.)
+
+The next step was to telnet to their SMTP port. Still no luck.
+
+And, yes, I know RFC822; the message _was_ correct.
+
+-- 
+The only winner of the War of 1812 was Tchaikovsky.
+                                       -- Solomon Short
+-- 
+Matthias Urlichs        \ XLink-POP Nürnberg  | EMail: urlichs@smurf.noris.de
+Schleiermacherstraße 12  \  Unix+Linux+Mac    | Phone: ...please use email.
+90491 Nürnberg (Germany)  \   Consulting+Networking+Programming+etc'ing     42
+          PGP: 1B 89 E2 1C 43 EA 80 44  15 D2 29 CF C6 C7 E0 DE 
+      Click <A HREF="http://smurf.noris.de/~urlichs/finger">here</A>.
+
+------------------------------
+
+From: egner@hermes.zkm.de (Sebastian Egner)
+Subject: A/D-board with Linux-driver??
+Date: 14 Oct 1994 14:05:49 GMT
+
+Does anybody know of multiple channel
+analog/digital interface boards for
+AT-bus IBM-compatibles for which there
+is regular (/dev/*) Linux device driver
+software?
+
+  Sebastian Egner,
+  Zentrum f"ur Kunst und Medientechnologie,
+  Karlsruhe (Germany)
+
+
+------------------------------
+
+From: fox@graphics.cs.nyu.edu (David Fox)
+Subject: Re: libg++-2.6: builtinbuf undefined
+Date: 14 Oct 1994 02:52:37 GMT
+
+In article <SATTLER.94Oct13152916@max.cs.tu-magdeburg.de> sattler@iti.cs.tu-magdeburg.de (Kai-Uwe Sattler) writes:
+
+] > Error message:
+] > ../../libg++.a(stdstrbufs.o): Undefined symbol builtinbuf referenced from data segment
+] 
+] I have the same problem, but only with Linux. On SunOS 4.1.3 and
+] Solaris 2.3 I can build libg++ without errors. Any hints ?
+
+I got the error on SunOS 4.1.3 too.  I just removed stdstrbufs.o
+from the list of files to be made, I haven't missed it yet.
+--
+David Fox                                               xoF divaD
+NYU Media Research Lab                     baL hcraeseR aideM UYN
+
+------------------------------
+
+From: Bryan Ford <baford@schirf.cs.utah.edu>
+Subject: Re: Shared Libs: working toward a permanent solution?
+Date: 14 Oct 1994 11:12:22 -0400
+Reply-To: baford@schirf.cs.utah.edu
+
+|The real problem with this sort of solution is that you have to educate
+|GCC about segment registers, and you have to include the segment number
+|into a pointer.  Otherwise, how is GCC supposed to know whether a
+|pointer was pointing at memory from the library's data segment, or at
+|memory passed in from the caller?  
+
+It doesn't need to.  Any pointer that actually gets passed around in
+a program in variables and such is still a 32-bit, absolute, "small model"
+pointer as usual.  The only thing that needs to be changed is the method
+of accessing or taking the address of a static variable.  To take the
+address of a static variable, just convert the segment-register-relative
+offset to a global, absolute offset by adding the base address of the
+library, and use the resulting absolute pointer thereafter.  This will
+work as long as a particular shared library doesn't move around in
+a particular process's address space _while_it_is_running_, which would
+be rather insane anyway. :-)
+
+|I've discussed this problem with GCC hackers who were also Multics
+|weanies, and this is a very difficult problem.  If it could be solved,
+|then we could indeed put shared libraries (and even shared memory!) into
+|separate segments, ala Multics.  This would be very clean from an OS
+|architectural issue --- unfortunately, it requires a lot of compiler
+|support that just doesn't exist right now.  
+
+Yes, a true multisegmented environment has its attractions, but after
+programming in one for a while (i.e. 16-bit DOS), I'd say its disadvantages
+are much bigger than its advantages. :-)  But I wasn't proposing a true
+multisegmented environment; just a small architecture-specific kludge
+to allow the compiler to use a segment register instead of a scarce general
+register to remember the library base address in a PIC library.
+
+                                Bryan
+
+------------------------------
+
+From: danpop@cernapo.cern.ch (Dan Pop)
+Subject: Re: A badly missed feature in gcc
+Date: Thu, 13 Oct 1994 11:10:10 GMT
+
+In <37i5mu$ba4@harbinger.cc.monash.edu.au> kevinl@fangorn.cs.monash.edu.au (Kevin Lentin) writes:
+
+>So are comments. The only non-C things the compiler sees are the # nn file
+>Directives so it knows where source comes from. So there is still no
+>meaning to the carriage return added to the comment syntax as far as the
+>compiler is concerned.
+>
+>That aside, I believe C++ comments are better. They're great for single
+>line comments, make temporary removal of a line easy (I still use C
+>comments for temporary removal of small blocks of code and #if for bigger
+>ones). BUT I think C should remain C. You're just going to break something
+>somewhere eventually. 
+
+Besides breaking valid C code, changing cpp to accept // comments as 
+default behaviour will also break other utilities which rely on cpp.
+For example, if you have in your .Xdefaults:
+
+Mosaic*homeDocument:    http://info.cern.ch
+
+the result will be completely different than what you expect, unless
+you use the -nocpp xrdb option, which means removing functionality from
+xrdb.
+
+Another example is the Unix Fortran compiler, f77. If it compiles a file
+with the .F extension, it will pass the source file through cpp before
+compiling it. But // is a Fortran operator! :-)
+
+Dan
+--
+Dan Pop 
+CERN, CN Division
+Email: danpop@cernapo.cern.ch
+Mail:  CERN - PPE, Bat. 31 R-004, CH-1211 Geneve 23, Switzerland
+
+------------------------------
+
+Crossposted-To: comp.os.linux.help
+From: tgm@netcom.com (Thomas G. McWilliams)
+Subject: Re: Status of Mac Linux & PPC Linux?
+Date: Wed, 12 Oct 1994 08:16:33 GMT
+
+The following was posted by gary@ah3.cal.msu.edu (Gary J LaPointe)
+to comp.sys.powerpc:
+
+=======================================================================
+
+LINUX ON POWER MAC DELAYED AS I/O PROBLEMS & COLLEGE WORK INTERVENE
+(October 7th 1994) The amateur development work to port the Linux
+version of Unix to the Power Macintosh has stalled. Back in May
+(Issue 5 story 1054), two students, Charlton Wilbur and Jem Lewis,
+laid out their ambitious plans to get the Freeware Unix clone up and
+running on Apple's machines by September.
+
+Lewis admits that finding spare time is a problem. However he said
+this week: "Our biggest problem besides time right now is that the
+Power Mac I/O stuff is a proprietary technology, and Apple's not
+telling." He adds that they are trying to "cajole" the necessary
+information from Apple and are also looking at how to reverse
+engineer the chip.
+
+Lewis says that the pair are still plodding on with the project;
+"When we think we have a handle on what's going to happen with the
+Mac I/O stuff, we'll send a note with a revised schedule", he said.
+
+--
+
+
+------------------------------
+
+From: ari@sinec.cent.saitama-u.ac.jp (Ari Widodo)
+Subject: ypbind didn't work
+Date: Wed, 12 Oct 1994 10:26:49 GMT
+
+
+ First, I would like to say thanks for all whom gave me
+ information about NIS. And I got the yp-client packages
+ and install that. But I canN't run ypbind. 
+---
+/usr/sbin/ypbind 
+Undefined C library functions:
+        1. light C shared image (Use the real one instead.)
+---
+ 
+  Should I recompile my C library ? Can somebody give me 
+some explanation for this error ?
+
+  Thank you very much,
+
+  Regards,
+
+  Ari Widodo
+--
+=====  A R I   W I D O D O    E=mail: ari@cent.saitama=u.ac.jp ===== 
+Saitama University  Dept. of Electrical and Electonic Engineering       
+        Member of ACCESS, Information Processing Center.        
+-- 
+=====  A R I   W I D O D O    E=mail: ari@cent.saitama=u.ac.jp ===== 
+Saitama University  Dept. of Electrical and Electonic Engineering       
+        Member of ACCESS, Information Processing Center.        
+
+------------------------------
+
+From: a0017097@wsuaix.csc.wsu.edu (Christopher Wiles)
+Subject: 1.1.52 Kernel Panics
+Date: Mon, 10 Oct 1994 19:03:57 GMT
+
+This has happened twice in the past two days:
+
+The machine has been running for a few hours.  I'm using EMACS on a short 
+(<5Kb) file.  Suddenly, I get a kernel panic along the lines of "EXT2FS: 
+can't access inode" (I apologize for not having the exact error message, 
+I can't find the scrap of paper I wrote it on).  Three-finger-salute does 
+not work, machine locks up nicely, and I have to press the reset button.
+
+The machine in question is a 386DX40, 8 megs of RAM, two Maxtors (a 42 
+meg and a 540 meg).  The kernel was compiled the day before yesterday 
+with GCC 2.6.0, -O2, -m386.  I'm fairly sure that it isn't GCC, as I 
+successfully used a 2.6.0-compiled 1.1.51 for almost a month, no incident.
+
+As I've got a really nasty software engineering project due Thursday, I 
+do not have the time to debug this one.  I've went back to 1.1.51 (umount 
+bugs and all).
+
+Has anyone else experienced this phenomenon?
+
+-- Chris
+
+a0017097@wsuaix.csc.wsu.edu   wileyc@halcyon.com   wileyc@quark.chs.wa.com
+       "... but I want to use all eight comm ports SIMULTANEOUSLY!"
+   PGP 2.6 public key available by finger for the clinically paranoid.
+
+------------------------------
+
+From: thomasez@dhhalden.no (Thomas Lundquist)
+Subject: .52 & .52 Hangs in heavy FTP'ing..
+Date: Thu, 13 Oct 1994 17:03:17 GMT
+
+
+Hi.
+
+I have problems running, 1.1.53 in my box. It will hang with no notice when 
+people is ftp'ing to it. They use different DOS/WIN ftp's.
+
+It seems like 1.1.51 works, but I have encountered (sp!) hangs there too..
+but more casually.
+
+I have used the .tar file from funet.fi with 1.1.52.
+
+Setup: 
+
+486dx66 16Mram
+800M IDE HD (yes, I should by a scsi drive..:=)
+2.1G, 325M ScsiHD
+aha 1542B
+generic S3 card
+Ne2000 (original)
+GUS w/1MB (tried both with sound in kernal and without.)
+
+Guess this is a betareport.. WIsh I had more info, but nothing in /usr/adm/ 
+gives me any hints.
+
+Thanks.
+
+--
+Thomas Lundquist.                         eMail : ThomasEZ@hiof.no
+Oestfold regional college, Norway.        Baldrick @Final Realms mud
+Departement of computer science.          @kark.hiof.no port 2001
+                                          Kark = 158.36.33.5
+
+                        ..PGP key available..
+                              ..Peace..
+
+------------------------------
+
+From: almesber@nessie.cs.id.ethz.ch (Werner Almesberger)
+Subject: Re: LINUX Logical volumes
+Date: 13 Oct 1994 10:57:03 GMT
+
+In article <MARCUS.94Oct12203051@tdb.ee.pdx.edu> marcus@ee.pdx.edu writes:
+>In-reply-to: adc@bach.coe.neu.edu's message of 12 Oct 1994 15:34:56 GMT
+> Logical volumes should be easy to implement with userfs.
+
+But then they'd be slow. I think there are three distinct areas that are
+typically associated with the concept of logical volumes:
+
+ 1) flexible disk space assignment: a virtual storage pool
+ 2) higher data troughput: striping accross multiple disks
+ 3) more reliability: checksum drives and/or mirroring
+
+2) and 3) are typically associated with RAID concepts.
+
+1) would be fairly simple to implement, with only a marginal performance
+hit. 2) could be easy too, but it may be hairy to administer (e.g. you'd
+have to make good guesses about the optimal length of physical reads. Of
+course, that may change from cylinder to cylinder.) Another problem with
+2) is, that many people would want to be able to use it with sets of
+non-identical drives, which would give only partial speed improvements
+and/or increase the complexity of configuring such a system.
+
+3) is the hardest part. For 3), you need some extended disk access
+scheduling, e.g. write data, THEN write copy (or update checksum),
+THEN allow any other writes to related sectors/blocks. Also, some cheap
+mechanism to keep the system state after a failure (e.g. power drops
+and system is interrupred in the middle of a write, so your block may
+be partially corrupted but you can't flag is as "bad" anymore) would
+be mandatory. Of course, write buffering in the drive could make all
+this just impossible.
+
+Also, 3) requires some good understanding of failure patterns. Since
+nowadays, the electronic parts of a disk drive tend to be more likely
+to fail that the mechanic parts, you also have to be concerned about
+disk controller or (very common !) bus problems. Of course, an easy
+but probably adequate solution to the latter would be to declare them
+as something that's beyond the scope of such a concept. Let's also
+not talk about drive firmware bugs (and yes, you see more of those in
+large, less common setups).
+
+Since 1) and 2) significantly increase the average amount of data lost
+per time period (if any single drive of a large virtual drive fails,
+you might lose an entire huge file system, so the loss increase can be
+even quadratic), you either want to have a very good backup policy or,
+some security of the 3) type.
+
+Because people generally tend to neglect backups, the result of
+implementing 1) and/or 2) without 3) might be that the general
+impression of logical volumes would be that they don't work well and
+that Linux itself might be unreliable. (Such generalizations happen
+all the time - just witness the many claims of file system errors even
+if it's very obvious that hardware problems are the real cause.)
+
+Another problem is that building 1) and 2) without taking into account
+(i.e. prototyping) 3) might result in a design that makes it hard to
+add 3) at a later time.
+
+So, as a poster has already commented, it's not the implementation,
+it's the design.
+
+> What about `ifs'?
+
+IFS can be used to extend your file system capacity, but you pay a very
+high price in terms of access latency and administrative overhead if you
+use it this way, even if you take the old kernel-based one. (And then
+you also get a bonus share of unreliability.)
+
+- Werner
+-- 
+   _________________________________________________________________________
+  / Werner Almesberger, sending this from    almesber@nessie.cs.id.ethz.ch /
+ /______________________..._but_now_at_home_at________almesber@di.epfl.ch_/
+
+------------------------------
+
+From: huang@ctt.com (John Huang)
+Subject: Re: 3c505 driver ?
+Date: 14 Oct 1994 16:29:15 GMT
+
+In article <1994Oct13.110404.20492@uxmail.ust.hk>,
+Tall Sword <cs_kokim@dmf123.ust.hk> wrote:
+>Zheng Huang (huang@eagle.sangamon.edu) wrote:
+>: Hi,
+>
+>: I tried to config my linux(slakware 2.0) to work with my 3c505 network card,
+>: but I can't find the 3c505.c file in linux src directory under drivers.
+>: For some reason, the 3c505 is been commented out from the config file. Could
+>: someone tell me how I can make 3c505 work with linux.
+>Try get the update kernel and compile again. For me, I am running 1.1.53 and
+>the 3c503 works fine on my system.
+>
+>--
+>* Origin: TallSword, Computer Science Year 2, HKUST
+>      internet: cs_kokim@dmf123.ust.hk, cs_kokim@stu.ust.hk
+>                root@dmf123.ust.hk, raymond@dmf123.ust.hk
+>                Raymond.Ko@f15.n700.z6.ftn.air.org
+>      fidonet:  Raymond Ko, 6:700/15@fidonet.org
+>        
+
+Does 3c503 driver works with 3c505 card?
+
+I tried to configure the kernel to include the 3c503 driver but it don't 
+recognize my card. I know the linux has support for all the 3com card except
+for 505. I tried my 3c501 card, and it works.
+
+Any help for 3c505 driver?
+
+Thanks for the reply.
+
+
+-- 
+John
+huang@image.ctt.com
+
+------------------------------
+
+Crossposted-To: comp.windows.x.i386unix
+From: rafal@cs.toronto.edu (Rafal Kustra)
+Subject: Term blocks modem, switching to VT and back restores?
+Date: 11 Oct 94 02:18:17 GMT
+
+
+I have ATI GUP, 2MVRAM. When I run term and do intensive
+communications (xmosaic over term, or some other graphical stwre), I
+would get my modem blocked. Term just keeps sending data from remote,
+with higher and higher latencies. Nothing will happen on my machine.
+In the past, I would have to kill term and seyon, and even than I
+wouldn't be able to connect to modem. Sometimes modem would send
+responses to requests made minute ago, as it if was backloged. But now
+I found a "solution": I such a blockage occurs (for example, I start
+xmosaic, having already opend emacs, all via term, and see that
+nothing is happening, I move my pointer to emacs window, and see that
+cursor would no highlight.) than I switch to VT and back to X, and some
+progress will be made. I just went over 20 or so pages of htlm in
+mosaic, having had to switch to VT and back few times. It (switching)
+just seems to unblock the modem. I am running Xfree 3.1, but same kind
+of blocking occurs in 2.1.1. I haven't tested whether this switching
+seems to restore the modem in 2.1.1, but I remember now it seem to
+did, concidentaly. It ("solution") just occured to me now.
+
+Thing that bothers me are the IRQ jumpers on my ATI/GUP board, with
+choice for IRQ3/2/5. However, manual says not to touch this and all
+are open now. I tried, some time ago, set it to IRQ 5, but I don't
+think it alleviated the problem - I remmember still having those
+loockups, although I was looking for smthg else then. (My modem is
+running on COM2/IRQ 3 with 14400B/56000 DTE speed. Also tried 38400
+DTE). Also ATI is said to use I/O address normaly belonging to COM 4,
+and my I/O card is set at COM1/COM4 (since COM 2 is used by internal
+modem). I cannot disable COM2/COM4 alltogether.
+I reiterate: I do not have problems with Video card, and modem/term,
+as long as intensive (bi-directional, it seems) graphic related term
+communication takes place. For example, I usually do not have problems
+with uploading /downloading files, in term, even at the same time.
+Same for running EMACS19 over term. Xmosaic, is an almost sure way to
+block the term/modem couple.
+
+
+Any ideas? (I am running Linux 1.1.52, same happened since at least
+1.1.37. Before it was rather OK, although I did not do much with term.
+Also I got my ATI/GUP at about the same time.).
+
+
+                        Thanx,
+
+
+                        Rafal
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

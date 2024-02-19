@@ -1,0 +1,297 @@
+To: Linux-Activists@BLOOM-PICAYUNE.MIT.EDU
+From: eonu24@castle.ed.ac.uk (I Reid)
+Crossposted-To: alt.os.linux
+Subject: HD booting: a solution
+Date: 6 Apr 92 07:22:52 GMT
+
+==============================================================
+I finally got round to writing this part of section II of my guide to Linux
+installation. It's a bit rough around the edges yet so give me some feedback
+on it and I'll see what I can do with it.
+
+Sorry for the delay,
+
+Iain
+==============================================================
+
+Booting Linux from your hard disk
+=================================
+
+For a good general introduction to the principles of what happens when your
+computer boots up you should read the read.me file that comes with the
+freeware program bootany (more later) or any good Dos programmers's reference.
+(For the latter I can recommend "The Waite Group's MS-DOS Developer's Guide").
+You don't need to know very much about what happens but it may help you
+understand things if you've read a little about what normally happens.
+
+Remember the master boot record and primary partitions from earlier in the
+section? If not, you should re-read the relevant bit (at the start of the
+section) before continuing.
+
+On a very simplistic level, the mechanism of hard disk boot up is as follows
+(assuming only one bootable partition)
+
+1. The boot sector of the hard disk (physically the first sector on the disk)
+   is read into memory at 0000:7C00 by the ROM BIOS.
+2. A few basic validation checks are carried out to make sure that this is a
+   proper boot sector.
+3. Part of the boot sector is moved within memory and from there validates the
+   partition table.
+4. The boot sector on the one and only startable partition is read into memory
+   at 0000:7C00 and the executable components run. This is operating specific
+   and loads Dos, Linux or whatever OS you are using.
+
+The situation with 2 primary partitions is slightly more complicated because
+the ROM BIOS cannot cope with having two startable (bootable) partitions and
+will boot neither if it finds this situation. So, how do we get round this?
+
+The master primary boot record contains code to check the partition table and
+choose the startable partition. If we can replace this code with some that
+gives us the choice between say Dos and Linux then the boot sector of the
+partition we choose will be loaded in and run. This boot sector contains the
+code for the specific operating system.
+
+As you can see, there are 2 distinct problems:
+
+1. What do we put into the master boot record to let us choose partitions
+2. What do we put into the Linux partition to let us boot it
+
+Thankfully the solution is easier than the theory so, without further ado let
+us press on. Starting with Linux.....
+
+You will need: - Shoelace
+               - a compiled version of the bootimage (either the original
+                 bootimage or from a kernel rebuild)
+
+You should find Shoelace in any of the Linux archives as a compressed tar file
+(i.e .tar.Z suffix). Transfer it to Linux, uncompress it and move it to /tmp
+(creating /tmp with mkdir if necessary). Now cd to /tmp and you're ready to
+start....
+
+If you untar the shoelace tar with tar xvf shoe.tar (or whatever it's called)
+you should see something like this
+[Root]/tmp: tar xvf shoe.tar
+
+shoe/
+shoe/Readme
+shoe/bootlace
+shoe/src/
+shoe/src/bpb.h
+shoe/src/part.h
+shoe/src/proto.h
+shoe/src/shoelace.h
+shoe/src/laceup.c
+shoe/src/shoelace.cdif
+shoe/config
+shoe/disktab
+shoe/laceup
+shoe/readme
+shoe/shoelace
+shoe/winiboot
+
+What this means is that shoe.tar has been extracted, the directory /tmp/shoe
+has been created and within that a directory called src has also been
+created. There are some files in each. If you go into the shoe directory and
+do a directory listing with ls you should see
+
+Readme    config    laceup    shoelace  winiboot
+bootlace  disktab   readme    src
+
+You should read the readme file (note the small r in readme) because it
+contains some important warnings which I do not intend to repeat. You should
+read them and be aware of them. Much of the readme file is irrelevant although
+you should try the floppy bootup it suggests if you are not happy with things.
+The synopsis of it is that you should move laceup, bootlace, winiboot, config
+and disktab to /etc and shoelace to /.
+
+After that you need to move your bootimage to somewhere standard. I chose to
+call it /vmlinux. The name you give it is up to you.
+
+Next you need to edit /etc/config. Initially it contains a lot of entries that
+are irrelevant to Linux (it is mainly a minix program). Most of these can be
+happily deleted (mine looks like this)
+
+==============================================================
+# Shoelace configuration file
+
+boot        /vmlinux
+
+==============================================================
+
+The only important bit is the boot entry!
+                        
+Next go to /etc (cd /etc) and type
+
+# laceup /dev/hda2 wini
+
+Be very careful here! What you are trying to do is to put the operating system
+specific information into the boot sector of your LINUX PARTITION. In my case
+this is /dev/hda2. Read and heed the warnings in the shoelace readme file
+before you do this 'cos one false move and you could end up in a mess. You
+should see something like this
+
+[Root]/etc: laceup /dev/hda2 wini
+Identification:             ShoeLace
+Sector size:                512 bytes
+Block size:                 2 sectors
+Boot sectors:               2 sectors
+Number of fats:             0
+Root directory size:        0 entries
+Volume size:                0 sectors
+Media descriptor:           0xf8
+Fat size:                   0 sectors
+Track size:                 0 sectors
+Cylinder size:              0 tracks
+Hidden sectors:             0 sectors
+Floppy table:  0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+[Root]/etc:  
+
+That's part one done. Next you have to modify the master boot record (first
+sector on the hard disk) to implement the boot time partition decision.
+/dev/hda is the ENTIRE hard disk (and the main way to access the master boot
+record from linux). Again, read the warnings (ESPECIALLY IF YOU ONLY HAVE ONE
+PARTITION) and press on if you are happy with things. For my setup I would
+type
+
+# laceup -w 2 /dev/hda
+
+and if all goes well I will see                                 
+
+    Boot Hd Sec Cyl Type Hd Sec Cyl      Base      Size
+  1  80   1   1   0   6   e  5c  24        28    123032
+ *2   0   0  41  25  80   e  9c   9    123060     96180
+  3   0   0   0   0   0   0   0   0         0         0
+  4   0   0   0   0   0   0   0   0         0         0
+                                
+What this shows is that I have 4 primary partitions (remember them?), only 2
+are in use. the first one is marked bootable (Boot field of hex 80 = bootable, 0
+is not). This is my Dos partition (type 6). The other one (number 2) is my Linux
+partition (type hex 80). The -w 2 switch to laceup means that I want partition
+2 to be my default partition (i.e. if I don't select a partition then it
+should boot partition 2). It doesn't matter whether the partition you choose
+is bootable or not. Shoelace will fix all :-)
+
+Ok, now logout, reboot (without a floppy in the floppy drive) and you should
+get an unpleasant looking boot menu (with a star by the 2 in my case). Select
+the number that corresponds to your Linux partition and watch it boot. Here is
+a bit of mine as an example (i.e. what's still on screen when the login prompt
+comes up!)
+
+*2   0   0  41  25  80   E  9C   9    123060     96180
+ 3   0   0   0   0   0   0   0   0         0         0
+ 4   0   0   0   0   0   0   0   0         0         0
+/dev/fd0 not found - guessing major and minor device numbers
+processor      = -1
+ramimagedev    = 512 /dev/fd0
+ramsize        = 0
+rootdev        = 770 bootdev
+scancode       = 13
+  
+Component           base   text   data    bss  stack symbols  model
+ShoeLace        :  80000   843C   1AC4    FF8   3378    1D90 ComI&D
+Load Parts
+kernel          : kernel not found
+  
+Load Image
+Press <RETURN> to see SVGA-modes available or any other key to continue.
+  
+8 virtual consoles
+4 pty's
+Partition table ok.
+14738/48090 free blocks
+14717/16030 free inodes
+1209 buffers = 1238016 bytes buffer space
+Free mem: 2097152 bytes
+Adding Swap: 2047 pages (8384512 bytes) swap-space
+
+[blank lines deleted]  
+  
+Welcome to Wizbit - running 0.95a (6/4/92)
+  
+Wizbit login:
+
+==============================================================
+
+IMPORTANT: IF YOU RECOMPILE YOUR KERNEL REMEMBER TO COPY /USR/SRC/LINUX/IMAGE
+           TO /VMLINUX (OR YOUR EQUIVALENT)
+
+
+That's it! Before anyone asks, I will answer 3 other questions here...
+
+1. Can I use bootany instead of shoelace?
+2. How did I name my system so that I don't get (none) login:
+3. How did I get 1209 buffers with only 4Mb of RAM?
+
+
+Using bootany
+=============
+
+Bootany is a boot time partition selector like shoelace and, in theory should
+be usable to give you the boot choice like shoelace. Unfortunately, it doesn't
+seem to work. When I tried it on my machine it altered my partition table and
+wouldn't boot anything. The solution to this was easy enough- boot linux from
+floppy and rebuild the partition table using pfdisk.
+
+Another warning.... if you use the w <file> option on pfdisk be very careful
+about what <file> is. For example, don't use bootany.sys (part of bootany)
+unless you want to wipe out your partition table (no Dos, no Linux....
+nothing!). To get out of this you'll need a partition table editor on a
+bootable floppy (remember I told you to keep your linux root and boot floppy
+safe? Now you know why :-))
+
+----
+Question 2..... add a line to your /etc/rc that says
+
+/bin/hostname Wizbit
+
+where "Wizbit" is the name of your system. Reboot and be amazed :-) (if you
+remembered to get hostname from the archives of course!)
+p.s. And no pinching "Wizbit".... get your own!
+
+----
+
+Question 3: First of all be very sure that you want to change things on your
+system. I run almost exclusively single user and have never run out of real
+memory ley alone touched my 8Mb of swap memory. I read a posting to
+alt.os.linux a while ago from someone (sorry, don't remember who) who said
+that he had bumped up his buffers (on a similar setup) and had noticed a
+significant speed increase. My changes are on trial to see a. if it makes a
+difference to me  and b. if it causes me any problems. What to do....
+
+In /usr/src/linux/init/main.c you'll see a bit that looks like this
+
+    if (memory_end > 16*1024*1024)
+        memory_end = 16*1024*1024;
+    if (memory_end >= 12*1024*1024) 
+        buffer_memory_end = 4*1024*1024;
+    else if (memory_end >= 6*1024*1024)
+        buffer_memory_end = 2*1024*1024;
+    else if (memory_end >= 4*1024*1024)
+        buffer_memory_end = 3*512*1024;
+    else
+        buffer_memory_end = 1*1024*1024;
+
+If after much thought and consideration etc you want to change things then
+find the memory_end entry for you (4Mb = 4*1024*1024 = my setup) and change the
+buffer_memory_end bit. I changed mine to look like this
+
+    if (memory_end > 16*1024*1024)
+        memory_end = 16*1024*1024;
+    if (memory_end >= 12*1024*1024) 
+        buffer_memory_end = 4*1024*1024;
+    else if (memory_end >= 6*1024*1024)
+        buffer_memory_end = 2*1024*1024;
+    else if (memory_end >= 4*1024*1024)
+        buffer_memory_end = 4*512*1024;     /* IAR 3/4/92 */
+    else
+        buffer_memory_end = 1*1024*1024;
+    main_memory_start = buffer_memory_end;
+
+Recompile the kernel and that's it.
+
+Iain
+
+p.s. remember to change it back if you have problems 'cos it is a non standard
+     hack :-). Also check that it is not the source of a problem before
+     posting to alt/comp.os.linux!
+

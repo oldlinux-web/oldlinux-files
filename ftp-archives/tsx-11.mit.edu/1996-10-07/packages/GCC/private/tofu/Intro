@@ -1,0 +1,376 @@
+	       Internationalization for Linux C Library
+               ----------------------------------------
+
+The Linux C Library Version 5 has completely new code for the support
+of internationalization.  (* This is not quite right in the moment
+but will be soon when I manage to release the new message handlng
+code.)  This code is written by Roland McGrath and Ulrich Drepper for
+the GNU and Linux C Libraries considering the POSIX standards where
+applicable.
+
+The code is designed to be portable to various architectures which are
+allowed to share their files defining a locale.  Special attention was
+also given to performance.  When available all files are mmap'ed.
+Together both of these conditions require an elaborated file format.
+
+To construct these locale files the POSIX.2 standard defines a tool
+named localedef.  The input of this tool consists of locale definition
+files in the format POSIX.2 defined and it writes out the files the C
+library can work with.  You cannot use a localedef program of another
+system because the produced locale files all have special file
+formats.
+
+There is a collection of these POSIX locale definition files
+available.  They were created in the POSIX working group 15 on i18n 
+(ISO/IEC JTC1/SC22/WG15).  Please read README.locales for more
+information about this and before you change anything.
+
+The complete set is not distributed with the C library for several
+reasons:
+
+- Not all users are interested in it
+- It will not change that often
+- It is quite big
+
+So for now it is available on
+
+	i44ftp.info.uni-karlsruhe.de:pub/linux/ctype
+
+and hopefully soon on tsx-11 and sunsite (perhaps in the C library
+directories;  server maintainers, please let me know where you make it
+available).
+
+
+			      How to use
+                              ----------
+
+As said above you need Linux libc-5, more specific libc-5.1.1 or
+above.  5.1.1 is the first version which ships the localedef program.
+
+If you upgraded your library sources with patches you will probably
+have in the libc/locale/ directory other directories (collate, ctype,
+monetary, numeric, response, and time).  These can savely be removed!
+They contain the code for the old programs which are not usable with
+libc-5.  If you still run libc-4 and don't have this programs in your
+bin directories consider building them first though.
+
+If you got this library and a binary of it you should go into the
+directory libc/locale/ and run
+
+	make SHARED= programs
+
+SHARED= is necessary to prevent it being compiled with -fPIC etc.
+
+(Please don't pay attention to the warning.  This is *work-in-progress*.)
+
+The compilation will hopefully end up with to programs built:
+localedef and locale.
+
+There is not yet any documentation but the POSIX.2 description and
+this text.  (But I'm working on this.)
+
+After installing the programs in /usr/bin
+
+[1]  cd /usr/src/libc/locale
+[2]  cp localedef locale /usr/bin
+
+you should unpack the WG-collection.
+
+[3]  tar zxvf WG-collection.tar.gz
+
+In the created directory you find one directory named `charmaps'.
+This contains a lot of character map definition files (also described
+in POSIX.2).  Some files describe rather exotic character maps (at
+least for Linux which does not run on EBCDIC machine).  I suggest to
+install at least the files beginning with `ISO_'.  The place to
+install is determined by the value the preprocessor variable
+CHARMAP_PATH had while compiling localedef.  Normally this is
+/usr/share/nls/charmap.
+
+[4]  cd WG-collection/charmaps
+[5]  mkdirhier /usr/share/nls/charmap
+[6]  cp ISO_* /usr/share/nls/charmap
+
+One strange point in the WG15-collection is that there is no ISO_10646
+charmap is in charmaps/.  But you can find one in locales/.  So you
+should copy it, too.
+
+[7]  cd WG-collection/locales
+[8]  cp ISO_10646 /usr/share/nls/charmap/ISO_10646-1:1993
+
+Now you should also make the locale definition files available in a
+common place.  I would suggest /usr/share/nls/locale:
+
+[9]  cd WG-collection/locales
+[10] mkdirhier /usr/share/nls/locale
+[11] cp POSIX ??_* /usr/share/nls/locale
+
+The rest of the WG15-collection is perhaps not interesting at this
+time.
+
+
+Create locale files
+-------------------
+
+So far only preparations have been made.  To create the needed binary
+locale files you have first to determine the environment you want.
+
+For me the situation would be: I want to have the definition for
+Germany and german languages.  Further I use Linux with ISO_8859-1
+(although I could also use 8859-2 and 8859-5).
+
+The first to points specify the locale definition file I have to use.
+If you look through the collection and also note that the ISO
+appreviation for Germany is De you will easily find the candidate:
+
+	de_DE.
+
+The third point determines the locale definition file to use.
+Obviously this has to be ISO_8859-1:1987.
+
+To get the locale file I run localedef with this commands
+
+[12] cd ~
+[13] mkdir new-dir
+[14] cd new-dir
+[15] localedef -i /usr/share/nls/locale/de_DE -f ISO_8859-1:1987 ./de
+
+I you run this with the given locale definition file you will get the
+following output:
+
+localedef: /usr/share/nls/locale/de_DE:23: invalid locale `en_DK' in copy statement
+localedef: /usr/share/nls/locale/de_DE:27: invalid locale `en_DK' in copy statement
+localedef: category `LC_COLLATE' not defined
+localedef: category `LC_CTYPE' not defined
+localedef: item `era' of category `LC_TIME' undefined
+localedef: item `era_year' of category `LC_TIME' undefined
+localedef: item `era_d_fmt' of category `LC_TIME' undefined
+localedef: item `alt_digits' of category `LC_TIME' undefined
+localedef: item `yesstr' of category `LC_MESSAGES' undefined
+localedef: item `nostr' of category `LC_MESSAGES' undefined
+localedef: no output file produced because warning were issued
+
+Especially interesting are the first two lines.  They tell you that
+the locale en_DK is missing.  Why this?  I don't want to have english
+language support for Danemark.
+
+The answer is the "OO concept" of the POSIX locale definition files.
+The en_DK locale definition is (one of) the main locale definition
+files.  Many locales share a lot of information.  Instead of copying
+it they can inherit it by the copy statement.  But the design is not
+optimal: the locale from which we want to inherit something must be
+created already and installed in the standard place (normally
+/usr/share/locale).  I.e. before making the de locale we have first to
+generate the en_DK locale.
+
+[16] su root
+[17] localedef -i /usr/share/nls/locale/en_DK -f ISO_8859-1:1987 en_DK
+localedef: item `era' of category `LC_TIME' undefined
+localedef: item `era_year' of category `LC_TIME' undefined
+localedef: item `era_d_fmt' of category `LC_TIME' undefined
+localedef: item `alt_digits' of category `LC_TIME' undefined
+localedef: item `yesstr' of category `LC_MESSAGES' undefined
+localedef: item `nostr' of category `LC_MESSAGES' undefined
+localedef: no output file produced because warning were issued
+
+There are some warning which prevent according to the POSIX standard
+the generation of the locale files.  But now I tell you that this are
+harmless so we can try it again with te -c option (do --help for
+info):
+
+[18] localedef -c -i /usr/share/nls/locale/en_DK -f ISO_8859-1:1987 en_DK
+localedef: item `NL_dummy' of category `LC_COLLATE' undefined
+localedef: item `era' of category `LC_TIME' undefined
+localedef: item `era_year' of category `LC_TIME' undefined
+localedef: item `era_d_fmt' of category `LC_TIME' undefined
+localedef: item `alt_digits' of category `LC_TIME' undefined
+localedef: item `yesstr' of category `LC_MESSAGES' undefined
+localedef: item `nostr' of category `LC_MESSAGES' undefined
+LC_COLLATE
+LC_CTYPE
+LC_MONETARY
+LC_NUMERIC
+LC_TIME
+LC_MESSAGES
+
+(For explanation see the de locale).
+
+Now run the command for the german locale again and you'll get
+
+[19] localedef -c -i /usr/share/nls/locale/de_DE -f ISO_8859-1:1987 ./de
+localedef: item `era' of category `LC_TIME' undefined
+localedef: item `era_year' of category `LC_TIME' undefined
+localedef: item `era_d_fmt' of category `LC_TIME' undefined
+localedef: item `alt_digits' of category `LC_TIME' undefined
+localedef: item `yesstr' of category `LC_MESSAGES' undefined
+localedef: item `nostr' of category `LC_MESSAGES' undefined
+LC_COLLATE
+LC_CTYPE
+LC_MONETARY
+LC_NUMERIC
+LC_TIME
+LC_MESSAGES
+
+The six LC_* lines signal that for these locale categories output is
+produced.  If you look through new-dir you will notice a directory de
+which contains the following:
+
+total 12
+-rw-r--r--   1 drepper  users          13 Jun 12 04:18 LC_COLLATE
+-rw-r--r--   1 drepper  users        6940 Jun 12 04:18 LC_CTYPE
+-rw-r--r--   1 drepper  users          42 Jun 12 04:18 LC_MESSAGES
+-rw-r--r--   1 drepper  users          94 Jun 12 04:18 LC_MONETARY
+-rw-r--r--   1 drepper  users          24 Jun 12 04:18 LC_NUMERIC
+-rw-r--r--   1 drepper  users         951 Jun 12 04:18 LC_TIME
+
+These are the desired files!  The last parameter of localedef, ./de,
+told it to place them in a directory de/ in the current dir.  In fact
+all names here containing at least one slash ('/') will be placed in
+the specified directory.  Because this work is often done by root to
+install global locale files there is a special option implemented.  If
+the name does not contain any slash, the files are placed in the
+system's locale directory (i.e. the one looked for locale files by the
+C library).  If a non-root user does omit the slash s/he should not be
+paniced by an error message like:
+
+localedef: cannot write output file `/usr/share/locale/de': Permission denied
+
+
+One more point which is not important in the moment is coming with the
+LC_MESSAGES file.  The name might suggest that this file contains
+messages for some programs.  But this is not right.  Only some very
+general (and rarely used) definition are found here.  The real message
+files will be produced in another way.  I'm nearly finished with this
+stuff so that it will be incorporated in the Linux C Library soon but
+not now.
+
+Important is only that LC_MESSAGES should not be a plain file but
+instead a directory.  localedef does not create this automatically but
+it can handle this situation.  Take the situation where I want to make
+a good colleague an account on my machine while he is French speaking
+Canadian.  The locale name I choose is fr_CA.  So I do the following
+steps:
+
+[20] mkdirhier fr_CA/LC_MESSAGES
+[21] localedef -c -i /usr/share/nls/locale/fr_CA -f ISO_8859-1:1987 ./fr_CA
+
+I get the following result:
+
+total 12
+-rw-r--r--   1 drepper  users          13 Jun 12 04:32 LC_COLLATE
+-rw-r--r--   1 drepper  users        6940 Jun 12 04:32 LC_CTYPE
+drwxr-xr-x   2 drepper  users        1024 Jun 12 04:32 LC_MESSAGES/
+-rw-r--r--   1 drepper  users          93 Jun 12 04:32 LC_MONETARY
+-rw-r--r--   1 drepper  users          25 Jun 12 04:32 LC_NUMERIC
+-rw-r--r--   1 drepper  users         945 Jun 12 04:32 LC_TIME
+
+fr_CA/LC_MESSAGES:
+total 1
+-rw-r--r--   1 drepper  users          42 Jun 12 04:32 SYS_LC_MESSAGES
+
+localedef recognized that LC_MESSAGES/ is a directory and made the
+file in this directory with the name prepended by `SYS_'.  (`SYS_' is a
+prefix reserved by POSIX for system usage.)  This is of course also
+understood by the libc and it is possible for the other locale
+categories, too.
+
+
+
+Naming problems
+---------------
+
+One problem that will naturally arise is naming.  In the above
+examples I had the names `de' and `fr_CA'.  These are the names which
+are today mostly used.  The internationalized GNU packages which will
+soon be released also follow this.
+
+This is of course recognized very early and the complete name could
+look like this [X/Open Portability Guide, Vol. 3]:
+
+	language[_territory[.codeset]]
+
+For the above examples the full names should be:
+
+	de_DE.ISO_8859-1:1987
+and
+	fr_CA.ISO_8859-5:1985
+
+This will also be necessary if we have full support for ISO_10646
+(i.e. the 32-bit character set).  At this point at least two different
+locales are available for each language.
+
+But on the other hand the "strange" behaviour of the localedef program
+needs the simple names.
+
+
+A last problem to mantion he is that the /usr/share hierachy is
+intended to be used on various platforms.  Nobody can say which
+character set in available on which machine.  So it is not generally
+possible to have e.g. a de_DE without specifying a character set.  We
+discussed this topic while writing the libc code but haven't found a
+solution yet.
+
+
+locale program
+--------------
+
+The second program which is created is locale.  I haven't mentioned it
+yet.  It is intended to get information about the current locale.  You
+can request the state of selection and also single values from a
+category.
+
+[[More information will be written soon.  I hope at least...]]
+
+
+Bugs, limitations & prospects
+-----------------------------
+
+I know the programs have still several problems.  If you find some
+please document them (description and perhaps way to reproduce) and
+send this to me,
+
+	drepper@gnu.ai.mit.edu
+
+not to HJ (at least you should also include me).  Patches are welcome
+to fix bugs but I don't think extensions are useful now because it is
+not complete now.  If you look through the code you will see a lot of
+#ifdefs.  This is mostly because I started writing the missing things.
+
+This leades me to explain what is missing:
+- wide character support (e.g. ISO_10646)
+- LC_COLLATE handling (and strcoll() and strxfrm() functions of the libc)
+
+I will work on this whenever I find time but there are other important
+things to do (I have to work on my diploma thesis).
+
+
+Projects
+--------
+
+I have several points which I want to see realized and which I surely
+cannot write alone.  So if you are interested in internationalization
+and have some time read on and tell me if you are interested.  I would
+especially love to see some people from Asia.
+
+
+Once the libc has wide-character support (which is not far away
+anymore because I already wrote most of the code) I would like to have
+terminals capable to handle this.  This would mean to have an xterm
+and a text-console.  For xterm I heard that X11R7 will have much more
+complete i18n support but I also want to have a text-console (this is
+because my box is far too small to run X; anybody having a spare-i586? :-).
+
+In previous discussion about this it became clear that this must *not*
+be done in ther kernel.  There might be some features added to the
+kernel but remember that putting bitmaps for N*1000 characters in
+kernel space is not acceptable.
+
+Japanese and chinese users reported that there are already text
+terminal emulations which can handle this situation.  We should
+examine this.  This whole project should also be tided couple with the
+kbd package (I think Andries Brouwer is the current developer of
+this!?).
+
+Anybody interested in this could perhaps contact me.  I there are some
+more I will try to get a mailing list organized (Patrick, would you be
+wiling to establish another li.org mailing list?).

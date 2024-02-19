@@ -1,0 +1,392 @@
+	The enclosed patches change the linux kernel so that you can
+use the hardware debugging registers.  These are accessed via the
+ptrace() interface, and you need a patched gdb before you will be able
+to make much use of them.  The patches were made to a 0.99pl13 kernel,
+and the kernel seems stable by itself.  The actual hardware debugging
+features have only been very lightly tested as of yet. 
+
+	See the new file <linux/debugreg.h> for an explanation of what
+each debugging register is used for.  I have patches for gdb-4.4 so
+that you can use this feature, and I hope that it will work OK - I
+will try and get these applied to a more recent version of gdb.
+
+	The "interface" to the debugging registers is intended to be
+compatible with the SVr4/SCO implementation.  Once I get further with gdb,
+it will be easier for me to verify that this working correctly.
+
+-Eric
+
+
+*** ./fs/exec.c~	Wed Sep 22 02:12:55 1993
+--- ./fs/exec.c	Tue Oct  5 09:16:51 1993
+***************
+*** 117,122 ****
+--- 117,123 ----
+  	unsigned short fs;
+  	int has_dumped = 0;
+  	char corefile[6+sizeof(current->comm)];
++ 	int i;
+  	register int dump_start, dump_size;
+  	struct user dump;
+  
+***************
+*** 160,165 ****
+--- 161,167 ----
+  	dump.u_dsize = ((unsigned long) (current->brk + (PAGE_SIZE-1))) >> 12;
+  	dump.u_dsize -= dump.u_tsize;
+  	dump.u_ssize = 0;
++ 	dump.task = *current;  /* Save a copy of the task_struct here */
+  	if (dump.start_stack < TASK_SIZE)
+  		dump.u_ssize = ((unsigned long) (TASK_SIZE - dump.start_stack)) >> 12;
+  /* If the size of the dump file exceeds the rlimit, then see what would happen
+***************
+*** 210,218 ****
+  		dump_size = dump.u_ssize << 12;
+  		DUMP_WRITE(dump_start,dump_size);
+  	};
+- /* Finally dump the task struct.  Not be used by gdb, but could be useful */
+  	set_fs(KERNEL_DS);
+- 	DUMP_WRITE(current,sizeof(*current));
+  close_coredump:
+  	if (file.f_op->release)
+  		file.f_op->release(inode,&file);
+--- 212,218 ----
+***************
+*** 480,485 ****
+--- 480,487 ----
+  			}
+  		}	
+  	}
++ 
++ 	for (i=0 ; i<8 ; i++) current->debugreg[i] = 0;
+  
+  	if (bprm->e_uid != current->euid || bprm->e_gid != current->egid || 
+  	    !permission(bprm->inode,MAY_READ))
+*** ./kernel/ptrace.c~	Wed Sep 22 02:13:03 1993
+--- ./kernel/ptrace.c	Tue Oct  5 09:17:15 1993
+***************
+*** 8,13 ****
+--- 8,14 ----
+  #include <linux/mm.h>
+  #include <linux/errno.h>
+  #include <linux/ptrace.h>
++ #include <linux/user.h>
+  
+  #include <asm/segment.h>
+  #include <asm/system.h>
+***************
+*** 219,225 ****
+--- 220,229 ----
+  asmlinkage int sys_ptrace(long request, long pid, long addr, long data)
+  {
+  	struct task_struct *child;
++ 	struct user * dummy;
+  
++ 	dummy = NULL;
++ 
+  	if (request == PTRACE_TRACEME) {
+  		/* are we already being traced? */
+  		if (current->flags & PF_PTRACED)
+***************
+*** 278,294 ****
+  			unsigned long tmp;
+  			int res;
+  
+! 			addr = addr >> 2; /* temporary hack. */
+! 			if (addr < 0 || addr >= 17)
+  				return -EIO;
+  			res = verify_area(VERIFY_WRITE, (void *) data, sizeof(long));
+  			if (res)
+  				return res;
+! 			tmp = get_stack_long(child, sizeof(long)*addr - MAGICNUMBER);
+! 			if (addr == DS || addr == ES ||
+! 			    addr == FS || addr == GS ||
+! 			    addr == CS || addr == SS)
+! 				tmp &= 0xffff;
+  			put_fs_long(tmp,(unsigned long *) data);
+  			return 0;
+  		}
+--- 282,307 ----
+  			unsigned long tmp;
+  			int res;
+  
+! 			if ((addr & 3) || addr < 0 || 
+! 			    addr > sizeof(struct user) - 3)
+  				return -EIO;
++ 
+  			res = verify_area(VERIFY_WRITE, (void *) data, sizeof(long));
+  			if (res)
+  				return res;
+! 			if(addr < 17*sizeof(long)) {
+! 			  addr = addr >> 2; /* temporary hack. */
+! 
+! 			  tmp = get_stack_long(child, sizeof(long)*addr - MAGICNUMBER);
+! 			  if (addr == DS || addr == ES ||
+! 			      addr == FS || addr == GS ||
+! 			      addr == CS || addr == SS)
+! 			    tmp &= 0xffff;
+! 			} else if (addr >= ((unsigned int) &dummy->task)) {
+! 			  addr -= (long) &dummy->task;
+! 			  addr += (long) child;
+! 			  tmp = *((unsigned long *) addr);
+! 			} else tmp = 0;
+  			put_fs_long(tmp,(unsigned long *) data);
+  			return 0;
+  		}
+***************
+*** 299,307 ****
+  			return write_long(child,addr,data);
+  
+  		case PTRACE_POKEUSR: /* write the word at location addr in the USER area */
+! 			addr = addr >> 2; /* temproary hack. */
+! 			if (addr < 0 || addr >= 17)
+  				return -EIO;
+  			if (addr == ORIG_EAX)
+  				return -EIO;
+  			if (addr == DS || addr == ES ||
+--- 312,323 ----
+  			return write_long(child,addr,data);
+  
+  		case PTRACE_POKEUSR: /* write the word at location addr in the USER area */
+! 			if ((addr & 3) || addr < 0 || 
+! 			    addr > sizeof(struct user) - 3)
+  				return -EIO;
++ 
++ 			addr = addr >> 2; /* temproary hack. */
++ 
+  			if (addr == ORIG_EAX)
+  				return -EIO;
+  			if (addr == DS || addr == ES ||
+***************
+*** 315,323 ****
+  				data &= FLAG_MASK;
+  				data |= get_stack_long(child, EFL*sizeof(long)-MAGICNUMBER)  & ~FLAG_MASK;
+  			}
+! 			if (put_stack_long(child, sizeof(long)*addr-MAGICNUMBER, data))
+  				return -EIO;
+  			return 0;
+  
+  		case PTRACE_SYSCALL: /* continue and stop at next (return from) syscall */
+  		case PTRACE_CONT: { /* restart after signal. */
+--- 331,361 ----
+  				data &= FLAG_MASK;
+  				data |= get_stack_long(child, EFL*sizeof(long)-MAGICNUMBER)  & ~FLAG_MASK;
+  			}
+! 		  /* Do not allow the user to set the debug register for kernel
+! 		     address space */
+! 		  if(addr < 17){
+! 			  if (put_stack_long(child, sizeof(long)*addr-MAGICNUMBER, data))
+  				return -EIO;
+  			return 0;
++ 			};
++ 
++ 		  /* We need to be very careful here.  We implicitly
++ 		     want to modify a portion of the task_struct, and we
++ 		     have to be selective about what portions we allow someone
++ 		     to modify. */
++ 
++ 		  addr = addr << 2;  /* Convert back again */
++ 		  if(addr < (long) &dummy->task.debugreg[0]) return -EIO;
++ 		  if(addr == (long) &dummy->task.debugreg[4]) return -EIO;
++ 		  if(addr == (long) &dummy->task.debugreg[5]) return -EIO;
++ 		  if(addr > (long) &dummy->task.debugreg[8]) return -EIO;
++ 		  if(addr < (long) &dummy->task.debugreg[4] &&
++ 		     ((unsigned long) data) >= 0xbffffffd) return -EIO;
++ 
++ 		  addr -= (long) &dummy->task;
++ 		  addr += (long) child;
++ 		  *((unsigned long *) addr) = data;
++ 		  return 0;
+  
+  		case PTRACE_SYSCALL: /* continue and stop at next (return from) syscall */
+  		case PTRACE_CONT: { /* restart after signal. */
+*** ./kernel/sys_call.S~	Wed Sep 22 02:11:30 1993
+--- ./kernel/sys_call.S	Tue Oct  5 00:05:41 1993
+***************
+*** 75,80 ****
+--- 75,86 ----
+  blocked		= 16
+  flags		= 20
+  errno		= 24
++ dbgreg0		= 28
++ dbgreg1		= 32
++ dbgreg2		= 36
++ dbgreg3		= 40
++ dbgreg6		= 52
++ dbgreg7		= 56
+  
+  ENOSYS = 38
+  
+***************
+*** 104,113 ****
+  	mov %dx,%ds; \
+  	mov %dx,%es; \
+  	movl $(USER_DS),%edx; \
+! 	mov %dx,%fs
+  
+  #define RESTORE_ALL \
+! 	popl %ebx; \
+  	popl %ecx; \
+  	popl %edx; \
+  	popl %esi; \
+--- 110,129 ----
+  	mov %dx,%ds; \
+  	mov %dx,%es; \
+  	movl $(USER_DS),%edx; \
+! 	mov %dx,%fs; \
+! 	movl $0,%edx;  \
+! 	movl %edx,%db7
+  
+  #define RESTORE_ALL \
+! 	movl _current,%eax; \
+! 	cmpl $0,dbgreg7(%eax);  \
+! 	je 3f;			\
+! 	movl dbgreg0(%eax),%ebx;  movl %ebx,%db0;	\
+! 	movl dbgreg1(%eax),%ebx;  movl %ebx,%db1;	\
+! 	movl dbgreg2(%eax),%ebx;  movl %ebx,%db2;	\
+! 	movl dbgreg3(%eax),%ebx;  movl %ebx,%db3;	\
+! 	movl dbgreg7(%eax),%ebx;  movl %ebx,%db7;	\
+! 3:	popl %ebx; \
+  	popl %ecx; \
+  	popl %edx; \
+  	popl %esi; \
+***************
+*** 161,166 ****
+--- 177,184 ----
+  	movl _current,%ebx
+  	andl $~CF_MASK,EFLAGS(%esp)	# clear carry - assume no errors
+  	movl $0,errno(%ebx)
++ 	movl %db6,%edx
++ 	movl %edx,dbgreg6(%ebx)  # save current hardware debugging status
+  	testb $0x20,flags(%ebx)		# PF_TRACESYS
+  	jne 1f
+  	call _sys_call_table(,%eax,4)
+***************
+*** 253,258 ****
+--- 271,278 ----
+  	pushl %edx
+  	pushl %ecx
+  	pushl %ebx
++ 	movl $0,%eax
++ 	movl %eax,%db7			# disable hardware debugging...
+  	cld
+  	movl $-1, %eax
+  	xchgl %eax, ORIG_EAX(%esp)	# orig_eax (get the error code. )
+***************
+*** 267,272 ****
+--- 287,297 ----
+  	mov %dx,%es
+  	movl $(USER_DS),%edx
+  	mov %dx,%fs
++ 	pushl %eax
++ 	movl _current,%eax
++ 	movl %db6,%edx
++ 	movl %edx,dbgreg6(%eax)  # save current hardware debugging status
++ 	popl %eax
+  	call *%ebx
+  	addl $8,%esp
+  	jmp ret_from_sys_call
+*** ./include/linux/sched.h~	Mon Sep 27 21:29:32 1993
+--- ./include/linux/sched.h	Mon Oct  4 22:15:42 1993
+***************
+*** 159,164 ****
+--- 159,165 ----
+  	unsigned long blocked;	/* bitmap of masked signals */
+  	unsigned long flags;	/* per process flags, defined below */
+  	int errno;
++ 	int debugreg[8];  /* Hardware debugging registers */
+  /* various fields */
+  	struct task_struct *next_task, *prev_task;
+  	struct sigaction sigaction[32];
+***************
+*** 243,248 ****
+--- 244,250 ----
+   */
+  #define INIT_TASK \
+  /* state etc */	{ 0,15,15,0,0,0,0, \
++ /* debugregs */ { 0, },            \
+  /* schedlink */	&init_task,&init_task, \
+  /* signals */	{{ 0, },}, \
+  /* stack */	0,0, \
+*** ./include/linux/debugreg.h~	Mon Oct  4 22:06:44 1993
+--- ./include/linux/debugreg.h	Mon Oct  4 22:06:44 1993
+***************
+*** 0 ****
+--- 1,59 ----
++ #ifndef _LINUX_DEBUGREG_H
++ #define _LINUX_DEBUGREG_H
++ 
++ 
++ /* Indicate the register numbers for a number of the specific
++    debug registers.  Registers 0-3 contain the addresses we wish to trap on */
++ #define DR_FIRSTADDR 0        /* u_debugreg[DR_FIRSTADDR] */
++ #define DR_LASTADDR 3         /* u_debugreg[DR_LASTADDR]  */
++ 
++ #define DR_STATUS 6           /* u_debugreg[DR_STATUS]     */
++ #define DR_CONTROL 7          /* u_debugreg[DR_CONTROL] */
++ 
++ /* Define a few things for the status register.  We can use this to determine
++    which debugging register was responsible for the trap.  The other bits
++    are either reserved or not of interest to us. */
++ 
++ #define DR_TRAP0 (0x1) /* Trap due to db0 */
++ #define DR_TRAP1 (0x2) /* Trap due to db1 */
++ #define DR_TRAP2 (0x4) /* Trap due to db2 */
++ #define DR_TRAP3 (0x8) /* Trap due to db3 */
++ 
++ /* Now define a bunch of things for manipulating the control register.
++    The top two bytes of the control register consist of 4 fields of 4
++    bytes - each field corresponds to one of the four debug registers,
++    and indicates what types of access we trap on, and how large the data
++    field is that we are looking at */
++ 
++ #define DR_CONTROL_SHIFT 16 /* Skip this many bits in ctl register */
++ #define DR_CONTROL_SIZE 4   /* 4 control bits per register */
++ 
++ #define DR_RW_EXECUTE (0x0)   /* Settings for the access types to trap on */
++ #define DR_RW_WRITE (0x1)
++ #define DR_RW_READ (0x3)
++ 
++ #define DR_LEN_1 (0x0) /* Settings for data length to trap on */
++ #define DR_LEN_2 (0x4)
++ #define DR_LEN_4 (0xC)
++ 
++ /* The low byte to the control register determine which registers are
++    enabled.  There are 4 fields of two bits - one to enable debugging
++    traps for accesses to the address via the gdt, and a second one to
++    enable debugging traps for accesses to the address via the ldt. */
++ 
++ #define DR_LOCAL_ENABLE_SHIFT 0    /* Extra shift to the local enable bit */
++ #define DR_GLOBAL_ENABLE_SHIFT 1   /* Extra shift to the global enable bit */
++ #define DR_ENABLE_SIZE 2           /* 2 enable bits per register */
++ 
++ #define DR_LOCAL_ENABLE_MASK (0x55)  /* Enable all 4 regs for ldt addresses */
++ #define DR_GLOBAL_ENABLE_MASK (0xAA) /* Enable all 4 regs for gdt addresses */
++ 
++ /* The second byte to the control register has a few special things.
++    We can slow the instruction pipeline for instructions coming via the
++    gdt or the ldt if we want to.  I am not sure why this is an advantage */
++ 
++ #define DR_CONTROL_RESERVED (0xFC00) /* Reserved by Intel */
++ #define DR_LOCAL_SLOWDOWN (0x100)   /* Slow the pipeline for access thru ldt */
++ #define DR_GLOBAL_SLOWDOWN (0x200)  /* Slow the pipeline for access thru gdt */
++ 
++ #endif
+*** ./include/linux/user.h~	Tue Nov 10 07:54:55 1992
+--- ./include/linux/user.h	Mon Oct  4 22:06:44 1993
+***************
+*** 66,75 ****
+--- 66,78 ----
+  				/* the registers. */
+    struct user_i387_struct* u_fpstate;	/* Math Co-processor pointer. */
+    unsigned long magic;		/* To uniquely identify a core file */
++   struct task_struct task;
+  };
+  #define NBPG 4096
+  #define UPAGES 1
+  #define HOST_TEXT_START_ADDR (u.start_code)
+  #define HOST_STACK_END_ADDR (u.start_stack + u.u_ssize * NBPG)
++ 
++ #define u_debugreg task.debugreg
+  
+  #endif

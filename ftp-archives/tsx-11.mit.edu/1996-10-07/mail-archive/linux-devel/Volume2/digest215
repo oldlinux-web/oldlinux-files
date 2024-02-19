@@ -1,0 +1,410 @@
+From:     Digestifier <Linux-Development-Request@senator-bedfellow.mit.edu>
+To:       Linux-Development@senator-bedfellow.mit.edu
+Reply-To: Linux-Development@senator-bedfellow.mit.edu
+Date:     Fri, 23 Sep 94 18:13:13 EDT
+Subject:  Linux-Development Digest #215
+
+Linux-Development Digest #215, Volume #2         Fri, 23 Sep 94 18:13:13 EDT
+
+Contents:
+  Re: NE2000+ and AHA1542CF problems (Rob Janssen)
+  Re: A badly missed feature in gcc (H. Peter Anvin)
+  Sleeping harddisk - POSSIBLE SOLUTION????? (Harald T. Alvestrand)
+  Re: A badly missed feature in gcc (Andreas Schwab)
+  Re: XFig Eats All My Memory. (Alfred Hovdestad)
+  Re: 1.1.51 seg fault on shutdown in _floppy_release (Frank Lofaro)
+  p5 code optimization for gcc (ChiWei Che)
+  Re: Pascal for Linux?? (Bernd Zierath)
+  Re: How to use a host as a router - READ THIS (Jay Ashworth)
+  Re: Future of linux -- the sequel (Shannon Hendrix)
+
+----------------------------------------------------------------------------
+
+Crossposted-To: comp.os.linux.help,comp.os.linux.misc
+From: rob@pe1chl.ampr.org (Rob Janssen)
+Subject: Re: NE2000+ and AHA1542CF problems
+Reply-To: pe1chl@rabo.nl
+Date: Fri, 23 Sep 1994 08:32:54 GMT
+
+In <35slgu$gct@errigle.gpl.net> bradley@gpl.com (Dermot Bradley) writes:
+
+>On a similar vein another machine (IDE, NE200 clone) gave the same
+>"eth0: transmit timed out, TX status 0xe, ISR 0x0."
+>"eth0: Possible network cable problem?"
+>messages last weekend.  The strange thing was it was NOT connected to any  
+>ethernet at the time.....I had it at home!!!!!!
+
+Did you put a T-connector with 2 terminators on the ethernet connector?
+If not, you will get this error as soon as you try to send something.
+
+Ethernet cards must always be connected to a network, and this setup
+is the minimal network (only one node, and the two terminators that should
+always be at the ends of the network cable)
+
+(of course this assumes you use thinwire)
+
+Rob
+-- 
+=========================================================================
+| Rob Janssen                | AMPRnet:   rob@pe1chl.ampr.org           |
+| e-mail: pe1chl@rabo.nl     | AX.25 BBS: PE1CHL@PI8UTR.#UTR.NLD.EU     |
+=========================================================================
+
+------------------------------
+
+From: hpa@ahab.eecs.nwu.edu (H. Peter Anvin)
+Subject: Re: A badly missed feature in gcc
+Reply-To: hpa@nwu.edu (H. Peter Anvin)
+Date: Fri, 23 Sep 1994 15:08:10 GMT
+
+[This is both posted and emailed, for convenience.]
+
+Followup to:  <9409231051.AA08511@idcube.idsoftware.com>
+By author:    ddt@idcube.idsoftware.com (David Taylor)
+In newsgroup: comp.os.linux.development
+>
+> I wish gcc for Linux could handle // comments.  Before you answer,
+> "use g++!", keep in mind that C++ generates a lot of restrictions
+> and stuff that vanilla C will let slide.  There are also new keywords
+> like class, new, and delete we often use.  This is a convenience
+> that most native compilers and some ports of gcc support.  Is there
+> some mysterious method I'm not aware of?  I'm currently running a
+> //-stripper program on all my *.c and *.h files which means I need
+> to keep a seperate source tree for Linux versions of anything I
+> do.  It's a great anti-motivator to keeping stuff up to date.
+> 
+> Please reply via e-mail if you have clues on this.  Will post
+> responses.  Thanks!
+> 
+
+Yes, there is indeed such a mysterious way.  The key is to pass the
+options -lang-c++ -U__cplusplus to cpp.  -lang-c++ enables
+//-comments, C++ include directories, and the __cplusplus symbol.
+-nostcinc++ is supposed to turn off C++ include directories, however,
+it did not do any difference for me.  Fortunately, it doesn't matter
+(at least on my system, there are no C++ include files which conflict
+with any C include files).
+
+In the file /usr/lib/gcc-lib/i486-linux/2.5.8/specs (or equivalent,
+depending on your GCC version), find the line saying:
+
+*cpp:
+
+Append to the line immediately following it:
+
+%{!ansi:-lang-c++ %{c:-U__cplusplus}}
+
+On my system, it looks like this after editing:
+
+*cpp:
+%{!m386:-D__i486__} %{posix:-D_POSIX_SOURCE} %{!ansi:-lang-c++ ${c:-U__cplusplus}}
+
+Note that this will permit -ansi to turn off C++-style comments.
+
+I could not find any docs on the specs file, so I deduced this mostly
+by trial and error.  I attempted to fetch the GCC source and look at
+it, but the network here is just too slow right now, for some reason.
+It seems to work on my system, though, for the couple of test cases I
+ran.
+
+        /hpa
+
+P.S: Thanks, Dave, for Linux and SGI DOOM!!  I got the registered
+version for my Linux box, and now my productivity has gone flatline!
+-- 
+INTERNET: hpa@nwu.edu             --- Allah'u'abha ---
+IBM MAIL: I0050052 at IBMMAIL     HAM RADIO:   N9ITP or SM4TKN
+FIDONET:  1:115/511 or 1:115/512  STORMNET:    181:294/1 or 181:294/101
+Have you hugged your Swede today?
+
+------------------------------
+
+From: hta@uninett.no (Harald T. Alvestrand)
+Subject: Sleeping harddisk - POSSIBLE SOLUTION?????
+Date: 23 Sep 1994 10:53:59 GMT
+
+Hello,
+I've started messing around with power management on my laptop.
+(more fool I).
+One of the irritiating features of Linux is that whenever the disk
+spins down to save power, it spins up again.
+The reason seems to be that the driver sends an interrupt, which the
+kernel does not expect, causing a printk(), which of course spins up
+the disk.
+
+Now, I messed around with the hd.c file, and came up with the following
+patch (against 1.1.51's linux/drivers/block/hd.c):
+
+diff -u -r1.1 hd.c
+--- 1.1 1994/09/23 07:43:15
++++ hd.c        1994/09/23 08:33:59
+@@ -415,11 +415,16 @@
+  * Ok, don't know what to do with the unexpected interrupts: on some machines
+  * doing a reset and a retry seems to result in an eternal loop. Right now I
+  * ignore it, and just set the timeout.
++
++ * Interrupts also seem to be generated on disk spindown; try to log it
+  */
+ void unexpected_hd_interrupt(void)
+ {
++       unsigned char status = inb_p(HD_STATUS);
++       unsigned char error = inb_p(HD_ERROR);
+        sti();
+-       printk(KERN_DEBUG "Unexpected HD interrupt\n");
++       printk(KERN_DEBUG "Unexpected HD interrupt, status=0x%x, error=0x%x\n",
++              status, error);
+        SET_TIMER;
+ }
+
+This resulted in the following output:
+
+Sep 23 10:52:06 dale kernel: Unexpected HD interrupt, status=0x80, error=0x80
+Sep 23 10:54:14 dale kernel: Unexpected HD interrupt, status=0x80, error=0x80
+Sep 23 11:13:42 dale kernel: Unexpected HD interrupt, status=0x80, error=0x80
+Sep 23 11:14:09 dale kernel: Unexpected HD interrupt, status=0x80, error=0x80
+Sep 23 11:15:41 dale kernel: Unexpected HD interrupt, status=0x80, error=0x80
+
+Now, according to linux/hdreg.h, this means "BUSY_STAT" and "BBD_ERR",
+which should mean that the controller is busy reading a bad block, but
+there is no error (ERR_STAT is off), according to my naive reading.
+
+What I would like to see is:
+
+- That some other people with laptops do this patch, and see if the status
+  values are the same. (It "ought to be safe", I think)
+
+- That the people who *know* this driver tell me if these values ever make
+  sense (a program to monitor these values would be nice, too....)
+
+The next step is of course to test for these values in the interrupt routine,
+and simply not log the message.
+
+Next problem is that everything hangs during spinup....but once we know that
+the disk is spun down, we can take special precautions in the blockwrite....
+
+-- 
+                   Harald Tveit Alvestrand
+                Harald.T.Alvestrand@uninett.no
+      G=Harald;I=T;S=Alvestrand;O=uninett;P=uninett;C=no
+                      +47 73 59 70 94
+My son's name is Torbjørn. The letter between "j" and "r" is o with a slash.
+
+------------------------------
+
+From: schwab@ls5.informatik.uni-dortmund.de (Andreas Schwab)
+Subject: Re: A badly missed feature in gcc
+Date: 23 Sep 1994 12:00:12 GMT
+
+In article <9409231051.AA08511@idcube.idsoftware.com>, ddt@idcube.idsoftware.com (David Taylor) writes:
+
+|> I wish gcc for Linux could handle // comments.
+
+You have the source, so go ahead and change gcc (actually, only cpp
+has to be changed).  But don't complain if you want to compile a
+language with gcc that isn't C.
+-- 
+Andreas Schwab                                      "And now for something
+schwab@issan.informatik.uni-dortmund.de              completely different"
+
+------------------------------
+
+From: hovdesta@teapot.usask.ca (Alfred Hovdestad)
+Subject: Re: XFig Eats All My Memory.
+Date: 21 Sep 1994 16:00:25 GMT
+
+Lucas James Sheneman (sheneman@cs.uidaho.edu) wrote:
+: I am running Linux 1.1.49, XF86_VGA (from XFree86-2.1.1).  When I run 
+: xfig, it rapidly eats up all of my available memory and never actually 
+: pops up.  I have 20MB RAM and 25MB swap.
+
+
+The problem is with the Fig-color file in the apps-default directory.
+The Fig-color file includes the Fig file, which is actually a link tot
+he Fig-color file, which opens the Fig file,.... you get the idea.
+
+To fix this, change the include in Fig-color to inckude Fig-standard.
+
+--
+Alfred Hovdestad                        |e-mail: hovdesta@herald.usask.ca
+Systems Programmer                      |    or: Alfred.Hovdestad@usask.ca
+Department of Computing Services        | Voice: (306) 966-4819
+University of Saskatchewan              |   FAX: (306) 966-4938
+
+------------------------------
+
+From: ftlofaro@unlv.edu (Frank Lofaro)
+Subject: Re: 1.1.51 seg fault on shutdown in _floppy_release
+Date: Thu, 22 Sep 94 19:51:49 GMT
+
+In article <CwHF3L.86A@aston.ac.uk> evansmp@mb4715.aston.ac.uk (Mark Evans) writes:
+>Mark Evans (evansmp@mb4715.aston.ac.uk) wrote:
+>: Vincent Fatica (vefatica@cockpit.syr.edu) wrote:
+>: : According to zSystem, the error occurs in _floppy_release.
+>
+>: : It also occurs on dismounting /b (an ext2 floppy). Thereafter, mount says
+>: : it's still mounted (which it's not).
+>
+>
+>: thats becuase umount actually alters /etc/mtab & /etc/mtab~ after it has
+>: done the umount() system call, the program will terminate in this system
+>: call.
+>
+>: I'm just putting some printk's in this function to see where it actually does
+>: terminate.
+>
+>What is happening is that floppy_release is being called with filp equal to 0
+>If you apply the following patch umount will no longer blow up.
+>
+>--- floppy.c.old       Wed Sep 21 15:32:04 1994
+>+++ floppy.c   Wed Sep 21 15:31:48 1994
+>@@ -2713,7 +2713,7 @@
+> {
+>       int drive= DRIVE(inode->i_rdev);
+> 
+>-      if(filp->f_mode & 2)
+>+      if(filp && (filp->f_mode & 2))
+>               fsync_dev(inode->i_rdev);
+>       if ( UDRS->fd_ref < 0)
+>               UDRS->fd_ref=0;
+>
+>
+
+Why is it getting called with filp == NULL?
+That could mean something is wrong.
+Also, maybe it would be a better idea to do the fsync_dev in that case, 
+since you can't tell if it is needed and it is safer to call it 
+(even if it may not be necessary) than to not call it (in case it 
+is necessary). One wants to be sure the device is completely fsync'd 
+before the close returns, so that one can be sure that the floppy can 
+be safely removed wihout losing data in the buffers.
+
+
+------------------------------
+
+From: werche@saba.rutgers.edu (ChiWei Che)
+Subject: p5 code optimization for gcc
+Date: 23 Sep 1994 13:06:28 -0400
+
+Hi all:
+   A faithful Linux user here. Recently, I got a Pentium machine, of course the
+thing is dedicated to Linux. Yesterday, I am upgrading the gcc 2.5.6 to
+intel optimized version of gcc 2.5.8. I use that to recompile the kernel, 
+the system is running faster before (although I didn't run any benchmark, and
+I don't know any benchmark in Linux, but you definitely can feel it). To all
+who are using the P5 CPU, try to replace the old one with pentium code, it's
+better. BTW, my system configuration:
+
+Motherboard: SUper micro
+Chipset    : Opti  (they said you sould go for Intel Neptune now)
+RAM        : 16 Mb
+Monitor    : 17" Panasyc
+Graph card : 1M DRAM Mach32 PCI version
+Harddisk   : 420 western digital (with cheap DTC PCI hardisk controler)
+Linux      : Info magic Sept
+
+I am also willing to discuss with those who is playing around Linux using P5
+machine.
+
+**********************
+ChiWei Che 
+Research Associate
+werche@caip.rutgers.edu
+**********************
+
+------------------------------
+
+From: zierath@zierath.isar.muc.de (Bernd Zierath)
+Subject: Re: Pascal for Linux??
+Date: 22 Sep 1994 17:42:40 GMT
+Reply-To: zierath@isar.muc.de
+
+In article 614@golem.greenie.muc.de, andi@golem.greenie.muc.de (Andi Kleen) writes:
+> williams (zwilliam@ucssun1.sdsu.edu) wrote:
+> :    I was wondering if anyone knows of a Pascal compiler that is available
+> : for Linux.. Please give me a pointer. Thanks!
+> :             --Zach
+> 
+> There's P2C, a Pascal->C converter and GNU Pascal (still alpha).
+> 
+> -Andi
+
+look for  bsd-sources/usr.bin/pascal (Berkeley-Pascal)
+
+-Bernd
+
+
+
+
+------------------------------
+
+From: jra@zeus.IntNet.net (Jay Ashworth)
+Crossposted-To: comp.os.linux.misc,comp.os.linux.admin,alt.uu.comp.os.linux.questions
+Subject: Re: How to use a host as a router - READ THIS
+Date: 23 Sep 1994 15:53:03 -0400
+
+dwm@shell.portal.com (David - Morris) writes:
+>Re. why not 127.0.0.0 instead of 127.0.0.1 -- the destination address must
+>be a 'host' address and the host address can't be zero (0).
+
+True... but I think he was talking about the destination address, not the
+interface address... you can route either the loopback _net_, or the
+loopback _host_, with equal facility.
+
+Cheers,
+-- jra
+-- 
+Jay R. Ashworth        High Technology Systems Comsulting             Ashworth
+Designer              Linux: The Choice of a GNU Generation       & Associates
+ka1fjx/4                                                  
+jra@baylink.com   "Hey! Do any of you guys know how to Madison?"  813 790 7592
+
+------------------------------
+
+From: shendrix@escape.widomaker.com (Shannon Hendrix)
+Subject: Re: Future of linux -- the sequel
+Date: Fri, 23 Sep 1994 02:31:27 GMT
+
+Hamish.Macdonald@bnr.ca (Hamish Macdonald) writes:
+
+>Keith> wide, and only supporting 2 disks.  ie 16 bits at a time travel
+>Keith> down the 40 pin IDE cable, is my understanding.
+
+>Fair enough.  Then why is the data transfer speed so slow compared to
+>SCSI, then?
+
+Who says it is?  I get well over 1.5mb/sec on my WD Caviar's.  The average
+throughput is over 1mb/sec.  I'd have to spend a lot more money to get 
+SCSI to do that well.
+
+Now, if you are talking about multiple drive access, fine.  But even that
+may not be true for long with the new IDE interface which is not only
+faster but also is supposed to allow multiple drive access just like 
+SCSI.
+
+
+-- 
+csh
+===========================================================================
+shendrix@escape.widomaker.com      | Linux and BSD
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

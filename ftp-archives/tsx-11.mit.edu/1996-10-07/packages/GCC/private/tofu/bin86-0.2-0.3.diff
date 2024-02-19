@@ -1,0 +1,231 @@
+diff -c linux/bin86/ChangeLog:1.1.1.1 linux/bin86/ChangeLog:1.2
+*** linux/bin86/ChangeLog:1.1.1.1	Tue May 16 22:10:49 1995
+--- linux/bin86/ChangeLog	Tue May 16 22:10:49 1995
+***************
+*** 1,3 ****
+--- 1,21 ----
++ Tue May 16 22:01:05 1995  H.J. Lu (hjl@nynexst.com)
++ 
++ 	* version 0.3 is released.
++ 
++ 	* Makefile: fix a few typos.
++ 
++ 	* as/const.h: include "endian.h".
++ 	  (LOW_BYTE): check the byte order.
++ 
++ 	* Makefile (endian.h): new target.
++ 	  (const.h): depend on endian.h.
++ 
++ 	* as/det_endian.c: new from glibc.
++ 
++ Sat Mar 18 16:39:19 1995  Francois-Rene Rideau (rideau@clipper.ens.fr)
++ 
++ 	* as/pops.c (doif): support nested conditionals.
++ 
+  Mon Nov 21 22:48:26 1994  H.J. Lu (hlu@nighthawk)
+  
+  	* version 0.2 is released.
+diff -c linux/bin86/Makefile:1.1.1.1 linux/bin86/Makefile:1.2
+*** linux/bin86/Makefile:1.1.1.1	Tue May 16 22:10:49 1995
+--- linux/bin86/Makefile	Tue May 16 22:10:49 1995
+***************
+*** 1,16 ****
+! CC=gcc-ss
+! CFLAGS=-O -g
+  LDFLAGS=
+  # Where to get strtoul ()?
+! LIBS=-liberty
+! DIRS=as ld
+  
+  BINDIR=/usr/gnu/i486-linux/bin
+  AS86=i486-linux-ld86
+  LD86=i486-linux-ld86
+! AS86=ld86
+  LD86=ld86
+  
+  MFLAGS= "LIBS=$(LIBS)" \
+  	"CFLAGS=$(CFLAGS)" \
+  	"LDFLAGS=$(LDFLAGS)" \
+--- 1,20 ----
+! CC=gcc 
+! CFLAGS=-O6 -fomit-frame-pointer
+  LDFLAGS=
+  # Where to get strtoul ()?
+! #LIBS=-liberty
+! DIRS=ld as
+  
+  BINDIR=/usr/gnu/i486-linux/bin
+  AS86=i486-linux-ld86
+  LD86=i486-linux-ld86
+! 
+! BINDIR=/usr/bin
+! AS86=as86
+  LD86=ld86
+  
++ STRIP=strip
++ 
+  MFLAGS= "LIBS=$(LIBS)" \
+  	"CFLAGS=$(CFLAGS)" \
+  	"LDFLAGS=$(LDFLAGS)" \
+***************
+*** 24,29 ****
+--- 28,34 ----
+  install: all
+  	cp as/as86 $(BINDIR)/$(AS86)
+  	cp ld/ld86 $(BINDIR)/$(LD86)
++ 	$(STRIP) $(BINDIR)/$(AS86) $(BINDIR)/$(LD86)
+  		   
+  depend clean clobber:
+  	for d in $(DIRS); do \
+diff -c linux/bin86/as/Makefile:1.1.1.1 linux/bin86/as/Makefile:1.2
+*** linux/bin86/as/Makefile:1.1.1.1	Tue May 16 22:10:50 1995
+--- linux/bin86/as/Makefile	Tue May 16 22:10:50 1995
+***************
+*** 20,26 ****
+  	$(CC) $(LDFLAGS) -o $@ $(OBJS) 
+  
+  clean:
+! 	$(RM) *.o as86 core
+  
+  as.o: const.h type.h byteord.h macro.h file.h flag.h globvar.h
+  assemble.o: const.h type.h address.h globvar.h opcode.h scan.h
+--- 20,26 ----
+  	$(CC) $(LDFLAGS) -o $@ $(OBJS) 
+  
+  clean:
+! 	$(RM) *.o as86 core endian.h
+  
+  as.o: const.h type.h byteord.h macro.h file.h flag.h globvar.h
+  assemble.o: const.h type.h address.h globvar.h opcode.h scan.h
+***************
+*** 38,40 ****
+--- 38,57 ----
+  readsrc.o: const.h type.h flag.h file.h globvar.h macro.h scan.h source.h
+  scan.o: const.h type.h scan.h
+  table.o: const.h type.h globvar.h scan.h
++ 
++ const.h: endian.h
++ 
++ endian.h: det_endian.c
++ 	$(CC) -o det_endian det_endian.c
++ 	-@if [ $$? = 0 ]; then \
++ 	  det_endian > $@; \
++ 	  if [ $$? = 0 ]; then \
++ 	    rm -f det_endian; \
++ 	  else \
++ 	    echo Failed to create $@; \
++ 	    exit 1; \
++ 	  fi; \
++ 	else \
++ 	  echo Failed to compile det_endian.c; \
++ 	  exit 1; \
++ 	fi
+diff -c linux/bin86/as/const.h:1.1.1.1 linux/bin86/as/const.h:1.2
+*** linux/bin86/as/const.h:1.1.1.1	Tue May 16 22:10:50 1995
+--- linux/bin86/as/const.h	Tue May 16 22:10:50 1995
+***************
+*** 4,12 ****
+   *   Copyright (C) 1992 Bruce Evans
+   */
+  
+! #define align(x)		((x) = (void *)(((int) (x) + (4-1)) & ~(4-1)))
+! #define LOW_BYTE	3	/* for big-endian: change to 0 for little endian */
+  
+  /* const.h - constants for assembler */
+  
+  /* major switches */
+--- 4,23 ----
+   *   Copyright (C) 1992 Bruce Evans
+   */
+  
+! #undef __BYTE_ORDER
+! #undef __LITTLE_ENDIAN
+! #undef __BIG_ENDIAN
+! #include "endian.h"
+! #define __LITTLE_ENDIAN 1234
+! #define __BIG_ENDIAN    4321
+! 
+! #if __BYTE_ORDER == __BIG_ENDIAN
+! #define LOW_BYTE	3
+! #else
+! #define LOW_BYTE	0
+! #endif
+  
++ #define align(x)		((x) = (void *)(((int) (x) + (4-1)) & ~(4-1)))
+  /* const.h - constants for assembler */
+  
+  /* major switches */
+diff -c /dev/null linux/bin86/as/det_endian.c:1.1
+*** /dev/null	Tue May 16 22:10:50 1995
+--- linux/bin86/as/det_endian.c	Tue May 16 22:10:50 1995
+***************
+*** 0 ****
+--- 1,34 ----
++ /* Determine the "endianness" of the CPU.
++    Copyright (C) 1991, 1992 Free Software Foundation, Inc.
++    Contributed by Torbjorn Granlund (tege@sics.se).
++ 
++ The GNU C Library is free software; you can redistribute it and/or
++ modify it under the terms of the GNU Library General Public License as
++ published by the Free Software Foundation; either version 2 of the
++ License, or (at your option) any later version.
++ 
++ The GNU C Library is distributed in the hope that it will be useful,
++ but WITHOUT ANY WARRANTY; without even the implied warranty of
++ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ Library General Public License for more details.
++ 
++ You should have received a copy of the GNU Library General Public
++ License along with the GNU C Library; see the file COPYING.LIB.  If
++ not, write to the Free Software Foundation, Inc., 675 Mass Ave,
++ Cambridge, MA 02139, USA.  */
++ 
++ #include <stdio.h>
++ 
++ main ()
++ {
++   unsigned long int i;
++ 
++   if (sizeof (i) != 4)
++     puts ("#error \"Not a 32-bit machine!\"");
++ 
++   i = (((((('4' << 8) + '3') << 8) + '2') << 8) + '1');
++ 
++   printf ("#define __BYTE_ORDER %.4s\n", (char *) &i);
++ 
++   exit (0);
++ }
+diff -c linux/bin86/as/pops.c:1.1.1.1 linux/bin86/as/pops.c:1.2
+*** linux/bin86/as/pops.c:1.1.1.1	Tue May 16 22:10:50 1995
+--- linux/bin86/as/pops.c	Tue May 16 22:10:50 1995
+***************
+*** 276,285 ****
+  	--ifstak;
+  	ifstak->elseflag = elseflag;
+  	elseflag = FALSE;	/* prepare */
+  	if ((ifstak->ifflag = ifflag) != FALSE)
+  	    /* else not assembling before, so not now & no ELSE's */
+  	{
+! 	    (*func) ();
+  	    if (!(lastexp.data & UNDBIT) && lastexp.offset == 0)
+  		/* else expression invalid or FALSE, don't change flags */
+  	    {
+--- 276,293 ----
+  	--ifstak;
+  	ifstak->elseflag = elseflag;
+  	elseflag = FALSE;	/* prepare */
++ 
++ 
++ 	/* parse the argument.
++ 	 * [Fare] moved it here to allow nested if's, as
++ 	 * the argument must be parsed even if we are not assembling !
++ 	 */
++ 	(*func) ();
++ 
+  	if ((ifstak->ifflag = ifflag) != FALSE)
+  	    /* else not assembling before, so not now & no ELSE's */
+  	{
+! 	    /* [Fari]: was here! (*func) (); */
+  	    if (!(lastexp.data & UNDBIT) && lastexp.offset == 0)
+  		/* else expression invalid or FALSE, don't change flags */
+  	    {

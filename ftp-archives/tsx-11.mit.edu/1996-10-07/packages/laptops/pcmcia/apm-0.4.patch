@@ -1,0 +1,344 @@
+diff -r -u -x *.o -x .* -x *.map -x *.s v1.1.85/linux/arch/i386/boot/setup.S linux/arch/i386/boot/setup.S
+--- v1.1.85/linux/arch/i386/boot/setup.S	Thu Jan  5 03:55:40 1995
++++ linux/arch/i386/boot/setup.S	Tue Jan 24 18:40:43 1995
+@@ -17,6 +17,9 @@
+ ! some changes and additional features by Christoph Niemann,
+ ! March 1993/June 1994 (Christoph.Niemann@linux.org)
+ !
++! add APM BIOS checking by Stephen Rothwell, May 1994
++! (Stephen.Rothwell@pd.necisa.oz.au)
++!
+ 
+ ! NOTE! These had better be the same as in bootsect.s!
+ #define __ASSEMBLY__
+@@ -231,6 +234,48 @@
+ 	jz	no_psmouse
+ 	mov	[0x1ff],#0xaa	! device present
+ no_psmouse:
++
++#ifdef CONFIG_APM
++! check for APM BIOS
++
++	mov	[64],#0		! version == 0 means no APM BIOS
++
++	mov	ax,#0x05300	! APM BIOS installation check
++	xor	bx,bx
++	int	0x15
++	jc	done_apm_bios	! error -> no APM BIOS
++
++	cmp	bx,#0x0504d	! check for "PM" signature
++	jne	done_apm_bios	! no signature -> no APM BIOS
++
++	mov	[64],ax		! record the APM BIOS version
++	mov	[76],cx		!	and flags
++	and	cx,#0x02	! Is 32 bit supported?
++	je	done_apm_bios	!	no ...
++
++	mov	ax,#0x05304	! Disconnect first just in case
++	xor	bx,bx
++	int	0x15		! ignore return code
++
++	mov	ax,#0x05303	! 32 bit connect
++	xor	bx,bx
++	int	0x15
++	jc	no_32_apm_bios	! error
++
++	mov	[66],ax		! BIOS code segment
++	mov	[68],ebx	! BIOS entry point offset
++	mov	[72],cx		! BIOS 16 bit code segment
++	mov	[74],dx		! BIOS data segment
++	mov	[78],si		! BIOS code segment length
++	mov	[80],di		! BIOS data segment length
++	jmp	done_apm_bios
++
++no_32_apm_bios:
++	and	[76], #0xfffd	! remove 32 bit support bit
++
++done_apm_bios:
++#endif
++
+ ! now we want to move to protected mode ...
+ 
+ 	cli			! no interrupts allowed !
+diff -r -u -x *.o -x .* -x *.map -x *.s v1.1.85/linux/arch/i386/config.in linux/arch/i386/config.in
+--- v1.1.85/linux/arch/i386/config.in	Mon Jan 23 00:38:27 1995
++++ linux/arch/i386/config.in	Tue Jan 24 20:21:51 1995
+@@ -28,6 +28,7 @@
+ if [ "$CONFIG_PCI" = "y" ]; then
+  bool '   PCI bridge optimisation (experimental)' CONFIG_PCI_OPTIMIZE n
+ fi
++bool 'Advanced Power Management BIOS support' CONFIG_APM n
+ bool 'System V IPC' CONFIG_SYSVIPC y
+ bool 'Kernel support for ELF binaries' CONFIG_BINFMT_ELF y
+ #bool 'Use -mpentium flag for Pentium-specific optimizations' CONFIG_M586 n
+diff -r -u -x *.o -x .* -x *.map -x *.s v1.1.85/linux/arch/i386/kernel/head.S linux/arch/i386/kernel/head.S
+--- v1.1.85/linux/arch/i386/kernel/head.S	Mon Jan  2 05:19:59 1995
++++ linux/arch/i386/kernel/head.S	Tue Jan 24 18:40:43 1995
+@@ -17,6 +17,7 @@
+ .globl _floppy_track_buffer
+ 
+ #define __ASSEMBLY__
++#include <linux/config.h>
+ #include <linux/tasks.h>
+ #include <linux/fd.h>
+ #include <asm/segment.h>
+@@ -342,7 +343,11 @@
+ .align 4
+ .word 0
+ gdt_descr:
++#ifdef CONFIG_APM
++	.word (11+2*NR_TASKS)*8-1
++#else
+ 	.word (8+2*NR_TASKS)*8-1
++#endif
+ 	.long 0xc0000000+_gdt
+ 
+ /*
+@@ -360,3 +365,8 @@
+ 	.quad 0x0000000000000000	/* not used */
+ 	.quad 0x0000000000000000	/* not used */
+ 	.fill 2*NR_TASKS,8,0		/* space for LDT's and TSS's etc */
++#ifdef CONFIG_APM
++	.quad 0x00c09a0000000000	/* APM CS    code */
++	.quad 0x00809a0000000000	/* APM CS 16 code (16 bit) */
++	.quad 0x00c0920000000000	/* APM DS    data */
++#endif
+diff -r -u -x *.o -x .* -x *.map -x *.s v1.1.85/linux/arch/i386/kernel/process.c linux/arch/i386/kernel/process.c
+--- v1.1.85/linux/arch/i386/kernel/process.c	Sun Jan 22 04:38:19 1995
++++ linux/arch/i386/kernel/process.c	Tue Jan 24 18:40:43 1995
+@@ -24,6 +24,13 @@
+ #include <asm/system.h>
+ 
+ asmlinkage void ret_from_sys_call(void) __asm__("ret_from_sys_call");
++ 
++#ifdef CONFIG_APM
++/*
++ * idle process hook
++ */
++int (* idle_hook)(void) = NULL;
++#endif
+ 
+ /*
+  * The idle loop on a i386..
+@@ -42,8 +49,12 @@
+ 	/* endless idle loop with no priority at all */
+ 	current->counter = -100;
+ 	for (;;) {
+-		if (hlt_works_ok && !need_resched)
+-			__asm__("hlt");
++#ifdef CONFIG_APM
++		if (!need_resched)
++			if ((idle_hook == NULL) || !(*idle_hook)())
++#endif
++				if (hlt_works_ok && !need_resched)
++					__asm__("hlt");
+ 		schedule();
+ 	}
+ }
+diff -r -u -x *.o -x .* -x *.map -x *.s v1.1.85/linux/arch/i386/kernel/setup.c linux/arch/i386/kernel/setup.c
+--- v1.1.85/linux/arch/i386/kernel/setup.c	Sun Jan 15 21:17:35 1995
++++ linux/arch/i386/kernel/setup.c	Tue Jan 24 19:32:05 1995
+@@ -21,6 +21,10 @@
+ #include <linux/a.out.h>
+ #include <linux/tty.h>
+ 
++#ifdef CONFIG_APM
++#include <linux/apm_bios.h>
++#endif
++
+ #include <asm/segment.h>
+ #include <asm/system.h>
+ 
+@@ -51,6 +55,10 @@
+ struct drive_info_struct { char dummy[32]; } drive_info;
+ struct screen_info screen_info;
+ 
++#ifdef CONFIG_APM
++struct apm_bios_info apm_bios_info;
++#endif
++
+ unsigned char aux_device_present;
+ extern int ramdisk_size;
+ extern int root_mountflags;
+@@ -65,6 +73,9 @@
+ #define EXT_MEM_K (*(unsigned short *) (PARAM+2))
+ #define DRIVE_INFO (*(struct drive_info_struct *) (PARAM+0x80))
+ #define SCREEN_INFO (*(struct screen_info *) (PARAM+0))
++#ifdef CONFIG_APM
++#define APM_BIOS_INFO (*(struct apm_bios_info *) (PARAM+64))
++#endif
+ #define MOUNT_ROOT_RDONLY (*(unsigned short *) (PARAM+0x1F2))
+ #define RAMDISK_SIZE (*(unsigned short *) (PARAM+0x1F8))
+ #define ORIG_ROOT_DEV (*(unsigned short *) (PARAM+0x1FC))
+@@ -84,6 +95,7 @@
+  	ROOT_DEV = ORIG_ROOT_DEV;
+  	drive_info = DRIVE_INFO;
+  	screen_info = SCREEN_INFO;
++	apm_bios_info = APM_BIOS_INFO;
+ 	aux_device_present = AUX_DEVICE_INFO;
+ 	memory_end = (1<<20) + (EXT_MEM_K<<10);
+ 	memory_end &= PAGE_MASK;
+diff -r -u -x *.o -x .* -x *.map -x *.s v1.1.85/linux/drivers/char/Makefile linux/drivers/char/Makefile
+--- v1.1.85/linux/drivers/char/Makefile	Sat Jan 28 19:57:36 1995
++++ linux/drivers/char/Makefile	Tue Jan 24 20:21:57 1995
+@@ -75,6 +75,11 @@
+ SRCS := $(SRCS) mouse.c
+ endif
+ 
++ifdef CONFIG_APM
++OBJS := $(OBJS) apm_bios.o
++SRCS := $(SRCS) apm_bios.c
++endif
++
+ all: char.a
+ 
+ char.a: $(OBJS)
+diff -r -u -x *.o -x .* -x *.map -x *.s v1.1.85/linux/drivers/char/mem.c linux/drivers/char/mem.c
+--- v1.1.85/linux/drivers/char/mem.c	Mon Jan 23 13:04:09 1995
++++ linux/drivers/char/mem.c	Tue Jan 24 20:23:15 1995
+@@ -16,6 +16,9 @@
+ #include <linux/malloc.h>
+ #include <linux/mman.h>
+ #include <linux/mm.h>
++#ifdef CONFIG_APM
++#include <linux/apm_bios.h>
++#endif
+ 
+ #include <asm/segment.h>
+ #include <asm/io.h>
+@@ -393,5 +396,10 @@
+                NR_FTAPE_BUFFERS, ftape_big_buffer);
+         mem_start = (long) ftape_big_buffer + NR_FTAPE_BUFFERS * 0x8000;
+ #endif 
++
++#ifdef CONFIG_APM
++	mem_start = apm_bios_init(mem_start);
++#endif
++
+ 	return mem_start;
+ }
+diff -r -u -x *.o -x .* -x *.map -x *.s v1.1.85/linux/include/linux/sched.h linux/include/linux/sched.h
+--- v1.1.85/linux/include/linux/sched.h	Mon Jan 23 13:04:10 1995
++++ linux/include/linux/sched.h	Tue Jan 24 20:22:21 1995
+@@ -250,6 +250,10 @@
+ extern unsigned long itimer_next;
+ extern struct timeval xtime;
+ extern int need_resched;
++#ifdef CONFIG_APM
++extern int (*idle_hook)(void);
++extern void (*busy_hook)(void);
++#endif
+ 
+ #define CURRENT_TIME (xtime.tv_sec)
+ 
+diff -r -u -x *.o -x .* -x *.map -x *.s v1.1.85/linux/init/main.c linux/init/main.c
+--- v1.1.85/linux/init/main.c	Mon Jan 23 13:04:10 1995
++++ linux/init/main.c	Tue Jan 24 20:22:55 1995
+@@ -25,6 +25,9 @@
+ #include <linux/ioport.h>
+ #include <linux/hdreg.h>
+ #include <linux/mm.h>
++#ifdef CONFIG_APM
++#include <linux/apm_bios.h>
++#endif
+ 
+ #include <asm/bugs.h>
+ 
+Only in linux/init: main.c~
+diff -r -u -x *.o -x .* -x *.map -x *.s v1.1.85/linux/kernel/ksyms.c linux/kernel/ksyms.c
+--- v1.1.85/linux/kernel/ksyms.c	Mon Jan 23 00:38:30 1995
++++ linux/kernel/ksyms.c	Tue Jan 24 20:22:22 1995
+@@ -41,6 +41,9 @@
+ #ifdef CONFIG_PCI
+ #include <linux/pci.h>
+ #endif
++#ifdef CONFIG_APM
++#include <linux/apm_bios.h>
++#endif
+ #if defined(CONFIG_MSDOS_FS) && !defined(CONFIG_UMSDOS_FS)
+ #include <linux/msdos_fs.h>
+ #endif
+@@ -100,6 +103,11 @@
+ 	X(pcibios_write_config_byte),
+ 	X(pcibios_write_config_word),
+ 	X(pcibios_write_config_dword),
++#endif
++
++#ifdef CONFIG_APM
++	X(apm_register_callback),
++	X(apm_unregister_callback),
+ #endif
+ 
+ 	/* process memory management */
+diff -r -u -x *.o -x .* -x *.map -x *.s v1.1.85/linux/kernel/sched.c linux/kernel/sched.c
+--- v1.1.85/linux/kernel/sched.c	Mon Jan 23 13:04:10 1995
++++ linux/kernel/sched.c	Tue Jan 24 20:22:23 1995
+@@ -93,6 +93,13 @@
+ unsigned long itimer_ticks = 0;
+ unsigned long itimer_next = ~0;
+ 
++#ifdef CONFIG_APM
++/*
++ * hook to let others know we are busy
++ */
++void (*busy_hook)(void) = NULL;
++#endif
++
+ /*
+  *  'schedule()' is the scheduler function. It's a very simple and nice
+  * scheduler: it's not perfect, but certainly works for most things.
+@@ -183,6 +190,14 @@
+ 	}
+ 	if (current == next)
+ 		return;
++#ifdef CONFIG_APM
++	/*
++	 * if we are switching away from the idle task
++	 * then we are considered busy.
++	 */
++	if ((busy_hook != NULL) && (current == &init_task))
++		(*busy_hook)();
++#endif
+ 	kstat.context_swtch++;
+ 	switch_to(next);
+ }
+diff -r -u -x *.o -x .* -x *.map -x *.s v1.1.85/linux/kernel/time.c linux/kernel/time.c
+--- v1.1.85/linux/kernel/time.c	Mon Jan 23 13:04:10 1995
++++ linux/kernel/time.c	Tue Jan 24 20:22:23 1995
+@@ -18,6 +18,7 @@
+  *	fixed set_rtc_mmss, fixed time.year for >= 2000, new mktime
+  */
+ 
++#include <linux/config.h>
+ #include <linux/errno.h>
+ #include <linux/sched.h>
+ #include <linux/kernel.h>
+@@ -60,7 +61,11 @@
+ 	  )*60 + sec; /* finally seconds */
+ }
+ 
++#ifdef CONFIG_APM
++unsigned long get_cmos_time(void)
++#else
+ void time_init(void)
++#endif
+ {
+ 	unsigned int year, mon, day, hour, min, sec;
+ 	int i;
+@@ -96,7 +101,16 @@
+ 	  }
+ 	if ((year += 1900) < 1970)
+ 		year += 100;
++#ifdef CONFIG_APM
++	return mktime(year, mon, day, hour, min, sec);
++}
++
++void time_init(void)
++{
++	xtime.tv_sec = get_cmos_time();
++#else
+ 	xtime.tv_sec = mktime(year, mon, day, hour, min, sec);
++#endif
+ 	xtime.tv_usec = 0;
+ }
+ /* 

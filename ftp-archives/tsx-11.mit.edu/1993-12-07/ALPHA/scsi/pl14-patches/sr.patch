@@ -1,0 +1,44 @@
+(POSSIBLY 1522 specific) -ERY
+
+yesterday, I got my brand-new CD-ROM drive:
+<6>  Vendor: TOSHIBA   Model: CD-ROM XM-4101TA  Rev: 2483
+<6>  Type:   CD-ROM                             ANSI SCSI revision: 02
+
+I got a "unsupported sectorsize" message on the first boot attempt.
+
+I figured out that the device doesn't respond correctly to the
+first couple of READ CDROM CAPACITY commands. I don't know why, but it
+succeeds on later tries...  Anyhow, on the first attempts it get's the
+command, but skips the information transfer phase by just sending an
+ok status and a COMMAND COMPLETE message.  I patched sr.c to handle this:
+
+
+--- sr.c.org	Fri Dec  3 14:27:41 1993
++++ sr.c	Fri Dec  3 14:31:04 1993
+@@ -656,6 +656,7 @@
+     cmd[0] = READ_CAPACITY;
+     cmd[1] = (scsi_CDs[i].device->lun << 5) & 0xe0;
+     memset ((void *) &cmd[2], 0, 8);
++    memset ((void *) buffer, 0, 4);
+     SCpnt->request.dev = 0xffff;  /* Mark as really busy */
+     
+     scsi_do_cmd (SCpnt,
+@@ -681,13 +682,14 @@
+   
+   wake_up(&scsi_devices[SCpnt->index].device_wait); 
+ 
+-  if (the_result) {
++  scsi_CDs[i].capacity = (buffer[0] << 24) |
++    (buffer[1] << 16) | (buffer[2] << 8) | buffer[3];
++
++  if (the_result || scsi_CDs[i].capacity==0) {
+     scsi_CDs[i].capacity = 0x1fffff;
+     scsi_CDs[i].sector_size = 2048;  /* A guess, just in case */
+     scsi_CDs[i].needs_sector_size = 1;
+   } else {
+-    scsi_CDs[i].capacity = (buffer[0] << 24) |
+-      (buffer[1] << 16) | (buffer[2] << 8) | buffer[3];
+     scsi_CDs[i].sector_size = (buffer[4] << 24) |
+       (buffer[5] << 16) | (buffer[6] << 8) | buffer[7];
+     if(scsi_CDs[i].sector_size == 0) scsi_CDs[i].sector_size = 2048;
+

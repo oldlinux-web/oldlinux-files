@@ -1,0 +1,504 @@
+From:     Digestifier <Linux-Development-Request@senator-bedfellow.mit.edu>
+To:       Linux-Development@senator-bedfellow.mit.edu
+Reply-To: Linux-Development@senator-bedfellow.mit.edu
+Date:     Fri, 23 Sep 94 18:13:13 EDT
+Subject:  Linux-Development Digest #216
+
+Linux-Development Digest #216, Volume #2         Fri, 23 Sep 94 18:13:13 EDT
+
+Contents:
+  NFS patch (Florian la Roche)
+  Re: ncr53c810, Linux, SCSI drive appears multiple times (Mark E. Wallace)
+  Errors writing to MSDOS Partition (Bernhard Kappler)
+  Re: NCR 53C406A SCSI (Patrick D'Cruze)
+
+----------------------------------------------------------------------------
+
+From: flla@coli.uni-sb.de (Florian la Roche)
+Subject: NFS patch
+Date: 22 Sep 1994 22:17:02 +0200
+
+
+Ooops, just posted the wrong patch...
+Seems, I am unable to cancel the previous message. A "D" command
+doesn't work right now...
+
+Well, sometimes everything goes wrong...
+
+Please report the release date of 22. sept 94 of this patch in any email...
+
+
+STILL MISSING THINGS:      22. Sep 1994
+=====================
+
+Some people report problems, when executing programs mounted from /usr.
+I haven't looked into this, but probably it has something got to do with
+the root uid being changed to something else and with suid-root
+programs. (I remember X11 to be one problem...)
+
+Everything else seems to be ok.
+Nobody has emailed me about data corruption any more, so I think these
+problems have gone.
+
+(Anyway, hardware problems seem to be bother the Linux community much more
+than any bugs left in the kernel...   :-)
+
+
+CHANGES FROM PREVIOUS PATCHES:
+==============================
+
+Now, I have also added some more checks about the used memory sizes.
+Previously, just assumptions were made about the size of the next packet.
+(If the server disagrees, you might get screwed up...)
+
+The biggest change in this version is a suggested buf-fix from Peter Eriksson.
+Linux should now be less often confused and talk much better to the NFS-server.
+Please look into the linux/fs/nfs/ directory after applaying the patch.
+I have included the original message from Peter.
+
+The main problem now is the data corruption with bigger packets that only
+some people report. Please read further down in this text for more...
+(This shouldn't be true any more...)
+
+
+NFS read-ahead and improved code:
+=================================
+
+Here is a patch to the kernel version 1.1.51. It can be applied also
+to most other kernel versions since that part didn't change in the
+last time...
+
+I recoded the existing patch that implements read-ahead for NFS. That old patch
+sometimes crashes the machine, since it copied data to the user level with
+interrupts turned off. (And if the page isn't present, you will get...)
+I put in also a timeout for that cache. Since the cache only contains up
+to 5 entries, this will normally not be a problem, but I wanted to make this
+100% sure...
+
+There should be also some further speed improvements from better coding
+technics and less copying of the data in the kernel. (Though parts of the
+code look now more ugly.)
+
+Note that read requests that are done via mmap are not cached. Most times,
+that will be only for shared libraries. Also linux will then do nearly all
+requests with a size of 4096 (PAGE_SIZE) and will not fetch such a
+page a second time without need for it. So enhancing read-ahead for mmap
+requests also is not a big win...
+(But it is a big win to set rsize to at least 4096...)
+
+
+Data corruption with NFS?
+=========================
+
+You can speed up NFS by specifying rsize=8192 and wsize=4096. Without any
+mount options, this patch won't make Linux faster.
+(mount nfs.server.edu:/export/linux/usr  /usr -o rsize=8192,wsize=4096)
+
+Note: The following shouldn't be true any more. Please give it really hard
+tests...
+However, some machines don't work with this. Random data corruption occurs.
+You can test this with:
+        (cd /nfs/mounted/directory; tar cf - .) | tar xf -
+and then doing several times (on 2 consoles?)
+        (cd /nfs/mounted/directory; tar cf - .) | tar df -
+Data corruption seems to be dependent on that rsize value. With 2048 it nearly
+never happens, with 4096 after sveral hours, with 8192 pretty fast.
+I myself have tested my machine very excessive and could never make such a
+data corruption happen.
+Could those people, that have such data corruption, please email me their
+exact configurations of the server side? Are udp checksums enabled on the
+server side?  Can someone use a network analysor on this?
+Can I login somewhere on a test machine, that doesn't have valuable data
+on it?
+
+If the Linux side is responsible for that data corruption, than the bug
+is most probably in fs/nfs/sock.c. I have read all other .c-files and they
+seem to be ok...
+
+
+What about implementing real caching of NFS?
+============================================
+
+The buffer cache uses the device number and the block number of that device
+to do the buffer caching. For nfs, we would also need to make buffer entries
+with device(mount point?), inode number, offset. These entries also need
+some (user adjustable) timeout value (3 seconds?).
+(Hi Olaf, this is described just the other way round in your great nag 1.0,
+if I am not totally wrong here. But I will send you some other small problems
+soon as well...)
+I might start implementing this...
+
+
+Speed improvements by doing read-ahead:
+=======================================
+
+I use always rsize=8192 and wsize=4096.
+
+I mounted the kernel source and did a "make config; touch .depend; make".
+I got 12454 read requests, 2662 could be taken out of the cache.
+That is 21% less requests over the net...
+
+Mounting /usr/X386 via NFS, doing one "startx" with fvwm and one xterm window,
+without that additional stuff that fvwm normally prints on startup, I get:
+245 read requests, where 171 can be taken out of the cache. (Sounds horrible
+good so far...) (Note that mmapping the shared libries for X11 doesn't count
+in these statistics.)
+
+Well, I got several pretty enthusiastic emails. (One saying from minimum 2 up
+to more than 3 times faster. Others believe in a 3 up to 4 times faster...)
+I am too lazy to copy parts of those email right now, but people seem to like
+this patch...
+
+
+INSTALLATION:
+=============
+
+Go into the kernel source tree (.../linux/) and do a "patch -s -p0 < this_file".
+Then recompile the kernel...
+
+Florian  La Roche               flla@stud.uni-sb.de
+
+
+begin 644 nfs.patch.gz
+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
+<6'CK!SVWI*IB6\#]//))LRGZ_P].#]\S)XL``&RR
+`
+end
+
+
+------------------------------
+
+From: markw@fuzzball.us.dell.com (Mark E. Wallace)
+Crossposted-To: comp.os.linux.help,comp.periphs.scsi
+Subject: Re: ncr53c810, Linux, SCSI drive appears multiple times
+Date: 23 Sep 1994 14:16:06 GMT
+
+Adrian Miranda (ade@testpac.pacifier.com) wrote:
+: I have an NCR53c810 SCSI controller card, and a PCI bus machine.  I'm
+: using the Slackware Linux NCR boot disk.  After much pain and misery,
+: I got the Linux kernel to see the NCR controller and the SCSI drive.
+: The problem is that it thinks I have 7 identical disks, it seems to
+: see the same drive on every possible SCSI id.  I can partition the
+: disk with fdisk, but when I go into the Slackware setup, it apparently
+: sees all the ghost disks, and dies.
+
+: Of course, my NCR53C810 card doesn't have a BIOS on it, and I suspect
+: my Motherboard BIOS doesn't support the NCR controller.  The only
+: thing the (Award) BIOS has that sounds promising is "On board PCI/SCSI
+: BIOS".  I was kind of hoping that meant the BIOS was on board, but I
+: suppose it is only for motherboards that have a SCSI controller
+: on-board?  Am I out of luck?  Perhaps the Award BIOS can be upgraded
+: to a newer version that does support the NCR controller?
+
+: Any help will be greatly appreciated.
+
+: Adrian
+
+This is usually caused by having a SCSI device on your SCSI bus that's
+set to the same SCSI ID as your host adapter device. What SCSI ID does
+your 53c810 use?
+
+===========================
+Mark E. Wallace
+markw@fuzzball.us.dell.com
+
+------------------------------
+
+From: bkappler@gris.informatik.uni-tuebingen.de (Bernhard Kappler)
+Subject: Errors writing to MSDOS Partition
+Date: 20 Sep 94 07:43:17 GMT
+
+Hello,
+
+I'm running Linux on a 386-33Mhz with 8 MB memory. I've an Adaptec
+1542 SCSI Board and a 80MB Disk from SeaGate and a 660MB Disk from HP.
+Linux works fine with the ext2 filesystem. Only writing on a msdos
+partition almost ever leads to corrupt files. This happens only if
+I write a file on my msdos Partion on the harddisk. Floppies do fine.
+
+I found out that files get corrupted doing a "sync" or waiting until
+the buffer has been copied to disk.
+
+For example:
+
+        cp file /msdos/file
+        diff file /msdos/file
+
+        no differences will be found until the buffer has been flushed 
+        to disk.
+
+Doing:  cp file /msdos/file
+        sync
+        diff file /msdos/file
+
+        will show up differences in over 90% of the tries!!!!
+
+My dos partition uses to second half of the HP disk (the upper cylinders).
+I think the disk has about 1400 Cylinders, put I actualy don't know.
+The partition was created using fdisk from linux and FAT 16 BIT as 
+filesystem.
+
+I hope someone can help me to fix this problem!!!
+
+Bernhard Kappler      bkappler@gris.informatik.uni-tuebingen.de
+
+
+------------------------------
+
+From: pdcruze@iinet.com.au (Patrick D'Cruze)
+Subject: Re: NCR 53C406A SCSI
+Date: 24 Sep 1994 04:02:53 +0800
+
+kevinl@bruce.cs.monash.edu.au (Kevin Lentin) writes:
+>Pete Cascio (cascio_p@kant.cs.mci.com) wrote:
+
+>> I've got a Media Vision Pro 3D sound card with SCSI-2.  The SCSI-2 chip is an
+>> NCR 53C406A.  It looks like it's probably something new, since it's not
+>> mentioned in the SCSI-HOWTO.
+
+>I think Patrick D'Cruze may have solved your problem. Try this:
+>    tsx-11.mit.edu:/pub/linux/ALPHA/scsi/acculogic-0.7.README
+>                                        /acculogic-0.7.lsm
+>                                       /acculogic-0.7.patch.gz
+
+To give credit where credit is due - the author of the ncr53c406a SCSI
+driver is Normunds Saumanis (saumanis@student.msu.edu).  I have nothing
+to do with the SCSI driver except I occasionally help upload new revisions
+of it as Normunds Internet access is a bit shaky.
+
+If anyone is interested in the ncr53c406a SCSI chip or on boards based
+around it, you're welcome to join the mailing list for it.  To subscribe,
+send email to:
+        majordomo@orac.iinet.com.au
+with the words:
+        subscribe ncr53c406a
+in the body of the message.
+
+
+>-- 
+>[==================================================================]
+>[ Kevin Lentin                   |___/~\__/~\___/~~~~\__/~\__/~\_| ]
+>[ kevinl@bruce.cs.monash.edu.au  |___/~\/~\_____/~\______/~\/~\__| ]
+>[ Macintrash: 'Just say NO!'     |___/~\__/~\___/~~~~\____/~~\___| ]
+>[==================================================================]
+
+Regards,
+Patrick D'Cruze
+pdcruze@orac.iinet.com.au
+
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

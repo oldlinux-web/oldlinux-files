@@ -1,0 +1,712 @@
+From:     Digestifier <Linux-Development-Request@senator-bedfellow.mit.edu>
+To:       Linux-Development@senator-bedfellow.mit.edu
+Reply-To: Linux-Development@senator-bedfellow.mit.edu
+Date:     Mon, 25 Oct 93 14:13:32 EDT
+Subject:  Linux-Development Digest #188
+
+Linux-Development Digest #188, Volume #1         Mon, 25 Oct 93 14:13:32 EDT
+
+Contents:
+  Re: GCC 2.4.5.... how do I compile the !@#$ thing? (amodra@lands.sa.gov.au)
+  Re: ugly name for core dumps (core.imagename) -> patch for "img.core" (Drew Eckhardt)
+  HT216-32 Support for XFree86? (Lawrence Houston)
+  Bugs in Quota-Patches (SLS 1.03, 0.99pl12) (Micaela Pantke)
+  Re: meta-fs device idea (Jeremy Fitzhardinge)
+  Re: Andrew File System
+  Re: ugly name for core dumps (core.imagename) -> patch for "img.core" (Ian Jackson)
+  Are there plans for PAS SCSI support? (Odn_bypas)
+  Re: Bug in tcpip package? (Wolfgang R. Mueller)
+  Bug in /etc/termcap (Norbert Kuemin)
+  Re: 1.72MB floppies (David C. Niemi)
+  Re: Are there plans for PAS SCSI support? (Jerry Shekhel)
+  Re: 1.72MB floppies (Helmut Geyer)
+  Slowness in scsi disk access (Eric Youngdale)
+  Re: 1.72MB floppies (Alain knaff)
+
+----------------------------------------------------------------------------
+
+Subject: Re: GCC 2.4.5.... how do I compile the !@#$ thing?
+From: amodra@lands.sa.gov.au
+Date: 25 Oct 93 10:00:05 +0930
+
+In article <2a3jj8INNr2d@matt.ksu.ksu.edu>, danodom@matt.ksu.ksu.edu (Dan Odom) writes:
+> GCC 2.3.3 gets upset when I try to compile GCC 2.4.5...
+> 
+> 'Undefined symbol __obstack_newchunk'
+> 
+> What library do I need that I don't have?  Or is this a problem in one
+> of the object files or the Makefile?  Arrrrrrgh!
+> 
+> Maybe 2.3.3 is just upset because I'm trying to replace it; after all,
+> nobody likes to be made obsolete, least of all C compilers :-).
+> 
+> -- 
+> Dan Odom
+> danodom@matt.ksu.ksu.edu -- Kansas State University, Manhattan, KS
+
+Your problem is really caused by using old libraries, but you can
+successfully compile gcc-2.4.5 as follows
+
+ configure --target=i386-linux --prefix=/usr
+ make CC=/usr/bin/gcc LANGUAGES=c CLIB=-liberty 2>&1 | tee stage1.log
+(the CLIB define gets you obstack.o which is in libc4.4.1 but not in
+libc4.3.3)
+ make stage1
+ make CC="stage1/xgcc -Bstage1/" CLIB=-liberty \
+      CFLAGS="-O2 -idirafter /usr/include -idirafter ./include" \
+      2>&1 | tee stage2.log
+(idirafter is because limits.h in /usr/include wants to #include_next
+the real limits.h supplied by gcc. Normally gcc will find its copy in
+/usr/lib/gcc-lib/i386-linux/x.x.x, where x.x.x is your version of gcc,
+but you don't have 2.4.5 installed yet)
+ make install
+
+You'll probably want the latest library and tools too! (libc-4.4.4
+and tools-2.9 last I looked)
+Compile and install them, then recompile gcc to use the latest
+libraries with:
+ make distclean
+ configure --target=i386-linux --prefix=/usr
+ make CC=/usr/bin/gcc CFLAGS=-O2 LDFLAGS=-s
+ make install
+
+
+Of course, it's a lot simpler just to get the latest binaries of
+everything :-)
+
+------------------------------
+
+From: drew@kinglear.cs.colorado.edu (Drew Eckhardt)
+Subject: Re: ugly name for core dumps (core.imagename) -> patch for "img.core"
+Date: Mon, 25 Oct 1993 06:11:56 GMT
+
+In article <1993Oct22.155102.8070@swan.pyr>, Alan Cox <iiitac@swan.pyr> wrote:
+>In article <CF9sJz.3qr@Colorado.EDU> drew@kinglear.cs.colorado.edu (Drew Eckhardt) writes:
+>>I don't see the problem - if you are blindly assuming that every 
+>>file named core* is a core file, the problem isn't Linux's naming 
+>>of core files (agreed apon as the way core files should be named by
+>>the Berkeley Computer Systems Research Group, but too late for 4.4 
+>THe problem is its very hard to write a quick script that removes every
+>8 hour old core dump and checks it is a core dump by sizes, legal values
+>magic numbers and offsets. If someone writes a little c program 
+>Then the script isn't too hard.
+
+The script isn't too hard period - you just have to parse the output of 
+the file command - 
+
+(note, this assumes GNU find with the default print option) -
+
+#!/usr/bin/perl
+
+open (CORES, "find . -name \"core*\" -a -mtime +8 | xargs file |" ) ||
+    die "$0 can't run find : $!\n";
+
+while (<CORES>) {
+    /(\S+)\s*:\s*(\S+)/;
+    unlink ($1) || print STDERR "$0 can't unlink $1 : $!\n" if 
+        ($2 eq core);
+}
+
+
+
+
+------------------------------
+
+From: houston@norton.geog.mcgill.ca (Lawrence Houston)
+Subject: HT216-32 Support for XFree86?
+Date: Mon, 25 Oct 1993 06:34:52 GMT
+
+Linux Developers:
+
+Has anyone developed an XFree86 Driver for the Headland Techology HT216-32 
+Chipset?  If not are there "technical" reasons why this is not possible?
+
+Lawrence Houston  -  (houston@norton.geog.mcgill.ca).
+
+------------------------------
+
+From: hz225wu@unidui.uni-duisburg.de (Micaela Pantke)
+Subject: Bugs in Quota-Patches (SLS 1.03, 0.99pl12)
+Date: 25 Oct 1993 08:58:29 +0100
+
+I spent the better part of last weekend debugging the filesystem code as
+of SLS 1.03pl12 and found two major *BUGS* in the included quota
+patches.  (Well it is the same bug twice...  but in two seperate
+places.) Look for code that reads 
+
+#ifdef CONFIG_QUOTA
+        /* Need inode entry of directory */
+        error = _namei(name,NULL,1,&ino);
+        if (error)
+           return error;
+...
+
+in the file /linux/fs/namei.c (the affected funcions are do_rmdir and
+do_unlink.  There is a missing iput(dir) before the return.  This should
+really be something like this:
+
+#ifdef CONFIG_QUOTA
+        /* Need inode entry of directory */
+        error = _namei(name,NULL,1,&ino);
+        if (error)
+        {
+           iput (dir);
+           return error;
+        }
+...
+
+Without these changes, some directory inodes get stuck in memory
+with an ever increasing i_count. You cant umount a filesystem while
+there are inodes with an i_count > 0 on it.
+
+Hope this reaches the person who is doing the quota-stuff and that
+I'm not wasting my efforts because I was using the SLS-distribution.
+
+
+                Karl Guenter Wuensch
+                hz225wu@unidui.uni-duisburg.de
+
+
+------------------------------
+
+From: jeremy@suite.sw.oz.au (Jeremy Fitzhardinge)
+Subject: Re: meta-fs device idea
+Date: 25 Oct 93 06:49:14 GMT
+
+In <RIDEAU.93Oct21172751@prao.ens.fr> rideau@ens.fr (Francois-Rene Rideau) writes:
+>  The thing is an filter device (a la loop device, or in fs mounting options)
+>over filesystems, that would allow --longnames--access rights--automatic
+>compression/decompression--user-level mounting-- (well, at least longnames to
+>begin with) over any filesystem transparently through a (hidden by default)
+>[optional .]filterfs[optional .]rc (or anything) description file ?
+
+Yes and no.  I wrote a filesystem driver "userfs" which allows user
+processes to be mounted and act like filesystems.  This would let
+you do everything you want to here -- but it would have to be
+written.
+
+userfs lets the process control most aspects of a filesystem.  The
+kernel calls the filesystem, which in turn packages up the call
+and sends it off to the process.  The process does whatever it
+needs to do and sends back a result.
+
+This is all pretty low-level - there is no existing facility to do
+all the processing you talk about.  Most particularly, it is a
+complete filesystem itself, with no option to overlay upon an
+existing one.  Something similar can be done with "ifs" -- the
+inhereting filesystem that allows filesystems to be stacked on top
+of each other.  ifs in combination with userfs could be the basis
+of what you're looking for.
+
+userfs is available on tsx-11:.../ALPHA/userfs
+
+        J
+
+
+------------------------------
+
+From: zzassgl@gl.mcc.ac.uk ()
+Subject: Re: Andrew File System
+Date: Mon, 25 Oct 1993 08:54:10 GMT
+
+Gary Keim (gk5g+@andrew.cmu.edu) wrote:
+: Excerpts from netnews.comp.os.linux.development: 22-Oct-93 Re: Andrew
+: File System Heikki Suonsivu@cs.hut.f (645) 
+
+: > AFS would be better than NFS, but I don't see what is the point of trying 
+: > to be compatible with AFS which isn't used anywhere (a major example of how 
+: > making something propretiary looses :-). 
+
+: % ls /afs 
+: alw.nih.gov              dsg.stanford.edu         nersc.gov 
+    ..........
+: dmsv.med.umich.edu       nd.edu                   wam.umd.edu 
+
+: That's quite a few nowhere's. 
+
+: -Gary Keim 
+: Andrew Consortium 
+
+
+And how many people at each site are locked out of the facilities because
+they are only available via AFS?  It's sad that educational sites decide to
+go with propretiary servers.
+
+
+--
+Geoff. Lane.                    zzassgl@gl.mcc.ac.uk or zzassgl@uts.mcc.ac.uk
+UTS Sys Admin,Manchester Computing Centre, Oxford Rd, Manchester, M13 9PL, UK
+
+The clothes have no emperor.                    -- C. A. Hoare, about Ada.
+
+------------------------------
+
+From: iwj10@cus.cam.ac.uk (Ian Jackson)
+Subject: Re: ugly name for core dumps (core.imagename) -> patch for "img.core"
+Date: Sun, 24 Oct 1993 23:58:50 GMT
+
+In article <1993Oct22.004243.2404@cc.usu.edu>,  <slhpv@cc.usu.edu> wrote:
+>I would like to see something like this:
+>  core\imagename, that way you could find and remove core files using
+>the command:
+>  rm core\\*
+>very unlikely to have filename conflicts.
+
+Ghod!  How many people a week would we see asking
+ "I have this file called core\something, how do I remove it ?"
+ "I can't get dbx/gdb/ups/whatever to see my corefiles."
+etc.
+
+This is an appallingly bad idea.
+
+-- 
+Ian Jackson, at home  <ijackson@nyx.cs.du.edu> or <iwj10@cus.cam.ac.uk>
+PGP2 public key available on server.  Urgent email: <iwj10@phx.cam.ac.uk>
+2 Lexington Close, Cambridge, CB4 3LS, England;  phone: +44 223 64238
+
+------------------------------
+
+Subject: Are there plans for PAS SCSI support?
+From: odn@wndrsvr.la.ca.us (Odn_bypas)
+Date: Mon, 25 Oct 1993 06:03:07 GMT
+
+
+
+I have installed Linux 99pl12. Linux properly identifies the PAS16 but as 
+the FAQ will tell anyone who reads it SCSI support is *NOT* offered from 
+that card.
+
+Are there plans to support the PAS16 SCSI adapter *OR* are there plans to 
+support Mylex SCSI-II adapters?
+
+
+Danke ahead a time.
+
+
+
+[*> Management may or may not agree with the above message.
+[*> WndrSvr in Southern California; Call +1-310-370-3069
+
+------------------------------
+
+From: dvs@ze8.rz.uni-duesseldorf.de (Wolfgang R. Mueller)
+Subject: Re: Bug in tcpip package?
+Date: Mon, 25 Oct 1993 12:23:41 GMT
+
+In article <CFFMyt.Dyt@news.otago.ac.nz> brendan@news.otago.ac.nz (Brendan Murray) writes:
+>Joe Emenaker (jemenake@trumpet.aix.calpoly.edu) wrote:
+>> addresses in the form of: xxx.yyy.zzz.qqq. However, if I have an ip
+>> address like 129.65.90.12, and I pad it with zeroes like this:
+>> 129.065.090.012, the telnet and ftp programs (possibly others) come up
+>SO its either a common bug, or correct ( though unexpected ) behavior. I
+>go for the latter. 
+
+Decimal numbers with leading zeroes are interpreted as octal like in C 
+sources also by scanf if used with the i-format.
+Hope this helps,
+Wolfgang R. Mueller <dvs@ze8.rz.uni-duesseldorf.de>,
+Computing Centre, Heinrich-Heine-University, Duesseldorf, Germany.
+
+------------------------------
+
+From: ZAD_KUEMIN@TRZCL1 (Norbert Kuemin)
+Subject: Bug in /etc/termcap
+Date: Mon, 25 Oct 1993 12:42:51 GMT
+
+If found some nice bugs in the file /etc/termcap. If JOE not works fine with
+a VT Terminal, this is the solution...
+
+=/etc/termcap===================================================================
+d3|vt300|vt320|vt340|dec vt300 series:\
+        :tc=vt200:
+dl|vt200|vt220|vt200-js|vt220-js|dec vt200 series with jump scroll:\
+        :im=\E[4h:ei=\E[4l:mi:dc=\E[P:dm=:ed=:al=\E[L:dl=\E[M:\
+        :cs=\E[%i%d;%dr:sf=\ED:sr=\EM:sb=\EM:\
+        :ce=\E[K:cl=\E[H\E[J:cd=\E[J:cm=\E[%i%d;%dH:nd=\E[C:up=\E[A:\
+        :so=\E[7m:se=\E[27m:us=\E[4m:ue=\E[24m:\
+        :md=\E[1m:mr=\E[7m:mb=\E[5m:me=\E[m:\
+        :is=\E>\E[?3l\E[?4l\E[?5l\E[?7h\E[?8h\E[1;24r\E[24;1H:\
+        :rs=\E>\E[?3l\E[?4l\E[?5l\E[?7h\E[?8h:\
+        :tc=vt100:
+d0|vt100|vt100-am|vt100am|dec vt100:\
+* FALSE :do=^J:co#80:li#24:cl=\E[;H\E[2J:sf=\ED:\
+* FALSE :le=^H:bs:am:cm=\E[%i%d;%dH:nd=\E[C:up=\E[A:\
+        :do=\E[B:co#80:li#24:cl=\E[;H\E[2J:sf=\ED:\
+        :le=\E[D:bs:am:cm=\E[%i%d;%dH:nd=\E[C:up=\E[A:\
+        :ce=\E[K:cd=\E[J:so=\E[7m:se=\E[m:us=\E[4m:ue=\E[m:\
+        :md=\E[1m:mr=\E[7m:mb=\E[5m:me=\E[m:is=\E[1;24r\E[24;1H:\
+        :rf=/usr/share/lib/tabset/vt100:\
+        :rs=\E>\E[?3l\E[?4l\E[?5l\E[?7h\E[?8h:ks=\E[?1h\E=:ke=\E[?1l\E>:\
+        :ku=\EOA:kd=\EOB:kr=\EOC:kl=\EOD:kb=^H:\
+        :ho=\E[H:k1=\EOP:k2=\EOQ:k3=\EOR:k4=\EOS:pt:sr=\EM:vt#3:xn:\
+        :sc=\E7:rc=\E8:cs=\E[%i%d;%dr:
+================================================================================
+
+Did you have the file /usr/share/lib/tabset/vt100 ? (Line 6 from vt100)
+I've stolen this file from a sun and all works fine exepted "sc"
+
+                                           Norbert
+
+
++----------V----------+  Norbert Kuemin     |RFC822: norbert.kuemin@alcatel.ch
+| A  L  C  A  T  E  L |  Alcatel STR        |DECnet: PSI%4795123920::ZAD_KUEMIN
++---------------------+                     |X.400:  c=CH a=arCom p=Alcatel
+         S T R           CH-8804 Au / ZH    |        s=Kuemin g=Norbert
+
+------------------------------
+
+From: niemidc@oasis.gtefsd.com (David C. Niemi)
+Subject: Re: 1.72MB floppies
+Date: 25 Oct 1993 15:58:08 GMT
+Reply-To: niemidc@oasis.gtefsd.com
+
+In article 93Oct21174240@prao.ens.fr, rideau@ens.fr (Francois-Rene Rideau) writes:
+>
+>
+>  My 0.99.9 had 1.72MB floppy support (i.e. I could mknod a /dev/fd0H1722),
+>and used it much (together with the DOS FDFORMAT utility). But I upgraded
+>to 0.99.13), and I can't have this device anymore. I looked in .../floppy.c,
+>and no 1.72MB floppy format was found. I was disappointed, but happily found that
+>Linux could still read (but not format - I must use DOS 8( ) my fdformatted
+>floppies.
+>  Why is that ?
+
+Probably due to auto-sensing (if you are using the floppy patch that does that),
+which does not help for formatting.  Or, you just successfully read part of a
+track and when you try to read/write more of the floppy it will fail.
+
+Just creating the device will not help unless you have somehow gotten the pl9
+patch to work under pl13.  Not an easy task, and I was never confident of the
+pl9 patch in the first place.
+
+
+>  Can I add an entry in floppy.c ?
+>  What values must I give to the gap1 and gap2 fields ?
+
+Good luck!  Sam Chessman and I are completely rewriting floppy.c and related
+files.  I won't know the values to use for gap1/gap2 until we are nearly done
+with that work.  Try experimenting if you are really impatient, but we plan
+to have a user-mode program to tweak these parameters via ioctl() until we
+find the right values.  This is expected to take quite some time, as it needs
+to be tried on a lot of different floppy drives, and our rewrite of the kernel
+stuff will have to be mostly done...
+
+
+>  Thanks for any help.
+>
+>P.S.: BTW, is it possible to write a new format for lower density floppies whose
+>external tracks would be formatted 500kbps, middle tracks 300kbps and internal
+>tracks 250 kbps ?
+
+That probably depends on your PC.  Some setups have automatic hardware selection
+of the data transfer rate.  Generally it is very inconvenient to control from
+software.  Even if it was possible, it would be a non-standard format, would
+require some very complex additions to the kernel, and would still be inferior
+to a standard 1.44MB floppy in capacity and speed.
+---
+David C. Niemi          Life is just an unintended side effect of reproduction.
+David.Niemi@oasis.gtegsc.com
+
+
+
+------------------------------
+
+From: jerry@msi.com (Jerry Shekhel)
+Subject: Re: Are there plans for PAS SCSI support?
+Date: 25 Oct 1993 16:05:53 GMT
+
+Odn_bypas (odn@wndrsvr.la.ca.us) wrote:
+:
+: I have installed Linux 99pl12. Linux properly identifies the PAS16 but as 
+: the FAQ will tell anyone who reads it SCSI support is *NOT* offered from 
+: that card.
+:
+: Are there plans to support the PAS16 SCSI adapter *OR* are there plans to 
+: support Mylex SCSI-II adapters?
+:
+
+There's a PAS16 SCSI driver in the latest ALPHA kernel.
+
+: Danke ahead a time.
+--
++-------------------+----------------------------+---------------------------+
+| JERRY J. SHEKHEL  | Molecular Simulations Inc. | Funny how everything      |
+| Drummers do it... |     Burlington, MA USA     |  was Roses while we       |
+|    ... In rhythm! |        jerry@msi.com       |   held on to the Guns...  |
++-------------------+----------------------------+---------------------------+
+
+------------------------------
+
+From: geyer@polyhymnia.iwr.uni-heidelberg.de (Helmut Geyer)
+Subject: Re: 1.72MB floppies
+Date: Mon, 25 Oct 93 16:03:16 GMT
+
+David C. Niemi (niemidc@oasis.gtefsd.com) wrote:
+:>In article 93Oct21174240@prao.ens.fr, rideau@ens.fr (Francois-Rene Rideau) writes:
+:>>
+:>>
+:>>  My 0.99.9 had 1.72MB floppy support (i.e. I could mknod a /dev/fd0H1722),
+:>>and used it much (together with the DOS FDFORMAT utility). But I upgraded
+:>>to 0.99.13), and I can't have this device anymore. I looked in .../floppy.c,
+:>>and no 1.72MB floppy format was found. I was disappointed, but happily found that
+:>>Linux could still read (but not format - I must use DOS 8( ) my fdformatted
+:>>floppies.
+:>>  Why is that ?
+
+:>Probably due to auto-sensing (if you are using the floppy patch that does that),
+:>which does not help for formatting.  Or, you just successfully read part of a
+:>track and when you try to read/write more of the floppy it will fail.
+
+:>Just creating the device will not help unless you have somehow gotten the pl9
+:>patch to work under pl13.  Not an easy task, and I was never confident of the
+:>pl9 patch in the first place.
+
+I have updated the patch (which did not need much changing) against pl12 and pl13.
+If you want it, mail me. I never had any problem (other than media failures
+of older disks) using this patch. 
+
+:>>  Can I add an entry in floppy.c ?
+:>>  What values must I give to the gap1 and gap2 fields ?
+
+        Helmut
+
+[deleted a lot]
+
+
+--
+==============================================================================
+Helmut Geyer                              geyer@kalliope.iwr.uni-heidelberg.de
+
+------------------------------
+
+From: eric@tantalus.nrl.navy.mil (Eric Youngdale)
+Subject: Slowness in scsi disk access
+Date: Mon, 25 Oct 1993 16:50:24 GMT
+
+        This thread started on the scsi channel, because people constantly
+complain about how slow the scsi disks are under linux are relative to DOS.  I
+do not know if there is a similar difference for IDE disks, but I have been
+thinking about this, and I have a few ideas that I wanted to share.  These are
+all just ideas, of course, and if anyone else has any thoughts to contribute
+I would be interested in hearing them.  Once I have a pretty solid
+understanding of where the delays come from, it will be easier to speed things
+up. 
+
+        To begin with, I have a benchmark program that bypasses the buffer
+cache and filesystems completely, which run as user mode programs to measure
+I/O throughput.  With my scsi disk, I get a peak I/O rate of about 1.8Mb/sec,
+which is really pretty respectable, and other people report similar or better
+numbers.  When going through a filesystem typical I/O rates are somewhere from
+300-800Kb/sec using 1Kb blocksizes (I have gotten numbers like 1.1Mb/sec when
+using an ext2 filesystem with a 4Kb blocksize).  Thus it would appear as if the
+problem were not in the scsi code, but somewhere above it.
+
+        What I have now done is to take portions of the linux kernel and form
+them into a user program to simulate running iozone on my system.  For the most
+part, I have tried to take whole functions without altering them very much, and
+to simplify matters I am only simulating the condition where the buffer cache
+has already expanded to the maximum size that it will ever reach (i.e.  we
+should never be calling grow_buffers).  I start with block_read/block_write
+(which are used to write directly to naked partitions), and I am currently down
+as far as ll_rw_blk().  I would ultimately like to get the request queueing in
+ll_rw_block.c incorporated as well as this may provide further insights.  At
+the very top level, the main() function simulates running iozone by first
+calling block_write for 25Mb worth of data and then calling block_read for 25Mb
+of data.  I am simulating a 15Mb buffer cache as this is about the same size as
+the real buffer cache on my machine.
+
+        While I was playing with the simulated iozone through my model, I
+noticed that at one point the program really slowed down like it was hitting a
+brick wall.  The simulated I/O rates dropped from something in excess of
+1Mb/sec to something close to 32Kb/sec.  The cause in this particluar instance
+was quite simple - the first 2/3 of the buffers in the free list were dirty,
+and each time we call getblk we end up traversing all of these to locate a
+clean buffer.  This came about because the write phase first dirties the entire
+15Mb buffer cache, syncs the buffers and then 10Mb more buffers are dirtied.
+Then the program starts reading, and the blocks that we use here are
+effectively removed from the top of the free list and moved down to the bottom,
+so after we read about 5Mb we end up in the situation where the first 10Mb
+worth of buffers on the free list are dirty, and we have to skip past all of
+these to find a clean buffer.  This condition will persist until the buffers
+are synced.
+
+        Anyway, I have a couple of preliminary ideas as to how best to increase
+performance of the buffer cache:
+
+        1) Each time we look through the buffer cache for a clean buffer, make
+a note of the position of the last clean buffer that we found.  This way in
+getblk we can simply skip ahead to this point the next time through, and avoid
+looking over the entire list for a clean buffer.  It takes something like 50ms
+to scan 15000 buffer headers like I have on my system, so this overhead can eat
+you alive.  Note that sync() would reset this pointer.  You would have to be a
+little bit careful here - if the buffer that the first_clean points to is ever
+removed from service (i.e. we need the page for something else), this pointer
+would have to be modified to point to another valid buffer header.
+
+        2) If we discover that all of the buffers in the buffer cache are
+dirty, we call sync.  The problem with doing this is that the process that is
+dirtying buffers gets stuck doing the sync, and the user program will not run
+again until the sync is complete.  The request queue can hold at most 4Mb worth
+of buffers, so the user process can get stalled for a considerable amount of
+time.  I wonder whether it would be a good idea to wake up the update process
+once something like 50-75% of the buffers are dirty so that the writing can
+take place at the same time that the user processes are dirtying more buffers.
+The reason that this is important is that the disk writing code can be quite
+lightweight, and it would be quite easy to have the disk being written at the
+same time that a different process is dirtying more buffers.  This may require
+some means by which the update process would register itself to the kernel (in
+theory we could do it based upon the filename alone, but this seems unclean to
+me), and I presume that sending a SIGALRM would be all that was required to get
+things going.  You would also have to clear the pointer to the update task if
+this process ever goes away for any reason.
+
+        3) The handling of multiple block sizes is still not quite right.  One
+possible improvement would be to maintain separate free lists for the buffers
+of different sizes, but this is still not enough.  There are times that I have
+noticed extremely poor performance when I have experimented with 4Kb
+blocksizes, and I suspect that the problem is that we have to search all of the
+buffers in the buffer cache to locate a buffer of the right size.  The only
+times that I have gotten good performance with 4Kb blocksizes is on a freshly
+booted system that presumably has very little in the buffer cache.  Note that
+even then this is not good enough because once the buffer cache is filled with
+1Kb buffers, it would appear that there is no mechanism of reclaiming them when
+we need more 4Kb buffers.  Instead we would end up reusing the same 4Kb buffers
+over and over again, which would lead to poor performance.
+
+        Anyway, I will try and improve the model some more tonight and see if I
+can come up with any further insights.  It is much easier working with the
+model than with the actual kernel code, so it should not be tough to improve
+the emulation.  Does anyone have any comments on what I have done so far???
+
+-Eric
+
+-- 
+"The woods are lovely, dark and deep.  But I have promises to keep,
+And lines to code before I sleep, And lines to code before I sleep."
+
+------------------------------
+
+From: knaff@imag.fr (Alain knaff)
+Subject: Re: 1.72MB floppies
+Date: 25 Oct 1993 17:00:21 GMT
+
+
+In article <2agt2g$748@europa.eng.gtefsd.com>, niemidc@oasis.gtefsd.com (David C. Niemi) writes:
+|> In article 93Oct21174240@prao.ens.fr, rideau@ens.fr (Francois-Rene Rideau) writes:
+|> >
+|> >
+|> >  My 0.99.9 had 1.72MB floppy support (i.e. I could mknod a /dev/fd0H1722),
+|> >and used it much (together with the DOS FDFORMAT utility). But I upgraded
+|> >to 0.99.13), and I can't have this device anymore. I looked in .../floppy.c,
+|> >and no 1.72MB floppy format was found. I was disappointed, but happily found that
+|> >Linux could still read (but not format - I must use DOS 8( ) my fdformatted
+|> >floppies.
+|> >  Why is that ?
+|> 
+|> Probably due to auto-sensing (if you are using the floppy patch that does that),
+|> which does not help for formatting.  Or, you just successfully read part of a
+|> track and when you try to read/write more of the floppy it will fail.
+|> 
+
+ An additional problem with the 1.72MB format is that it needs sector
+interleaving. ( i.e. the order of the sectors needs to be 1, 12, 2 ,13, 3, 14,
+4, 15, 5, 16, 6, 17, 7, 18, 8, 19, 9, 20, 10, 21, 11 instead of 1, 2, 3, 4, 5,
+6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21 )
+ The fdpatches by Heiko Schroeder get this right, (just adding a line 
+describing this format to floppy.c is not enough)
+
+ With 21 sectors per track, the sectors are so close together that the floppy
+controller is not yet ready to read the next sector when it just has finished
+reading a sector. Thus it has to wait one rotation of the disk until the next
+sector comes under the head again. Without interleaving, floppy reads would
+thuus be 21 times slower than usual, which is quite noticeable. With 
+interleaving, they are only 2 times slower. This problem only exists with 21 
+sectors per track, 20 sectors per track is O.K.
+
+|> Just creating the device will not help unless you have somehow gotten the pl9
+|> patch to work under pl13.  Not an easy task, and I was never confident of the
+|> pl9 patch in the first place.
+|> 
+ I have been using 1.72Mb floppies since april, without any problems.
+
+|> 
+|> >  Can I add an entry in floppy.c ?
+ No, this is not enough, because of the interleaving problem.
+
+|> >  What values must I give to the gap1 and gap2 fields ?
+|> 
+|> Good luck!  Sam Chessman and I are completely rewriting floppy.c and related
+|> files.  I won't know the values to use for gap1/gap2 until we are nearly done
+|> with that work.  Try experimenting if you are really impatient, but we plan
+|> to have a user-mode program to tweak these parameters via ioctl() until we
+ Wouldn't FDSETPRM and FDDEFPRM do the trick?
+|> find the right values.  This is expected to take quite some time, as it needs
+|> to be tried on a lot of different floppy drives, and our rewrite of the kernel
+|> stuff will have to be mostly done...
+|> 
+               12500
+ The formula: --------  - 575  gives working values for fmt_gap.
+              nsectors
+
+ Replace 12500 with 6250 for double density disks.
+
+( Note: this formula does NOT give the default values for the standard
+formats. There seems to be quite a lot of tolerance for the standard formats.)
+ I noticed that for gap1, you can take almost any value. (I normally copy the
+ value for 1.44Mb floppies to 1.72Mb floppies)
+
+|> 
+|> >  Thanks for any help.
+|> >
+|> >P.S.: BTW, is it possible to write a new format for lower density floppies whose
+|> >external tracks would be formatted 500kbps, middle tracks 300kbps and internal
+|> >tracks 250 kbps ?
+|> 
+|> That probably depends on your PC.  Some setups have automatic hardware selection
+|> of the data transfer rate.  Generally it is very inconvenient to control from
+|> software.  Even if it was possible, it would be a non-standard format, would
+|> require some very complex additions to the kernel, and would still be inferior
+|> to a standard 1.44MB floppy in capacity and speed.
+
+ Hardware selection of data tranfert rate is only used for formatting a disk,
+not for reading it or writing to it.
+ To select the tranfert rate, the drive checks if the disk has a hole in the
+appropriate place or not. 
+ If there is no hole, the drive refuses to format the disk in high density,
+and if there IS a hole, it also refuses to format the disk in double density.
+
+ A well known trick to circumvent this "hardware selection mechanism" is to 
+drill a hole in the (double denisity) disk. (needed to format the first 
+(high density) tracks)
+ In order to format the last (double density) tracks, scotch an (opaque) sheet
+of paper over the hole.
+
+ When reading and writing to the disk, these tricks are not needed any more.
+(However, you need to rewrite floppy.c in order to do the rate switching
+automatically.)
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Email: knaff@mururoa.imag.fr                      Alain Lucien Knaff
+
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

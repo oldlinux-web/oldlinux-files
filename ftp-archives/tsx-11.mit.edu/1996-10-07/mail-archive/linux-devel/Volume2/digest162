@@ -1,0 +1,583 @@
+From:     Digestifier <Linux-Development-Request@senator-bedfellow.mit.edu>
+To:       Linux-Development@senator-bedfellow.mit.edu
+Reply-To: Linux-Development@senator-bedfellow.mit.edu
+Date:     Mon, 12 Sep 94 17:13:27 EDT
+Subject:  Linux-Development Digest #162
+
+Linux-Development Digest #162, Volume #2         Mon, 12 Sep 94 17:13:27 EDT
+
+Contents:
+  Re: mprotect() support in Linux kernel? (Bruno Haible)
+  Re: Survey: who wants f77,cc,c++,hpf for linux? (Craig Burley)
+  Reading MAC floppies (mtools) ? (Johan Montald)
+  Re: Alpha Linux (Lawrence Kirby)
+  Re: Multiprocessing Pentium Systems (Alan Cox)
+  Re: News Spool File System - new filesystem type?? (Rich Salz)
+  Re: Help with development using vi. (Ralph Sims)
+  Re: Homemade Terminal Server cheap (Jerry Cullingford)
+  Re: Homemade Terminal Server cheap (Jerry Cullingford)
+  Re: Why I cannot mount a PhotoCD on Mitsumi ? (Tamas Badics)
+  Re: Why I cannot mount a PhotoCD on Mitsumi ? (Tamas Badics)
+  IIC (I^2C) (HP-HIL) Bus device driver wanted (Klaus Mueller)
+  Re: Status of Mac Linux & PPC Linux? (Hamish Macdonald)
+  Re: Help with development using vi. (Olli Vinberg)
+  Re: Slow curses - is there a better/faster curses? (Kai Petzke)
+
+----------------------------------------------------------------------------
+
+From: haible@ma2s2.mathematik.uni-karlsruhe.de (Bruno Haible)
+Crossposted-To: comp.lang.modula3
+Subject: Re: mprotect() support in Linux kernel?
+Date: 12 Sep 1994 13:21:20 GMT
+
+Sven Goldt <goldt@math.tu-berlin.de> wrote:
+>
+>: However, it appears that mprotect() is not supported under Linux:
+>
+> It is implemented in newer kernels.
+
+mprotect() still needs the following three patches to work properly.
+
+The first one ensures that the reference count of an mmap'ed file is
+decremented when adjacent vm_areas are merged (because it is incremented
+when a vm_area is splitted). The second and third one provide proper
+management of the vm_area_struct list.
+
+
+                    Bruno Haible
+                    haible@ma2s2.mathematik.uni-karlsruhe.de
+
+
+diff -r -c3 linux-1.1.48/mm/mmap.c linux/mm/mmap.c
+*** linux-1.1.48/mm/mmap.c      Sun Aug 14 15:40:56 1994
+--- linux/mm/mmap.c     Tue Aug 23 11:11:52 1994
+***************
+*** 424,429 ****
+--- 432,444 ----
+                 */
+                prev->vm_end = mpnt->vm_end;
+                prev->vm_next = mpnt->vm_next;
++               if (mpnt->vm_ops && mpnt->vm_ops->close) {
++                       mpnt->vm_offset += mpnt->vm_end - mpnt->vm_start;
++                       mpnt->vm_start = mpnt->vm_end;
++                       mpnt->vm_ops->close(mpnt);
++               }
++               if (mpnt->vm_inode)
++                       mpnt->vm_inode->i_count--;
+                kfree_s(mpnt, sizeof(*mpnt));
+                mpnt = prev;
+        }
+diff -r -c3 linux-1.1.48/mm/mprotect.c linux/mm/mprotect.c
+*** linux-1.1.48/mm/mprotect.c  Sun Aug 14 15:40:56 1994
+--- linux/mm/mprotect.c Sun Aug 14 02:24:34 1994
+***************
+*** 107,123 ****
+        unsigned long start, unsigned long end,
+        int newflags, int prot)
+  {
+!       int error;
+!       unsigned long tmpflags, tmpprot;
+  
+!       tmpflags = vma->vm_flags;
+!       tmpprot = vma->vm_page_prot;
+        vma->vm_flags = newflags;
+        vma->vm_page_prot = prot;
+!       error = mprotect_fixup_end(vma, end, tmpflags, tmpprot);
+!       if (!error)
+!               error = mprotect_fixup_start(vma, start, tmpflags, tmpprot);
+!       return error;
+  }
+  
+  static int mprotect_fixup(struct vm_area_struct * vma, 
+--- 111,146 ----
+        unsigned long start, unsigned long end,
+        int newflags, int prot)
+  {
+!       struct vm_area_struct * left, * right;
+  
+!       left = (struct vm_area_struct *) kmalloc(sizeof(struct vm_area_struct), GFP_KERNEL);
+!       if (!left)
+!               return -ENOMEM;
+!       right = (struct vm_area_struct *) kmalloc(sizeof(struct vm_area_struct), GFP_KERNEL);
+!       if (!right) {
+!               kfree(left);
+!               return -ENOMEM;
+!       }
+!       *left = *vma;
+!       *right = *vma;
+!       left->vm_end = start;
+!       vma->vm_start = start;
+!       vma->vm_end = end;
+!       right->vm_start = end;
+!       vma->vm_offset += vma->vm_start - left->vm_start;
+!       right->vm_offset += right->vm_start - left->vm_start;
+        vma->vm_flags = newflags;
+        vma->vm_page_prot = prot;
+!       if (vma->vm_inode)
+!               vma->vm_inode->i_count += 2;
+!       if (vma->vm_ops && vma->vm_ops->dup) {
+!               vma->vm_ops->dup(left);
+!               vma->vm_ops->dup(right);
+!       }
+!       insert_vm_struct(current, left);
+!       insert_vm_struct(current, right);
+!       merge_segments(current->mm->mmap);
+!       return 0;
+  }
+  
+  static int mprotect_fixup(struct vm_area_struct * vma, 
+***************
+*** 155,161 ****
+  
+  asmlinkage int sys_mprotect(unsigned long start, size_t len, unsigned long prot)
+  {
+!       unsigned long end;
+        struct vm_area_struct * vma;
+  
+        if (start & ~PAGE_MASK)
+--- 178,184 ----
+  
+  asmlinkage int sys_mprotect(unsigned long start, size_t len, unsigned long prot)
+  {
+!       unsigned long end, tmp;
+        struct vm_area_struct * vma;
+  
+        if (start & ~PAGE_MASK)
+***************
+*** 188,199 ****
+                if (vma->vm_end >= end)
+                        return mprotect_fixup(vma, start, end, newflags);
+  
+!               error = mprotect_fixup(vma, start, vma->vm_end, newflags);
+                if (error)
+                        return error;
+!               start = vma->vm_end;
+!               vma = vma->vm_next;
+!               if (!vma || vma->vm_start != start)
+!                       return -EFAULT;
+        }
+  }
+--- 211,225 ----
+                if (vma->vm_end >= end)
+                        return mprotect_fixup(vma, start, end, newflags);
+  
+!               tmp = vma->vm_end;
+!               error = mprotect_fixup(vma, start, tmp, newflags);
+                if (error)
+                        return error;
+!               start = tmp;
+!               if (vma->vm_end <= start) {
+!                       vma = vma->vm_next;
+!                       if (!vma || vma->vm_start != start)
+!                               return -EFAULT;
+!               }
+        }
+  }
+
+
+------------------------------
+
+From: burley@gnu.ai.mit.edu (Craig Burley)
+Crossposted-To: comp.lang.fortran
+Subject: Re: Survey: who wants f77,cc,c++,hpf for linux?
+Date: 12 Sep 94 16:05:41 GMT
+
+In article <34qjup$4sb@sulawesi.lerc.nasa.gov> mshann@hyperthink.lerc.nasa.gov (Ray Hann) writes:
+
+   So it looks like the only compiler gap in the free software world is
+   FORTRAN.  I heard gf77 was about to enter beta and the only thing
+   it was really missing was 'EQUIVALENCE'.
+
+No.  EQUIVALENCE basically works.  I'm mainly fixing bugs now in
+0.4, which adds basic support for -g, among other things.
+--
+
+James Craig Burley, Software Craftsperson    burley@gnu.ai.mit.edu
+
+------------------------------
+
+From: johan@dombo (Johan Montald)
+Subject: Reading MAC floppies (mtools) ?
+Date: 12 Sep 1994 15:39:14 GMT
+
+Hi,
+
+Does somebody knows of any utilities for reading/writing
+Macintosh formatted floppies similar to the mtools for
+MS-DOS formatted floppies ?
+
+Regards,
+
+Johan Montald
+______________________________________________________________
+Johan Montald                                                /
+Customer Representative                                     ///
+  Computer Associates International Belgium                /// /
+  Woluwelaan 34 B13                                       /// / /
+  1200 Brussels                                          ///// / /
+  Belgium                                               ///// / / /
+email: johan@ingres.com                                /////// / / /
+phone: +32-2/773.28.11  ext 865                       ///////// / / /
+fax  : +32-2/762.73.59                               ///////////// / /
+____________________________________________________///////////////////.
+
+God is real, unless declared integer
+
+------------------------------
+
+Crossposted-To: comp.lang.c
+From: fred@genesis.demon.co.uk (Lawrence Kirby)
+Subject: Re: Alpha Linux
+Reply-To: fred@genesis.demon.co.uk
+Date: Mon, 12 Sep 1994 12:34:24 +0000
+
+In article <KJETILHO.94Sep10153821@mnemosyne.uio.no>
+           kjetilho@mnemosyne.uio.no "Kjetil Torgrim Homme" writes:
+
+>+--- Richard Coleman:
+>| I've always thought that C should have some way of letting you
+>| decided how many bytes to use for your computation.
+>
+>I once saw someone on Usenet suggest this convention:
+>
+>  int8, int16, int32, ...:
+>     Variables that should be exactly this size.
+
+Bad idea since there is no guarantee that these sizes are available to
+an implementation so they are inherently nonportable and not particularly
+useful.
+
+>  int8u, int16u, int32u, ...:
+>     Variables that can be larger to increase speed. Many machines
+>     would have a 32-bit int16u.
+
+You're just defining int16u to be precisely what plain int is. The only
+useful one is int32u which I would just call int32. And I would define it
+as 'the smallest type the implementation can reasonably support which can
+represent the entire range -2147483647 to 2147483647'.
+
+-- 
+=========================================
+Lawrence Kirby | fred@genesis.demon.co.uk
+Wilts, England | 70734.126@compuserve.com
+=========================================
+
+------------------------------
+
+From: iialan@iifeak.swan.ac.uk (Alan Cox)
+Subject: Re: Multiprocessing Pentium Systems
+Date: Mon, 12 Sep 1994 15:10:11 GMT
+
+In article <HUGH.94Sep11203646@hugh.cosc.canterbury.ac.nz> hugh@hugh.cosc.canterbury.ac.nz (Hugh Emberson) writes:
+>The easy way is the way that SunOS 4.1.3 does it, or is rumoured to do
+>it.  Allegedly 4.1.3 has a single spin lock around the entire kernel, so
+>that only one processor can be executing inside the kernel at any time.
+
+I don't know about SunOS but it's how several systems do it. The syscall()
+entry point from a process not on CPU #0 puts the process into a
+sleeping-in-kernel state and the process then gets rescheduled into
+running-in-kernel state only by CPU #0 (which looks for these first).
+
+Alan
+
+
+-- 
+  ..-----------,,----------------------------,,----------------------------,,
+ // Alan Cox  //  iialan@www.linux.org.uk   //  GW4PTS@GB7SWN.#45.GBR.EU  //
+ ``----------'`----------------------------'`----------------------------''
+
+------------------------------
+
+From: rsalz@uunet.uu.net (Rich Salz)
+Crossposted-To: news.software.b
+Subject: Re: News Spool File System - new filesystem type??
+Date: 12 Sep 1994 13:23:42 -0400
+
+> But the idea of building an INN that uses a 
+>well defined database API to access news and control files
+>makes a lot of sense.
+
+I think I'm flattered that INN is becoming a generic term. :-)
+
+HOWEVER:  while what is being talked about is interesting, and might even
+get better performance and (I'm not holding my breath on these last two)
+be portable and free, >>it won't be INN.<<
+
+I think the term "news system" is the one to use.
+        /r$
+
+------------------------------
+
+From: ralphs@halcyon.halcyon.com (Ralph Sims)
+Crossposted-To: comp.os.linux.help
+Subject: Re: Help with development using vi.
+Date: 12 Sep 1994 14:03:03 GMT
+
+bpacilio@reston.rst.inri.com (Bill Pacilio) writes:
+
+>I use the elvis/vi editor to do my development work. On a unix system you have
+>the capability to cut and paste using the mouse. This does no seem to work
+>under Linux. I checked out the man pages and looked for a FAQ but found no
+>reference. Can someone direct me to a reference or tell me if the editor can be
+>configured this way
+
+Grab the selection package, re-compile the kernel with selection enabled,
+and you're on your way.
+
+
+------------------------------
+
+Crossposted-To: comp.dcom.servers
+From: jc@crosfield.co.uk (Jerry Cullingford)
+Subject: Re: Homemade Terminal Server cheap
+Date: Mon, 12 Sep 1994 14:27:43 GMT
+
+In article <34tn8o$jp1@ronin.mindspring.com> cmattern@mindspring.com writes:
+>: Cyclades ad in Linux Journal #5 page 6 says;
+>:       "Order Now Just $99.- 8 ports $399.- 16 ports"
+>
+>The ad also specifies that that price is for first time resellers. I
+>suspect there are a few strings but the ad is, IMHO, very deceptive,
+>especially coming as it does in something that is more of a user/hacker
+>mag than a trade journal for VARs.
+
+Elsewhere in the most recent issue, there's another ad from a reseller,
+selling the 8 port version for $139. I believe that's a promotional pric
+until the end of the month. I'm trying to get one to work in my system
+at the moment; so far dip appears to be talking via the card to the modem
+OK, and can get it to dial - and picks up the CONNECT message fine, but
+nothing shows up from the system at the far end. Using a normal 16450 serial
+port works fine - wierd. I'll have to do some more experiments :-).
+-- 
++------------------------------------------------------------------+     |
+| Jerry Cullingford  #include <std.disclaimer> +44 442 230000 x3875|   ,-|--
+| jc@crosfield.co.uk jc@selune.demon.co.uk  jerry@shell.portal.com |   \_|__
++-----(Work)--------------(Home)--------------(another alternate)--+ \___/
+
+------------------------------
+
+Crossposted-To: comp.dcom.servers
+From: jc@crosfield.co.uk (Jerry Cullingford)
+Subject: Re: Homemade Terminal Server cheap
+Date: Mon, 12 Sep 1994 14:30:20 GMT
+
+In article <1994Sep9.104659.15721@phzzzt.atww.org> mfaurot@phzzzt.atww.org (Michael Faurot) writes:
+>William (billw@glare.cisco.com) wrote:
+>
+>: 1) MSRP for the 16 port card is over $700 apiece - I don't know where
+>:    the original poster got $400 for 16 ports.  (MSRP of 8 port cards
+>:    was over $400.)  Cyclade also sells a full "terminal server", 16 ports
+>:    for (barely) under $2000...
+>
+>I just bought an 8-port card directly from Cyclades and it was only $228.
+
+Hmm; I bought mine from a reseller advertising in LJ for $139 :-)
+
+
+
+-- 
++------------------------------------------------------------------+     |
+| Jerry Cullingford  #include <std.disclaimer> +44 442 230000 x3875|   ,-|--
+| jc@crosfield.co.uk jc@selune.demon.co.uk  jerry@shell.portal.com |   \_|__
++-----(Work)--------------(Home)--------------(another alternate)--+ \___/
+
+------------------------------
+
+From: badics@rutcor.rutgers.edu (Tamas Badics)
+Crossposted-To: comp.os.linux.help
+Subject: Re: Why I cannot mount a PhotoCD on Mitsumi ?
+Date: 12 Sep 1994 10:39:49 -0400
+
+jeffpk@netcom.com (Jeff Kesselman) writes:
+
+>Boy, after all that info I put out, I have to admit that THIS question 
+>I'm not 100% sure of... mostly 'cause I've never had to do it (all my 
+>CD-ROM programming has been on dedicated platforms such as C-I, 3DO, etc...)
+
+>Why don't you tell us exactly what you are doing, and where it is 
+>failing?  Are you mounting the CD-ROM using Linux mount?  Does it mount 
+>successfully or error out?
+
+>We may get into details that will need the trained eye of someone who 
+>actually knows the innards of the CD-ROM drivers under Linux but, 
+>technically and according to the standards, you SHOULD be able to mount a 
+>Photo-CD and see its files.
+
+>CD type discs can have multiple 'tracks'. On a yellow CD-ROM, the data is 
+>all in track 0.  I assume Photo-CD by definition would HAVE to be the same...
+
+
+Jeff, 
+
+Here it is what happens. I use Linux 1.0.9 (Slackware 2.0) and usually I mount
+CD-s with the "mount -t iso9660 /dev/cdrom /cdrom" command. It works
+for data and audio CD-s. Now I tried the same with two PhotoCD-s, and
+got the usual uninformative errormessage:
+"mount: wrong fs type, /dev/cdrom already mounted, /cdrom busy, or other error"
+
+Which could mean anything... I guess thats it. What is annoying me is that 
+I can read the PhotoCD in MS-DOS, and I have to copy the 4Meg imagefiles to
+my Harddisk to be able to see them...
+
+I also sent mail to the guy who wrote mcd.c, but no reply yet. (I admit, my
+mail was down for a couple of days too.)
+Also, someone just wrote that the mcd.c is not prepared for PhotoCD-s yet :-(
+
+Thanks for any help.
+
+        Tamas
+
+------------------------------
+
+From: badics@rutcor.rutgers.edu (Tamas Badics)
+Crossposted-To: comp.os.linux.help
+Subject: Re: Why I cannot mount a PhotoCD on Mitsumi ?
+Date: 12 Sep 1994 10:42:38 -0400
+
+Eberhard_Moenkeberg@p27.rollo.central.de (Eberhard Moenkeberg) writes:
+
+
+>Hello Tamas Badics and all others,
+
+>on 07.09.94 Tamas Badics wrote to All in USENET.COMP.OS.LINUX.HELP:
+
+>TB> Is the PhotoCD compatibility missing from the mcd.c driver?
+
+>Yes.
+
+>Greetings ... Eberhard
+
+IF this is the case, do you know anybody who is capable to add the neede code?
+(I am illiterate in CD-ROMs, but would like to see my pictures under Linux)
+
+Thanks,
+        Tamas
+
+------------------------------
+
+From: mueller@rbg.informatik.th-darmstadt.de (Klaus Mueller)
+Subject: IIC (I^2C) (HP-HIL) Bus device driver wanted
+Date: 12 Sep 1994 16:48:58 GMT
+
+Hi,
+
+since I would like to add an HP-HIL-Keyboard to my Linux-PC there is the
+question:
+
+Is there a device-driver for HP-HIL?
+
+HP-HIL is basicly an IIC-bus (I^2C). So has someone already written a
+driver for this bus. Preferably it should be possible to use the
+IIC-Keyboard instead of the standard one.
+
+Bye, thanks in advance
+        Klaus
+
+--
+Klaus M"uller (mueller@rbg.informatik.th-darmstadt.de)  GCS(2.1) d? H-- s+/--
+!g p2+ !au a- w v C+(++++) UHL++/++++ P+ L++ 3 E@ N++>+++ K- W M+ !V -po+ Y+ 
+t- !5 !j R+ G? tv- b++++ !D !B e++(+++/*) u h!* f?/+ r++ n- x+     IRC: loren 
+
+------------------------------
+
+From: Hamish.Macdonald@bnr.ca (Hamish Macdonald)
+Crossposted-To: comp.os.linux.help
+Subject: Re: Status of Mac Linux & PPC Linux?
+Date: 12 Sep 1994 14:54:25 GMT
+
+>>>>> I wrote:
+
+>> I haven't heard any progress reports about the Linux/68k port to
+>> the Mac for a while.  I understand that getting information about
+>> the Macintosh hardware is difficult.
+
+>>>>> sobiloff@mail.lap.umd.edu (Blake Sobiloff) wrote:
+
+Blake> No more difficult that tracking down information about Linux;
+Blake> ftp.support.apple.com has lots of information in /dts/mac/*,
+Blake> and you can always buy a copy of "d e v e l o p" for $10 and
+Blake> get a CD-ROM full of tech docs.
+
+Then perhaps it's the standard problem then:
+
+  Everybody is sitting around waiting for someone else to do the work,
+  instead of doing it themselves, if they really want it.
+
+------------------------------
+
+From: vinberg@cc.Helsinki.FI (Olli Vinberg)
+Crossposted-To: comp.os.linux.help
+Subject: Re: Help with development using vi.
+Date: 12 Sep 1994 22:07:07 +0300
+Reply-To: Olli Vinberg <vinberg@cc.helsinki.fi>
+
+In article <351brt$366@speedy.inri.com>,
+Bill Pacilio <bpacilio@reston.rst.inri.com> wrote:
+>I use the elvis/vi editor to do my development work. On a unix system you have
+>the capability to cut and paste using the mouse. This does no seem to work
+>under Linux. I checked out the man pages and looked for a FAQ but found no
+>reference. Can someone direct me to a reference or tell me if the editor can be
+>configured this way
+
+Get a better vi. nvi from ftp.cs.berkeley.edu (if I remember the
+address correctly) is a much better vi than elvis. (And let's you
+cut&paste under X, which is the exact reason why I dumped elvis)
+
+-- 
+=======================================================================
+Olli Vinberg                \  Our OS who art in CPU, UNIX be thy name.
+vinberg@cc.helsinki.fi        \  Thy programs run, thy syscalls done,
+http://www.helsinki.fi/~vinberg \  in kernel as it is in user!
+
+------------------------------
+
+From: wpp@marie.physik.tu-berlin.de (Kai Petzke)
+Crossposted-To: comp.os.linux.help,comp.os.linux.misc,comp.os.linux.admin
+Subject: Re: Slow curses - is there a better/faster curses?
+Date: 12 Sep 94 15:09:09 GMT
+
+jamesd@teleport.com (James Deibele) writes:
+
+>Console output under Linux was very quick and I'm sure X performance is
+>pretty good.  But curses performance is a little sluggish and adding
+>lines near the bottom of the screen is a real killer - curses seems to
+>clear the screen with blank lines <then> adds the new text.
+
+What do you mean?  Elvis performance under X or elvis performance on
+console or curses performance under X/console?
+
+Elvis does not use curses, it has its own terminal interface.  This is
+*very* fast on Linux the console.  However, in an X-Term, scrolling is
+very slow when you do not have accelerated video, and that affects the
+insertion and deletion of lines with elvis.
+
+
+
+Kai
+-- 
+Kai Petzke                      | How fast can computers get?
+Technical University of Berlin  |
+Berlin, Germany                 | Sol 9, of course, on Star Trek.
+wpp@marie.physik.tu-berlin.de   |
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

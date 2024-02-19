@@ -1,0 +1,608 @@
+From:     Digestifier <Linux-Development-Request@senator-bedfellow.mit.edu>
+To:       Linux-Development@senator-bedfellow.mit.edu
+Reply-To: Linux-Development@senator-bedfellow.mit.edu
+Date:     Sat, 15 Oct 94 19:13:06 EDT
+Subject:  Linux-Development Digest #313
+
+Linux-Development Digest #313, Volume #2         Sat, 15 Oct 94 19:13:06 EDT
+
+Contents:
+  Re: Shared Libs: working toward a permanent solution? (Eric Youngdale)
+  Re: ext2fs vs. Berkeley FFS (Peter Mutsaers)
+  Re: Anyone working on improving NFS? (Bill Heiser)
+  Re: 1.1.53 Wont compile AHA152x.c (H.J. Lu)
+  serial line problem (Joerg Wedeck)
+  Re: ypbind didn't work (Dominik Kubla)
+  Re: Kernel Patch 1.1.54: Make dep failed: File missing (Mark Lord)
+  Drivers for DPT SCSI available ? (Boon Chong Benjamin Low)
+  Re: insmod drv_hello.o gives "___moddi3 undefined" (Christopher Gori)
+  Re: 8-bit colour ANSI and ncurses (Rasmus Lerdorf)
+  Re: LINUX Logical volumes (Jay Ashworth)
+  Re: Single host firewalling (Jay Ashworth)
+  Re: PGP for Linux?? (Jon Freivald)
+  Re: Linux Mud (Dirk Weigenand)
+  Re: We a FAQ: Linux vs. *BSD!!! (Jordan K. Hubbard)
+  fsync doesn't work on umsdos file systems (Marty Leisner 25733)
+  Re: Serious Bug In The Networking Code (Daniel Tran)
+  Re: A badly missed feature in gcc (Eric V. Smith)
+  Re: ext2fs vs. Berkeley FFS (H. Peter Anvin)
+
+----------------------------------------------------------------------------
+
+From: eric@aib.com (Eric Youngdale)
+Subject: Re: Shared Libs: working toward a permanent solution?
+Date: Wed, 12 Oct 1994 22:09:41 GMT
+
+In article <hpa.21d10000.Just.say.no.to.DOS@ahab.eecs.nwu.edu>,
+H. Peter Anvin <hpa@nwu.edu> wrote:
+>Actually, the selector could be prepared by the kernel at library load
+>time (at the same time as the __libbase variable is initialized), and
+>all that needs to be done at entry time is loading the selector into
+>the appropriate register (9 cycles on 486, 19 on 386).
+
+        In theory this could be done, I suppose.  It would be a horrible kluge,
+I think.  I would like to keep the implementation close to what is used on
+other i386 Unix platforms, and segment selectors are not in the picture there.
+For one thing, it would require patches to gcc to generate the new code, and it
+would require that we invent new relocation types and correctly handle these in
+gas and ld.  Finally, the dynamic linker would have to initialize segment
+descriptors in the ldt for each shared image that is use.  As it is with ELF,
+we are leveraging off of the efforts of people who would like to use gcc/gas/ld
+on SVr4 systems.
+
+>How does the current PIC code find out where the entrypoint is,
+>incidentally (i.e. how does the user code call the library)?
+
+        All of the symbols are resolved at runtime.  When the binary starts up,
+control is passed to the dynamic linker whose job it is to locate and load all
+of the shared libraries that are required.  Then it performs relocations, which
+means that it essentially connects the application to the shared library.  The
+dynamic loader has the overall picture, since it knows the VMA where each
+shared library was loaded into memory, and it picks apart the .hash, .dynsym
+and .rel.* sections and does the right thing.  Incidentally, the default is to
+use lazy symbol binding which means that .plt entries are not initialized at
+startup time, so that once you call a function for the first time the dynamic
+linker is called instead.  The dynamic linker looks up the actual address of
+the requested function, fixes the .plt entry and then calls the function so
+that the original invocation works correctly.  The idea is that you do not
+waste a lot of time initializing a lot of .plt entries when you may only use
+a fraction of them.
+
+        Again, if it can be demonstrated that the performance hit is unacceptable,
+then I believe that it is possible to implement something much more within the
+framework of PIC ELF which would not require that we give up the %ebx register.
+
+-Eric
+
+
+------------------------------
+
+From: plm@atcmp.nl (Peter Mutsaers)
+Subject: Re: ext2fs vs. Berkeley FFS
+Date: Mon, 10 Oct 1994 22:26:52 GMT
+
+>> On 10 Oct 1994 19:04:18 GMT, hstrong@eng1.uconn.edu (Hugh Strong) said:
+
+  HS> : So the only way to go is to create a directory with files in it that
+  HS> : belong together. It has been that way since the beginning. What is
+  HS> : wrong with that.
+
+  HS> Everything, if you wish to give files attributes.
+  HS> UNIX programs read and write *files*, not directories.
+  HS> This *would* break existing code, if we were to suddenly start 
+  HS> using separate directories to store little bits of fluff associated
+  HS> with each file.  Forks are for storing information that pertains
+  HS> to a particular file, not for keeping separate but related
+  HS> data sets together in one large file.
+
+Whatever notation you choose, whether directories, or file:ICON etc.,
+your programs must be adapted to use it. Except, when you use
+directories, existing probrams such as 'cp' can still be used to
+access the seperate parts of a 'fork'.
+
+  HS> Really, keeping everything the way it was in My Father's Time for
+  HS> the pure simple joy of it is not a good idea.
+
+The suggestion given before is no more than 'syntactic sugar' I
+think. You have a file on a different filesystem that is composite
+somehow. There are several ways to map that into the Unix
+filesystem. I would choose the mapping that requires no extension in
+the current kernel. User programs can always put a layer above this
+and shield the details for higher levels.
+
+  HS> : It is basic in the Unix philosophy that files are untyped and that the
+  HS> : kernel does not care what is in the file. Adding such things is
+  HS> : completely against the Unix way of thinking.
+
+  HS> Forks are untyped and unstructured as well.  Nothing should prevent
+  HS> you from writing any arbitrary chunk of data into a fork, except
+  HS> lack of priveledges.  
+
+You have one sequential stream of bytes, a file. If you have more
+streams of bytes, (so called forks apparently) you have more
+files. Either in a directory, or with different extensions (like the
+*.pag an *.dir files from dbm). It seems completely useless to me to
+extend the existing semantics of the system calls for this.
+-- 
+Peter Mutsaers                  |  AT Computing bv,  P.O. Box 1428,
+plm@atcmp.nl                    |  6501 BK  Nijmegen, The Netherlands
+tel. work: +31 (0)80 527248     |
+tel. home: +31 (0)3405 71093    |  "... En..., doet ie het al?"
+
+------------------------------
+
+From: bill@bhhome.ci.net (Bill Heiser)
+Subject: Re: Anyone working on improving NFS?
+Date: 15 Oct 1994 14:44:19 GMT
+
+Amrik Thethi (at@setanta.demon.co.uk) wrote:
+: In article <CxJC8C.7ML@acsu.buffalo.edu> stock@cs.buffalo.edu (Matthew D Stock) writes:
+: >Hi.  Is anyone currently working on improving NFS under Linux?  If I
+: The latest kernels (> 1.1.50 I think) have a simple static 5 block cache
+: in the NFS client. This improves average performance significantly (~50%).
+
+I found that by increasing the wsize and rsize to 8192, performance is
+made quite reasonable even with older kernels (i.e. 1.1.4x).   However
+my biggest problem with LINUX NFS is that there is no File Locking 
+done (i.e. rpc.lockd in SunOS).  So, for example, I can't NFS mount
+my mail spool directory from another machine - if I do it gets corrupted.
+
+-- 
+Bill Heiser:    bill@bhhome.ci.net,  heiser@world.std.com
+
+------------------------------
+
+From: hjl@nynexst.com (H.J. Lu)
+Subject: Re: 1.1.53 Wont compile AHA152x.c
+Date: 15 Oct 1994 11:48:24 GMT
+
+Earl A. Stutes (estutes@netcom20.netcom.com) wrote:
+
+: >> Subject says it all. I get a GCC internal error on this file now.
+
+: >> Gcc2.6.0
+
+: This has been going on for several pathc levels.  I had the problem
+: back when the patch level was about 1.1.40 or so.  every now and then,
+: I try to build the whole kernel with 2.6.0 and it breaks on aha152x.c.
+: I switch my gcc symbolic link to 2.5.8, delete the .o file and finish
+: the build.  So, I am running 1.52 compiled mostly on 2.6.0 with a few
+: modules 2.5.8.  It has been working fine for me.   I could not see
+: anything obvious in aha152x.c that should be causing the problem.
+
+That is a gcc bug. I have said many times that gcc 2.6.0 is too buggy
+to use. If you really want to use gcc 2.6.x, please join the GCC
+channel. Gcc 2.6.0-941008 compiles 1.1.54 just fine.
+
+H.J.
+
+------------------------------
+
+From: jw@peanuts.informatik.uni-tuebingen.de (Joerg Wedeck)
+Subject: serial line problem
+Date: 15 Oct 1994 14:38:54 GMT
+
+Hi all,
+
+it appears to me that i have a serial line problem with kernel 1.1.54
+on a system with an i468 dx2/66, asus sp3g motherboard, IDE disk + SCSI
+disk, both using the onboard controller, a spea v7 mercury lite pci
+graphics adater and a serial mouse.
+
+when running without dialing out via the second serial everything
+works fine. when dialing out, the system completely hangs after a while,
+i suspect ther is a deadlock somewhere. This especially happens when
+switching  from X to a virtual console or switching back. Does anybody
+have a solution in mind ?
+
+Joerg
+
+--
+==================================+======================================
+Joerg Wedeck                      | E-Mail: jw@peanuts.informatik\
+Universitaet Tuebingen            |             .uni-tuebingen.de
+Lehrstuhl fuer Techn. Informatik  |
+Sand 13                           |
+72076 Tuebingen                   |
+Germany                           |
+==================================+======================================
+       Deswegen bin ich ja Optio, und Du nur Legionaer :-)
+========================================================================+
+
+
+------------------------------
+
+From: kubla@Uni-Mainz.DE (Dominik Kubla)
+Subject: Re: ypbind didn't work
+Date: 14 Oct 1994 06:19:06 GMT
+
+
+Ari Widodo writes:
+
+    First, I would like to say thanks for all whom gave me
+    information about NIS. And I got the yp-client packages
+    and install that. But I canN't run ypbind. 
+   ---
+   /usr/sbin/ypbind 
+   Undefined C library functions:
+           1. light C shared image (Use the real one instead.)
+   ---
+
+     Should I recompile my C library ? Can somebody give me 
+   some explanation for this error ?
+
+No. Each libc binary distribution consists of TWO libc shared images,
+by default called
+
+  /lib/libc.so.<major>.<minor>.<patchlevel>
+  /lib/libc-lite.so.< major>.<minor>.<patchlevel>
+
+The difference between the full-featured and the lite version is that in
+the latter yp, locale and other things. are missing. This is done to fit
+the library on the boot/rootdisk combos.
+
+The error message simply states that either the lite library was installed
+under the name of the augmented version or that the symbolic link
+
+  /lib/libc.so.<major>
+
+points to the lite version. In the first case you will just need to install
+the latest binary release (or compile it yourself if you like). In the
+second case simply run 'ldconfig -v'.
+
+Cheers,
+  Dominik
+--
+===========================================================================
+eMail: Dominik.Kubla@Uni-Mainz.DE    sMail: Dominik Kubla, Lannerstrasse 53
+                                            55270 Ober-Olm, F.R. of Germany
+>>> Save the environment NOW! <<<           ******  European  Union  ******
+
+------------------------------
+
+From: mlord@bnr.ca (Mark Lord)
+Subject: Re: Kernel Patch 1.1.54: Make dep failed: File missing
+Date: 15 Oct 1994 15:03:22 GMT
+
+In article <bart.159.00128658@dunedin.es.co.nz> bart@dunedin.es.co.nz writes:
+<I just patched kernel 1.1.53 and 1.1.54, as far as I could follow it without 
+...
+<gcc: uni_to_437.c: No such file or directory
+...
+<How do I get around this problem??
+
+        mv /usr/src/uni_to_437.c /usr/src/linux/drivers/char
+
+or reapply the patch with the -p0 option:   gunzip <patch54 | patch -p0
+-- 
+mlord@bnr.ca    Mark Lord       BNR Ottawa,Canada       613-763-7482
+
+------------------------------
+
+From: boonlow@malibu.sfu.ca (Boon Chong Benjamin Low)
+Subject: Drivers for DPT SCSI available ?
+Date: 15 Oct 94 14:59:38 GMT
+
+Hey there,
+         Are there any drivers out there for DPT SCSI controller ?
+A long time ago, heard that someone is developing some drivers for the
+card, I lost track of it for quite awhile.
+Can someone update me on whether the drivers are up and ready ?
+And the stability for them under Linux ?
+
+Thanks for your time.
+
+ Ben.
+
+
+------------------------------
+
+From: cgori@isengard.stanford.edu (Christopher Gori)
+Subject: Re: insmod drv_hello.o gives "___moddi3 undefined"
+Date: 14 Oct 1994 00:26:24 GMT
+
+(rantapaa@s6.math.umn.edu (Erik E. Rantapaa)) wrote: 
+
+>I am trying to use the module utilities with the following set up:
+>
+>  kernel version: 1.1.51
+>      cc version: 2.5.8
+>  modules.tar.gz: dated June 27, 1994
+
+Same as you but 1.1.53.
+
+>
+>When attempting to load the sample module dvr_hello.o, however,
+>I get the following error:
+>
+>___moddi3 undefined
+>
+
+Exact same error.  Why?
+
+>Is there something special I need to do when compiling module
+>object files?
+>
+>Here is a list of the symbols in drv_hello.o:
+
+[nm output exactly same as mine deleted]
+
+Any help would be appreciated.
+
+        Chris Gori
+        cgori@isengard.stanford.edu
+
+
+------------------------------
+
+From: rasmus@io.org (Rasmus Lerdorf)
+Subject: Re: 8-bit colour ANSI and ncurses
+Date: 13 Oct 1994 06:42:39 -0400
+
+hpa@ahab.eecs.nwu.edu (H. Peter Anvin) writes:
+
+>Output:
+>       <ESC> ) U
+
+I looked through the console driver source and noticed that 
+<ESC>]11m  does what I want.  ie. show the chars for ascii codes
+<32 and also switches to the first alternate character set.  
+From within ncurses it appears as though attrset(A_ALTCHARSET)
+does the trick.  <ESC>]11m  along with 10, 12, 21,22,24 and 27
+are mode codes I haven't seen before.  They are not in the
+ANSI spec, and they don't look like VT100 sequences to me.
+
+*Rasmus*
+
+------------------------------
+
+From: jra@zeus.IntNet.net (Jay Ashworth)
+Subject: Re: LINUX Logical volumes
+Date: 10 Oct 1994 20:23:22 -0400
+
+killianr@beldin.sun.ac.za (Richelo Killian) writes:
+> Is it posible to create logigal volumes across drives and/or
+> partitions and then mount a single filesystem on that volume? I know it
+> can be done on HP-UX, but I want to do it on my LINUX box?
+
+To clarify, what I believe you're asking about is the ability to create a
+logical filesystem/volume which spans physical volumes, i.e. a 3GB
+filesystem spanning 3 1GB drives.
+
+No, I don't believe anyone's done this yet.  Other commercial Unices which
+allow this include Data General's DG-UX, where I first saw the feature.
+It _is_ nice...  but it would be murder to hack into the kernel, I
+suspect.
+
+Not a problem of implementation, but of design.
+
+Cheers,
+-- jra
+-- 
+Jay R. Ashworth       High Technology Systems Consulting              Ashworth
+Designer             Linux: The Choice of a GNU Generation        & Associates
+ka1fjx/4                                                       +1 813 790 7592
+jra@baylink.com  "Hey! Do any of you guys know how to Madison?"      NIC: jra3
+
+------------------------------
+
+From: jra@zeus.IntNet.net (Jay Ashworth)
+Subject: Re: Single host firewalling
+Date: 10 Oct 1994 20:28:20 -0400
+
+riku.saikkonen@compart.fi (Riku Saikkonen) writes:
+[ about securing your machine from a network ]
+
+>>If you're talking about MS-Windows, you probably have little to worry
+>>about, provided you don't leave any listener processes up.  Now,
+
+>In Linux, the lazy way out is to kill inetd... (right?)
+
+Almost.
+
+Most network server process on a Unix box are started by inet, but not
+all... noticeable exceptions tend to include your mailer-daemon, and let's
+not forget that big, lovable, X server sitting on port 6000.
+
+Kill inetd, and then do a netstat, and see who's still listening.
+
+Cheers,
+-- jra
+-- 
+Jay R. Ashworth       High Technology Systems Consulting              Ashworth
+Designer             Linux: The Choice of a GNU Generation        & Associates
+ka1fjx/4                                                       +1 813 790 7592
+jra@baylink.com  "Hey! Do any of you guys know how to Madison?"      NIC: jra3
+
+------------------------------
+
+From: jaf@pine.liii.com (Jon Freivald)
+Subject: Re: PGP for Linux??
+Date: Sat, 15 Oct 1994 02:26:06 GMT
+
+mwe@dfw.net wrote:
+: Zack T. Smith (zack@netcom.com) wrote:
+
+: : Can anyone tell me whether PGP (the encyption utility) been ported Linux?
+: : I haven't been able to find it in the archives...
+
+: "since about forever" PGP compiles out-of-the-box under Linux.
+: grab a copy of the source code and type 'make'.
+
+Actually, type 'make linux'.
+
+------------------------------
+
+From: weigo@asi09.rz.uni-leipzig.de (Dirk Weigenand)
+Subject: Re: Linux Mud
+Date: 15 Oct 1994 15:33:48 GMT
+
+Try Amylaars driver available from mud.uni-muenster.de. It's a driver
+for LP-Muds capable running in compat and native mode. There is also
+a mudlib available at that adress. This driver is developed on linux
+and hence runs without a flaw. You should also install byacc since
+yacc/bison complain about illformed rules in the grammar file used.
+
+Have fun,
+
+Dirk
+
+------------------------------
+
+From: jkh@freefall.cdrom.com (Jordan K. Hubbard)
+Crossposted-To: comp.os.386bsd.development
+Subject: Re: We a FAQ: Linux vs. *BSD!!!
+Date: 15 Oct 1994 05:12:01 GMT
+
+In article <37mflh$f6s@unix1.cc.uop.edu> hughes@napa.eng.uop.edu (Ken Hughes) writes:
+   Normally I would agree, but in this case I doubt that ignoring the
+   questions will stop them from being asked.  New people come into these
+
+Read what I said more carefully, please.  I didn't propose to stop the
+questions, I simply proposed to stop the answers.  The questions will
+keep coming in, but will "quench" themselves far more quickly if
+people simply ignore them.  We're always going to have this question,
+there's no doubt, so the best we can do is try to minimize the amount
+of damage it does.
+
+   386BSD-1.0", so please don't start THAT thread again either).  IMHO, the
+   only chance for resolving this issue would be for someone to sit down and
+   compile a list of features that shows which OS has what and which doesn't.
+
+I don't agree.  As you seem to concur, the FAQ will be out of date and
+essentially useless far too rapidly to make the effort of writing it
+anything but a wasted one.
+
+                                                Jordan
+
+------------------------------
+
+From: leisner@batman (Marty Leisner 25733)
+Subject: fsync doesn't work on umsdos file systems
+Reply-To: leisner@sdsp.mc.xerox.com
+Date: Fri, 14 Oct 1994 21:21:59 GMT
+
+I'm running Keith Bostic's nvi (1.34) on linux...
+
+I have kernel 1.1.52
+
+It doesn't an fsync when it writes the file...but fsync doesn't
+work on umsdos file systems (but it works on msdos file systems...)
+
+I gets an error of
+"invalid argument"...
+
+
+--
+marty
+leisner@sdsp.mc.xerox.com  
+Member of the League for Programming Freedom
+C++ is to C as lung cancer is to lung.
+
+------------------------------
+
+From: dtran@emelnitz.ucla.edu (Daniel Tran)
+Crossposted-To: comp.os.linux.admin,comp.os.linux.help
+Subject: Re: Serious Bug In The Networking Code
+Date: Mon, 10 Oct 1994 17:51:46 GMT
+
+In article <37a37b$a2d@Venus.mcs.com> munster@MCS.COM (Jerry Ablan) writes:
+>: There appears to be a serious bug in some of the networking code
+>: supplied with linux/slackware, that causes the computer to get
+>: 'network unreachable' after approximately 3 minutes of perfect
+>: functioning.  I have no idea what the problem might be, and if
+>: somebody tell me where to look, I can try to figure out what versions
+>: my drivers etc. are.  Here are the configurations I ve gotten this
+>: problem with:
+
+>I've noticed that this occurs when you run routed. Do not run routed and see
+>if it still happens.
+
+>-- Jerry
+
+Would running running routed with -q parameter help.
+
+Daniel Tran - dtran@emelnitz.ucla.edu
+
+------------------------------
+
+From: esmith@access1.digex.net (Eric V. Smith)
+Subject: Re: A badly missed feature in gcc
+Date: 14 Oct 1994 03:20:54 -0400
+
+I too will suspend my good judgement and jump in on this one.
+
+In article <37julm$59t@nz12.rz.uni-karlsruhe.de>,
+Thomas Koenig <Thomas.Koenig@ciw.uni-karlsruhe.de> wrote:
+>Microsoft et.al.  are trying to pull the same tricks on the users that
+>IBM got away with a long time.  When people with this kind of mindset
+>collide with the portability fanatics from UNIX systems, you get a
+>culture clash ;-)
+>
+
+I believe "portability fanatics from UNIX systems" to be an oxymoron.  In
+general, I find the Unix crowd to be about the least concerned with (or
+aware of) portability of any group I've seen.
+
+From "integers are pointers" to "pointers to data can hold pointers to
+functions" to "ints are 32 bits", this group of programmers has written
+some of the _least_ portable code I've seen.
+
+My, $0.02, and I apologize in advance for giving into my temptation
+to follow up on this tired thread.
+
+Eric.
+
+------------------------------
+
+From: hpa@ahab.eecs.nwu.edu (H. Peter Anvin)
+Subject: Re: ext2fs vs. Berkeley FFS
+Reply-To: hpa@nwu.edu (H. Peter Anvin)
+Date: Mon, 10 Oct 1994 17:51:12 GMT
+
+Followup to:  <37bpse$ue@newsy.ifm.liu.se>
+By author:    peter@ifm.liu.se (Peter Eriksson)
+In newsgroup: comp.os.linux.development
+> 
+> >The icon (for a window manager) for the file could be
+> >accessed by the following call.
+> 
+> >             fd1 = open("MyDataFile:ICON",O_RDONLY);
+> 
+> If one were to implement something like this, then it would be much
+> better to use the "/" character to separate the filename and the subforks...
+> 
+> Just a little thought.
+> 
+
+And, incidentally, it works without kernel mods!!  (A multifork file
+is *exactly* the same as a directory!)
+
+        /hpa
+-- 
+INTERNET: hpa@nwu.edu             --- Allah'u'abha ---
+IBM MAIL: I0050052 at IBMMAIL     HAM RADIO:   N9ITP or SM4TKN
+FIDONET:  1:115/511 or 1:115/512  STORMNET:    181:294/1 or 181:294/101
+"NT is not a bad thing if I don't have to use it..."  -- xmsb@borland.com
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

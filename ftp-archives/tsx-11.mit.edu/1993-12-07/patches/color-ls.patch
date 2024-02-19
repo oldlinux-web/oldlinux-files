@@ -1,0 +1,620 @@
+I took the color-ls patch from sunsite.unc.edu, and applied it to the ls
+from GNU fileutils 3.4. This patch, for those who are not familiar with
+it, provides colorization of ls output according to file permissions and
+type.  From there, I made modifications to add the following features:
+
+    -- Text attributes (normal, bold, flashing, etc.) are now supported.
+    -- The program checks to see if output is to a tty, and
+       automatically disables colorization if it is not. Any pipes
+       that take input from ls will get normal, non-colorized input.
+    -- Support has been added for colorization by filename extension.
+       For instance, any filenames ending in ".tgz", ".taz", ".Z", 
+       ".z", ".zip", ".lzh", etc. will show up in bold red.
+
+Things still to do:
+
+    -- It would be nice if this used the ls from fileutils 3.5, but the
+       old patch wouldn't work with it and I didn't want to start from
+       scratch.  But someday...
+       In the meantime, the source needed for this patch is the GNU 
+       fileutils version 3.4.  I found it at nic.funet.fi.
+
+    -- If I could figure out how to detect the filesystem type of the
+       directory being listed, it would be nice to disable executable
+       detection for MS-DOS partitions, since all files appear with
+       -rwxr xr x permissions on those, and so they all wind up being
+       colorized as executables. (Except where filename extensions are
+       detected. Those will always take precedence.)
+
+Anyway, the new, improved patch follows. It's currently set up with the
+colors I like to use, but the internal documentation explains how to
+change them to whatever you like. I recommend compiling the program so
+that it defaults to color output. You can always use the "-f" flag to
+disable it. You'll have to add a couple flags to the DEFS statement in
+the Makefile to get it to work. I recommend using -DCOLOR=1 -DEIGHTBIT=1
+
+Have fun!
+
+---
+Patrick Volkerding
+volkerdi@mhd1.moorhead.msus.edu
+bf703@cleveland.freenet.edu
+
+
+*** ls.c~	Thu Oct 15 03:08:47 1992
+--- ls.c	Tue May 18 20:44:32 1993
+***************
+*** 32,37 ****
+--- 32,55 ----
+  
+  /* Written by Richard Stallman and David MacKenzie. */
+  
++ /* 8-bit and color support by Peter Anvin <hpa@nwu.edu>
++ 
++    Color support based on original patches by Greg Lee
++                                               <lee@uhunix.uhcc.hawaii.edu>
++ 
++    Display attributes support, auto-disable for pipes, and colors according to
++    file suffixes added by Patrick Volkerding (volkerdi@mhd1.moorhead.msus.edu)
++ 
++    These features are conditionalized.  To enable them, add the following
++    to the DEFS statement in the main level Makefile:
++ 
++    -DEIGHTBIT=0     To enable 8-bit support (default OFF, activate with -8)
++    -DEIGHTBIT=1     To enable 8-bit support (default ON, deactivate with -7)
++ 
++    -DCOLOR=0        To enable color support (default OFF, activate with -f)
++    -DCOLOR=1        To enable color support (default ON, deactivate with -f)
++ */
++ 
+  #ifdef _AIX
+   #pragma alloca
+  #endif
+***************
+*** 50,55 ****
+--- 68,88 ----
+  #define S_IEXEC S_IXUSR
+  #endif
+  
++ /* The following handles the conditionalizations of the 8-bit and
++    color options */
++ 
++ #ifndef COLOR
++ #define COLOR_DEFAULT 0
++ #else
++ #define COLOR_DEFAULT COLOR
++ #endif
++ 
++ #ifndef EIGHTBIT
++ #define EIGHTBIT_DEFAULT 0
++ #else
++ #define EIGHTBIT_DEFAULT EIGHTBIT
++ #endif
++ 
+  /* Return an int indicating the result of comparing two longs. */
+  #ifdef INT_16_BITS
+  #define longdiff(a, b) ((a) < (b) ? -1 : (a) > (b) ? 1 : 0)
+***************
+*** 106,111 ****
+--- 139,147 ----
+  void print_many_per_line ();
+  void print_name_with_quoting ();
+  void print_type_indicator ();
++ #ifdef COLOR
++ void print_colorized_name ();
++ #endif
+  void print_with_commas ();
+  void queue_directory ();
+  void sort_files ();
+***************
+*** 243,248 ****
+--- 279,290 ----
+  
+  int print_block_size;
+  
++ #ifdef COLOR
++ /* Nonzero means use color for types.  -f toggles. */
++ 
++ int print_with_color;
++ #endif
++ 
+  /* Nonzero means show file sizes in kilobytes instead of blocks
+     (the size of which is system-dependant).  -k */
+  
+***************
+*** 343,348 ****
+--- 385,415 ----
+  
+  int format_needs_stat;
+  
++ #ifdef EIGHTBIT
++ /* If zero, we consider all characters above 0x7E as nongraphic chars.
++    Default is to consider 0xA1 to 0xFF as graphic (ISO 8859).
++    -7 disables, -8 enables. */
++ 
++ int bit8_ok;
++ #endif
++ 
++ /* This function sees if the second argument matches the last characters of the
++    first one. It is used to see whether we should colorize-by-file-suffix */
++ 
++ char match (name, suffix)
++ char *name;
++ char *suffix;
++ {
++     char *namepoint;
++     int offset;
++     offset = strlen(name) - strlen(suffix);
++     if ( offset > -1 ) {
++         namepoint = &name[offset];
++         if (!strcmp(namepoint, suffix)) return 1;
++     }
++     return 0;
++ }
++ 
+  /* The exit status to use if we don't get any fatal errors. */
+  
+  int exit_status;
+***************
+*** 367,373 ****
+    format_needs_stat = sort_type == sort_time || sort_type == sort_size
+      || format == long_format
+      || trace_links || trace_dirs || indicator_style != none
+!     || print_block_size || print_inode;
+  
+    nfiles = 100;
+    files = (struct file *) xmalloc (sizeof (struct file) * nfiles);
+--- 434,444 ----
+    format_needs_stat = sort_type == sort_time || sort_type == sort_size
+      || format == long_format
+      || trace_links || trace_dirs || indicator_style != none
+!     || print_block_size || print_inode
+! #ifdef COLOR
+!       || print_with_color
+! #endif
+! 	;
+  
+    nfiles = 100;
+    files = (struct file *) xmalloc (sizeof (struct file) * nfiles);
+***************
+*** 444,449 ****
+--- 515,529 ----
+    {"sort", 1, 0, 10},
+    {"tabsize", 1, 0, 'T'},
+    {"time", 1, 0, 11},
++ 
++   /* Retain these (as dummy options) even if disabled */
++   {"color", 0, 0, 20},
++   {"colour", 0, 0, 20},
++   {"no-color", 0, 0, 21},
++   {"no-colour", 0, 0, 21},
++   {"7bit", 0, 0, '7'},
++   {"8bit", 0, 0, '8'},
++ 
+    {0, 0, 0, 0}
+  };
+  
+***************
+*** 535,540 ****
+--- 615,626 ----
+    really_all_files = 0;
+    ignore_patterns = 0;
+    quote_as_string = 0;
++ #ifdef COLOR
++   print_with_color = COLOR_DEFAULT;
++ #endif
++ #ifdef EIGHTBIT
++   bit8_ok = EIGHTBIT_DEFAULT;
++ #endif
+  
+    p = getenv ("COLUMNS");
+    line_length = p ? atoi (p) : 80;
+***************
+*** 551,557 ****
+    p = getenv ("TABSIZE");
+    tabsize = p ? atoi (p) : 8;
+  
+!   while ((c = getopt_long (argc, argv, "abcdgiklmnpqrstuw:xABCFI:LNQRST:UX1",
+  			   long_options, (int *) 0)) != EOF)
+      {
+        switch (c)
+--- 637,643 ----
+    p = getenv ("TABSIZE");
+    tabsize = p ? atoi (p) : 8;
+  
+!   while ((c = getopt_long(argc, argv, "abcdfgiklmnpqrstuw:xABCFI:LNQRST:UX178",
+  			   long_options, (int *) 0)) != EOF)
+      {
+        switch (c)
+***************
+*** 573,578 ****
+--- 659,671 ----
+  	case 'd':
+  	  immediate_dirs = 1;
+  	  break;
++ 
++ 	case 'f':
++ 	  /* No effect if color is disabled */
++ #ifdef COLOR
++ 	  print_with_color = 0;
++ #endif
++ 	  break;
+  	  
+  	case 'g':
+  	  /* No effect.  For BSD compatibility. */
+***************
+*** 694,699 ****
+--- 787,806 ----
+  	case '1':
+  	  format = one_per_line;
+  	  break;
++ 
++ 	case '7':
++ 	  /* Dummy option if EIGHTBIT is not defined */
++ #ifdef EIGHTBIT
++ 	  bit8_ok = 0;
++ #endif
++ 	  break;
++ 
++ 	case '8':
++ 	  /* Dummy option if EIGHTBIT is not defined */
++ #ifdef EIGHTBIT
++ 	  bit8_ok = 1;
++ #endif
++ 	  break;
+  	  
+  	case 10:		/* +sort */
+  	  i = argmatch (optarg, sort_args);
+***************
+*** 724,729 ****
+--- 831,848 ----
+  	    }
+  	  format = formats[i];
+  	  break;
++ 
++ 	case 20:		/* --color */
++ #ifdef COLOR
++ 	  print_with_color = 1;
++ #endif
++ 	  break;
++ 
++ 	case 21:		/* --no-color */
++ #ifdef COLOR
++ 	  print_with_color = 0;
++ #endif
++ 	  break;
+  	  
+  	default:
+  	  usage ();
+***************
+*** 1337,1342 ****
+--- 1456,1467 ----
+      }
+  }
+  
++ #ifdef COLOR
++ #define PRINT_COLORIZED(NAME,MODE) print_colorized_name (NAME,MODE)
++ #else
++ #define PRINT_COLORIZED(NAME,MODE) print_name_with_quoting (NAME)
++ #endif
++ 
+  void
+  print_long_format (f)
+       struct file *f;
+***************
+*** 1404,1410 ****
+  
+    printf ("%s ", timebuf + 4);
+  
+!   print_name_with_quoting (f->name);
+  
+    if (f->filetype == symbolic_link)
+      {
+--- 1529,1535 ----
+  
+    printf ("%s ", timebuf + 4);
+  
+!   PRINT_COLORIZED (f->name, f->stat.st_mode);
+  
+    if (f->filetype == symbolic_link)
+      {
+***************
+*** 1411,1417 ****
+        if (f->linkname)
+  	{
+  	  fputs (" -> ", stdout);
+! 	  print_name_with_quoting (f->linkname);
+  	  if (indicator_style != none)
+  	    print_type_indicator (f->linkmode);
+  	}
+--- 1536,1542 ----
+        if (f->linkname)
+  	{
+  	  fputs (" -> ", stdout);
+! 	  PRINT_COLORIZED (f->linkname, f->linkmode);
+  	  if (indicator_style != none)
+  	    print_type_indicator (f->linkmode);
+  	}
+***************
+*** 1468,1474 ****
+  	      break;
+  
+  	    default:
+! 	      if (c > 040 && c < 0177)
+  		putchar (c);
+  	      else
+  		printf ("\\%03o", (unsigned int) c);
+--- 1593,1603 ----
+  	      break;
+  
+  	    default:
+! #ifdef EIGHTBIT
+! 	      if ( (c >= 0x20 && c <= 0x7E) || (bit8_ok && c >= 0xA1 && c <= 0xFF) )
+! #else
+! 	      if (c >= 040 && c < 0177)
+! #endif
+  		putchar (c);
+  	      else
+  		printf ("\\%03o", (unsigned int) c);
+***************
+*** 1476,1482 ****
+--- 1605,1615 ----
+  	}
+        else
+  	{
++ #ifdef EIGHTBIT
++ 	  if ( (c >= 0x20 && c <= 0x7E) || (bit8_ok && c >= 0xA1 && c <= 0xFF) )
++ #else
+  	  if (c >= 040 && c < 0177)
++ #endif
+  	    putchar (c);
+  	  else if (!qmark_funny_chars)
+  	    putchar (c);
+***************
+*** 1504,1510 ****
+      printf ("%*u ", block_size_size,
+  	    convert_blocks (ST_NBLOCKS (f->stat), kilobyte_blocks));
+  
+!   print_name_with_quoting (f->name);
+  
+    if (indicator_style != none)
+      print_type_indicator (f->stat.st_mode);
+--- 1637,1643 ----
+      printf ("%*u ", block_size_size,
+  	    convert_blocks (ST_NBLOCKS (f->stat), kilobyte_blocks));
+  
+!   PRINT_COLORIZED (f->name, f->stat.st_mode);
+  
+    if (indicator_style != none)
+      print_type_indicator (f->stat.st_mode);
+***************
+*** 1537,1548 ****
+      putchar ('*');
+  }
+  
+  int
+  length_of_file_name_and_frills (f)
+       struct file *f;
+  {
+    register char *p = f->name;
+!   register char c;
+    register int len = 0;
+  
+    if (print_inode)
+--- 1670,1804 ----
+      putchar ('*');
+  }
+  
++ #ifdef COLOR
++ 
++ /* ????_COLOR is the ANSI decimal color number for the escape sequence. */
++ /* Here's the lowdown: */
++ /* black=30, red=31, green=32, yellow=33, blue=34, magenta=35, cyan=36 white=37 */
++ /* The ????_ATT codes are graphics functions such as bold, underscore, blink */
++ /* I haven't tried them all so use them at your own risk. Bold (01) does work */
++ /* for sure. */
++ /* these are: off=0, bold=1, underscore=4, blink=5, reverse=7, conceled=8 */
++ 
++ #define DIR_COLOR    "34"
++ #define DIR_ATT      "01"
++ 
++ #define LINK_COLOR   "36"
++ #define LINK_ATT     "01"
++ 
++ #define FIFO_COLOR   "33"
++ #define FIFO_ATT     "00"
++ 
++ #define SOCK_COLOR   "35"
++ #define SOCK_ATT     "01"
++ 
++ #define BLK_COLOR    "33"
++ #define BLK_ATT      "01"
++ 
++ #define CHR_COLOR    "33"
++ #define CHR_ATT      "01"
++ 
++ #define EXEC_COLOR   "32"
++ #define EXEC_ATT     "01"
++ 
++ void
++ print_colorized_name (name, mode)
++      char *name;
++      unsigned int mode;
++ {
++   char *c;
++   char *a;
++ 
++   c = NULL;
++   a = NULL;
++ 
++   if ( print_with_color & isatty(1))
++     {
++       if (S_ISDIR (mode)) {
++ 	c = DIR_COLOR;
++         a = DIR_ATT;
++       }
++ 
++ #ifdef S_ISLNK
++       else if (S_ISLNK (mode)) {
++ 	c = LINK_COLOR;
++         a = LINK_ATT;
++       }
++ #endif
++ 
++ #ifdef S_ISFIFO
++       else if (S_ISFIFO (mode)) {
++ 	c = FIFO_COLOR;
++         a = FIFO_ATT;
++       }
++ #endif
++ 
++ #ifdef S_ISSOCK
++       else if (S_ISSOCK (mode)) {
++ 	c = SOCK_COLOR;
++         a = SOCK_ATT;
++       }
++ #endif
++ 
++ #ifdef S_ISBLK
++       else if (S_ISBLK (mode)) {
++ 	c = BLK_COLOR;
++         a = BLK_ATT;
++       }
++ #endif
++ 
++ #ifdef S_ISCHR
++       else if (S_ISCHR (mode)) {
++ 	c = CHR_COLOR;
++         a = CHR_ATT;
++       }
++ #endif
++ 
++       else if ( S_ISREG (mode)
++ 	       && (mode & (S_IEXEC | S_IEXEC >> 3 | S_IEXEC >> 6))) {
++ 	c = EXEC_COLOR;
++         a = EXEC_ATT;
++       }
++ 
++       if ( S_ISREG (mode) ) {
++         if (match(name,".cmd")|match(name,".com")|match(name,".btm")
++ 	        |match(name,".exe")|match(name,".bat")) {
++             c = EXEC_COLOR;
++             a = EXEC_ATT;
++         } else if (match(name,".tar")|match(name,".tgz")|match(name,".zoo")
++                 |match(name,".arj")|match(name,".taz")|match(name,".lzh")
++                 |match(name,".zip")|match(name,".z")|match(name,".Z")) {
++             c = "31"; /* red */
++             a = "01"; /* bright */
++         } else if (match(name,".jpg")|match(name,".gif")|match(name,".bmp")) {
++             c = "35"; /* magenta */
++   	    a = "01"; /* bright */
++         } else if (match(name,".dll")|match(name,".txt")|match(name,".doc")
++                 |match(name,".sys")|match(name,".drv")|match(name,".ini")) {
++             c = "37"; /* white */
++             a = "00"; /* normal */
++         }
++       }
++ 
++       if (c)
++ 	/* printf("\33[%sm", c); */
++         printf("\33[%s;%sm", a, c);
++     }
++ 
++   print_name_with_quoting(name);
++ 
++   if (c)
++     printf("\33[0m");
++ }
++ 
++ #endif /* COLOR */
++ 
+  int
+  length_of_file_name_and_frills (f)
+       struct file *f;
+  {
+    register char *p = f->name;
+!   register unsigned char c;
+    register int len = 0;
+  
+    if (print_inode)
+***************
+*** 1578,1584 ****
+  	      break;
+  
+  	    default:
+! 	      if (c >= 040 && c < 0177)
+  		len += 1;
+  	      else
+  		len += 4;
+--- 1834,1844 ----
+  	      break;
+  
+  	    default:
+! #ifdef EIGHTBIT
+! 	  if ( (c >= 0x20 && c <= 0x7E) || (bit8_ok && c >= 0xA1 && c <= 0xFF) )
+! #else
+! 	  if (c >= 040 && c < 0177)
+! #endif
+  		len += 1;
+  	      else
+  		len += 4;
+***************
+*** 1798,1813 ****
+  void
+  usage ()
+  {
+!   fprintf (stderr, "\
+! Usage: %s [-abcdgiklmnpqrstuxABCFLNQRSUX1] [-w cols] [-T cols] [-I pattern]\n\
+         [--all] [--escape] [--directory] [--inode] [--kilobytes] [--literal]\n\
+         [--numeric-uid-gid] [--hide-control-chars] [--reverse] [--size]\n\
+         [--width=cols] [--tabsize=cols] [--almost-all] [--ignore-backups]\n",
+! 	   program_name);
+    fprintf (stderr, "\
+         [--classify] [--file-type] [--ignore=pattern] [--dereference]\n\
+         [--quote-name] [--recursive] [--sort={none,time,size,extension}]\n\
+         [--format={long,verbose,commas,across,vertical,single-column}]\n\
+!        [--time={atime,access,use,ctime,status}] [path...]\n");
+    exit (1);
+  }
+--- 2058,2098 ----
+  void
+  usage ()
+  {
+!   fprintf (stderr,"\
+! Usage: %s [-abcd%sgiklmnpqrstuxABCFLNQRSUX1%s] [-w cols] [-T cols] [-I pattern]\n\
+         [--all] [--escape] [--directory] [--inode] [--kilobytes] [--literal]\n\
+         [--numeric-uid-gid] [--hide-control-chars] [--reverse] [--size]\n\
+         [--width=cols] [--tabsize=cols] [--almost-all] [--ignore-backups]\n",
+! 	   program_name,
+! #ifdef COLOR
+! 	   "f"
+! #else
+! 	   ""
+! #endif
+! ,
+! #ifdef EIGHTBIT
+! 	   "78"
+! #else
+! 	   ""
+! #endif
+! 	   );
+    fprintf (stderr, "\
+         [--classify] [--file-type] [--ignore=pattern] [--dereference]\n\
+         [--quote-name] [--recursive] [--sort={none,time,size,extension}]\n\
+         [--format={long,verbose,commas,across,vertical,single-column}]\n\
+!        [--time={atime,access,use,ctime,status}] %s%s[path...]\n",
+! #ifdef COLOR
+! 	   COLOR_DEFAULT ? "[--no-color] " : "[--color ] "
+! #else
+! 	   ""
+! #endif
+! 	   ,
+! #ifdef EIGHTBIT
+! 	   EIGHTBIT_DEFAULT ? "[--7bit] " : "[--8bit ] "
+! #else
+! 	   ""
+! #endif
+! 	   );
+    exit (1);
+  }
++ 

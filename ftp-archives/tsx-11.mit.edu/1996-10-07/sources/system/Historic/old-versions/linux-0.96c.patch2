@@ -1,0 +1,5509 @@
+*** 0.96c.pl1/linux/Makefile	Sat Jul 18 22:27:57 1992
+--- linux/Makefile	Thu Jul 16 02:34:48 1992
+***************
+*** 34,39 ****
+--- 34,41 ----
+  # KEYBOARD = -DKBD_DK -DKBDFLAGS=0
+  # KEYBOARD = -DKBD_DK_LATIN1 -DKBDFLAGS=0x9F
+  # KEYBOARD = -DKBD_DVORAK -DKBDFLAGS=0
++ # KEYBOARD = -DKBD_SG -DKBDFLAGS=0
++ # KEYBOARD = -DKBD_SG_LATIN1 -DKBDFLAGS=0x9F
+  
+  #
+  # comment this line if you don't want the emulation-code
+***************
+*** 66,72 ****
+  AR	=ar
+  
+  ARCHIVES	=kernel/kernel.o mm/mm.o fs/fs.o net/net.o
+! FILESYSTEMS	=fs/minix/minix.o fs/ext/ext.o
+  DRIVERS		=kernel/blk_drv/blk_drv.a kernel/chr_drv/chr_drv.a \
+  		 kernel/blk_drv/scsi/scsi.a
+  MATH		=kernel/math/math.a
+--- 68,74 ----
+  AR	=ar
+  
+  ARCHIVES	=kernel/kernel.o mm/mm.o fs/fs.o net/net.o
+! FILESYSTEMS	=fs/minix/minix.o fs/ext/ext.o fs/msdos/msdos.o
+  DRIVERS		=kernel/blk_drv/blk_drv.a kernel/chr_drv/chr_drv.a \
+  		 kernel/blk_drv/scsi/scsi.a
+  MATH		=kernel/math/math.a
+***************
+*** 89,95 ****
+  
+  Version:
+  	@./makever.sh
+! 	@echo \#define UTS_RELEASE \"0.96c.pl1-`cat .version`\" > include/linux/config_rel.h
+  	@echo \#define UTS_VERSION \"`date +%D`\" > include/linux/config_ver.h
+  	touch include/linux/config.h
+  
+--- 91,97 ----
+  
+  Version:
+  	@./makever.sh
+! 	@echo \#define UTS_RELEASE \"0.96c.pl2-`cat .version`\" > include/linux/config_rel.h
+  	@echo \#define UTS_VERSION \"`date +%D`\" > include/linux/config_ver.h
+  	touch include/linux/config.h
+  
+*** 0.96c.pl1/linux/fs/Makefile	Sun Jul  5 03:11:06 1992
+--- linux/fs/Makefile	Thu Jul 16 02:36:05 1992
+***************
+*** 7,13 ****
+  #
+  # Note 2! The CFLAGS definitions are now in the main makefile...
+  
+! SUBDIRS	=minix ext
+  
+  .c.s:
+  	$(CC) $(CFLAGS) -S $<
+--- 7,13 ----
+  #
+  # Note 2! The CFLAGS definitions are now in the main makefile...
+  
+! SUBDIRS	=minix ext msdos
+  
+  .c.s:
+  	$(CC) $(CFLAGS) -S $<
+*** 0.96c.pl1/linux/fs/buffer.c	Fri Jul  3 03:09:37 1992
+--- linux/fs/buffer.c	Wed Jul 15 16:07:16 1992
+***************
+*** 30,36 ****
+  static struct buffer_head * start_buffer = (struct buffer_head *) &end;
+  static struct buffer_head * hash_table[NR_HASH];
+  static struct buffer_head * free_list;
+! static struct task_struct * buffer_wait = NULL;
+  int NR_BUFFERS = 0;
+  
+  static inline void wait_on_buffer(struct buffer_head * bh)
+--- 30,36 ----
+  static struct buffer_head * start_buffer = (struct buffer_head *) &end;
+  static struct buffer_head * hash_table[NR_HASH];
+  static struct buffer_head * free_list;
+! static struct wait_queue * buffer_wait = NULL;
+  int NR_BUFFERS = 0;
+  
+  static inline void wait_on_buffer(struct buffer_head * bh)
+*** 0.96c.pl1/linux/fs/exec.c	Sat Jul 18 22:27:57 1992
+--- linux/fs/exec.c	Fri Jul 17 04:30:30 1992
+***************
+*** 101,106 ****
+--- 101,107 ----
+  	has_dumped = 1;
+  /* write and seek example: from kernel space */
+  	__asm__("mov %0,%%fs"::"r" ((unsigned short) 0x10));
++ 	dump.magic = CMAGIC;
+  	dump.u_tsize = current->end_code / PAGE_SIZE;
+  	dump.u_dsize = (current->brk - current->end_code) / PAGE_SIZE;
+  	dump.u_ssize =((current->start_stack +(PAGE_SIZE-1)) / PAGE_SIZE) -
+***************
+*** 168,173 ****
+--- 169,176 ----
+  	struct inode * inode;
+  	struct buffer_head * bh;
+  	struct exec ex;
++ 	int i;
++ 	struct file * f;
+  
+  	if (get_limit(0x17) != TASK_SIZE)
+  		return -EINVAL;
+***************
+*** 183,188 ****
+--- 186,200 ----
+  		iput(inode);
+  		return -EACCES;
+  	}
++  	if (inode->i_count > 1) {		/* check for writers */
++  		f=0+file_table;
++  		for (i=0 ; i<NR_FILE ; i++,f++ )
++  			if (f->f_count && (f->f_mode & 2))
++  				if (inode == f->f_inode) {
++  					iput(inode);
++  					return -ETXTBSY;
++  				}
++  	}
+  	if (!(bh = bread(inode->i_dev,bmap(inode,0)))) {
+  		iput(inode);
+  		return -EACCES;
+***************
+*** 391,396 ****
+--- 403,409 ----
+  	int sh_bang = 0;
+  	unsigned long p=PAGE_SIZE*MAX_ARG_PAGES-4;
+  	int ch;
++ 	struct file * f;
+  
+  	if ((0xffff & eip[1]) != 0x000f)
+  		panic("execve called from supervisor mode");
+***************
+*** 398,403 ****
+--- 411,425 ----
+  		page[i]=0;
+  	if (!(inode=namei(filename)))		/* get executables inode */
+  		return -ENOENT;
++ 	if (inode->i_count > 1) {		/* check for writers */
++ 		f=0+file_table;
++ 		for (i=0 ; i<NR_FILE ; i++,f++ )
++ 			if (f->f_count && (f->f_mode & 2))
++ 				if (inode == f->f_inode) {
++ 					retval = -ETXTBSY;
++ 					goto exec_error2;
++ 				}
++ 	}
+  	argc = count(argv);
+  	envc = count(envp);
+  	
+*** 0.96c.pl1/linux/fs/super.c	Sat Jul 18 22:27:57 1992
+--- linux/fs/super.c	Wed Jul 15 07:19:47 1992
+***************
+*** 11,17 ****
+  #include <linux/sched.h>
+  #include <linux/minix_fs.h>
+  #include <linux/ext_fs.h>
+! /* #include <linux/msdos_fs.h> */
+  #include <linux/kernel.h>
+  #include <linux/stat.h>
+  #include <asm/system.h>
+--- 11,17 ----
+  #include <linux/sched.h>
+  #include <linux/minix_fs.h>
+  #include <linux/ext_fs.h>
+! #include <linux/msdos_fs.h>
+  #include <linux/kernel.h>
+  #include <linux/stat.h>
+  #include <asm/system.h>
+***************
+*** 38,44 ****
+  static struct file_system_type file_systems[] = {
+  	{minix_read_super,"minix"},
+  	{ext_read_super,"ext"},
+!  /*	{msdos_read_super,"msdos"}, */
+  	{NULL,NULL}
+  };
+  
+--- 38,44 ----
+  static struct file_system_type file_systems[] = {
+  	{minix_read_super,"minix"},
+  	{ext_read_super,"ext"},
+! 	{msdos_read_super,"msdos"},
+  	{NULL,NULL}
+  };
+  
+***************
+*** 65,74 ****
+  
+  void free_super(struct super_block * sb)
+  {
+- 	cli();
+  	sb->s_lock = 0;
+  	wake_up(&(sb->s_wait));
+- 	sti();
+  }
+  
+  void wait_on_super(struct super_block * sb)
+--- 65,72 ----
+*** 0.96c.pl1/linux/fs/namei.c	Sat Jul 18 22:27:58 1992
+--- linux/fs/namei.c	Wed Jul 15 03:05:09 1992
+***************
+*** 197,204 ****
+  	struct inode ** res_inode)
+  {
+  	const char * basename;
+! 	int namelen,error;
+  	struct inode * dir, *inode;
+  
+  	if ((flag & O_TRUNC) && !(flag & O_ACCMODE))
+  		flag |= O_WRONLY;
+--- 197,205 ----
+  	struct inode ** res_inode)
+  {
+  	const char * basename;
+! 	int namelen,error,i;
+  	struct inode * dir, *inode;
++ 	struct task_struct ** p;
+  
+  	if ((flag & O_TRUNC) && !(flag & O_ACCMODE))
+  		flag |= O_WRONLY;
+***************
+*** 258,263 ****
+--- 259,278 ----
+  		iput(inode);
+  		return -EPERM;
+  	}
++  	if ((inode->i_count > 1) && (flag & O_ACCMODE))
++  		for (p = &LAST_TASK ; p > &FIRST_TASK ; --p) {
++  			if (!*p)
++  				continue;
++  			if (inode == (*p)->executable) {
++  				iput(inode);
++  				return -ETXTBSY;
++  			}
++  			for (i=0; i < (*p)->numlibraries; i++)
++  				if (inode == (*p)->libraries[i].library) {
++  					iput(inode);
++  					return -ETXTBSY;
++  				}
++  		}
+  	if (flag & O_TRUNC)
+  		if (inode->i_op && inode->i_op->truncate) {
+  			inode->i_size = 0;
+*** 0.96c.pl1/linux/fs/pipe.c	Thu Jul  2 00:42:04 1992
+--- linux/fs/pipe.c	Wed Jul 15 04:24:46 1992
+***************
+*** 117,122 ****
+--- 117,144 ----
+  	}
+  }
+  
++ static int pipe_select(struct inode * inode, struct file * filp, int sel_type, select_table * wait)
++ {
++ 	switch (sel_type) {
++ 		case SEL_IN:
++ 			if (!PIPE_EMPTY(*inode) || !PIPE_WRITERS(*inode))
++ 				return 1;
++ 			select_wait(&PIPE_READ_WAIT(*inode), wait);
++ 			return 0;
++ 		case SEL_OUT:
++ 			if (!PIPE_FULL(*inode) || !PIPE_WRITERS(*inode))
++ 				return 1;
++ 			select_wait(&PIPE_WRITE_WAIT(*inode), wait);
++ 			return 0;
++ 		case SEL_EX:
++ 			if (!PIPE_READERS(*inode) || !PIPE_WRITERS(*inode))
++ 				return 1;
++ 			select_wait(&inode->i_wait,wait);
++ 			return 0;
++ 	}
++ 	return 0;
++ }
++ 
+  /*
+   * Ok, these three routines NOW keep track of readers/writers,
+   * Linus previously did it with inode->i_count checking.
+***************
+*** 150,156 ****
+  	pipe_read,
+  	bad_pipe_rw,
+  	pipe_readdir,
+! 	NULL,		/* pipe_select */
+  	pipe_ioctl,
+  	NULL,		/* no special open code */
+  	pipe_read_release
+--- 172,178 ----
+  	pipe_read,
+  	bad_pipe_rw,
+  	pipe_readdir,
+! 	pipe_select,
+  	pipe_ioctl,
+  	NULL,		/* no special open code */
+  	pipe_read_release
+***************
+*** 161,167 ****
+  	bad_pipe_rw,
+  	pipe_write,
+  	pipe_readdir,
+! 	NULL,		/* pipe_select */
+  	pipe_ioctl,
+  	NULL,		/* no special open code */
+  	pipe_write_release
+--- 183,189 ----
+  	bad_pipe_rw,
+  	pipe_write,
+  	pipe_readdir,
+! 	pipe_select,
+  	pipe_ioctl,
+  	NULL,		/* no special open code */
+  	pipe_write_release
+***************
+*** 172,178 ****
+  	pipe_read,
+  	pipe_write,
+  	pipe_readdir,
+! 	NULL,		/* pipe_select */
+  	pipe_ioctl,
+  	NULL,		/* no special open code */
+  	pipe_rdwr_release
+--- 194,200 ----
+  	pipe_read,
+  	pipe_write,
+  	pipe_readdir,
+! 	pipe_select,
+  	pipe_ioctl,
+  	NULL,		/* no special open code */
+  	pipe_rdwr_release
+*** 0.96c.pl1/linux/fs/select.c	Sat Jun 27 16:14:28 1992
+--- linux/fs/select.c	Wed Jul 15 16:46:59 1992
+***************
+*** 7,13 ****
+  
+  #include <linux/fs.h>
+  #include <linux/kernel.h>
+- #include <linux/tty.h>
+  #include <linux/sched.h>
+  #include <linux/string.h>
+  #include <linux/stat.h>
+--- 7,12 ----
+***************
+*** 29,183 ****
+   * understand what I'm doing here, then you understand how the linux sleep/wakeup
+   * mechanism works.
+   *
+!  * Two very simple procedures, add_wait() and free_wait() make all the work. We
+!  * have to have interrupts disabled throughout the select, but that's not really
+!  * such a loss: sleeping automatically frees interrupts when we aren't in this
+!  * task.
+   */
+  
+  static select_table * sel_tables = NULL;
+  
+- static void add_wait(struct task_struct ** wait_address, select_table * p)
+- {
+- 	int i;
+- 
+- 	if (!wait_address)
+- 		return;
+- 	for (i = 0 ; i < p->nr ; i++)
+- 		if (p->entry[i].wait_address == wait_address)
+- 			return;
+- 	current->next_wait = NULL;
+- 	p->entry[p->nr].wait_address = wait_address;
+- 	p->entry[p->nr].old_task = *wait_address;
+- 	*wait_address = current;
+- 	p->nr++;
+- }
+- 
+- /*
+-  * free_wait removes the current task from any wait-queues and then
+-  * wakes up the queues.
+-  */
+- static void free_one_table(select_table * p)
+- {
+- 	int i;
+- 	struct task_struct ** tpp;
+- 
+- 	for(tpp = &LAST_TASK ; tpp > &FIRST_TASK ; --tpp)
+- 		if (*tpp && ((*tpp)->next_wait == p->current))
+- 			(*tpp)->next_wait = NULL;
+- 	if (!p->nr)
+- 		return;
+- 	for (i = 0; i < p->nr ; i++) {
+- 		wake_up(p->entry[i].wait_address);
+- 		wake_up(&p->entry[i].old_task);
+- 	}
+- 	p->nr = 0;
+- }
+- 
+  static void free_wait(select_table * p)
+  {
+! 	select_table * tmp;
+  
+! 	if (p->woken)
+! 		return;
+! 	p = sel_tables;
+! 	sel_tables = NULL;
+! 	while (p) {
+! 		wake_up(&p->current);
+! 		p->woken = 1;
+! 		tmp = p->next_table;
+! 		p->next_table = NULL;
+! 		free_one_table(p);
+! 		p = tmp;
+  	}
+  }
+  
+- static struct tty_struct * get_tty(struct inode * inode)
+- {
+- 	int major, minor;
+- 
+- 	if (!S_ISCHR(inode->i_mode))
+- 		return NULL;
+- 	if ((major = MAJOR(inode->i_rdev)) != 5 && major != 4)
+- 		return NULL;
+- 	if (major == 5)
+- 		minor = current->tty;
+- 	else
+- 		minor = MINOR(inode->i_rdev);
+- 	if (minor < 0)
+- 		return NULL;
+- 	return TTY_TABLE(minor);
+- }
+- 
+  /*
+   * The check_XX functions check out a file. We know it's either
+!  * a pipe, a character device or a fifo (fifo's not implemented)
+   */
+! static int check_in(select_table * wait, struct inode * inode)
+  {
+! 	struct tty_struct * tty;
+! 
+! 	if (tty = get_tty(inode))
+! 		if (!EMPTY(tty->secondary))
+! 			return 1;
+! 		else if (tty->link && !tty->link->count)
+! 			return 1;
+! 		else
+! 			add_wait(&tty->secondary->proc_list, wait);
+! 	else if (inode->i_pipe)
+! 		if (!PIPE_EMPTY(*inode) || !PIPE_WRITERS(*inode))
+! 			return 1;
+! 		else
+! 			add_wait(&inode->i_wait, wait);
+! 	else if (S_ISSOCK(inode->i_mode))
+! 		if (sock_select(inode, NULL, SEL_IN, wait))
+! 			return 1;
+! 		else
+! 			add_wait(&inode->i_wait, wait);
+  	return 0;
+  }
+  
+! static int check_out(select_table * wait, struct inode * inode)
+  {
+! 	struct tty_struct * tty;
+! 
+! 	if (tty = get_tty(inode))
+! 		if (!FULL(tty->write_q))
+! 			return 1;
+! 		else
+! 			add_wait(&tty->write_q->proc_list, wait);
+! 	else if (inode->i_pipe)
+! 		if (!PIPE_FULL(*inode))
+! 			return 1;
+! 		else
+! 			add_wait(&inode->i_wait, wait);
+! 	else if (S_ISSOCK(inode->i_mode))
+! 		if (sock_select(inode, NULL, SEL_OUT, wait))
+! 			return 1;
+! 		else
+! 			add_wait(&inode->i_wait, wait);
+  	return 0;
+  }
+  
+! static int check_ex(select_table * wait, struct inode * inode)
+  {
+! 	struct tty_struct * tty;
+! 
+! 	if (tty = get_tty(inode))
+! 		if (!FULL(tty->write_q))
+! 			return 0;
+! 		else
+! 			return 0;
+! 	else if (inode->i_pipe)
+! 		if (!PIPE_READERS(*inode) || !PIPE_WRITERS(*inode))
+! 			return 1;
+! 		else
+! 			add_wait(&inode->i_wait,wait);
+! 	else if (S_ISSOCK(inode->i_mode))
+! 		if (sock_select(inode, NULL, SEL_EX, wait))
+! 			return 1;
+! 		else
+! 			add_wait(&inode->i_wait, wait);
+  	return 0;
+  }
+  
+--- 28,73 ----
+   * understand what I'm doing here, then you understand how the linux sleep/wakeup
+   * mechanism works.
+   *
+!  * Two very simple procedures, select_wait() and free_wait() make all the work.
+!  * select_wait() is a inline-function defined in <linux/fs.h>, as all select
+!  * functions have to call it to add an entry to the select table.
+   */
+  
+  static select_table * sel_tables = NULL;
+  
+  static void free_wait(select_table * p)
+  {
+! 	struct select_table_entry * entry = p->entry + p->nr;
+  
+! 	while (p->nr > 0) {
+! 		p->nr--;
+! 		entry--;
+! 		remove_wait_queue(entry->wait_address,&entry->wait);
+  	}
+  }
+  
+  /*
+   * The check_XX functions check out a file. We know it's either
+!  * a pipe, a character device or a fifo
+   */
+! static int check_in(select_table * wait, struct inode * inode, struct file * file)
+  {
+! 	if (file->f_op && file->f_op->select)
+! 		return file->f_op->select(inode,file,SEL_IN,wait);
+  	return 0;
+  }
+  
+! static int check_out(select_table * wait, struct inode * inode, struct file * file)
+  {
+! 	if (file->f_op && file->f_op->select)
+! 		return file->f_op->select(inode,file,SEL_OUT,wait);
+  	return 0;
+  }
+  
+! static int check_ex(select_table * wait, struct inode * inode, struct file * file)
+  {
+! 	if (file->f_op && file->f_op->select)
+! 		return file->f_op->select(inode,file,SEL_EX,wait);
+  	return 0;
+  }
+  
+***************
+*** 186,191 ****
+--- 76,82 ----
+  {
+  	int count;
+  	select_table wait_table;
++ 	struct file * file;
+  	int i;
+  	fd_set mask;
+  
+***************
+*** 209,235 ****
+  	}
+  repeat:
+  	wait_table.nr = 0;
+- 	wait_table.woken = 0;
+- 	wait_table.current = current;
+- 	wait_table.next_table = sel_tables;
+- 	sel_tables = &wait_table;
+  	*inp = *outp = *exp = 0;
+  	count = 0;
+  	current->state = TASK_INTERRUPTIBLE;
+  	mask = 1;
+  	for (i = 0 ; i < NR_OPEN ; i++, mask += mask) {
+  		if (mask & in)
+! 			if (check_in(&wait_table,current->filp[i]->f_inode)) {
+  				*inp |= mask;
+  				count++;
+  			}
+  		if (mask & out)
+! 			if (check_out(&wait_table,current->filp[i]->f_inode)) {
+  				*outp |= mask;
+  				count++;
+  			}
+  		if (mask & ex)
+! 			if (check_ex(&wait_table,current->filp[i]->f_inode)) {
+  				*exp |= mask;
+  				count++;
+  			}
+--- 100,123 ----
+  	}
+  repeat:
+  	wait_table.nr = 0;
+  	*inp = *outp = *exp = 0;
+  	count = 0;
+  	current->state = TASK_INTERRUPTIBLE;
+  	mask = 1;
+  	for (i = 0 ; i < NR_OPEN ; i++, mask += mask) {
++ 		file = current->filp[i];
+  		if (mask & in)
+! 			if (check_in(&wait_table,file->f_inode,file)) {
+  				*inp |= mask;
+  				count++;
+  			}
+  		if (mask & out)
+! 			if (check_out(&wait_table,file->f_inode,file)) {
+  				*outp |= mask;
+  				count++;
+  			}
+  		if (mask & ex)
+! 			if (check_ex(&wait_table,file->f_inode,file)) {
+  				*exp |= mask;
+  				count++;
+  			}
+*** 0.96c.pl1/linux/fs/ext/namei.c	Sat Jul 18 22:28:06 1992
+--- linux/fs/ext/namei.c	Wed Jul 15 16:11:22 1992
+***************
+*** 885,891 ****
+  int ext_rename(struct inode * old_dir, const char * old_name, int old_len,
+  	struct inode * new_dir, const char * new_name, int new_len)
+  {
+! 	static struct task_struct * wait = NULL;
+  	static int lock = 0;
+  	int result;
+  
+--- 885,891 ----
+  int ext_rename(struct inode * old_dir, const char * old_name, int old_len,
+  	struct inode * new_dir, const char * new_name, int new_len)
+  {
+! 	static struct wait_queue * wait = NULL;
+  	static int lock = 0;
+  	int result;
+  
+*** /dev/null	Sat Jul 18 22:26:09 1992
+--- linux/fs/msdos/Makefile	Thu Jul 16 02:36:33 1992
+***************
+*** 0 ****
+--- 1,77 ----
++ #
++ # Makefile for the linux MS-DOS-filesystem routines.
++ #
++ # Note! Dependencies are done automagically by 'make dep', which also
++ # removes any old dependencies. DON'T put your own dependencies here
++ # unless it's something special (ie not a .c file).
++ #
++ # Note 2! The CFLAGS definitions are now in the main makefile...
++ 
++ .c.s:
++ 	$(CC) $(CFLAGS) \
++ 	-S -o $*.s $<
++ .c.o:
++ 	$(CC) $(CFLAGS) -c -o $*.o $<
++ .s.o:
++ 	$(AS) -o $*.o $<
++ 
++ OBJS=	namei.o inode.o file.o dir.o misc.o fat.o
++ 
++ msdos.o: $(OBJS)
++ 	$(LD) -r -o msdos.o $(OBJS)
++ 
++ clean:
++ 	rm -f core *.o *.a tmp_make
++ 	for i in *.c;do rm -f `basename $$i .c`.s;done
++ 
++ dep:
++ 	sed '/\#\#\# Dependencies/q' < Makefile > tmp_make
++ 	(for i in *.c;do $(CPP) -M $$i;done) >> tmp_make
++ 	cp tmp_make Makefile
++ 
++ ### Dependencies:
++ dir.o : dir.c /usr/src/linux/include/errno.h /usr/src/linux/include/asm/segment.h \
++   /usr/src/linux/include/linux/stat.h /usr/src/linux/include/linux/fs.h /usr/src/linux/include/linux/limits.h \
++   /usr/src/linux/include/linux/wait.h /usr/src/linux/include/sys/types.h /usr/src/linux/include/stddef.h \
++   /usr/src/linux/include/sys/dirent.h /usr/src/linux/include/limits.h /usr/src/linux/include/sys/vfs.h \
++   /usr/src/linux/include/linux/msdos_fs.h /usr/src/linux/include/linux/sched.h \
++   /usr/src/linux/include/linux/head.h /usr/src/linux/include/linux/mm.h /usr/src/linux/include/linux/kernel.h \
++   /usr/src/linux/include/signal.h /usr/src/linux/include/sys/param.h /usr/src/linux/include/sys/time.h \
++   /usr/src/linux/include/time.h /usr/src/linux/include/sys/resource.h 
++ fat.o : fat.c /usr/src/linux/include/errno.h /usr/src/linux/include/linux/stat.h \
++   /usr/src/linux/include/linux/msdos_fs.h /usr/src/linux/include/sys/types.h /usr/src/linux/include/stddef.h \
++   /usr/src/linux/include/linux/fs.h /usr/src/linux/include/linux/limits.h /usr/src/linux/include/linux/wait.h \
++   /usr/src/linux/include/sys/dirent.h /usr/src/linux/include/limits.h /usr/src/linux/include/sys/vfs.h \
++   /usr/src/linux/include/linux/kernel.h 
++ file.o : file.c /usr/src/linux/include/errno.h /usr/src/linux/include/asm/segment.h \
++   /usr/src/linux/include/asm/system.h /usr/src/linux/include/linux/fcntl.h /usr/src/linux/include/sys/types.h \
++   /usr/src/linux/include/stddef.h /usr/src/linux/include/linux/stat.h /usr/src/linux/include/linux/sched.h \
++   /usr/src/linux/include/linux/head.h /usr/src/linux/include/linux/fs.h /usr/src/linux/include/linux/limits.h \
++   /usr/src/linux/include/linux/wait.h /usr/src/linux/include/sys/dirent.h /usr/src/linux/include/limits.h \
++   /usr/src/linux/include/sys/vfs.h /usr/src/linux/include/linux/mm.h /usr/src/linux/include/linux/kernel.h \
++   /usr/src/linux/include/signal.h /usr/src/linux/include/sys/param.h /usr/src/linux/include/sys/time.h \
++   /usr/src/linux/include/time.h /usr/src/linux/include/sys/resource.h /usr/src/linux/include/linux/msdos_fs.h 
++ inode.o : inode.c /usr/src/linux/include/errno.h /usr/src/linux/include/linux/string.h \
++   /usr/src/linux/include/sys/types.h /usr/src/linux/include/stddef.h /usr/src/linux/include/linux/stat.h \
++   /usr/src/linux/include/linux/msdos_fs.h /usr/src/linux/include/linux/fs.h /usr/src/linux/include/linux/limits.h \
++   /usr/src/linux/include/linux/wait.h /usr/src/linux/include/sys/dirent.h /usr/src/linux/include/limits.h \
++   /usr/src/linux/include/sys/vfs.h /usr/src/linux/include/linux/kernel.h /usr/src/linux/include/linux/sched.h \
++   /usr/src/linux/include/linux/head.h /usr/src/linux/include/linux/mm.h /usr/src/linux/include/signal.h \
++   /usr/src/linux/include/sys/param.h /usr/src/linux/include/sys/time.h /usr/src/linux/include/time.h \
++   /usr/src/linux/include/sys/resource.h /usr/src/linux/include/asm/segment.h 
++ misc.o : misc.c /usr/src/linux/include/errno.h /usr/src/linux/include/limits.h \
++   /usr/src/linux/include/linux/string.h /usr/src/linux/include/sys/types.h /usr/src/linux/include/stddef.h \
++   /usr/src/linux/include/linux/stat.h /usr/src/linux/include/linux/msdos_fs.h \
++   /usr/src/linux/include/linux/fs.h /usr/src/linux/include/linux/limits.h /usr/src/linux/include/linux/wait.h \
++   /usr/src/linux/include/sys/dirent.h /usr/src/linux/include/sys/vfs.h /usr/src/linux/include/linux/sched.h \
++   /usr/src/linux/include/linux/head.h /usr/src/linux/include/linux/mm.h /usr/src/linux/include/linux/kernel.h \
++   /usr/src/linux/include/signal.h /usr/src/linux/include/sys/param.h /usr/src/linux/include/sys/time.h \
++   /usr/src/linux/include/time.h /usr/src/linux/include/sys/resource.h 
++ namei.o : namei.c /usr/src/linux/include/errno.h /usr/src/linux/include/asm/segment.h \
++   /usr/src/linux/include/linux/string.h /usr/src/linux/include/sys/types.h /usr/src/linux/include/stddef.h \
++   /usr/src/linux/include/linux/stat.h /usr/src/linux/include/linux/sched.h /usr/src/linux/include/linux/head.h \
++   /usr/src/linux/include/linux/fs.h /usr/src/linux/include/linux/limits.h /usr/src/linux/include/linux/wait.h \
++   /usr/src/linux/include/sys/dirent.h /usr/src/linux/include/limits.h /usr/src/linux/include/sys/vfs.h \
++   /usr/src/linux/include/linux/mm.h /usr/src/linux/include/linux/kernel.h /usr/src/linux/include/signal.h \
++   /usr/src/linux/include/sys/param.h /usr/src/linux/include/sys/time.h /usr/src/linux/include/time.h \
++   /usr/src/linux/include/sys/resource.h /usr/src/linux/include/linux/msdos_fs.h 
+*** /dev/null	Sat Jul 18 22:26:09 1992
+--- linux/fs/msdos/dir.c	Thu Jul 16 00:35:11 1992
+***************
+*** 0 ****
+--- 1,128 ----
++ /*
++  *  linux/fs/msdos/dir.c
++  *
++  *  Written 1992 by Werner Almesberger
++  *
++  *  MS-DOS directory handling functions
++  */
++ 
++ #include <errno.h>
++ #include <asm/segment.h>
++ #include <linux/stat.h>
++ #include <linux/fs.h>
++ #include <linux/msdos_fs.h>
++ 
++ /* for compatibility warnings */
++ #include <linux/sched.h>
++ 
++ static int msdos_dummy_read(struct inode *inode,struct file *filp,char *buf,
++     int count);
++ static int msdos_readdir(struct inode *inode,struct file *filp,
++     struct dirent *dirent,int count);
++ 
++ 
++ static struct file_operations msdos_dir_operations = {
++ 	NULL,			/* lseek - default */
++ 	msdos_dummy_read,	/* read */
++ 	NULL,			/* write - bad */
++ 	msdos_readdir,		/* readdir */
++ 	NULL,			/* select - default */
++ 	NULL,			/* ioctl - default */
++ 	NULL,			/* no special open code */
++ 	NULL			/* no special release code */
++ };
++ 
++ struct inode_operations msdos_dir_inode_operations = {
++ 	&msdos_dir_operations,	/* default directory file-ops */
++ 	msdos_create,		/* create */
++ 	msdos_lookup,		/* lookup */
++ 	NULL,			/* link */
++ 	msdos_unlink,		/* unlink */
++ 	NULL,			/* symlink */
++ 	msdos_mkdir,		/* mkdir */
++ 	msdos_rmdir,		/* rmdir */
++ 	NULL,			/* mknod */
++ 	msdos_rename,		/* rename */
++ 	NULL,			/* readlink */
++ 	NULL,			/* follow_link */
++ 	msdos_bmap,		/* bmap */
++ 	NULL			/* truncate */
++ };
++ 
++ 
++ /* So  grep *  doesn't complain in the presence of directories. */
++ 
++ static int msdos_dummy_read(struct inode *inode,struct file *filp,char *buf,
++     int count)
++ {
++ 	static long last_warning = 0;
++ 
++ 	if (CURRENT_TIME-last_warning >= 10) {
++ 		printk("COMPATIBILITY WARNING: reading a directory\r\n");
++ 		last_warning = CURRENT_TIME;
++ 	}
++ 	return 0;
++ }
++ 
++ 
++ static int msdos_readdir(struct inode *inode,struct file *filp,
++     struct dirent *dirent,int count)
++ {
++ 	int ino,i,i2,last;
++ 	char c,*walk;
++ 	struct buffer_head *bh;
++ 	struct msdos_dir_entry *de;
++ 
++ 	if (!inode || !S_ISDIR(inode->i_mode)) return -EBADF;
++ 	if (inode->i_ino == MSDOS_ROOT_INO) {
++ /* Fake . and .. for the root directory. */
++ 		if (filp->f_pos == 2) filp->f_pos = 0;
++ 		else if (filp->f_pos < 2) {
++ 				walk = filp->f_pos++ ? ".." : ".";
++ 				for (i = 0; *walk; walk++)
++ 					put_fs_byte(*walk,dirent->d_name+i++);
++ 				put_fs_long(MSDOS_ROOT_INO,&dirent->d_ino);
++ 				put_fs_byte(0,dirent->d_name+i);
++ 				put_fs_word(i,&dirent->d_reclen);
++ 				return i;
++ 			}
++ 	}
++ 	if (filp->f_pos & (sizeof(struct msdos_dir_entry)-1)) return -ENOENT;
++ 	bh = NULL;
++ 	while ((ino = msdos_get_entry(inode,&filp->f_pos,&bh,&de)) > -1) {
++ 		if (de->name[0] && ((unsigned char *) (de->name))[0] !=
++ 		    DELETED_FLAG && !(de->attr & ATTR_VOLUME)) {
++ 			for (i = last = 0; i < 8; i++) {
++ 				if (!(c = de->name[i])) break;
++ 				if (c >= 'A' && c <= 'Z') c += 32;
++ 				if (c != ' ') last = i+1;
++ 				put_fs_byte(c,i+dirent->d_name);
++ 			}
++ 			i = last;
++ 			if (de->ext[0] && de->ext[0] != ' ') {
++ 				put_fs_byte('.',i+dirent->d_name);
++ 				i++;
++ 				for (i2 = 0; i2 < 3; i2++) {
++ 					if (!(c = de->ext[i2])) break;
++ 					if (c >= 'A' && c <= 'Z') c += 32;
++ 					put_fs_byte(c,i+dirent->d_name);
++ 					i++;
++ 					if (c != ' ') last = i;
++ 				}
++ 			}
++ 			if (i = last) {
++ 				if (!strcmp(de->name,MSDOS_DOT))
++ 					ino = inode->i_ino;
++ 				else if (!strcmp(de->name,MSDOS_DOTDOT))
++ 						ino = msdos_parent_ino(inode,0);
++ 				put_fs_long(ino,&dirent->d_ino);
++ 				put_fs_byte(0,i+dirent->d_name);
++ 				put_fs_word(i,&dirent->d_reclen);
++ 				brelse(bh);
++ 				return i;
++ 			}
++ 		}
++ 	}
++ 	if (bh) brelse(bh);
++ 	return 0;
++ }
+*** /dev/null	Sat Jul 18 22:26:09 1992
+--- linux/fs/msdos/file.c	Thu Jul 16 00:35:11 1992
+***************
+*** 0 ****
+--- 1,210 ----
++ /*
++  *  linux/fs/msdos/file.c
++  *
++  *  Written 1992 by Werner Almesberger
++  *
++  *  MS-DOS regular file handling primitives
++  */
++ 
++ #include <errno.h>
++ #include <asm/segment.h>
++ #include <asm/system.h>
++ #include <linux/fcntl.h>
++ #include <linux/stat.h>
++ #include <linux/sched.h>
++ #include <linux/fs.h>
++ #include <linux/msdos_fs.h>
++ 
++ 
++ #define MIN(a,b) (((a) < (b)) ? (a) : (b))
++ #define MAX(a,b) (((a) > (b)) ? (a) : (b))
++ 
++ 
++ static int msdos_file_read(struct inode *inode,struct file *filp,char *buf,
++     int count);
++ static int msdos_file_write(struct inode *inode,struct file *filp,char *buf,
++     int count);
++ 
++ 
++ static struct file_operations msdos_file_operations = {
++ 	NULL,			/* lseek - default */
++ 	msdos_file_read,	/* read */
++ 	msdos_file_write,	/* write */
++ 	NULL,			/* readdir - bad */
++ 	NULL,			/* select - default */
++ 	NULL,			/* ioctl - default */
++ 	NULL,			/* no special open is needed */
++ 	NULL			/* release */
++ };
++ 
++ struct inode_operations msdos_file_inode_operations = {
++ 	&msdos_file_operations,	/* default file operations */
++ 	NULL,			/* create */
++ 	NULL,			/* lookup */
++ 	NULL,			/* link */
++ 	NULL,			/* unlink */
++ 	NULL,			/* symlink */
++ 	NULL,			/* mkdir */
++ 	NULL,			/* rmdir */
++ 	NULL,			/* mknod */
++ 	NULL,			/* rename */
++ 	NULL,			/* readlink */
++ 	NULL,			/* follow_link */
++ 	msdos_bmap,		/* bmap */
++ 	msdos_truncate		/* truncate */
++ };
++ 
++ /* No bmap for MS-DOS FS' that don't align data at kByte boundaries. */
++ 
++ struct inode_operations msdos_file_inode_operations_no_bmap = {
++ 	&msdos_file_operations,	/* default file operations */
++ 	NULL,			/* create */
++ 	NULL,			/* lookup */
++ 	NULL,			/* link */
++ 	NULL,			/* unlink */
++ 	NULL,			/* symlink */
++ 	NULL,			/* mkdir */
++ 	NULL,			/* rmdir */
++ 	NULL,			/* mknod */
++ 	NULL,			/* rename */
++ 	NULL,			/* readlink */
++ 	NULL,			/* follow_link */
++ 	NULL,			/* bmap */
++ 	msdos_truncate		/* truncate */
++ };
++ 
++ 
++ static int msdos_file_read(struct inode *inode,struct file *filp,char *buf,
++     int count)
++ {
++ 	char *start;
++ 	int left,offset,size,sector,cnt;
++ 	char ch;
++ 	struct buffer_head *bh;
++ 	void *data;
++ 
++ /* printk("msdos_file_read\r\n"); */
++ 	if (!inode) {
++ 		printk("msdos_file_read: inode = NULL\r\n");
++ 		return -EINVAL;
++ 	}
++ 	if (!S_ISREG(inode->i_mode)) {
++ 		printk("msdos_file_read: mode = %07o\n",inode->i_mode);
++ 		return -EINVAL;
++ 	}
++ 	if (filp->f_pos >= inode->i_size || count <= 0) return 0;
++ 	start = buf;
++ 	while (left = MIN(inode->i_size-filp->f_pos,count-(buf-start))) {
++ 		if (!(sector = msdos_smap(inode,filp->f_pos >> SECTOR_BITS)))
++ 			break;
++ 		offset = filp->f_pos & (SECTOR_SIZE-1);
++ 		if (!(bh = msdos_sread(inode->i_dev,sector,&data))) break;
++ 		filp->f_pos += (size = MIN(SECTOR_SIZE-offset,left));
++ 		if (inode->i_data[D_BINARY]) {
++ 			memcpy_tofs(buf,data+offset,size);
++ 			buf += size;
++ 		}
++ 		else for (cnt = size; cnt; cnt--) {
++ 				if ((ch = *((char *) data+offset++)) == '\r')
++ 					size--;
++ 				else {
++ 					if (ch != 26) put_fs_byte(ch,buf++);
++ 					else {
++ 						filp->f_pos = inode->i_size;
++ 						brelse(bh);
++ 						return buf-start;
++ 					}
++ 				}
++ 			}
++ 		brelse(bh);
++ 	}
++ 	if (start == buf) return -EIO;
++ 	return buf-start;
++ }
++ 
++ 
++ static int msdos_file_write(struct inode *inode,struct file *filp,char *buf,
++     int count)
++ {
++ 	int sector,offset,size,left,written;
++ 	int error,carry;
++ 	char *start,*to,ch;
++ 	struct buffer_head *bh;
++ 	void *data;
++ 
++ 	if (!inode) {
++ 		printk("msdos_file_write: inode = NULL\n");
++ 		return -EINVAL;
++ 	}
++ 	if (!S_ISREG(inode->i_mode)) {
++ 		printk("msdos_file_write: mode = %07o\n",inode->i_mode);
++ 		return -EINVAL;
++ 	}
++ /*
++  * ok, append may not work when many processes are writing at the same time
++  * but so what. That way leads to madness anyway.
++  */
++ 	if (filp->f_flags & O_APPEND) filp->f_pos = inode->i_size;
++ 	if (count <= 0) return 0;
++ 	error = carry = 0;
++ 	for (start = buf; count || carry; count -= size) {
++ 		while (!(sector = msdos_smap(inode,filp->f_pos >> SECTOR_BITS)))
++ 			if ((error = msdos_add_cluster(inode)) < 0) break;
++ 		if (error) break;
++ 		offset = filp->f_pos & (SECTOR_SIZE-1);
++ 		size = MIN(SECTOR_SIZE-offset,MAX(carry,count));
++ 		if (!(bh = msdos_sread(inode->i_dev,sector,&data))) {
++ 			error = -EIO;
++ 			break;
++ 		}
++ 		if (inode->i_data[D_BINARY]) {
++ 			memcpy_fromfs(data+(filp->f_pos & (SECTOR_SIZE-1)),
++ 			    buf,written = size);
++ 			buf += size;
++ 		}
++ 		else {
++ 			written = left = SECTOR_SIZE-offset;
++ 			to = data+(filp->f_pos & (SECTOR_SIZE-1));
++ 			if (carry) {
++ 				*to++ = '\n';
++ 				left--;
++ 				carry = 0;
++ 			}
++ 			for (size = 0; size < count && left; size++) {
++ 				if ((ch = get_fs_byte(buf++)) == '\n') {
++ 					*to++ = '\r';
++ 					left--;
++ 				}
++ 				if (!left) carry = 1;
++ 				else {
++ 					*to++ = ch;
++ 					left--;
++ 				}
++ 			}
++ 			written -= left;
++ 		}
++ 		filp->f_pos += written;
++ 		if (filp->f_pos > inode->i_size) {
++ 			inode->i_size = filp->f_pos;
++ 			inode->i_dirt = 1;
++ 		}
++ 		bh->b_dirt = 1;
++ 		brelse(bh);
++ 	}
++ 	inode->i_mtime = inode->i_ctime = CURRENT_TIME;
++ 	inode->i_data[D_ATTRS] |= ATTR_ARCH;
++ 	inode->i_dirt = 1;
++ 	return start == buf ? error : buf-start;
++ }
++ 
++ 
++ void msdos_truncate(struct inode *inode)
++ {
++ 	int cluster;
++ 
++ 	if (!S_ISREG(inode->i_mode)) return;
++ 	cluster = SECTOR_SIZE*MSDOS_SB(inode->i_sb)->cluster_size;
++ 	(void) fat_free(inode,(inode->i_size+(cluster-1))/cluster);
++ 	inode->i_data[D_ATTRS] |= ATTR_ARCH;
++ 	inode->i_dirt = 1;
++ }
+*** /dev/null	Sat Jul 18 22:26:09 1992
+--- linux/fs/msdos/inode.c	Thu Jul 16 00:35:11 1992
+***************
+*** 0 ****
+--- 1,275 ----
++ /*
++  *  linux/fs/msdos/inode.c
++  *
++  *  Written 1992 by Werner Almesberger
++  */
++ 
++ #include <errno.h>
++ #include <linux/string.h>
++ #include <linux/stat.h>
++ #include <linux/msdos_fs.h>
++ #include <linux/kernel.h>
++ #include <linux/sched.h>
++ #include <asm/segment.h>
++ 
++ 
++ void msdos_put_inode(struct inode *inode)
++ {
++ 	struct inode *depend;
++ 
++ 	inode->i_size = 0;
++ 	msdos_truncate(inode);
++ 	depend = (struct inode *) inode->i_data[D_DEPEND];
++ 	memset(inode,0,sizeof(struct inode));
++ 	if (depend) {
++ 		if ((struct inode *) depend->i_data[D_OLD] != inode) {
++ 			printk("Invalid link (0x%X): expected 0x%X, got "
++ 			    "0x%X\r\n",(int) depend,(int) inode,
++ 			    depend->i_data[D_OLD]);
++ 			panic("That's fatal");
++ 		}
++ 		depend->i_data[D_OLD] = 0;
++ 		iput(depend);
++ 	}
++ }
++ 
++ 
++ void msdos_put_super(struct super_block *sb)
++ {
++ 	cache_inval_dev(sb->s_dev);
++ 	lock_super(sb);
++ 	sb->s_dev = 0;
++ 	free_super(sb);
++ 	return;
++ }
++ 
++ 
++ static struct super_operations msdos_sops = { 
++ 	msdos_read_inode,
++ 	msdos_write_inode,
++ 	msdos_put_inode,
++ 	msdos_put_super,
++ 	NULL, /* added in 0.96c */
++ 	msdos_statfs
++ };
++ 
++ 
++ static int parse_options(char *options,char *check,char *conversion)
++ {
++ 	char *this,*value;
++ 
++ 	*check = 'n';
++ 	*conversion = 'b';
++ 	if (!options) return 1;
++ 	for (this = strtok(options,","); this; this = strtok(NULL,",")) {
++ 		if (value = strchr(this,'=')) *value++ = 0;
++ 		if (!strcmp(this,"check") && value) {
++ 			if (value[0] && !value[1] && strchr("rns",*value))
++ 				*check = *value;
++ 			else if (!strcmp(value,"releaxed")) *check = 'r';
++ 			else if (!strcmp(value,"normal")) *check = 'n';
++ 			else if (!strcmp(value,"strict")) *check = 's';
++ 			else return 0;
++ 		}
++ 		else if (!strcmp(this,"conv") && value) {
++ 			if (value[0] && !value[1] && strchr("bta",*value))
++ 				*conversion = *value;
++ 			else if (!strcmp(value,"binary")) *conversion = 'b';
++ 			else if (!strcmp(value,"text")) *conversion = 't';
++ 			else if (!strcmp(value,"auto")) *conversion = 'a';
++ 			else return 0;
++ 		}
++ 		else return 0;
++ 	}
++ 	return 1;
++ }
++ 
++ 
++ /* Read the super block of an MS-DOS FS. */
++ 
++ struct super_block *msdos_read_super(struct super_block *s,void *data)
++ {
++ 	struct buffer_head *bh;
++ 	struct msdos_boot_sector *b;
++ 	int data_sectors;
++ 	char check,conversion;
++ 
++ 	if (!parse_options((char *) data,&check,&conversion)) {
++ 		s->s_dev = 0;
++ 		return NULL;
++ 	}
++ 	cache_init();
++ 	lock_super(s);
++ 	bh = bread(s->s_dev,0);
++ 	free_super(s);
++ 	if (bh == NULL) {
++ 		s->s_dev = 0;
++ 		printk("MSDOS bread failed\r\n");
++ 		return NULL;
++ 	}
++ 	b = (struct msdos_boot_sector *) bh->b_data;
++ 	MSDOS_SB(s)->cluster_size = b->cluster_size;
++ 	MSDOS_SB(s)->fats = b->fats;
++ 	MSDOS_SB(s)->fat_start = b->reserved;
++ 	MSDOS_SB(s)->fat_length = b->fat_length;
++ 	MSDOS_SB(s)->dir_start = b->reserved+b->fats*b->fat_length;
++ 	MSDOS_SB(s)->dir_entries = *((unsigned short *) &b->dir_entries);
++ 	MSDOS_SB(s)->data_start = MSDOS_SB(s)->dir_start+((MSDOS_SB(s)->
++ 	    dir_entries << 5) >> 9);
++ 	data_sectors = (*((unsigned short *) &b->sectors) ? *((unsigned short *)
++ 	    &b->sectors) : b->total_sect)-MSDOS_SB(s)->data_start;
++ 	MSDOS_SB(s)->clusters = b->cluster_size ? data_sectors/b->cluster_size :
++ 	    0;
++ 	MSDOS_SB(s)->fat_bits = MSDOS_SB(s)->clusters > MSDOS_FAT12 ? 16 : 12;
++ 	brelse(bh);
++ printk("[MS-DOS FS Rel. alpha.5, FAT %d, check=%c, conv=%c]\r\n",
++   MSDOS_SB(s)->fat_bits,check,conversion);
++ printk("[me=0x%x,cs=%d,#f=%d,fs=%d,fl=%d,ds=%d,de=%d,data=%d,se=%d,ts=%d]\r\n",
++   b->media,MSDOS_SB(s)->cluster_size,MSDOS_SB(s)->fats,MSDOS_SB(s)->fat_start,
++   MSDOS_SB(s)->fat_length,MSDOS_SB(s)->dir_start,MSDOS_SB(s)->dir_entries,
++   MSDOS_SB(s)->data_start,*(unsigned short *) &b->sectors,b->total_sect);
++ 	if (!MSDOS_SB(s)->fats || (MSDOS_SB(s)->dir_entries & (MSDOS_DPS-1))
++ 	    || !b->cluster_size || MSDOS_SB(s)->clusters+2 > MSDOS_SB(s)->
++ 		fat_length*SECTOR_SIZE*8/MSDOS_SB(s)->fat_bits) {
++ 		s->s_dev = 0;
++ 		printk("Unsupported FS parameters\r\n");
++ 		return NULL;
++ 	}
++ 	if (!MSDOS_CAN_BMAP(MSDOS_SB(s))) printk("No bmap support\r\n");
++ 	s->s_magic = MSDOS_SUPER_MAGIC;
++ 	MSDOS_SB(s)->name_check = check;
++ 	MSDOS_SB(s)->conversion = conversion;
++ 	/* set up enough so that it can read an inode */
++ 	s->s_op = &msdos_sops;
++ 	MSDOS_SB(s)->fs_uid = current->uid;
++ 	MSDOS_SB(s)->fs_gid = current->gid;
++ 	MSDOS_SB(s)->fs_umask = current->umask;
++ 	if (!(s->s_mounted = iget(s->s_dev,MSDOS_ROOT_INO))) {
++ 		s->s_dev = 0;
++ 		printk("get root inode failed\n");
++ 		return NULL;
++ 	}
++ 	return s;
++ }
++ 
++ 
++ void msdos_statfs(struct super_block *sb,struct statfs *buf)
++ {
++ 	int cluster_size,free,this;
++ 
++ 	cluster_size = MSDOS_SB(sb)->cluster_size;
++ 	put_fs_long(sb->s_magic,&buf->f_type);
++ 	put_fs_long(SECTOR_SIZE,&buf->f_bsize);
++ 	put_fs_long(MSDOS_SB(sb)->clusters*cluster_size,&buf->f_blocks);
++ 	free = 0;
++ 	for (this = 2; this < MSDOS_SB(sb)->clusters+2; this++)
++ 		if (!fat_access(sb,this,-1)) free++;
++ 	free *= cluster_size;
++ 	put_fs_long(free,&buf->f_bfree);
++ 	put_fs_long(free,&buf->f_bavail);
++ 	put_fs_long(0,&buf->f_files);
++ 	put_fs_long(0,&buf->f_ffree);
++ }
++ 
++ 
++ int msdos_bmap(struct inode *inode,int block)
++ {
++ 	struct msdos_sb_info *sb;
++ 	int cluster,offset;
++ 
++ 	sb = MSDOS_SB(inode->i_sb);
++ 	if ((sb->cluster_size & 1) || (sb->data_start & 1)) return 0;
++ 	if (inode->i_ino == MSDOS_ROOT_INO) {
++ 		if (sb->dir_start & 1) return 0;
++ 		return (sb->dir_start >> 1)+block;
++ 	}
++ 	cluster = (block*2)/sb->cluster_size;
++ 	offset = (block*2) % sb->cluster_size;
++ 	if (!(cluster = get_cluster(inode,cluster))) return 0;
++ 	return ((cluster-2)*sb->cluster_size+sb->data_start+offset) >> 1;
++ }
++ 
++ 
++ void msdos_read_inode(struct inode *inode)
++ {
++ 	struct buffer_head *bh;
++ 	struct msdos_dir_entry *raw_entry;
++ 	int this;
++ 
++ /* printk("read inode %d\r\n",inode->i_ino); */
++ 	inode->i_data[D_BUSY] = inode->i_data[D_DEPEND] =
++ 	    inode->i_data[D_OLD] = 0;
++ 	inode->i_data[D_BINARY] = 1;
++ 	inode->i_uid = MSDOS_SB(inode->i_sb)->fs_uid;
++ 	inode->i_gid = MSDOS_SB(inode->i_sb)->fs_gid;
++ 	if (inode->i_ino == MSDOS_ROOT_INO) {
++ 		inode->i_mode = (0777 & ~MSDOS_SB(inode->i_sb)->fs_umask) |
++ 		    S_IFDIR;
++ 		inode->i_op = &msdos_dir_inode_operations;
++ 		inode->i_nlink = 1;
++ 		inode->i_size = MSDOS_SB(inode->i_sb)->dir_entries*
++ 		    sizeof(struct msdos_dir_entry);
++ 		inode->i_data[D_START] = 0;
++ 		inode->i_data[D_ATTRS] = 0;
++ 		inode->i_mtime = inode->i_atime = inode->i_ctime = 0;
++ 		return;
++ 	}
++ 	if (!(bh = bread(inode->i_dev,inode->i_ino >> MSDOS_DPB_BITS)))
++ 	    panic("unable to read i-node block");
++ 	raw_entry = &((struct msdos_dir_entry *) (bh->b_data))
++ 	    [inode->i_ino & (MSDOS_DPB-1)];
++ 	if (raw_entry->attr & ATTR_DIR) {
++ 		inode->i_mode = MSDOS_MKMODE(raw_entry->attr,0777 &
++ 		    ~MSDOS_SB(inode->i_sb)->fs_umask) | S_IFDIR;
++ 		inode->i_op = &msdos_dir_inode_operations;
++ 		inode->i_nlink = 3;
++ 		inode->i_size = 0;
++ 		for (this = raw_entry->start; this && this != -1; this =
++ 		    fat_access(inode->i_sb,this,-1))
++ 			inode->i_size += SECTOR_SIZE*MSDOS_SB(inode->i_sb)->
++ 			    cluster_size;
++ 	}
++ 	else {
++ 		inode->i_mode = MSDOS_MKMODE(raw_entry->attr,0666 &
++ 		    ~MSDOS_SB(inode->i_sb)->fs_umask) | S_IFREG;
++ 		inode->i_op = MSDOS_CAN_BMAP(MSDOS_SB(inode->i_sb)) ? 
++ 		    &msdos_file_inode_operations :
++ 		    &msdos_file_inode_operations_no_bmap;
++ 		inode->i_nlink = 1;
++ 		inode->i_size = raw_entry->size;
++ 	}
++ 	inode->i_data[D_BINARY] = is_binary(MSDOS_SB(inode->i_sb)->conversion,
++ 	    raw_entry->ext);
++ 	inode->i_data[D_START] = raw_entry->start;
++ 	inode->i_data[D_ATTRS] = raw_entry->attr & ATTR_UNUSED;
++ 	inode->i_mtime = inode->i_atime = inode->i_ctime =
++ 	    date_dos2unix(raw_entry->time,raw_entry->date);
++ 	brelse(bh);
++ }
++ 
++ 
++ void msdos_write_inode(struct inode *inode)
++ {
++ 	struct buffer_head *bh;
++ 	struct msdos_dir_entry *raw_entry;
++ 
++ 	inode->i_dirt = 0;
++ 	if (inode->i_ino == MSDOS_ROOT_INO || !inode->i_nlink) return;
++ 	if (!(bh = bread(inode->i_dev,inode->i_ino >> MSDOS_DPB_BITS)))
++ 	    panic("unable to read i-node block");
++ 	raw_entry = &((struct msdos_dir_entry *) (bh->b_data))
++ 	    [inode->i_ino & (MSDOS_DPB-1)];
++ 	if (S_ISDIR(inode->i_mode)) {
++ 		raw_entry->attr = ATTR_DIR;
++ 		raw_entry->size = 0;
++ 	}
++ 	else {
++ 		raw_entry->attr = ATTR_NONE;
++ 		raw_entry->size = inode->i_size;
++ 	}
++ 	raw_entry->attr |= MSDOS_MKATTR(inode->i_mode) | inode->i_data[D_ATTRS];
++ 	raw_entry->start = inode->i_data[D_START];
++ 	date_unix2dos(inode->i_mtime,&raw_entry->time,&raw_entry->date);
++ 	bh->b_dirt = 1;
++ 	brelse(bh);
++ }
+*** /dev/null	Sat Jul 18 22:26:09 1992
+--- linux/fs/msdos/misc.c	Thu Jul 16 00:38:36 1992
+***************
+*** 0 ****
+--- 1,365 ----
++ /*
++  *  linux/fs/msdos/misc.c
++  *
++  *  Written 1992 by Werner Almesberger
++  */
++ 
++ #include <errno.h>
++ #include <limits.h>
++ #include <linux/string.h>
++ #include <linux/stat.h>
++ #include <linux/msdos_fs.h>
++ #include <linux/sched.h>
++ #include <linux/kernel.h>
++ 
++ 
++ static char bin_extensions[] =
++   "EXECOMAPPSYSOVLOBJLIB"		/* program code */
++   "ARCZIPLHALZHZOOTARZ  ARJ"		/* common archivers */
++   "GIFBMPTIFGL JPG"			/* graphics */
++   "TFMVF GF PK PXLDVI";			/* TeX */
++ 
++ 
++ /* Select binary/text conversion */
++ 
++ int is_binary(char conversion,char *extension)
++ {
++ 	char *walk;
++ 
++ 	switch (conversion) {
++ 		case 'b':
++ 			return 1;
++ 		case 't':
++ 			return 0;
++ 		case 'a':
++ 			for (walk = bin_extensions; *walk; walk += 3)
++ 				if (!strncmp(extension,walk,3)) return 1;
++ 			return 0;
++ 		default:
++ 			panic("Invalid conversion mode");
++ 	}
++ }
++ 
++ 
++ static struct wait_queue *creation_wait = NULL;
++ static creation_lock = 0;
++ 
++ 
++ void lock_creation(void)
++ {
++ 	while (creation_lock) sleep_on(&creation_wait);
++ 	creation_lock = 1;
++ }
++ 
++ 
++ void unlock_creation(void)
++ {
++ 	creation_lock = 0;
++ 	wake_up(&creation_wait);
++ }
++ 
++ 
++ int msdos_add_cluster(struct inode *inode)
++ {
++ 	static struct wait_queue *wait = NULL;
++ 	static int lock = 0;
++ 	static int previous = 0; /* works best if one FS is being used */
++ 	int count,this,limit,last,current,sector;
++ 	void *data;
++ 	struct buffer_head *bh;
++ 
++ 	if (inode->i_ino == MSDOS_ROOT_INO) return -ENOSPC;
++ 	while (lock) sleep_on(&wait);
++ 	lock = 1;
++ 	limit = MSDOS_SB(inode->i_sb)->clusters;
++ 	this = limit; /* to keep GCC happy */
++ 	for (count = 0; count < limit; count++) {
++ 		this = ((count+previous) % limit)+2;
++ 		if (fat_access(inode->i_sb,this,-1) == 0) break;
++ 	}
++ #ifdef DEBUG
++ printk("free cluster: %d\r\n",this);
++ #endif
++ 	previous = (count+previous+1) % limit;
++ 	if (count >= limit) {
++ 		lock = 0;
++ 		wake_up(&wait);
++ 		return -ENOSPC;
++ 	}
++ 	fat_access(inode->i_sb,this,MSDOS_SB(inode->i_sb)->fat_bits == 12 ?
++ 	    0xff8 : 0xfff8);
++ 	lock = 0;
++ 	wake_up(&wait);
++ #ifdef DEBUG
++ printk("set to %x\r\n",fat_access(inode->i_sb,this,-1));
++ #endif
++ 	if (!S_ISDIR(inode->i_mode)) {
++ 		last = inode->i_size ? get_cluster(inode,(inode->i_size-1)/
++ 		    SECTOR_SIZE/MSDOS_SB(inode->i_sb)->cluster_size) : 0;
++ 	}
++ 	else {
++ 		last = 0;
++ 		if (current = inode->i_data[D_START]) {
++ 			cache_lookup(inode,INT_MAX,&last,&current);
++ 			while (current && current != -1)
++ 				if (!(current = fat_access(inode->i_sb,
++ 				    last = current,-1)))
++ 					panic("File without EOF");
++ 			}
++ 	}
++ #ifdef DEBUG
++ printk("last = %d\r\n",last);
++ #endif
++ 	if (last) fat_access(inode->i_sb,last,this);
++ 	else {
++ 		inode->i_data[D_START] = this;
++ 		inode->i_dirt = 1;
++ 	}
++ #ifdef DEBUG
++ if (last) printk("next set to %d\r\n",fat_access(inode->i_sb,last,-1));
++ #endif
++ 	for (current = 0; current < MSDOS_SB(inode->i_sb)->cluster_size;
++ 	    current++) {
++ 		sector = MSDOS_SB(inode->i_sb)->data_start+(this-2)*
++ 		    MSDOS_SB(inode->i_sb)->cluster_size+current;
++ #ifdef DEBUG
++ printk("zeroing sector %d\r\n",sector);
++ #endif
++ 		if (current < MSDOS_SB(inode->i_sb)->cluster_size-1 &&
++ 		    !(sector & 1)) {
++ 			if (!(bh = getblk(inode->i_dev,sector >> 1)))
++ 				printk("getblk failed\r\n");
++ 			else {
++ 				memset(bh->b_data,0,BLOCK_SIZE);
++ 				bh->b_uptodate = 1;
++ 			}
++ 			current++;
++ 		}
++ 		else {
++ 			if (!(bh = msdos_sread(inode->i_dev,sector,&data)))
++ 				printk("msdos_sread failed\r\n");
++ 			else memset(data,0,SECTOR_SIZE);
++ 		}
++ 		if (bh) {
++ 			bh->b_dirt = 1;
++ 			brelse(bh);
++ 		}
++ 	}
++ 	if (S_ISDIR(inode->i_mode)) {
++ 		if (inode->i_size & (SECTOR_SIZE-1))
++ 			panic("Odd directory size");
++ 		inode->i_size += SECTOR_SIZE*MSDOS_SB(inode->i_sb)->
++ 		    cluster_size;
++ #ifdef DEBUG
++ printk("size is %d now (%x)\r\n",inode->i_size,inode);
++ #endif
++ 		inode->i_dirt = 1;
++ 	}
++ 	return 0;
++ }
++ 
++ 
++ /* Linear day numbers of the respective 1sts in non-leap years. */
++ 
++ static int day_n[] = { 0,31,59,90,120,151,181,212,243,273,304,334,0,0,0,0 };
++ 		  /* JanFebMarApr May Jun Jul Aug Sep Oct Nov Dec */
++ 
++ 
++ /* Convert a MS-DOS time/date pair to a UNIX date (seconds since 1 1 70). */
++ 
++ int date_dos2unix(unsigned short time,unsigned short date)
++ {
++ 	int month,year;
++ 
++ 	month = ((date >> 5) & 4)-1;
++ 	year = date >> 9;
++ 	return (time & 31)*2+60*((time >> 5) & 63)+(time >> 11)*3600+86400*
++ 	    ((date & 31)-1+day_n[month]+(year/4)+year*365-((year & 3) == 0 &&
++ 	    month < 2 ? 1 : 0)+3653);
++ 			/* days since 1.1.70 plus 80's leap day */
++ }
++ 
++ 
++ /* Convert linear UNIX date to a MS-DOS time/date pair. */
++ 
++ void date_unix2dos(int unix_date,unsigned short *time,
++     unsigned short *date)
++ {
++ 	int day,year,nl_day,month;
++ 
++ 	*time = (unix_date % 60)/2+(((unix_date/60) % 60) << 5)+
++ 	    (((unix_date/3600) % 24) << 11);
++ 	day = unix_date/86400-3652;
++ 	year = day/365;
++ 	if ((year+3)/4+365*year > day) year--;
++ 	day -= (year+3)/4+365*year;
++ 	if (day == 59 && !(year & 3)) {
++ 		nl_day = day;
++ 		month = 2;
++ 	}
++ 	else {
++ 		nl_day = (year & 3) || day <= 59 ? day : day-1;
++ 		for (month = 0; month < 12; month++)
++ 			if (day_n[month] > nl_day) break;
++ 	}
++ 	*date = nl_day-day_n[month-1]+1+(month << 5)+(year << 9);
++ }
++ 
++ 
++ /* Returns the inode number of the directory entry at offset pos. If bh is
++    non-NULL, it is brelse'd before. Pos is incremented. The buffer header is
++    returned in bh. */
++ 
++ int msdos_get_entry(struct inode *dir,int *pos,struct buffer_head **bh,
++     struct msdos_dir_entry **de)
++ {
++ 	int sector,offset;
++ 	void *data;
++ 
++ 	while (1) {
++ 		offset = *pos;
++ 		if ((sector = msdos_smap(dir,*pos >> SECTOR_BITS)) == -1)
++ 			return -1;
++ 		if (!sector) return -1; /* FAT error ... */
++ 		*pos += sizeof(struct msdos_dir_entry);
++ 		if (*bh) brelse(*bh);
++ 		if (!(*bh = msdos_sread(dir->i_dev,sector,&data))) continue;
++ 		*de = (struct msdos_dir_entry *) (data+(offset &
++ 		    (SECTOR_SIZE-1)));
++ 		return (sector << MSDOS_DPS_BITS)+((offset & (SECTOR_SIZE-1)) >>
++ 		    MSDOS_DIR_BITS);
++ 	}
++ }
++ 
++ 
++ /* Scans a directory for a given file (name points to its formatted name) or
++    for an empty directory slot (name is NULL). Returns the inode number. */
++ 
++ int msdos_scan(struct inode *dir,char *name,struct buffer_head **res_bh,
++     struct msdos_dir_entry **res_de,int *ino)
++ {
++ 	int pos;
++ 	struct msdos_dir_entry *de;
++ 	struct inode *inode;
++ 
++ 	pos = 0;
++ 	*res_bh = NULL;
++ 	while ((*ino = msdos_get_entry(dir,&pos,res_bh,&de)) > -1) {
++ 		if (name) {
++ 			if (de->name[0] && ((unsigned char *) (de->name))[0]
++ 			    != DELETED_FLAG && !(de->attr & ATTR_VOLUME) &&
++ 			    !strncmp(de->name,name,MSDOS_NAME)) break;
++ 		}
++ 		else if (!de->name[0] || ((unsigned char *) (de->name))[0] ==
++ 			    DELETED_FLAG) {
++ 				if (!(inode = iget(dir->i_dev,*ino))) break;
++ 				if (!inode->i_data[D_BUSY]) {
++ 					iput(inode);
++ 					break;
++ 				}
++ 	/* skip deleted files that haven't been closed yet */
++ 				iput(inode);
++ 			}
++ 	}
++ 	if (*ino == -1) {
++ 		if (*res_bh) brelse(*res_bh);
++ 		*res_bh = NULL;
++ 		return name ? -ENOENT : -ENOSPC;
++ 	}
++ 	*res_de = de;
++ 	return 0;
++ }
++ 
++ 
++ /* Now an ugly part: this set of directory scan routines works on clusters
++    rather than on inodes and sectors. They are necessary to locate the '..'
++    directory "inode". */
++ 
++ 
++ static int raw_found(struct super_block *sb,int sector,char *name,int number,
++     int *ino)
++ {
++ 	struct buffer_head *bh;
++ 	struct msdos_dir_entry *data;
++ 	int entry,start;
++ 
++ 	if (!(bh = msdos_sread(sb->s_dev,sector,(void **) &data))) return -EIO;
++ 	for (entry = 0; entry < MSDOS_DPS; entry++)
++ 		if (name ? !strncmp(data[entry].name,name,MSDOS_NAME) :
++ 		    *(unsigned char *) data[entry].name != DELETED_FLAG &&
++ 		    data[entry].start == number) {
++ 			if (ino) *ino = sector*MSDOS_DPS+entry;
++ 			start = data[entry].start;
++ 			brelse(bh);
++ 			return start;
++ 		}
++ 	brelse(bh);
++ 	return -1;
++ }
++ 
++ 
++ static int raw_scan_root(struct super_block *sb,char *name,int number,int *ino)
++ {
++ 	int count,cluster;
++ 
++ 	for (count = 0; count < MSDOS_SB(sb)->dir_entries/MSDOS_DPS; count++) {
++ 		if ((cluster = raw_found(sb,MSDOS_SB(sb)->dir_start+count,name,
++ 		    number,ino)) >= 0) return cluster;
++ 	}
++ 	return -ENOENT;
++ }
++ 
++ 
++ static int raw_scan_nonroot(struct super_block *sb,int start,char *name,
++     int number,int *ino)
++ {
++ 	int count,cluster;
++ 
++ 	do {
++ 		for (count = 0; count < MSDOS_SB(sb)->cluster_size; count++) {
++ 			if ((cluster = raw_found(sb,(start-2)*MSDOS_SB(sb)->
++ 			    cluster_size+MSDOS_SB(sb)->data_start+count,name,
++ 			    number,ino)) >= 0) return cluster;
++ 		}
++ 		if (!(start = fat_access(sb,start,-1))) panic("FAT error");
++ 	}
++ 	while (start != -1);
++ 	return -ENOENT;
++ }
++ 
++ 
++ static int raw_scan(struct super_block *sb,int start,char *name,int number,
++     int *ino)
++ {
++     if (start) return raw_scan_nonroot(sb,start,name,number,ino);
++     else return raw_scan_root(sb,name,number,ino);
++ }
++ 
++ 
++ int msdos_parent_ino(struct inode *dir,int locked)
++ {
++ 	int error,current,prev,this;
++ 
++ 	if (!S_ISDIR(dir->i_mode)) panic("Non-directory fed to m_p_i");
++ 	if (dir->i_ino == MSDOS_ROOT_INO) return dir->i_ino;
++ 	if (!locked) lock_creation(); /* prevent renames */
++ 	if ((current = raw_scan(dir->i_sb,dir->i_data[D_START],MSDOS_DOTDOT,0,
++ 	    NULL)) < 0) {
++ 		if (!locked) unlock_creation();
++ 		return current;
++ 	}
++ 	if (!current) this = MSDOS_ROOT_INO;
++ 	else {
++ 		if ((prev = raw_scan(dir->i_sb,current,MSDOS_DOTDOT,0,NULL)) <
++ 		    0) {
++ 			if (!locked) unlock_creation();
++ 			return prev;
++ 		}
++ 		if ((error = raw_scan(dir->i_sb,prev,NULL,current,&this)) < 0) {
++ 			if (!locked) unlock_creation();
++ 			return error;
++ 		}
++ 	}
++ 	if (!locked) unlock_creation();
++ 	return this;
++ }
+*** /dev/null	Sat Jul 18 22:26:09 1992
+--- linux/fs/msdos/namei.c	Thu Jul 16 00:35:11 1992
+***************
+*** 0 ****
+--- 1,512 ----
++ /*
++  *  linux/fs/msdos/namei.c
++  *
++  *  Written 1992 by Werner Almesberger
++  */
++ 
++ #include <errno.h>
++ #include <asm/segment.h>
++ #include <linux/string.h>
++ #include <linux/stat.h>
++ #include <linux/sched.h>
++ #include <linux/msdos_fs.h>
++ #include <linux/kernel.h>
++ 
++ 
++ /* MS-DOS "device special files" */
++ 
++ static char *reserved_names[] = {
++     "CON     ","PRN     ","NUL     ","AUX     ",
++     "LPT1    ","LPT2    ","LPT3    ","LPT4    ",
++     "COM1    ","COM2    ","COM3    ","COM4    ",
++     NULL };
++ 
++ 
++ /* Formats an MS-DOS file name. Rejects invalid names. */
++ 
++ static int msdos_format_name(char conv,const char *name,int len,char *res)
++ {
++ 	char *walk,**reserved;
++ 	char c;
++ 	int space;
++ 
++ 	if (get_fs_byte(name) == DELETED_FLAG) return -EINVAL;
++ 	if (get_fs_byte(name) == '.' && (len == 1 || (len == 2 &&
++ 	    get_fs_byte(name+1) == '.'))) {
++ 		memset(res+1,' ',10);
++ 		while (len--) *res++ = '.';
++ 		return 0;
++ 	}
++ 	space = 0; /* to make GCC happy */
++ 	c = 0;
++ 	for (walk = res; len && walk-res < 8; walk++) {
++ 	    	c = get_fs_byte(name++);
++ 		len--;
++ 		if (c == ' ' && conv != 'r') return -EINVAL;
++ 		if (c >= 'A' && c <= 'Z') {
++ 			if (conv != 'r') return -EINVAL;
++ 			c += 32;
++ 		}
++ 		if (c < ' ' || c == ':' || c == '\\') return -EINVAL;
++ 		if (c == '.') break;
++ 		space = c == ' ';
++ 		*walk = c >= 'a' && c <= 'z' ? c-32 : c;
++ 	}
++ 	if (space) return -EINVAL;
++ 	if (conv == 's' && len && c != '.') {
++ 		c = get_fs_byte(name++);
++ 		len--;
++ 		if (c != '.') return -EINVAL;
++ 	}
++ 	while (c != '.' && len--) c = get_fs_byte(name++);
++ 	if (walk == res) return -EINVAL;
++ 	if (c == '.') {
++ 		while (walk-res < 8) *walk++ = ' ';
++ 		while (len > 0 && walk-res < MSDOS_NAME) {
++ 			c = get_fs_byte(name++);
++ 			len--;
++ 			if (c == ' ' && conv != 'r') return -EINVAL;
++ 			if (c < ' ' || c == ':' || c == '\\' || c == '.')
++ 				return -EINVAL;
++ 			if (c >= 'A' && c <= 'Z') {
++ 				if (conv != 'r') return -EINVAL;
++ 				c += 32;
++ 			}
++ 			space = c == ' ';
++ 			*walk++ = c >= 'a' && c <= 'z' ? c-32 : c;
++ 		}
++ 		if (space) return -EINVAL;
++ 		if (conv == 's' && len) return -EINVAL;
++ 	}
++ 	while (walk-res < MSDOS_NAME) *walk++ = ' ';
++ 	for (reserved = reserved_names; *reserved; reserved++)
++ 		if (!strncmp(res,*reserved,8)) return -EINVAL;
++ 	return 0;
++ }
++ 
++ 
++ /* Locates a directory entry. */
++ 
++ static int msdos_find(struct inode *dir,const char *name,int len,
++     struct buffer_head **bh,struct msdos_dir_entry **de,int *ino)
++ {
++ 	char msdos_name[MSDOS_NAME];
++ 	int res;
++ 
++ 	if ((res = msdos_format_name(MSDOS_SB(dir->i_sb)->name_check,name,len,
++ 	    msdos_name)) < 0) return res;
++ 	return msdos_scan(dir,msdos_name,bh,de,ino);
++ }
++ 
++ 
++ int msdos_lookup(struct inode *dir,const char *name,int len,
++     struct inode **result)
++ {
++ 	int ino,res;
++ 	struct msdos_dir_entry *de;
++ 	struct buffer_head *bh;
++ 	struct inode *next;
++ 
++ 	*result = NULL;
++ 	if (!dir) return -ENOENT;
++ 	if (!S_ISDIR(dir->i_mode)) {
++ 		iput(dir);
++ 		return -ENOENT;
++ 	}
++ 	if (len == 1 && get_fs_byte(name) == '.') {
++ 		*result = dir;
++ 		return 0;
++ 	}
++ 	if (len == 2 && get_fs_byte(name) == '.' && get_fs_byte(name+1) == '.')
++ 	    {
++ 		ino = msdos_parent_ino(dir,0);
++ 		iput(dir);
++ 		if (ino < 0) return ino;
++ 		if (!(*result = iget(dir->i_dev,ino))) return -EACCES;
++ 		return 0;
++ 	}
++ 	if ((res = msdos_find(dir,name,len,&bh,&de,&ino)) < 0) {
++ 		iput(dir);
++ 		return res;
++ 	}
++ 	if (bh) brelse(bh);
++ /* printk("lookup: ino=%d\r\n",ino); */
++ 	if (!(*result = iget(dir->i_dev,ino))) {
++ 		iput(dir);
++ 		return -EACCES;
++ 	}
++ 	if ((*result)->i_data[D_BUSY]) { /* mkdir in progress */
++ 		iput(*result);
++ 		iput(dir);
++ 		return -ENOENT;
++ 	}
++ 	while ((*result)->i_data[D_OLD]) {
++ 		next = (struct inode *) ((*result)->i_data[D_OLD]);
++ 		iput(*result);
++ 		if (!(*result = iget(next->i_dev,next->i_ino)))
++ 			panic("msdos_lookup: Can't happen");
++ 	}
++ 	iput(dir);
++ 	return 0;
++ }
++ 
++ 
++ /* Creates a directory entry (name is already formatted). */
++ 
++ static int msdos_create_entry(struct inode *dir,char *name,int is_dir,
++     struct inode **result)
++ {
++ 	struct buffer_head *bh;
++ 	struct msdos_dir_entry *de;
++ 	int res,ino;
++ 
++ 	if ((res = msdos_scan(dir,NULL,&bh,&de,&ino)) < 0) {
++ 		if (dir->i_ino == MSDOS_ROOT_INO) return -ENOSPC;
++ 		if ((res = msdos_add_cluster(dir)) < 0) return res;
++ 		if ((res = msdos_scan(dir,NULL,&bh,&de,&ino)) < 0) return res;
++ 	}
++ 	memcpy(de->name,name,MSDOS_NAME);
++ 	de->attr = is_dir ? ATTR_DIR : ATTR_ARCH;
++ 	de->start = 0;
++ 	date_unix2dos(CURRENT_TIME,&de->time,&de->date);
++ 	de->size = 0;
++ 	bh->b_dirt = 1;
++ 	if (*result = iget(dir->i_dev,ino)) msdos_read_inode(*result);
++ 	brelse(bh);
++ 	if (!*result) return -EIO;
++ 	(*result)->i_mtime = (*result)->i_atime = (*result)->i_ctime =
++ 	    CURRENT_TIME;
++ 	(*result)->i_dirt = 1;
++ 	return 0;
++ }
++ 
++ 
++ int msdos_create(struct inode *dir,const char *name,int len,int mode,
++ 	struct inode **result)
++ {
++ 	struct buffer_head *bh;
++ 	struct msdos_dir_entry *de;
++ 	char msdos_name[MSDOS_NAME];
++ 	int ino,res;
++ 
++ 	if (!dir) return -ENOENT;
++ 	if ((res = msdos_format_name(MSDOS_SB(dir->i_sb)->name_check,name,len,
++ 	    msdos_name)) < 0) {
++ 		iput(dir);
++ 		return res;
++ 	}
++ 	lock_creation();
++ 	if (msdos_scan(dir,msdos_name,&bh,&de,&ino) >= 0) {
++ 		unlock_creation();
++ 		brelse(bh);
++ 		iput(dir);
++ 		return -EEXIST;
++  	}
++ 	res = msdos_create_entry(dir,msdos_name,S_ISDIR(mode),result);
++ 	unlock_creation();
++ 	iput(dir);
++ 	return res;
++ }
++ 
++ 
++ int msdos_mkdir(struct inode *dir,const char *name,int len,int mode)
++ {
++ 	struct buffer_head *bh;
++ 	struct msdos_dir_entry *de;
++ 	struct inode *inode,*dot;
++ 	char msdos_name[MSDOS_NAME];
++ 	int ino,res;
++ 
++ 	if ((res = msdos_format_name(MSDOS_SB(dir->i_sb)->name_check,name,len,
++ 	    msdos_name)) < 0) {
++ 		iput(dir);
++ 		return res;
++ 	}
++ 	lock_creation();
++ 	if (msdos_scan(dir,msdos_name,&bh,&de,&ino) >= 0) {
++ 		unlock_creation();
++ 		brelse(bh);
++ 		iput(dir);
++ 		return -EEXIST;
++  	}
++ 	if ((res = msdos_create_entry(dir,msdos_name,1,&inode)) < 0) {
++ 		unlock_creation();
++ 		iput(dir);
++ 		return res;
++ 	}
++ 	inode->i_data[D_BUSY] = 1; /* prevent lookups */
++ 	if ((res = msdos_add_cluster(inode)) < 0) goto mkdir_error;
++ 	if ((res = msdos_create_entry(inode,MSDOS_DOT,1,&dot)) < 0)
++ 		goto mkdir_error;
++ 	dot->i_size = inode->i_size;
++ 	dot->i_data[D_START] = inode->i_data[D_START];
++ 	dot->i_dirt = 1;
++ 	iput(dot);
++ 	if ((res = msdos_create_entry(inode,MSDOS_DOTDOT,1,&dot)) < 0)
++ 		goto mkdir_error;
++ 	unlock_creation();
++ 	dot->i_size = dir->i_size;
++ 	dot->i_data[D_START] = dir->i_data[D_START];
++ 	dot->i_dirt = 1;
++ 	inode->i_data[D_BUSY] = 0;
++ 	iput(dot);
++ 	iput(inode);
++ 	iput(dir);
++ 	return 0;
++ mkdir_error:
++ 	iput(inode);
++ 	if (msdos_rmdir(dir,name,len) < 0) panic("rmdir in mkdir failed");
++ 	unlock_creation();
++ 	return res;
++ }
++ 
++ 
++ int msdos_rmdir(struct inode *dir,const char *name,int len)
++ {
++ 	int res,ino,pos;
++ 	struct buffer_head *bh,*dbh;
++ 	struct msdos_dir_entry *de,*dde;
++ 	struct inode *inode;
++ 
++ 	bh = NULL;
++ 	inode = NULL;
++ 	res = -EINVAL;
++ 	if (len == 1 && get_fs_byte(name) == '.') goto rmdir_done;
++ 	if ((res = msdos_find(dir,name,len,&bh,&de,&ino)) < 0) goto rmdir_done;
++ 	res = -ENOENT;
++ 	if (!(inode = iget(dir->i_dev,ino))) goto rmdir_done;
++ 	res = -ENOTDIR;
++ 	if (!S_ISDIR(inode->i_mode)) goto rmdir_done;
++ 	res = -EBUSY;
++ 	if (dir->i_dev != inode->i_dev || dir == inode) goto rmdir_done;
++ 	if (inode->i_count > 1) goto rmdir_done;
++ 	res = -ENOTEMPTY;
++ 	pos = 0;
++ 	dbh = NULL;
++ 	while (msdos_get_entry(inode,&pos,&dbh,&dde) > -1)
++ 		if (dde->name[0] && ((unsigned char *) dde->name)[0] !=
++ 		    DELETED_FLAG && strncmp(dde->name,MSDOS_DOT,MSDOS_NAME) &&
++ 		    strncmp(dde->name,MSDOS_DOTDOT,MSDOS_NAME)) goto rmdir_done;
++ 	if (dbh) brelse(dbh);
++ 	inode->i_nlink = 0;
++ 	dir->i_mtime = CURRENT_TIME;
++ 	inode->i_dirt = dir->i_dirt = 1;
++ 	de->name[0] = DELETED_FLAG;
++ 	bh->b_dirt = 1;
++ 	res = 0;
++ rmdir_done:
++ 	brelse(bh);
++ 	iput(dir);
++ 	iput(inode);
++ 	return res;
++ }
++ 
++ 
++ int msdos_unlink(struct inode *dir,const char *name,int len)
++ {
++ 	int res,ino;
++ 	struct buffer_head *bh;
++ 	struct msdos_dir_entry *de;
++ 	struct inode *inode;
++ 
++ 	bh = NULL;
++ 	inode = NULL;
++ 	if ((res = msdos_find(dir,name,len,&bh,&de,&ino)) < 0)
++ 		goto unlink_done;
++ 	if (!(inode = iget(dir->i_dev,ino))) {
++ 		res = -ENOENT;
++ 		goto unlink_done;
++ 	}
++ 	if (!S_ISREG(inode->i_mode)) {
++ 		res = -EPERM;
++ 		goto unlink_done;
++ 	}
++ 	inode->i_nlink = 0;
++ 	inode->i_data[D_BUSY] = 1;
++ 	inode->i_dirt = 1;
++ 	de->name[0] = DELETED_FLAG;
++ 	bh->b_dirt = 1;
++ unlink_done:
++ 	brelse(bh);
++ 	iput(inode);
++ 	iput(dir);
++ 	return res;
++ }
++ 
++ 
++ static int rename_same_dir(struct inode *old_dir,char *old_name,
++     struct inode *new_dir,char *new_name,struct buffer_head *old_bh,
++     struct msdos_dir_entry *old_de,int old_ino)
++ {
++ 	struct buffer_head *new_bh;
++ 	struct msdos_dir_entry *new_de;
++ 	struct inode *new_inode,*old_inode;
++ 	int new_ino;
++ 	int exists;
++ 
++ 	if (!strncmp(old_name,new_name,MSDOS_NAME)) return 0;
++ 	exists = msdos_scan(new_dir,new_name,&new_bh,&new_de,&new_ino) >= 0;
++ 	if (*(unsigned char *) old_de->name == DELETED_FLAG) {
++ 		if (exists) brelse(new_bh);
++ 		return -ENOENT;
++ 	}
++ 	if (exists) {
++ 		if (!(new_inode = iget(new_dir->i_dev,new_ino))) {
++ 			brelse(new_bh);
++ 			return -EIO;
++ 		}
++ 		if (S_ISDIR(new_inode->i_mode)) {
++ 			iput(new_inode);
++ 			brelse(new_bh);
++ 			return -EPERM;
++ 		}
++ 		new_inode->i_nlink = 0;
++ 		new_inode->i_data[D_BUSY] = 1;
++ 		new_inode->i_dirt = 1;
++ 		new_de->name[0] = DELETED_FLAG;
++ 		new_bh->b_dirt = 1;
++ 		iput(new_inode);
++ 		brelse(new_bh);
++ 	}
++ 	memcpy(old_de->name,new_name,MSDOS_NAME);
++ 	old_bh->b_dirt = 1;
++ 	if (MSDOS_SB(old_dir->i_sb)->conversion == 'a') /* update binary info */
++ 		if (old_inode = iget(old_dir->i_dev,old_ino)) {
++ 			msdos_read_inode(old_inode);
++ 			iput(old_inode);
++ 		}
++ 	return 0;
++ }
++ 
++ 
++ static int rename_diff_dir(struct inode *old_dir,char *old_name,
++     struct inode *new_dir,char *new_name,struct buffer_head *old_bh,
++     struct msdos_dir_entry *old_de,int old_ino)
++ {
++ 	struct buffer_head *new_bh,*free_bh,*dotdot_bh;
++ 	struct msdos_dir_entry *new_de,*free_de,*dotdot_de;
++ 	struct inode *old_inode,*new_inode,*free_inode,*dotdot_inode,*walk;
++ 	int new_ino,free_ino,dotdot_ino;
++ 	int error,exists,ino;
++ 
++ 	if (old_dir->i_dev != new_dir->i_dev) return -EINVAL;
++ 	if (old_ino == new_dir->i_ino) return -EINVAL;
++ 	if (!(walk = iget(new_dir->i_dev,new_dir->i_ino))) return -EIO;
++ 	while (walk->i_ino != MSDOS_ROOT_INO) {
++ 		ino = msdos_parent_ino(walk,1);
++ 		iput(walk);
++ 		if (ino < 0) return ino;
++ 		if (ino == old_ino) return -EINVAL;
++ 		if (!(walk = iget(new_dir->i_dev,ino))) return -EIO;
++ 	}
++ 	iput(walk);
++ 	if ((error = msdos_scan(new_dir,NULL,&free_bh,&free_de,&free_ino)) < 0)
++ 	    return error;
++ 	exists = msdos_scan(new_dir,new_name,&new_bh,&new_de,&new_ino)
++ 	    >= 0;
++ 	if (!(old_inode = iget(old_dir->i_dev,old_ino))) {
++ 		brelse(free_bh);
++ 		if (exists) brelse(new_bh);
++ 		return -EIO;
++ 	}
++ 	if (*(unsigned char *) old_de->name == DELETED_FLAG) {
++ 		iput(old_inode);
++ 		brelse(free_bh);
++ 		if (exists) brelse(new_bh);
++ 		return -ENOENT;
++ 	}
++ 	new_inode = NULL; /* to make GCC happy */
++ 	if (exists) {
++ 		if (!(new_inode = iget(new_dir->i_dev,new_ino))) {
++ 			iput(old_inode);
++ 			brelse(new_bh);
++ 			return -EIO;
++ 		}
++ 		if (S_ISDIR(new_inode->i_mode)) {
++ 			iput(new_inode);
++ 			iput(old_inode);
++ 			brelse(new_bh);
++ 			return -EPERM;
++ 		}
++ 		new_inode->i_nlink = 0;
++ 		new_inode->i_data[D_BUSY] = 1;
++ 		new_inode->i_dirt = 1;
++ 		new_de->name[0] = DELETED_FLAG;
++ 		new_bh->b_dirt = 1;
++ 	}
++ 	memcpy(free_de,old_de,sizeof(struct msdos_dir_entry));
++ 	memcpy(free_de->name,new_name,MSDOS_NAME);
++ 	if (!(free_inode = iget(new_dir->i_dev,free_ino))) {
++ 		free_de->name[0] = DELETED_FLAG;
++ /*  Don't mark free_bh as dirty. Both states are supposed to be equivalent. */
++ 		brelse(free_bh);
++ 		if (exists) {
++ 			iput(new_inode);
++ 			brelse(new_bh);
++ 		}
++ 		return -EIO;
++ 	}
++ 	msdos_read_inode(free_inode);
++ 	old_inode->i_data[D_BUSY] = 1;
++ 	old_inode->i_dirt = 1;
++ 	old_de->name[0] = DELETED_FLAG;
++ 	old_bh->b_dirt = 1;
++ 	free_bh->b_dirt = 1;
++ 	if (!exists) iput(free_inode);
++ 	else {
++ 		new_inode->i_data[D_DEPEND] = (int) free_inode;
++ 		free_inode->i_data[D_OLD] = (int) new_inode;
++ 		/* free_inode is put when putting new_inode */
++ 		iput(new_inode);
++ 		brelse(new_bh);
++ 	}
++ 	if (S_ISDIR(old_inode->i_mode)) {
++ 		if ((error = msdos_scan(old_inode,MSDOS_DOTDOT,&dotdot_bh,
++ 		    &dotdot_de,&dotdot_ino)) < 0) goto rename_done;
++ 		if (!(dotdot_inode = iget(old_inode->i_dev,dotdot_ino))) {
++ 			brelse(dotdot_bh);
++ 			error = -EIO;
++ 			goto rename_done;
++ 		}
++ 		dotdot_de->start = dotdot_inode->i_data[D_START] =
++ 		    new_dir->i_data[D_START];
++ 		dotdot_inode->i_dirt = 1;
++ 		dotdot_bh->b_dirt = 1;
++ 		iput(dotdot_inode);
++ 		brelse(dotdot_bh);
++ 	}
++ 	error = 0;
++ rename_done:
++ 	brelse(free_bh);
++ 	iput(old_inode);
++ 	return error;
++ }
++ 
++ 
++ int msdos_rename(struct inode *old_dir,const char *old_name,int old_len,
++ 	struct inode *new_dir,const char *new_name,int new_len)
++ {
++ 	char old_msdos_name[MSDOS_NAME],new_msdos_name[MSDOS_NAME];
++ 	struct buffer_head *old_bh;
++ 	struct msdos_dir_entry *old_de;
++ 	int old_ino,error;
++ 
++ 	if ((error = msdos_format_name(MSDOS_SB(old_dir->i_sb)->name_check,
++ 	    old_name,old_len,old_msdos_name)) < 0) goto rename_done;
++ 	if ((error = msdos_format_name(MSDOS_SB(new_dir->i_sb)->name_check,
++ 	    new_name,new_len,new_msdos_name)) < 0) goto rename_done;
++ 	if ((error = msdos_scan(old_dir,old_msdos_name,&old_bh,&old_de,
++ 	    &old_ino)) < 0) goto rename_done;
++ 	lock_creation();
++ 	if (old_dir == new_dir)
++ 		error = rename_same_dir(old_dir,old_msdos_name,new_dir,
++ 		    new_msdos_name,old_bh,old_de,old_ino);
++ 	else error = rename_diff_dir(old_dir,old_msdos_name,new_dir,
++ 		    new_msdos_name,old_bh,old_de,old_ino);
++ 	unlock_creation();
++ 	brelse(old_bh);
++ rename_done:
++ 	iput(old_dir);
++ 	iput(new_dir);
++ 	return error;
++ }
+*** /dev/null	Sat Jul 18 22:26:09 1992
+--- linux/fs/msdos/fat.c	Thu Jul 16 00:35:11 1992
+***************
+*** 0 ****
+--- 1,277 ----
++ /*
++  *  linux/fs/msdos/fat.c
++  *
++  *  Written 1992 by Werner Almesberger
++  */
++ 
++ #include <errno.h>
++ #include <linux/stat.h>
++ #include <linux/msdos_fs.h>
++ #include <linux/kernel.h>
++ 
++ 
++ static struct fat_cache *fat_cache,cache[FAT_CACHE];
++ 
++ 
++ /* Returns the this'th FAT entry, -1 if it is an end-of-file entry. If
++    new_value is != -1, that FAT entry is replaced by it. */
++ 
++ int fat_access(struct super_block *sb,int this,int new_value)
++ {
++ 	struct buffer_head *bh,*bh2,*c_bh,*c_bh2;
++ 	unsigned char *p_first,*p_last;
++ 	void *data,*data2,*c_data,*c_data2;
++ 	int first,last,next,copy;
++ 
++ 	if (MSDOS_SB(sb)->fat_bits == 16) first = last = this*2;
++ 	else {
++ 		first = this*3/2;
++ 		last = first+1;
++ 	}
++ 	if (!(bh = msdos_sread(sb->s_dev,MSDOS_SB(sb)->fat_start+(first >>
++ 	    SECTOR_BITS),&data))) {
++ 		printk("bread in fat_access failed\r\n");
++ 		return 0;
++ 	}
++ 	if ((first >> SECTOR_BITS) == (last >> SECTOR_BITS)) {
++ 		bh2 = bh;
++ 		data2 = data;
++ 	}
++ 	else {
++ 		if (!(bh2 = msdos_sread(sb->s_dev,MSDOS_SB(sb)->fat_start+(last
++ 		    >> SECTOR_BITS),&data2))) {
++ 			brelse(bh);
++ 			printk("bread in fat_access failed\r\n");
++ 			return 0;
++ 		}
++ 	}
++ 	if (MSDOS_SB(sb)->fat_bits == 16) {
++ 		next = ((unsigned short *) data)[(first & (SECTOR_SIZE-1))
++ 		    >> 1];
++ 		if (next >= 0xfff8) next = -1;
++ 	}
++ 	else {
++ 		p_first = &((unsigned char *) data)[first & (SECTOR_SIZE-1)];
++ 		p_last = &((unsigned char *) data2)[(first+1) &
++ 		    (SECTOR_SIZE-1)];
++ 		if (this & 1) next = ((*p_first >> 4) | (*p_last << 4)) & 0xfff;
++ 		else next = (*p_first+(*p_last << 8)) & 0xfff;
++ 		if (next >= 0xff8) next = -1;
++ 	}
++ 	if (new_value != -1) {
++ 		if (MSDOS_SB(sb)->fat_bits == 16)
++ 			((unsigned short *) data)[(first & (SECTOR_SIZE-1)) >>
++ 			    1] = new_value;
++ 		else {
++ 			if (this & 1) {
++ 				*p_first = (*p_first & 0xf) | (new_value << 4);
++ 				*p_last = new_value >> 4;
++ 			}
++ 			else {
++ 				*p_first = new_value & 0xff;
++ 				*p_last = (*p_last & 0xf0) | (new_value >> 8);
++ 			}
++ 			bh2->b_dirt = 1;
++ 		}
++ 		bh->b_dirt = 1;
++ 		for (copy = 1; copy < MSDOS_SB(sb)->fats; copy++) {
++ 			if (!(c_bh = msdos_sread(sb->s_dev,MSDOS_SB(sb)->
++ 			    fat_start+(first >> SECTOR_BITS)+MSDOS_SB(sb)->
++ 			    fat_length*copy,&c_data))) break;
++ 			memcpy(c_data,data,SECTOR_SIZE);
++ 			c_bh->b_dirt = 1;
++ 			if (data != data2 || bh != bh2) {
++ 				if (!(c_bh2 = msdos_sread(sb->s_dev,
++ 				    MSDOS_SB(sb)->fat_start+(first >>
++ 				    SECTOR_BITS)+MSDOS_SB(sb)->fat_length*copy
++ 				    +1,&c_data2))) {
++ 					brelse(c_bh);
++ 					break;
++ 				}
++ 				memcpy(c_data2,data2,SECTOR_SIZE);
++ 				brelse(c_bh2);
++ 			}
++ 			brelse(c_bh);
++ 		}
++ 	}
++ 	brelse(bh);
++ 	if (data != data2) brelse(bh2);
++ 	return next;
++ }
++ 
++ 
++ void cache_init(void)
++ {
++ 	static int initialized = 0;
++ 	int count;
++ 
++ 	if (initialized) return;
++ 	fat_cache = &cache[0];
++ 	for (count = 0; count < FAT_CACHE; count++) {
++ 		cache[count].device = 0;
++ 		cache[count].next = count == FAT_CACHE-1 ? NULL :
++ 		    &cache[count+1];
++ 	}
++ 	initialized = 1;
++ }
++ 
++ 
++ void cache_lookup(struct inode *inode,int cluster,int *f_clu,int *d_clu)
++ {
++ 	struct fat_cache *walk;
++ 
++ #ifdef DEBUG
++ printk("cache lookup: %d\r\n",*f_clu);
++ #endif
++ 	for (walk = fat_cache; walk; walk = walk->next)
++ 		if (inode->i_dev == walk->device && walk->ino == inode->i_ino &&
++ 		    walk->file_cluster <= cluster && walk->file_cluster >
++ 		    *f_clu) {
++ 			*d_clu = walk->disk_cluster;
++ #ifdef DEBUG
++ printk("cache hit: %d (%d)\r\n",walk->file_cluster,*d_clu);
++ #endif
++ 			if ((*f_clu = walk->file_cluster) == cluster) return;
++ 		}
++ }
++ 
++ 
++ #ifdef DEBUG
++ static void list_cache(void)
++ {
++ 	struct fat_cache *walk;
++ 
++ 	for (walk = fat_cache; walk; walk = walk->next) {
++ 		if (walk->device) printk("(%d,%d) ",walk->file_cluster,
++ 			walk->disk_cluster);
++ 		else printk("-- ");
++ 	}
++ 	printk("\r\n");
++ }
++ #endif
++ 
++ 
++ void cache_add(struct inode *inode,int f_clu,int d_clu)
++ {
++ 	struct fat_cache *walk,*last;
++ 
++ #ifdef DEBUG
++ printk("cache add: %d (%d)\r\n",f_clu,d_clu);
++ #endif
++ 	last = NULL;
++ 	for (walk = fat_cache; walk->next; walk = (last = walk)->next)
++ 		if (inode->i_dev == walk->device && walk->ino == inode->i_ino &&
++ 		    walk->file_cluster == f_clu) {
++ 			if (walk->disk_cluster != d_clu)
++ 				panic("FAT cache corruption");
++ 			/* update LRU */
++ 			if (last == NULL) return;
++ 			last->next = walk->next;
++ 			walk->next = fat_cache;
++ 			fat_cache = walk;
++ #ifdef DEBUG
++ list_cache();
++ #endif
++ 			return;
++ 		}
++ 	walk->device = inode->i_dev;
++ 	walk->ino = inode->i_ino;
++ 	walk->file_cluster = f_clu;
++ 	walk->disk_cluster = d_clu;
++ 	last->next = NULL;
++ 	walk->next = fat_cache;
++ 	fat_cache = walk;
++ #ifdef DEBUG
++ list_cache();
++ #endif
++ }
++ 
++ 
++ /* Cache invalidation occurs rarely, thus the LRU chain is not updated. It
++    fixes itself after a while. */
++ 
++ void cache_inval_inode(struct inode *inode)
++ {
++ 	struct fat_cache *walk;
++ 
++ 	for (walk = fat_cache; walk; walk = walk->next)
++ 		if (walk->device == inode->i_dev && walk->ino == inode->i_ino)
++ 			walk->device = 0;
++ }
++ 
++ 
++ void cache_inval_dev(int device)
++ {
++ 	struct fat_cache *walk;
++ 
++ 	for (walk = fat_cache; walk; walk = walk->next)
++ 		if (walk->device == device) walk->device = 0;
++ }
++ 
++ 
++ int get_cluster(struct inode *inode,int cluster)
++ {
++ 	int this,count;
++ 
++ 	if (!(this = inode->i_data[D_START])) return 0;
++ 	if (!cluster) return this;
++ 	count = 0;
++ 	for (cache_lookup(inode,cluster,&count,&this); count < cluster;
++ 	    count++) {
++ 		if ((this = fat_access(inode->i_sb,this,-1)) == -1) return 0;
++ 		if (!this) return 0;
++ 	}
++ 	cache_add(inode,cluster,this);
++ 	return this;
++ }
++ 
++ 
++ int msdos_smap(struct inode *inode,int sector)
++ {
++ 	struct msdos_sb_info *sb;
++ 	int cluster,offset;
++ 
++ 	sb = MSDOS_SB(inode->i_sb);
++ 	if (inode->i_ino == MSDOS_ROOT_INO || (S_ISDIR(inode->i_mode) &&
++ 	    !inode->i_data[D_START])) {
++ 		if (sector >= sb->dir_entries >> MSDOS_DPS_BITS) return 0;
++ 		return sector+sb->dir_start;
++ 	}
++ 	cluster = sector/sb->cluster_size;
++ 	offset = sector % sb->cluster_size;
++ 	if (!(cluster = get_cluster(inode,cluster))) return 0;
++ 	return (cluster-2)*sb->cluster_size+sb->data_start+offset;
++ }
++ 
++ 
++ /* Free all clusters after the skip'th cluster. Doesn't use the cache,
++    because this way we get an additional sanity check. */
++ 
++ int fat_free(struct inode *inode,int skip)
++ {
++ 	int this,last;
++ 
++ 	if (!(this = inode->i_data[D_START])) return 0;
++ 	last = 0;
++ 	while (skip--) {
++ 		last = this;
++ 		if ((this = fat_access(inode->i_sb,this,-1)) == -1)
++ 			return 0;
++ 		if (!this) {
++ 			printk("fat_free: skipped EOF\r\n");
++ 			return -EIO;
++ 		}
++ 	}
++ 	if (last)
++ 		fat_access(inode->i_sb,last,MSDOS_SB(inode->i_sb)->fat_bits ==
++ 		    12 ? 0xff8 : 0xfff8);
++ 	else {
++ 		inode->i_data[D_START] = 0;
++ 		inode->i_dirt = 1;
++ 	}
++ 	while (this != -1)
++ 		if (!(this = fat_access(inode->i_sb,this,0)))
++ 			panic("fat_free: deleting beyond EOF");
++ 	cache_inval_inode(inode);
++ 	return 0;
++ }
+*** 0.96c.pl1/linux/fs/minix/namei.c	Sat Jul 18 22:28:14 1992
+--- linux/fs/minix/namei.c	Wed Jul 15 16:11:22 1992
+***************
+*** 751,757 ****
+  int minix_rename(struct inode * old_dir, const char * old_name, int old_len,
+  	struct inode * new_dir, const char * new_name, int new_len)
+  {
+! 	static struct task_struct * wait = NULL;
+  	static int lock = 0;
+  	int result;
+  
+--- 751,757 ----
+  int minix_rename(struct inode * old_dir, const char * old_name, int old_len,
+  	struct inode * new_dir, const char * new_name, int new_len)
+  {
+! 	static struct wait_queue * wait = NULL;
+  	static int lock = 0;
+  	int result;
+  
+*** 0.96c.pl1/linux/kernel/sched.c	Sat Jul 18 22:28:23 1992
+--- linux/kernel/sched.c	Wed Jul 15 16:28:36 1992
+***************
+*** 35,41 ****
+  {
+  	int i,j = 4096-sizeof(struct task_struct);
+  
+! 	printk("%d: pid=%d, state=%d, father=%d, child=%d, ",nr,p->pid,
+  		p->state, p->p_pptr->pid, p->p_cptr ? p->p_cptr->pid : -1);
+  	i=0;
+  	while (i<j && !((char *)(p+1))[i])
+--- 35,41 ----
+  {
+  	int i,j = 4096-sizeof(struct task_struct);
+  
+! 	printk("%d: pid=%d, state=%d, father=%d, child=%d, ",(p == current)?-nr:nr,p->pid,
+  		p->state, p->p_pptr->pid, p->p_cptr ? p->p_cptr->pid : -1);
+  	i=0;
+  	while (i<j && !((char *)(p+1))[i])
+***************
+*** 136,146 ****
+  			if ((*p)->timeout && (*p)->timeout < jiffies)
+  				if ((*p)->state == TASK_INTERRUPTIBLE) {
+  					(*p)->timeout = 0;
+! 					(*p)->state = TASK_RUNNING;
+  				}
+  			if (((*p)->signal & ~(*p)->blocked) &&
+! 			(*p)->state==TASK_INTERRUPTIBLE)
+! 				(*p)->state=TASK_RUNNING;
+  		}
+  
+  /* this is the scheduler proper: */
+--- 136,146 ----
+  			if ((*p)->timeout && (*p)->timeout < jiffies)
+  				if ((*p)->state == TASK_INTERRUPTIBLE) {
+  					(*p)->timeout = 0;
+! 					wake_one_task(*p);
+  				}
+  			if (((*p)->signal & ~(*p)->blocked) &&
+! 			    (*p)->state==TASK_INTERRUPTIBLE)
+! 				wake_one_task(*p);
+  		}
+  
+  /* this is the scheduler proper: */
+***************
+*** 181,239 ****
+  	return -EINTR;
+  }
+  
+  /*
+   * wake_up doesn't wake up stopped processes - they have to be awakened
+   * with signals or similar.
+   */
+! void wake_up(struct task_struct **p)
+  {
+! 	struct task_struct * wakeup_ptr, * tmp;
+  
+! 	if (p && *p) {
+! 		wakeup_ptr = *p;
+! 		*p = NULL;
+! 		while (wakeup_ptr && wakeup_ptr != task[0]) {
+! 			if (wakeup_ptr->state == TASK_ZOMBIE)
+  				printk("wake_up: TASK_ZOMBIE\n");
+! 			else if (wakeup_ptr->state != TASK_STOPPED) {
+! 				wakeup_ptr->state = TASK_RUNNING;
+! 				if (wakeup_ptr->counter > current->counter)
+  					need_resched = 1;
+  			}
+- 			tmp = wakeup_ptr->next_wait;
+- 			wakeup_ptr->next_wait = task[0];
+- 			wakeup_ptr = tmp;
+  		}
+! 	}
+  }
+  
+! static inline void __sleep_on(struct task_struct **p, int state)
+  {
+! 	unsigned int flags;
+  
+  	if (!p)
+  		return;
+  	if (current == task[0])
+  		panic("task[0] trying to sleep");
+! 	__asm__("pushfl ; popl %0":"=r" (flags));
+! 	current->next_wait = *p;
+! 	task[0]->next_wait = NULL;
+! 	*p = current;
+  	current->state = state;
+  	sti();
+  	schedule();
+! 	if (current->next_wait != task[0])
+! 		wake_up(p);
+! 	current->next_wait = NULL;
+  	__asm__("pushl %0 ; popfl"::"r" (flags));
+  }
+  
+! void interruptible_sleep_on(struct task_struct **p)
+  {
+  	__sleep_on(p,TASK_INTERRUPTIBLE);
+  }
+  
+! void sleep_on(struct task_struct **p)
+  {
+  	__sleep_on(p,TASK_UNINTERRUPTIBLE);
+  }
+--- 181,248 ----
+  	return -EINTR;
+  }
+  
++ void wake_one_task(struct task_struct * p)
++ {
++ 	p->state = TASK_RUNNING;
++ 	if (p->counter > current->counter)
++ 		need_resched = 1;
++ }
++ 
+  /*
+   * wake_up doesn't wake up stopped processes - they have to be awakened
+   * with signals or similar.
+   */
+! void wake_up(struct wait_queue **q)
+  {
+! 	struct wait_queue *tmp, *next;
+! 	struct task_struct * p;
+! 	unsigned long flags;
+  
+! 	if (!q || !(next = *q))
+! 		return;
+! 	__asm__ __volatile__("pushfl ; popl %0 ; cli":"=r" (flags));
+! 	do {
+! 		tmp = next;
+! 		next = tmp->next;
+! 		if (p = tmp->task) {
+! 			if (p->state == TASK_ZOMBIE)
+  				printk("wake_up: TASK_ZOMBIE\n");
+! 			else if (p->state != TASK_STOPPED) {
+! 				p->state = TASK_RUNNING;
+! 				if (p->counter > current->counter)
+  					need_resched = 1;
+  			}
+  		}
+! 		tmp->next = NULL;
+! 	} while (next && next != *q);
+! 	__asm__ __volatile__("pushl %0 ; popfl"::"r" (flags));
+  }
+  
+! static inline void __sleep_on(struct wait_queue **p, int state)
+  {
+! 	unsigned long flags;
+  
+  	if (!p)
+  		return;
+  	if (current == task[0])
+  		panic("task[0] trying to sleep");
+! 	if (current->wait.next)
+! 		printk("__sleep_on: wait->next exists\n");
+! 	__asm__ __volatile__("pushfl ; popl %0 ; cli":"=r" (flags));
+  	current->state = state;
++ 	add_wait_queue(p,&current->wait);
+  	sti();
+  	schedule();
+! 	remove_wait_queue(p,&current->wait);
+  	__asm__("pushl %0 ; popfl"::"r" (flags));
+  }
+  
+! void interruptible_sleep_on(struct wait_queue **p)
+  {
+  	__sleep_on(p,TASK_INTERRUPTIBLE);
+  }
+  
+! void sleep_on(struct wait_queue **p)
+  {
+  	__sleep_on(p,TASK_UNINTERRUPTIBLE);
+  }
+***************
+*** 243,249 ****
+   * proper. They are here because the floppy needs a timer, and this
+   * was the easiest way of doing it.
+   */
+! static struct task_struct * wait_motor[4] = {NULL,NULL,NULL,NULL};
+  static int  mon_timer[4]={0,0,0,0};
+  static int moff_timer[4]={0,0,0,0};
+  unsigned char current_DOR = 0x0C;
+--- 252,258 ----
+   * proper. They are here because the floppy needs a timer, and this
+   * was the easiest way of doing it.
+   */
+! static struct wait_queue * wait_motor[4] = {NULL,NULL,NULL,NULL};
+  static int  mon_timer[4]={0,0,0,0};
+  static int moff_timer[4]={0,0,0,0};
+  unsigned char current_DOR = 0x0C;
+*** 0.96c.pl1/linux/kernel/exit.c	Sun Jul  5 01:22:27 1992
+--- linux/kernel/exit.c	Tue Jul 14 02:59:22 1992
+***************
+*** 421,426 ****
+--- 421,427 ----
+  	if (stat_addr)
+  		verify_area(stat_addr,4);
+  repeat:
++ 	current->signal &= ~(1<<(SIGCHLD-1));
+  	flag=0;
+   	for (p = current->p_cptr ; p ; p = p->p_osptr) {
+  		if (pid>0) {
+*** 0.96c.pl1/linux/kernel/fork.c	Sun Jul  5 01:20:58 1992
+--- linux/kernel/fork.c	Thu Jul 16 12:54:00 1992
+***************
+*** 66,72 ****
+  
+  static int find_empty_process(void)
+  {
+! 	int i;
+  
+  	repeat:
+  		if ((++last_pid) & 0xffff0000)
+--- 66,72 ----
+  
+  static int find_empty_process(void)
+  {
+! 	int i, task_nr;
+  
+  	repeat:
+  		if ((++last_pid) & 0xffff0000)
+***************
+*** 75,83 ****
+  			if (task[i] && ((task[i]->pid == last_pid) ||
+  				        (task[i]->pgrp == last_pid)))
+  				goto repeat;
+  	for(i=1 ; i<NR_TASKS ; i++)
+  		if (!task[i])
+! 			return i;
+  	return -EAGAIN;
+  }
+  
+--- 75,90 ----
+  			if (task[i] && ((task[i]->pid == last_pid) ||
+  				        (task[i]->pgrp == last_pid)))
+  				goto repeat;
++ /* Only the super-user can fill the last available slot */
++ 	task_nr = 0;
+  	for(i=1 ; i<NR_TASKS ; i++)
+  		if (!task[i])
+! 			if (task_nr)
+! 				return task_nr;
+! 			else
+! 				task_nr = i;
+! 	if (task_nr && suser())
+! 		return task_nr;
+  	return -EAGAIN;
+  }
+  
+***************
+*** 105,110 ****
+--- 112,119 ----
+  	}
+  	task[nr] = p;
+  	*p = *current;	/* NOTE! this doesn't copy the supervisor stack */
++ 	p->wait.task = p;
++ 	p->wait.next = NULL;
+  	p->state = TASK_UNINTERRUPTIBLE;
+  	p->flags &= ~PF_PTRACED;
+  	p->pid = last_pid;
+***************
+*** 125,131 ****
+  	p->tss.esp0 = PAGE_SIZE + (long) p;
+  	p->tss.ss0 = 0x10;
+  	p->tss.eip = eip;
+! 	p->tss.eflags = eflags;
+  	p->tss.eax = 0;
+  	p->tss.ecx = ecx;
+  	p->tss.edx = edx;
+--- 134,140 ----
+  	p->tss.esp0 = PAGE_SIZE + (long) p;
+  	p->tss.ss0 = 0x10;
+  	p->tss.eip = eip;
+! 	p->tss.eflags = eflags & 0xffffcfff;	/* iopl is always 0 for a new process */
+  	p->tss.eax = 0;
+  	p->tss.ecx = ecx;
+  	p->tss.edx = edx;
+*** 0.96c.pl1/linux/kernel/traps.c	Sat Jul 18 22:28:23 1992
+--- linux/kernel/traps.c	Tue Jul 14 15:04:54 1992
+***************
+*** 57,63 ****
+  void page_fault(void);
+  void coprocessor_error(void);
+  void reserved(void);
+- void irq13(void);
+  void alignment_check(void);
+  
+  static void die(char * str,long esp_ptr,long nr)
+--- 57,62 ----
+***************
+*** 199,203 ****
+  	set_trap_gate(17,&alignment_check);
+  	for (i=18;i<48;i++)
+  		set_trap_gate(i,&reserved);
+- 	set_trap_gate(45,&irq13);
+  }
+--- 198,201 ----
+*** 0.96c.pl1/linux/kernel/printk.c	Sun May 17 17:07:00 1992
+--- linux/kernel/printk.c	Wed Jul 15 15:49:43 1992
+***************
+*** 22,28 ****
+  static unsigned long log_page = 0;
+  static unsigned long log_start = 0;
+  static unsigned long log_size = 0;
+! static struct task_struct * log_wait = NULL;
+  
+  int sys_syslog(int type, char * buf, int len)
+  {
+--- 22,28 ----
+  static unsigned long log_page = 0;
+  static unsigned long log_start = 0;
+  static unsigned long log_size = 0;
+! static struct wait_queue * log_wait = NULL;
+  
+  int sys_syslog(int type, char * buf, int len)
+  {
+*** 0.96c.pl1/linux/kernel/chr_drv/keyboard.c	Sat Jul 18 22:28:23 1992
+--- linux/kernel/chr_drv/keyboard.c	Thu Jul 16 02:31:56 1992
+***************
+*** 126,133 ****
+  	qp->buf[qp->head]=ch;
+  	if ((new_head=(qp->head+1)&(TTY_BUF_SIZE-1)) != qp->tail)
+  		qp->head=new_head;
+! 	if (qp->proc_list != NULL)
+! 		qp->proc_list->state=0;
+  }
+  
+  static void puts_queue(char *cp)
+--- 126,132 ----
+  	qp->buf[qp->head]=ch;
+  	if ((new_head=(qp->head+1)&(TTY_BUF_SIZE-1)) != qp->tail)
+  		qp->head=new_head;
+! 	wake_up(&qp->proc_list);
+  }
+  
+  static void puts_queue(char *cp)
+***************
+*** 142,149 ****
+  				 != qp->tail)
+  			qp->head=new_head;
+  	}
+! 	if (qp->proc_list != NULL)
+! 		qp->proc_list->state=0;
+  }
+  
+  static void ctrl(int sc)
+--- 141,147 ----
+  				 != qp->tail)
+  			qp->head=new_head;
+  	}
+! 	wake_up(&qp->proc_list);
+  }
+  
+  static void ctrl(int sc)
+***************
+*** 777,782 ****
+--- 775,866 ----
+            0,    0,    0,    0,    0,    0,    0,    0,
+            0 };
+  
++ #elif defined KBD_SG
++ static unsigned char key_map[] = {
++           0,   27,  '1',  '2',  '3',  '4',  '5',  '6',
++         '7',  '8',  '9',  '0', '\'',  '^',  127,    9,
++         'q',  'w',  'e',  'r',  't',  'z',  'u',  'i',
++         'o',  'p',    0,    0,   13,    0,  'a',  's',
++         'd',  'f',  'g',  'h',  'j',  'k',  'l',    0,
++           0,    0,    0,  '$',  'y',  'x',  'c',  'v',
++         'b',  'n',  'm',  ',',  '.',  '-',    0,  '*',
++           0,   32,    0,    0,    0,    0,    0,    0,
++           0,    0,    0,    0,    0,    0,    0,    0,
++           0,    0,  '-',    0,    0,    0,  '+',    0,
++           0,    0,    0,    0,    0,    0,  '<',    0,
++           0,    0,    0,    0,    0,    0,    0,    0,
++           0 };
++ static unsigned char shift_map[] = {
++           0,   27,  '+',  '"',  '*',    0,  '%',  '&',
++         '/',  '(',  ')',  '=',  '?',  '`',  127,    9,
++         'Q',  'W',  'E',  'R',  'T',  'Z',  'U',  'I',
++         'O',  'P',    0,  '!',   13,    0,  'A',  'S',
++         'D',  'F',  'G',  'H',  'J',  'K',  'L',    0,
++           0,    0,    0,    0,  'Y',  'X',  'C',  'V',
++         'B',  'N',  'M',  ';',  ':',  '_',    0,  '*',
++           0,   32,    0,    0,    0,    0,    0,    0,
++           0,    0,    0,    0,    0,    0,    0,    0,
++           0,    0,  '-',    0,    0,    0,  '+',    0,
++           0,    0,    0,    0,    0,    0,  '>',    0,
++           0,    0,    0,    0,    0,    0,    0,    0,
++           0 };
++ static unsigned char alt_map[] = {
++           0,    0,    0,  '@',  '#',    0,    0,    0,
++         '|',    0,    0,    0, '\'',  '~',    0,    0,
++         '@',    0,    0,    0,    0,    0,    0,    0,
++           0,    0,   '[',  ']',  13,    0,    0,    0,
++           0,    0,    0,    0,    0,    0,    0,    0,
++         '{',    0,    0,  '}',    0,    0,    0,    0,
++           0,    0,    0,    0,    0,    0,    0,    0,
++           0,    0,    0,    0,    0,    0,    0,    0,
++           0,    0,    0,    0,    0,    0,    0,    0,
++           0,    0,    0,    0,    0,    0,    0,    0,
++           0,    0,    0,    0,    0,    0, '\\',    0,
++           0,    0,    0,    0,    0,    0,    0,    0,
++           0 };
++ #elif defined KBD_SG_LATIN1
++ static unsigned char key_map[] = {
++           0,   27,  '1',  '2',  '3',  '4',  '5',  '6',
++         '7',  '8',  '9',  '0', '\'',  '^',  127,    9,
++         'q',  'w',  'e',  'r',  't',  'z',  'u',  'i',
++         'o',  'p',  252,    0,   13,    0,  'a',  's',
++         'd',  'f',  'g',  'h',  'j',  'k',  'l',  246,
++         228,  167,    0,  '$',  'y',  'x',  'c',  'v',
++         'b',  'n',  'm',  ',',  '.',  '-',    0,  '*',
++           0,   32,    0,    0,    0,    0,    0,    0,
++           0,    0,    0,    0,    0,    0,    0,    0,
++           0,    0,  '-',    0,    0,    0,  '+',    0,
++           0,    0,    0,    0,    0,    0,  '<',    0,
++           0,    0,    0,    0,    0,    0,    0,    0,
++           0 };
++ static unsigned char shift_map[] = {
++           0,   27,  '+',  '"',  '*',  231,  '%',  '&',
++         '/',  '(',  ')',  '=',  '?',  '`',  127,    9,
++         'Q',  'W',  'E',  'R',  'T',  'Z',  'U',  'I',
++         'O',  'P',  220,  '!',   13,    0,  'A',  'S',
++         'D',  'F',  'G',  'H',  'J',  'K',  'L',  214,
++         196,  176,    0,  163,  'Y',  'X',  'C',  'V',
++         'B',  'N',  'M',  ';',  ':',  '_',    0,  '*',
++           0,   32,    0,    0,    0,    0,    0,    0,
++           0,    0,    0,    0,    0,    0,    0,    0,
++           0,    0,  '-',    0,    0,    0,  '+',    0,
++           0,    0,    0,    0,    0,    0,  '>',    0,
++           0,    0,    0,    0,    0,    0,    0,    0,
++           0 };
++ static unsigned char alt_map[] = {
++           0,    0,    0,  '@',  '#',    0,    0,  172,
++         '|',  162,    0,    0, '\'',  '~',    0,    0,
++         '@',    0,    0,    0,    0,    0,    0,    0,
++           0,    0,  '[',  ']',   13,    0,    0,    0,
++           0,    0,    0,    0,    0,    0,    0,  233,
++         '{',    0,    0,  '}',    0,    0,    0,    0,
++           0,    0,    0,    0,    0,    0,    0,    0,
++           0,    0,    0,    0,    0,    0,    0,    0,
++           0,    0,    0,    0,    0,    0,    0,    0,
++           0,    0,    0,    0,    0,    0,    0,    0,
++           0,    0,    0,    0,    0,    0, '\\',    0,
++           0,    0,    0,    0,    0,    0,    0,    0,
++           0 };
+  #else
+  #error "KBD-type not defined"
+  #endif
+*** 0.96c.pl1/linux/kernel/chr_drv/Makefile	Sun Jul  5 03:10:08 1992
+--- linux/kernel/chr_drv/Makefile	Thu Jul 16 02:35:31 1992
+***************
+*** 17,23 ****
+  	$(CC) $(CFLAGS) -c $<
+  
+  OBJS  = tty_io.o console.o keyboard.o serial.o \
+! 	tty_ioctl.o pty.o lp.o vt.o mem.o
+  
+  chr_drv.a: $(OBJS)
+  	$(AR) rcs chr_drv.a $(OBJS)
+--- 17,23 ----
+  	$(CC) $(CFLAGS) -c $<
+  
+  OBJS  = tty_io.o console.o keyboard.o serial.o \
+! 	tty_ioctl.o pty.o lp.o vt.o mem.o mouse.o
+  
+  chr_drv.a: $(OBJS)
+  	$(AR) rcs chr_drv.a $(OBJS)
+*** 0.96c.pl1/linux/kernel/chr_drv/console.c	Sat Jul 18 22:28:23 1992
+--- linux/kernel/chr_drv/console.c	Wed Jul 15 08:15:19 1992
+***************
+*** 212,218 ****
+  	if (currcons == fg_console) \
+  		(fg) = (v)
+  
+! int blankinterval = 5*60*HZ;
+  static int screen_size = 0;
+  
+  static void sysbeep(void);
+--- 212,218 ----
+  	if (currcons == fg_console) \
+  		(fg) = (v)
+  
+! int blankinterval = 10*60*HZ;
+  static int screen_size = 0;
+  
+  static void sysbeep(void);
+***************
+*** 315,321 ****
+  {
+  	if (video_type != VIDEO_TYPE_EGAC && video_type != VIDEO_TYPE_EGAM)
+  		return;
+! 	if (currcons != fg_console || vtmode == KD_GRAPHICS)
+  		return;
+  	cli();
+  	outb_p(12, video_port_reg);
+--- 315,321 ----
+  {
+  	if (video_type != VIDEO_TYPE_EGAC && video_type != VIDEO_TYPE_EGAM)
+  		return;
+! 	if (currcons != fg_console || console_blanked || vtmode == KD_GRAPHICS)
+  		return;
+  	cli();
+  	outb_p(12, video_port_reg);
+***************
+*** 609,615 ****
+  
+  static inline void set_cursor(int currcons)
+  {
+! 	if (currcons != fg_console)
+  		return;
+  	cli();
+  	if (deccm) {
+--- 609,615 ----
+  
+  static inline void set_cursor(int currcons)
+  {
+! 	if (currcons != fg_console || console_blanked)
+  		return;
+  	cli();
+  	if (deccm) {
+***************
+*** 1217,1234 ****
+  				state = ESnormal;
+  		}
+  	}
+- 	timer_active &= ~(1<<BLANK_TIMER);
+  	if (vtmode == KD_GRAPHICS)
+  		return;
+  	set_cursor(currcons);
+- 	if (currcons == fg_console)
+- 		if (console_blanked) {
+- 			timer_table[BLANK_TIMER].expires = 0;
+- 			timer_active |= 1<<BLANK_TIMER;
+- 		} else if (blankinterval) {
+- 			timer_table[BLANK_TIMER].expires = jiffies + blankinterval;
+- 			timer_active |= 1<<BLANK_TIMER;
+- 		}
+  }
+  
+  void do_keyboard_interrupt(void)
+--- 1217,1225 ----
+***************
+*** 1514,1517 ****
+--- 1505,1518 ----
+  		pos+=2;
+  	}
+  	set_cursor(currcons);
++ 	if (vt_cons[fg_console].vt_mode == KD_GRAPHICS)
++ 		return;
++ 	timer_active &= ~(1<<BLANK_TIMER);
++ 	if (console_blanked) {
++ 		timer_table[BLANK_TIMER].expires = 0;
++ 		timer_active |= 1<<BLANK_TIMER;
++ 	} else if (blankinterval) {
++ 		timer_table[BLANK_TIMER].expires = jiffies + blankinterval;
++ 		timer_active |= 1<<BLANK_TIMER;
++ 	}
+  }
+*** 0.96c.pl1/linux/kernel/chr_drv/tty_io.c	Sat Jul 18 22:28:31 1992
+--- linux/kernel/chr_drv/tty_io.c	Wed Jul 15 04:42:18 1992
+***************
+*** 90,121 ****
+  
+  void tty_write_flush(struct tty_struct * tty)
+  {
+! 	unsigned long flags;
+! 
+! 	__asm__ __volatile__("pushfl ; popl %0 ; cli":"=r" (flags));
+! 	if (!EMPTY(tty->write_q) && !(TTY_WRITE_BUSY & tty->flags)) {
+! 		tty->flags |= TTY_WRITE_BUSY;
+! 		__asm__ __volatile__("pushl %0 ; popfl"::"r" (flags));
+! 		tty->write(tty);
+! 		cli();
+! 		tty->flags &= ~TTY_WRITE_BUSY;
+! 	}
+! 	__asm__ __volatile__("pushl %0 ; popfl"::"r" (flags));
+  }
+  
+  void tty_read_flush(struct tty_struct * tty)
+  {
+! 	unsigned long flags;
+! 
+! 	__asm__ __volatile__("pushfl ; popl %0 ; cli":"=r" (flags));
+! 	if (!EMPTY(tty->read_q) && !(TTY_READ_BUSY & tty->flags)) {
+! 		tty->flags |= TTY_READ_BUSY;
+! 		__asm__ __volatile__("pushl %0 ; popfl"::"r" (flags));
+! 		copy_to_cooked(tty);
+! 		cli();
+! 		tty->flags &= ~TTY_READ_BUSY;
+! 	}
+! 	__asm__ __volatile__("pushl %0 ; popfl"::"r" (flags));
+  }
+  
+  void change_console(unsigned int new_console)
+--- 90,113 ----
+  
+  void tty_write_flush(struct tty_struct * tty)
+  {
+! 	if (EMPTY(tty->write_q))
+! 		return;
+! 	if (set_bit(TTY_WRITE_BUSY,&tty->flags))
+! 		return;
+! 	tty->write(tty);
+! 	if (clear_bit(TTY_WRITE_BUSY,&tty->flags))
+! 		printk("tty_write_flush: bit already cleared\n");
+  }
+  
+  void tty_read_flush(struct tty_struct * tty)
+  {
+! 	if (EMPTY(tty->read_q))
+! 		return;
+! 	if (set_bit(TTY_READ_BUSY, &tty->flags))
+! 		return;
+! 	copy_to_cooked(tty);
+! 	if (clear_bit(TTY_READ_BUSY, &tty->flags))
+! 		printk("tty_read_flush: bit already cleared\n");
+  }
+  
+  void change_console(unsigned int new_console)
+***************
+*** 296,301 ****
+--- 288,315 ----
+  	return -ERESTARTSYS;
+  }
+  
++ static void wait_for_canon_input(struct tty_struct * tty)
++ {
++ 	while (1) {
++ 		TTY_READ_FLUSH(tty);
++ 		if (tty->link)
++ 			if (tty->link->count)
++ 				TTY_WRITE_FLUSH(tty->link);
++ 			else
++ 				return;
++ 		if (current->signal & ~current->blocked)
++ 			return;
++ 		if (FULL(tty->read_q))
++ 			return;
++ 		if (tty->secondary->data)
++ 			return;
++ 		cli();
++ 		if (!tty->secondary->data)
++ 			interruptible_sleep_on(&tty->secondary->proc_list);
++ 		sti();
++ 	}
++ }
++ 
+  static int read_chan(unsigned int channel, struct file * file, char * buf, int nr)
+  {
+  	struct tty_struct * tty;
+***************
+*** 315,359 ****
+  			return -EIO;
+  		else
+  			return(tty_signal(SIGTTIN, tty));
+! 	time = 10L*tty->termios.c_cc[VTIME];
+! 	minimum = tty->termios.c_cc[VMIN];
+! 	if (L_CANON(tty)) {
+! 		minimum = nr;
+! 		current->timeout = 0xffffffff;
+! 		time = 0;
+! 	} else if (minimum)
+! 		current->timeout = 0xffffffff;
+  	else {
+! 		minimum = nr;
+! 		if (time)
+! 			current->timeout = time + jiffies;
+! 		time = 0;
+  	}
+  	if (file->f_flags & O_NONBLOCK)
+  		time = current->timeout = 0;
+  	if (minimum>nr)
+  		minimum = nr;
+- 	TTY_READ_FLUSH(tty);
+  	while (nr>0) {
+! 		if (tty->link && tty->link->write)
+  			TTY_WRITE_FLUSH(tty->link);
+! 		cli();
+! 		if (EMPTY(tty->secondary) || (L_CANON(tty) &&
+! 		    !FULL(tty->read_q) && !tty->secondary->data)) {
+! 			if (!current->timeout)
+! 				break;
+! 			if (current->signal & ~current->blocked) 
+! 				break;
+! 			if (tty->link && !tty->link->count)
+! 				break;
+! 			interruptible_sleep_on(&tty->secondary->proc_list);
+! 			sti();
+! 			TTY_READ_FLUSH(tty);
+! 			continue;
+! 		}
+! 		sti();
+! 		do {
+! 			c = get_tty_queue(tty->secondary);
+  			if ((EOF_CHAR(tty) != __DISABLED_CHAR &&
+  			     c==EOF_CHAR(tty)) || c==10)
+  				tty->secondary->data--;
+--- 329,361 ----
+  			return -EIO;
+  		else
+  			return(tty_signal(SIGTTIN, tty));
+! 	if (L_CANON(tty))
+! 		minimum = time = current->timeout = 0;
+  	else {
+! 		time = 10L*tty->termios.c_cc[VTIME];
+! 		minimum = tty->termios.c_cc[VMIN];
+! 		if (minimum)
+! 			current->timeout = 0xffffffff;
+! 		else {
+! 			if (time)
+! 				current->timeout = time + jiffies;
+! 			else
+! 				current->timeout = 0;
+! 			time = 0;
+! 			minimum = 1;
+! 		}
+  	}
+  	if (file->f_flags & O_NONBLOCK)
+  		time = current->timeout = 0;
++ 	else if (L_CANON(tty))
++ 		wait_for_canon_input(tty);
+  	if (minimum>nr)
+  		minimum = nr;
+  	while (nr>0) {
+! 		TTY_READ_FLUSH(tty);
+! 		if (tty->link)
+  			TTY_WRITE_FLUSH(tty->link);
+! 		while (nr > 0 && ((c = get_tty_queue(tty->secondary)) >= 0)) {
+  			if ((EOF_CHAR(tty) != __DISABLED_CHAR &&
+  			     c==EOF_CHAR(tty)) || c==10)
+  				tty->secondary->data--;
+***************
+*** 360,380 ****
+  			if ((EOF_CHAR(tty) != __DISABLED_CHAR &&
+  			     c==EOF_CHAR(tty)) && L_CANON(tty))
+  				break;
+! 			else {
+! 				put_fs_byte(c,b++);
+! 				if (!--nr)
+! 					break;
+! 			}
+  			if (c==10 && L_CANON(tty))
+  				break;
+! 		} while (nr>0 && !EMPTY(tty->secondary));
+  		wake_up(&tty->read_q->proc_list);
+! 		if (L_CANON(tty) || b-buf >= minimum)
+  			break;
+! 		if (time)
+! 			current->timeout = time+jiffies;
+  	}
+- 	sti();
+  	TTY_READ_FLUSH(tty);
+  	if (tty->link && tty->link->write)
+  		TTY_WRITE_FLUSH(tty->link);
+--- 362,389 ----
+  			if ((EOF_CHAR(tty) != __DISABLED_CHAR &&
+  			     c==EOF_CHAR(tty)) && L_CANON(tty))
+  				break;
+! 			put_fs_byte(c,b++);
+! 			nr--;
+! 			if (time)
+! 				current->timeout = time+jiffies;
+  			if (c==10 && L_CANON(tty))
+  				break;
+! 		};
+  		wake_up(&tty->read_q->proc_list);
+! 		if (b-buf >= minimum || !current->timeout)
+  			break;
+! 		if (current->signal & ~current->blocked) 
+! 			break;
+! 		if (tty->link && !tty->link->count)
+! 			break;
+! 		TTY_READ_FLUSH(tty);
+! 		if (tty->link)
+! 			TTY_WRITE_FLUSH(tty->link);
+! 		cli();
+! 		if (EMPTY(tty->secondary))
+! 			interruptible_sleep_on(&tty->secondary->proc_list);
+! 		sti();
+  	}
+  	TTY_READ_FLUSH(tty);
+  	if (tty->link && tty->link->write)
+  		TTY_WRITE_FLUSH(tty->link);
+***************
+*** 433,440 ****
+  					c='\n';
+  				else if (c=='\n' && O_NLRET(tty))
+  					c='\r';
+! 				if (c=='\n' && !(tty->flags & TTY_CR_PENDING) && O_NLCR(tty)) {
+! 					tty->flags |= TTY_CR_PENDING;
+  					put_tty_queue(13,tty->write_q);
+  					continue;
+  				}
+--- 442,449 ----
+  					c='\n';
+  				else if (c=='\n' && O_NLRET(tty))
+  					c='\r';
+! 				if (c=='\n' && O_NLCR(tty) &&
+! 				    !set_bit(TTY_CR_PENDING,&tty->flags)) {
+  					put_tty_queue(13,tty->write_q);
+  					continue;
+  				}
+***************
+*** 442,448 ****
+  					c=toupper(c);
+  			}
+  			b++; nr--;
+! 			tty->flags &= ~TTY_CR_PENDING;
+  			put_tty_queue(c,tty->write_q);
+  		}
+  		if (nr>0)
+--- 451,457 ----
+  					c=toupper(c);
+  			}
+  			b++; nr--;
+! 			clear_bit(TTY_CR_PENDING,&tty->flags);
+  			put_tty_queue(c,tty->write_q);
+  		}
+  		if (nr>0)
+***************
+*** 516,521 ****
+--- 525,531 ----
+  	if (!tty->count && !(tty->link && tty->link->count)) {
+  		flush_input(tty);
+  		flush_output(tty);
++ 		tty->stopped = 0;
+  	}
+  	if (IS_A_PTY_MASTER(dev)) {
+  		if (tty->count)
+***************
+*** 540,546 ****
+  	if (retval) {
+  		tty->count--;
+  		if (IS_A_PTY_MASTER(dev) && tty->link)
+! 			tty->link->count++;
+  	}
+  	return retval;
+  }
+--- 550,556 ----
+  	if (retval) {
+  		tty->count--;
+  		if (IS_A_PTY_MASTER(dev) && tty->link)
+! 			tty->link->count--;
+  	}
+  	return retval;
+  }
+***************
+*** 579,590 ****
+  			redirect = NULL;
+  }
+  
+  static struct file_operations tty_fops = {
+  	tty_lseek,
+  	tty_read,
+  	tty_write,
+  	NULL,		/* tty_readdir */
+! 	NULL,		/* tty_select */
+  	tty_ioctl,
+  	tty_open,
+  	tty_release
+--- 589,633 ----
+  			redirect = NULL;
+  }
+  
++ static int tty_select(struct inode * inode, struct file * filp, int sel_type, select_table * wait)
++ {
++ 	int dev;
++ 	struct tty_struct * tty;
++ 
++ 	dev = filp->f_rdev;
++ 	if (MAJOR(dev) != 4) {
++ 		printk("tty_select: tty pseudo-major != 4\n");
++ 		return 0;
++ 	}
++ 	dev = MINOR(filp->f_rdev);
++ 	tty = TTY_TABLE(dev);
++ 	switch (sel_type) {
++ 		case SEL_IN:
++ 			if (!EMPTY(tty->secondary))
++ 				return 1;
++ 			if (tty->link && !tty->link->count)
++ 				return 1;
++ 			select_wait(&tty->secondary->proc_list, wait);
++ 			return 0;
++ 		case SEL_OUT:
++ 			if (!FULL(tty->write_q))
++ 				return 1;
++ 			select_wait(&tty->write_q->proc_list, wait);
++ 			return 0;
++ 		case SEL_EX:
++ 			if (tty->link && !tty->link->count)
++ 				return 1;
++ 			return 0;
++ 	}
++ 	return 0;
++ }
++ 
+  static struct file_operations tty_fops = {
+  	tty_lseek,
+  	tty_read,
+  	tty_write,
+  	NULL,		/* tty_readdir */
+! 	tty_select,
+  	tty_ioctl,
+  	tty_open,
+  	tty_release
+*** 0.96c.pl1/linux/kernel/chr_drv/serial.c	Sat Jul 18 22:28:31 1992
+--- linux/kernel/chr_drv/serial.c	Thu Jul 16 12:39:10 1992
+***************
+*** 33,38 ****
+--- 33,40 ----
+  	{ PORT_UNKNOWN, 3, 0x2E8, 3, NULL},
+  };
+  
++ static void send_intr(struct serial_struct * info);
++ 
+  static void modem_status_intr(struct serial_struct * info)
+  {
+  	unsigned char status = inb(info->port+6);
+***************
+*** 40,51 ****
+  	if (!(info->tty->termios.c_cflag & CLOCAL)) {
+  		if ((status & 0x88) == 0x08 && info->tty->pgrp > 0)
+  			kill_pg(info->tty->pgrp,SIGHUP,1);
+! #if 0
+! 		if ((status & 0x10) == 0x10)
+! 			info->tty->stopped = 0;
+! 		else
+! 			info->tty->stopped = 1;
+! #endif
+  	}
+  }
+  
+--- 42,53 ----
+  	if (!(info->tty->termios.c_cflag & CLOCAL)) {
+  		if ((status & 0x88) == 0x08 && info->tty->pgrp > 0)
+  			kill_pg(info->tty->pgrp,SIGHUP,1);
+! 
+! 		if (info->tty->termios.c_cflag & CRTSCTS)
+! 			info->tty->stopped = !(status & 0x10);
+! 
+! 		if (!info->tty->stopped)
+! 			send_intr(info);
+  	}
+  }
+  
+***************
+*** 83,88 ****
+--- 85,92 ----
+  	struct tty_queue * queue = info->tty->write_q;
+  	int c, i = 0;
+  
++ 	if (info->tty->stopped) return;
++ 
+  	timer_active &= ~(1 << timer);
+  	while (inb_p(info->port+5) & 0x20) {
+  		if (queue->tail == queue->head)
+***************
+*** 90,97 ****
+  		c = queue->buf[queue->tail];
+  		queue->tail++;
+  		queue->tail &= TTY_BUF_SIZE-1;
+! 		outb(c,port);
+! 		if ((info->type != PORT_16550A) || (++i >= 14))
+  			break;
+  	}
+  	timer_table[timer].expires = jiffies + 10;
+--- 94,101 ----
+  		c = queue->buf[queue->tail];
+  		queue->tail++;
+  		queue->tail &= TTY_BUF_SIZE-1;
+!   		outb(c,port);
+! 		if ((info->type != PORT_16550A) || (++i >= 14) || info->tty->stopped)
+  			break;
+  	}
+  	timer_table[timer].expires = jiffies + 10;
+***************
+*** 303,312 ****
+  	outb_p(0x03,port+3);	/* reset DLAB */
+  	outb_p(0x0f,port+4);	/* set DTR,RTS, OUT_2 */
+  	outb_p(0x0f,port+1);	/* enable all intrs */
+! 	inb_p(port+5);
+! 	inb_p(port+0);
+  	inb_p(port+6);
+! 	inb(port+2);
+  }
+  
+  void change_speed(unsigned int line)
+--- 307,321 ----
+  	outb_p(0x03,port+3);	/* reset DLAB */
+  	outb_p(0x0f,port+4);	/* set DTR,RTS, OUT_2 */
+  	outb_p(0x0f,port+1);	/* enable all intrs */
+! 	inb_p(port+2);
+  	inb_p(port+6);
+! 	inb_p(port+2);
+! 	inb_p(port+5);
+! 	do {		/* drain all of the stuck characters out of the port */
+! 		inb_p(port+0);
+! 	} while (inb_p(port+5) & 1 == 1);
+! 	inb_p(port+2);
+! 	inb_p(port+5);
+  }
+  
+  void change_speed(unsigned int line)
+***************
+*** 416,421 ****
+--- 425,431 ----
+  		retval = request_irq(new_irq,handler);
+  		if (retval)
+  			return retval;
++ 		info->irq = new_irq;
+  		free_irq(irq);
+  	}
+  	cli();
+***************
+*** 455,472 ****
+  	for (i = 0, info = serial_table; i < NR_SERIALS; i++,info++) {
+  		info->tty = (tty_table+64) + i;
+  		init(info);
+  		switch (info->type) {
+  			case PORT_8250:
+! 				printk("serial port at 0x%04x is a 8250\n", info->port);
+  				break;
+  			case PORT_16450:
+! 				printk("serial port at 0x%04x is a 16450\n", info->port);
+  				break;
+  			case PORT_16550:
+! 				printk("serial port at 0x%04x is a 16550\n", info->port);
+  				break;
+  			case PORT_16550A:
+! 				printk("serial port at 0x%04x is a 16550A\n", info->port);
+  				break;
+  		}
+  	}
+--- 465,488 ----
+  	for (i = 0, info = serial_table; i < NR_SERIALS; i++,info++) {
+  		info->tty = (tty_table+64) + i;
+  		init(info);
++ 		if (info->type == PORT_UNKNOWN)
++ 			continue;
++ 		printk("serial port at 0x%04x (irq = %d)",info->port,info->irq);
+  		switch (info->type) {
+  			case PORT_8250:
+! 				printk(" is a 8250\n");
+  				break;
+  			case PORT_16450:
+! 				printk(" is a 16450\n");
+  				break;
+  			case PORT_16550:
+! 				printk(" is a 16550\n");
+  				break;
+  			case PORT_16550A:
+! 				printk(" is a 16550A\n");
+! 				break;
+! 			default:
+! 				printk("\n");
+  				break;
+  		}
+  	}
+*** /dev/null	Sat Jul 18 22:26:09 1992
+--- linux/kernel/chr_drv/mouse.c	Wed Jul 15 04:46:19 1992
+***************
+*** 0 ****
+--- 1,177 ----
++ /*
++  * Logitech Bus Mouse Driver for Linux
++  * by James Banks
++  * 
++  * Heavily modified by David Giller
++  *   changed from queue- to counter- driven
++  *   hacked out a (probably incorrect) mouse_select
++  *
++  * Modified again by Nathan Laredo to interface with
++  *   0.96c-pl1 IRQ handling changes (13JUL92)
++  *   didn't bother touching select code.
++  *
++  * Modified the select() code blindly to conform to the VFS
++  *   requirements. 92.07.14 - Linus. Somebody should test it out.
++  * 
++  * version 0.1
++  */
++ 
++ #include	<linux/kernel.h>
++ #include	<linux/sched.h>
++ #include	<linux/mouse.h>
++ #include	<linux/tty.h>
++ #include	<asm/io.h>
++ #include	<asm/segment.h>
++ #include	<asm/system.h>
++ #include	<asm/irq.h>
++ #include	<signal.h>
++ #include	<errno.h>
++ #include	<signal.h>
++ 
++ static struct mouse_status mouse;
++ 
++ static void mouse_interrupt(int cpl)
++ {
++ 	char dx, dy, buttons;
++ 
++ 	MSE_INT_OFF();
++ 	
++ 	outb(MSE_READ_X_LOW, MSE_CONTROL_PORT);
++ 	dx = (inb(MSE_DATA_PORT) & 0xf);
++ 	
++ 	outb(MSE_READ_X_HIGH, MSE_CONTROL_PORT);
++ 	dx |= (inb(MSE_DATA_PORT) & 0xf) << 4;
++ 	
++ 	outb(MSE_READ_Y_LOW, MSE_CONTROL_PORT );
++ 	dy = (inb(MSE_DATA_PORT) & 0xf);
++ 	
++ 	outb(MSE_READ_Y_HIGH, MSE_CONTROL_PORT);
++ 	buttons = inb(MSE_DATA_PORT);
++ 
++ 	dy |= (buttons & 0xf) << 4;
++ 	buttons = ((buttons >> 5) & 0x07);
++ 
++ 	mouse.buttons = buttons;
++ 	mouse.latch_buttons |= buttons;
++ 	mouse.dx += dx;
++ 	mouse.dy += dy;
++ 	mouse.ready = 1;
++ 	if (mouse.inode && mouse.inode->i_wait)
++ 		 wake_up(&mouse.inode->i_wait);
++ 	
++ 	MSE_INT_ON();
++ }
++ 
++ static void release_mouse(struct inode * inode, struct file * file)
++ {
++ 	MSE_INT_OFF();
++ 	mouse.active = 0;
++ 	mouse.ready = 0; 
++ 	mouse.inode = NULL;
++ 	free_irq(MOUSE_IRQ);
++ }
++ 
++ static int open_mouse(struct inode * inode, struct file * file)
++ {
++ 	if (mouse.active)
++ 		return -EBUSY;
++ 	if (!mouse.present)
++ 		return -EINVAL;
++ 	if (request_irq(MOUSE_IRQ, mouse_interrupt))
++ 		return -EBUSY;
++ 	mouse.active = 1;
++ 	mouse.ready = 0;
++ 	mouse.inode = inode;
++ 	mouse.dx = 0;
++ 	mouse.dy = 0;	
++ 	mouse.buttons = mouse.latch_buttons = 0x80;
++ 	MSE_INT_ON();	
++ 	return 0;
++ }
++ 
++ static int write_mouse(struct inode * inode, struct file * file, char * buffer, int count)
++ {
++ 	return -EINVAL;
++ }
++ 
++ static int read_mouse(struct inode * inode, struct file * file, char * buffer, int count)
++ {
++ 	int i;
++ 
++ 	if (count < 3) return -EINVAL;
++ 	if (!mouse.ready) return -EAGAIN;
++ 	
++ 	MSE_INT_OFF();
++ 		
++ 	put_fs_byte(mouse.latch_buttons | 0x80, buffer);
++ 	
++ 	if (mouse.dx < -127) mouse.dx = -127;
++ 	if (mouse.dx >  127) mouse.dx =  127;
++ 	
++ 	put_fs_byte((char)mouse.dx, buffer + 1);
++ 	
++ 	if (mouse.dy < -127) mouse.dy = -127;
++ 	if (mouse.dy >  127) mouse.dy =  127;
++ 	
++ 	put_fs_byte((char) -mouse.dy, buffer + 2);
++ 	
++ 	for (i = 3; i < count; i++)
++ 		put_fs_byte(0x00, buffer + i);
++ 		
++ 	mouse.dx = 0;
++ 	mouse.dy = 0;
++ 	mouse.latch_buttons = mouse.buttons;
++ 	mouse.ready = 0;
++ 	
++ 	MSE_INT_ON();
++ 	return i;	
++ }
++ 
++ static int mouse_select(struct inode *inode, struct file *file, int sel_type, select_table * wait)
++ {
++ 	if (sel_type != SEL_IN)
++ 		return 0;
++ 	if (mouse.ready) 
++ 		return 1;
++ 	select_wait(&inode->i_wait,wait);
++ 	return 0;
++ }
++ 
++ static struct file_operations mouse_fops = {
++ 	NULL,		/* mouse_seek */
++ 	read_mouse,
++ 	write_mouse,
++ 	NULL, 		/* mouse_readdir */
++ 	mouse_select, 	/* mouse_select */
++ 	NULL, 		/* mouse_ioctl */
++ 	open_mouse,
++ 	release_mouse,
++ };
++ 
++ long mouse_init(long kmem_start)
++ {	
++ 	int i;
++ 
++ 	outb(MSE_CONFIG_BYTE, MSE_CONFIG_PORT);
++ 	outb(MSE_SIGNATURE_BYTE, MSE_SIGNATURE_PORT);
++ 	
++ 	for (i = 0; i < 100000; i++); /* busy loop */
++ 	if (inb(MSE_SIGNATURE_PORT) != MSE_SIGNATURE_BYTE) {
++ 		printk("No bus mouse detected.\n");
++ 		mouse.present = 0;
++ 		return kmem_start;
++ 	}
++ 	chrdev_fops[10] = &mouse_fops;
++ 	outb(MSE_DEFAULT_MODE, MSE_CONFIG_PORT);
++ 	
++ 	MSE_INT_OFF();
++ 	
++ 	mouse.present = 1;
++ 	mouse.active = 0;
++ 	mouse.ready = 0;
++ 	mouse.buttons = mouse.latch_buttons = 0x80;
++ 	mouse.dx = 0;
++ 	mouse.dy = 0;
++ 	printk("Bus mouse detected and installed.\n");
++ 	return kmem_start;
++ }
+*** 0.96c.pl1/linux/kernel/chr_drv/mem.c	Sun Jul  5 00:47:51 1992
+--- linux/kernel/chr_drv/mem.c	Wed Jul 15 00:35:55 1992
+***************
+*** 246,250 ****
+--- 246,251 ----
+  	chrdev_fops[1] = &mem_fops;
+  	mem_start = tty_init(mem_start);
+  	mem_start = lp_init(mem_start);
++ 	mem_start = mouse_init(mem_start);
+  	return mem_start;
+  }
+*** 0.96c.pl1/linux/kernel/blk_drv/ll_rw_blk.c	Sat Jul 18 22:28:40 1992
+--- linux/kernel/blk_drv/ll_rw_blk.c	Wed Jul 15 16:02:43 1992
+***************
+*** 26,32 ****
+  /*
+   * used to wait on when there are no free requests
+   */
+! struct task_struct * wait_for_request = NULL;
+  
+  /* blk_dev_struct is:
+   *	do_request-address
+--- 26,32 ----
+  /*
+   * used to wait on when there are no free requests
+   */
+! struct wait_queue * wait_for_request = NULL;
+  
+  /* blk_dev_struct is:
+   *	do_request-address
+***************
+*** 207,213 ****
+  /* fill up the request-info, and add it to the queue */
+  	req->dev = bh->b_dev;
+  	req->cmd = rw;
+! 	req->errors=0;
+  	req->sector = bh->b_blocknr<<1;
+  	req->nr_sectors = 2;
+  	req->buffer = bh->b_data;
+--- 207,213 ----
+  /* fill up the request-info, and add it to the queue */
+  	req->dev = bh->b_dev;
+  	req->cmd = rw;
+! 	req->errors = 0;
+  	req->sector = bh->b_blocknr<<1;
+  	req->nr_sectors = 2;
+  	req->buffer = bh->b_data;
+***************
+*** 251,257 ****
+  	req->sector = page<<3;
+  	req->nr_sectors = 8;
+  	req->buffer = buffer;
+! 	req->waiting = current;
+  	req->bh = NULL;
+  	req->next = NULL;
+  	current->state = TASK_UNINTERRUPTIBLE;
+--- 251,257 ----
+  	req->sector = page<<3;
+  	req->nr_sectors = 8;
+  	req->buffer = buffer;
+! 	req->waiting = &current->wait;
+  	req->bh = NULL;
+  	req->next = NULL;
+  	current->state = TASK_UNINTERRUPTIBLE;
+***************
+*** 332,338 ****
+  		req->sector = b[i] << 1;
+  		req->nr_sectors = 2;
+  		req->buffer = buf;
+! 		req->waiting = current;
+  		req->bh = NULL;
+  		req->next = NULL;
+  		current->state = TASK_UNINTERRUPTIBLE;
+--- 332,338 ----
+  		req->sector = b[i] << 1;
+  		req->nr_sectors = 2;
+  		req->buffer = buf;
+! 		req->waiting = &current->wait;
+  		req->bh = NULL;
+  		req->next = NULL;
+  		current->state = TASK_UNINTERRUPTIBLE;
+*** 0.96c.pl1/linux/kernel/blk_drv/floppy.c	Sat Jul 18 22:28:40 1992
+--- linux/kernel/blk_drv/floppy.c	Wed Jul 15 16:00:15 1992
+***************
+*** 177,183 ****
+  /* Synchronization of FDC access. */
+  
+  static volatile int format_status = FORMAT_NONE, fdc_busy = 0;
+! static struct task_struct *fdc_wait = NULL, *format_done = NULL;
+  
+  /* Errors during formatting are counted here. */
+  
+--- 177,183 ----
+  /* Synchronization of FDC access. */
+  
+  static volatile int format_status = FORMAT_NONE, fdc_busy = 0;
+! static struct wait_queue *fdc_wait = NULL, *format_done = NULL;
+  
+  /* Errors during formatting are counted here. */
+  
+***************
+*** 233,239 ****
+  static unsigned char current_track = NO_TRACK;
+  static unsigned char command = 0;
+  unsigned char selected = 0;
+! struct task_struct * wait_on_floppy_select = NULL;
+  
+  void floppy_deselect(unsigned int nr)
+  {
+--- 233,239 ----
+  static unsigned char current_track = NO_TRACK;
+  static unsigned char command = 0;
+  unsigned char selected = 0;
+! struct wait_queue * wait_on_floppy_select = NULL;
+  
+  void floppy_deselect(unsigned int nr)
+  {
+*** 0.96c.pl1/linux/kernel/blk_drv/blk.h	Sat Jul 18 22:28:48 1992
+--- linux/kernel/blk_drv/blk.h	Wed Jul 15 15:59:24 1992
+***************
+*** 27,33 ****
+  	unsigned long sector;
+  	unsigned long nr_sectors;
+  	char * buffer;
+! 	struct task_struct * waiting;
+  	struct buffer_head * bh;
+  	struct buffer_head * bhtail;
+  	struct request * next;
+--- 27,33 ----
+  	unsigned long sector;
+  	unsigned long nr_sectors;
+  	char * buffer;
+! 	struct wait_queue * waiting;
+  	struct buffer_head * bh;
+  	struct buffer_head * bhtail;
+  	struct request * next;
+***************
+*** 50,56 ****
+  
+  extern struct blk_dev_struct blk_dev[NR_BLK_DEV];
+  extern struct request request[NR_REQUEST];
+! extern struct task_struct * wait_for_request;
+  
+  extern int * blk_size[NR_BLK_DEV];
+  
+--- 50,56 ----
+  
+  extern struct blk_dev_struct blk_dev[NR_BLK_DEV];
+  extern struct request request[NR_REQUEST];
+! extern struct wait_queue * wait_for_request;
+  
+  extern int * blk_size[NR_BLK_DEV];
+  
+*** 0.96c.pl1/linux/kernel/sys_call.S	Sat Jul 18 22:28:57 1992
+--- linux/kernel/sys_call.S	Tue Jul 14 15:11:03 1992
+***************
+*** 37,44 ****
+   *	40(%esp) - %oldss
+   */
+  
+- SIG_CHLD	= 17
+- 
+  EBX		= 0x00
+  ECX		= 0x04
+  EDX		= 0x08
+--- 37,42 ----
+***************
+*** 86,92 ****
+  .globl _divide_error,_debug,_nmi,_int3,_overflow,_bounds,_invalid_op
+  .globl _double_fault,_coprocessor_segment_overrun
+  .globl _invalid_TSS,_segment_not_present,_stack_segment
+! .globl _general_protection,_irq13,_reserved
+  .globl _alignment_check,_page_fault
+  .globl ret_from_sys_call
+  
+--- 84,90 ----
+  .globl _divide_error,_debug,_nmi,_int3,_overflow,_bounds,_invalid_op
+  .globl _double_fault,_coprocessor_segment_overrun
+  .globl _invalid_TSS,_segment_not_present,_stack_segment
+! .globl _general_protection,_reserved
+  .globl _alignment_check,_page_fault
+  .globl ret_from_sys_call
+  
+***************
+*** 109,167 ****
+  	movl $0x17,%edx; \
+  	mov %dx,%fs
+  
+- #define ACK_FIRST(mask) \
+- 	inb $0x21,%al; \
+- 	jmp 1f; \
+- 1:	jmp 1f; \
+- 1:	orb $(mask),%al; \
+- 	outb %al,$0x21; \
+- 	jmp 1f; \
+- 1:	jmp 1f; \
+- 1:	movb $0x20,%al; \
+- 	outb %al,$0x20
+- 
+- #define ACK_SECOND(mask) \
+- 	inb $0xA1,%al; \
+- 	jmp 1f; \
+- 1:	jmp 1f; \
+- 1:	orb $(mask),%al; \
+- 	outb %al,$0xA1; \
+- 	jmp 1f; \
+- 1:	jmp 1f; \
+- 1:	movb $0x20,%al; \
+- 	outb %al,$0xA0 \
+- 	jmp 1f; \
+- 1:	jmp 1f; \
+- 1:	outb %al,$0x20
+- 
+- #define UNBLK_FIRST(mask) \
+- 	inb $0x21,%al; \
+- 	jmp 1f; \
+- 1:	jmp 1f; \
+- 1:	andb $~(mask),%al; \
+- 	outb %al,$0x21
+- 
+- #define UNBLK_SECOND(mask) \
+- 	inb $0xA1,%al; \
+- 	jmp 1f; \
+- 1:	jmp 1f; \
+- 1:	andb $~(mask),%al; \
+- 	outb %al,$0xA1
+- 
+  .align 2
+- bad_sys_call:
+- 	movl $-ENOSYS,EAX(%esp)
+- 	jmp ret_from_sys_call
+- .align 2
+  reschedule:
+  	pushl $ret_from_sys_call
+  	jmp _schedule
+  .align 2
+  _system_call:
+! 	pushl %eax		# save orig_eax
+  	SAVE_ALL
+  	cmpl _NR_syscalls,%eax
+! 	jae bad_sys_call
+  	call _sys_call_table(,%eax,4)
+  	movl %eax,EAX(%esp)		# save the return value
+  ret_from_sys_call:
+--- 107,123 ----
+  	movl $0x17,%edx; \
+  	mov %dx,%fs
+  
+  .align 2
+  reschedule:
+  	pushl $ret_from_sys_call
+  	jmp _schedule
+  .align 2
+  _system_call:
+! 	pushl %eax			# save orig_eax
+  	SAVE_ALL
++ 	movl $-ENOSYS,EAX(%esp)
+  	cmpl _NR_syscalls,%eax
+! 	jae ret_from_sys_call
+  	call _sys_call_table(,%eax,4)
+  	movl %eax,EAX(%esp)		# save the return value
+  ret_from_sys_call:
+***************
+*** 212,227 ****
+  	iret
+  
+  .align 2
+- _irq13:
+- 	pushl %eax
+- 	xorb %al,%al
+- 	outb %al,$0xF0
+- 	movb $0x20,%al
+- 	outb %al,$0x20
+- 	jmp 1f
+- 1:	jmp 1f
+- 1:	outb %al,$0xA0
+- 	popl %eax
+  _coprocessor_error:
+  	pushl $-1		# mark this as an int. 
+  	SAVE_ALL
+--- 168,173 ----
+*** 0.96c.pl1/linux/kernel/ioport.c	Tue Apr 21 19:24:55 1992
+--- linux/kernel/ioport.c	Wed Jul 15 21:13:36 1992
+***************
+*** 92,94 ****
+--- 92,121 ----
+  	}
+  	return 0;
+  }
++ 
++ unsigned int *stack;
++ 
++ /*
++  * sys_iopl has to be used when you want to access the IO ports
++  * beyond the 0x3ff range: to get the full 65536 ports bitmapped
++  * you'd need 8kB of bitmaps/process, which is a bit excessive.
++  *
++  * Here we just change the eflags value on the stack: we allow
++  * only the super-user to do it. This depends on the stack-layout
++  * on system-call entry - see also fork() and the signal handling
++  * code.
++  */
++ int sys_iopl(long ebx,long ecx,long edx,
++ 	     long esi, long edi, long ebp, long eax, long ds,
++ 	     long es, long fs, long gs, long orig_eax,
++ 	     long eip,long cs,long eflags,long esp,long ss)
++ {
++ 	unsigned int level = ebx;
++ 
++ 	if (level > 3)
++ 		return -EINVAL;
++ 	if (!suser())
++ 		return -EPERM;
++ 	*(&eflags) = (eflags & 0xffffcfff) | (level << 12);
++ 	return 0;
++ }
+*** 0.96c.pl1/linux/kernel/irq.c	Sat Jul 18 22:28:57 1992
+--- linux/kernel/irq.c	Thu Jul 16 12:32:26 1992
+***************
+*** 36,43 ****
+--- 36,50 ----
+  	{ NULL, 0, 0, NULL },
+  };
+  
++ void irq13(void);
++ 
+  /*
+   * This builds up the IRQ handler stubs using some ugly macros in irq.h
++  *
++  * These macros create the low-level assembly IRQ routines that do all
++  * the operations that are needed to keep the AT interrupt-controller
++  * happy. They are also written to be fast - and to disable interrupts
++  * as little as humanly possible.
+   */
+  BUILD_IRQ(FIRST,0,0x01)
+  BUILD_IRQ(FIRST,1,0x02)
+***************
+*** 62,70 ****
+   * particular interrupt is disabled when this is called.
+   *
+   * The routine has to call the appropriate handler (disabling
+!  * interrupts if needed first), and then re-enable this interrupt-
+!  * line if the handler was ok. If no handler exists, the IRQ isn't
+!  * re-enabled.
+   *
+   * Note similarities on a very low level between this and the
+   * do_signal() function. Naturally this is simplified, but they
+--- 69,77 ----
+   * particular interrupt is disabled when this is called.
+   *
+   * The routine has to call the appropriate handler (disabling
+!  * interrupts if needed first). If no handler exists, we return
+!  * an error value, telling the low-level IRQ routines not to
+!  * re-enable this IRQ line.
+   *
+   * Note similarities on a very low level between this and the
+   * do_signal() function. Naturally this is simplified, but they
+***************
+*** 73,94 ****
+   * (signal) number as argument, but the cpl value at the time of
+   * the interrupt.
+   */
+! void do_IRQ(int irq, struct pt_regs * regs)
+  {
+  	struct sigaction * sa = irq + irq_sigaction;
+  	void (*handler)(int);
+  
+  	if (!(handler = sa->sa_handler))
+! 		return;
+  	if (sa->sa_flags & SA_INTERRUPT)
+  		cli();
+  	handler(regs->cs & 3);
+- 	cli();
+- 	if (irq < 8)
+- 		outb(inb_p(0x21) & ~(1<<irq),0x21);
+- 	else
+- 		outb(inb_p(0xA1) & ~(1<<(irq-8)),0xA1);
+  	sti();
+  }
+  
+  int irqaction(unsigned int irq, struct sigaction * new)
+--- 80,103 ----
+   * (signal) number as argument, but the cpl value at the time of
+   * the interrupt.
+   */
+! int do_IRQ(int irq, struct pt_regs * regs)
+  {
+  	struct sigaction * sa = irq + irq_sigaction;
+  	void (*handler)(int);
++ 	unsigned int esp;
+  
+  	if (!(handler = sa->sa_handler))
+! 		return -1;	/* the irq isn't re-enabled */
+! 	__asm__ __volatile__("movl %%esp,%0":"=r" (esp));
+! 	if (esp < 200+(unsigned long)(current+1)) {
+! 		printk("Stack overflow on IRQ%d: shutting down\n",irq);
+! 		return -1;
+! 	}
+  	if (sa->sa_flags & SA_INTERRUPT)
+  		cli();
+  	handler(regs->cs & 3);
+  	sti();
++ 	return 0;		/* re-enable the irq when returning */
+  }
+  
+  int irqaction(unsigned int irq, struct sigaction * new)
+***************
+*** 150,155 ****
+--- 159,172 ----
+  	__asm__ __volatile__("pushl %0 ; popfl"::"r" (flags));
+  }
+  
++ extern void math_error(void);
++ 
++ static void math_error_irq(int cpl)
++ {
++ 	outb(0,0xF0);
++ 	math_error();
++ }
++ 
+  void init_IRQ(void)
+  {
+  	set_trap_gate(0x20,IRQ0_interrupt);
+***************
+*** 161,167 ****
+  	set_trap_gate(0x26,IRQ6_interrupt);
+  	set_trap_gate(0x27,IRQ7_interrupt);
+  	set_trap_gate(0x28,IRQ8_interrupt);
+! 	set_trap_gate(0x29,IRQ10_interrupt);
+  	set_trap_gate(0x2a,IRQ10_interrupt);
+  	set_trap_gate(0x2b,IRQ11_interrupt);
+  	set_trap_gate(0x2c,IRQ12_interrupt);
+--- 178,184 ----
+  	set_trap_gate(0x26,IRQ6_interrupt);
+  	set_trap_gate(0x27,IRQ7_interrupt);
+  	set_trap_gate(0x28,IRQ8_interrupt);
+! 	set_trap_gate(0x29,IRQ9_interrupt);
+  	set_trap_gate(0x2a,IRQ10_interrupt);
+  	set_trap_gate(0x2b,IRQ11_interrupt);
+  	set_trap_gate(0x2c,IRQ12_interrupt);
+***************
+*** 168,171 ****
+--- 185,190 ----
+  	set_trap_gate(0x2d,IRQ13_interrupt);
+  	set_trap_gate(0x2e,IRQ14_interrupt);
+  	set_trap_gate(0x2f,IRQ15_interrupt);
++ 	if (request_irq(13,math_error_irq))
++ 		printk("Unable to get IRQ13 for math-error handler\n");
+  }
+*** 0.96c.pl1/linux/kernel/ptrace.c	Sat Jul 18 22:28:57 1992
+--- linux/kernel/ptrace.c	Fri Jul 17 03:39:50 1992
+***************
+*** 240,246 ****
+  
+  		if (child == current)
+  			return -EPERM;
+! 		if ((!current->dumpable || (current->uid != child->euid) ||
+  	 	    (current->gid != child->egid)) && !suser())
+  			return -EPERM;
+  		/* the same process cannot be attached many times */
+--- 240,246 ----
+  
+  		if (child == current)
+  			return -EPERM;
+! 		if ((!child->dumpable || (current->uid != child->euid) ||
+  	 	    (current->gid != child->egid)) && !suser())
+  			return -EPERM;
+  		/* the same process cannot be attached many times */
+*** 0.96c.pl1/linux/tools/build.c	Tue May 26 19:40:55 1992
+--- linux/tools/build.c	Thu Jul 16 00:40:25 1992
+***************
+*** 32,38 ****
+  #define MINIX_HEADER 32
+  #define GCC_HEADER 1024
+  
+! #define SYS_SIZE 0x4000
+  
+  #define DEFAULT_MAJOR_ROOT 0
+  #define DEFAULT_MINOR_ROOT 0
+--- 32,38 ----
+  #define MINIX_HEADER 32
+  #define GCC_HEADER 1024
+  
+! #define SYS_SIZE 0x5000
+  
+  #define DEFAULT_MAJOR_ROOT 0
+  #define DEFAULT_MINOR_ROOT 0
+*** 0.96c.pl1/linux/include/sys/user.h	Wed Jun 10 15:24:39 1992
+--- linux/include/sys/user.h	Fri Jul 17 04:30:30 1992
+***************
+*** 62,67 ****
+--- 62,68 ----
+    struct pt_regs * u_ar0;	/* Used by gdb to help find the values for */
+  				/* the registers. */
+    struct user_i387_struct* u_fpstate;	/* Math Co-processor pointer. */
++   unsigned long magic;		/* To uniquely identify a core file */
+  };
+  #define NBPG 4096
+  #define UPAGES 1
+*** 0.96c.pl1/linux/include/a.out.h	Fri Apr 24 18:26:25 1992
+--- linux/include/a.out.h	Fri Jul 17 04:30:30 1992
+***************
+*** 72,77 ****
+--- 72,79 ----
+  /* Code indicating demand-paged executable.  */
+  #define ZMAGIC 0413
+  
++ /* Code indicating core file.  */
++ #define CMAGIC 0421
+  #if !defined (N_BADMAG)
+  #define N_BADMAG(x)					\
+   (N_MAGIC(x) != OMAGIC && N_MAGIC(x) != NMAGIC		\
+*** 0.96c.pl1/linux/include/linux/sched.h	Sat Jul 18 22:29:05 1992
+--- linux/include/linux/sched.h	Wed Jul 15 16:46:48 1992
+***************
+*** 128,136 ****
+  	 */
+  	struct task_struct *p_opptr,*p_pptr, *p_cptr, *p_ysptr, *p_osptr;
+  	/*
+! 	 * sleep makes a singly linked list with this.
+  	 */
+! 	struct task_struct *next_wait;
+  	unsigned short uid,euid,suid;
+  	unsigned short gid,egid,sgid;
+  	unsigned long timeout;
+--- 128,137 ----
+  	 */
+  	struct task_struct *p_opptr,*p_pptr, *p_cptr, *p_ysptr, *p_osptr;
+  	/*
+! 	 * For ease of programming... Normal sleeps don't need to
+! 	 * keep track of a wait-queue: every task has an entry of it's own
+  	 */
+! 	struct wait_queue wait;
+  	unsigned short uid,euid,suid;
+  	unsigned short gid,egid,sgid;
+  	unsigned long timeout;
+***************
+*** 185,191 ****
+  /* ec,brk... */	0,0,0,0,0,0,0, \
+  /* pid etc.. */	0,0,0,0, \
+  /* suppl grps*/ {NOGROUP,}, \
+! /* proc links*/ &init_task.task,&init_task.task,NULL,NULL,NULL,NULL, \
+  /* uid etc */	0,0,0,0,0,0, \
+  /* timeout */	0,0,0,0,0,0,0,0,0,0,0,0, \
+  /* min_flt */	0,0,0,0, \
+--- 186,193 ----
+  /* ec,brk... */	0,0,0,0,0,0,0, \
+  /* pid etc.. */	0,0,0,0, \
+  /* suppl grps*/ {NOGROUP,}, \
+! /* proc links*/ &init_task.task,&init_task.task,NULL,NULL,NULL, \
+! /* wait queue*/ {&init_task.task,NULL}, \
+  /* uid etc */	0,0,0,0,0,0, \
+  /* timeout */	0,0,0,0,0,0,0,0,0,0,0,0, \
+  /* min_flt */	0,0,0,0, \
+***************
+*** 222,231 ****
+  #define CURRENT_TIME (startup_time+(jiffies+jiffies_offset)/HZ)
+  
+  extern void add_timer(long jiffies, void (*fn)(void));
+! extern void sleep_on(struct task_struct ** p);
+  extern int send_sig(long sig,struct task_struct * p,int priv);
+- extern void interruptible_sleep_on(struct task_struct ** p);
+- extern void wake_up(struct task_struct ** p);
+  extern int in_group_p(gid_t grp);
+  
+  extern int request_irq(unsigned int irq,void (*handler)(int));
+--- 224,236 ----
+  #define CURRENT_TIME (startup_time+(jiffies+jiffies_offset)/HZ)
+  
+  extern void add_timer(long jiffies, void (*fn)(void));
+! 
+! extern void sleep_on(struct wait_queue ** p);
+! extern void interruptible_sleep_on(struct wait_queue ** p);
+! extern void wake_up(struct wait_queue ** p);
+! extern void wake_one_task(struct task_struct * p);
+! 
+  extern int send_sig(long sig,struct task_struct * p,int priv);
+  extern int in_group_p(gid_t grp);
+  
+  extern int request_irq(unsigned int irq,void (*handler)(int));
+***************
+*** 259,266 ****
+--- 264,273 ----
+  __asm__("cmpl %%ecx,_current\n\t" \
+  	"je 1f\n\t" \
+  	"movw %%dx,%1\n\t" \
++ 	"cli\n\t" \
+  	"xchgl %%ecx,_current\n\t" \
+  	"ljmp %0\n\t" \
++ 	"sti\n\t" \
+  	"cmpl %%ecx,_last_task_used_math\n\t" \
+  	"jne 1f\n\t" \
+  	"clts\n" \
+***************
+*** 297,302 ****
+--- 304,354 ----
+  
+  #define set_base(ldt,base) _set_base( ((char *)&(ldt)) , base )
+  #define set_limit(ldt,limit) _set_limit( ((char *)&(ldt)) , (limit-1)>>12 )
++ 
++ extern inline void add_wait_queue(struct wait_queue ** p, struct wait_queue * wait)
++ {
++ 	unsigned long flags;
++ 	struct wait_queue * tmp;
++ 
++ 	__asm__ __volatile__("pushfl ; popl %0 ; cli":"=r" (flags));
++ 	wait->next = *p;
++ 	tmp = wait;
++ 	while (tmp->next)
++ 		if ((tmp = tmp->next)->next == *p)
++ 			break;
++ 	*p = tmp->next = wait;
++ 	__asm__ __volatile__("pushl %0 ; popfl"::"r" (flags));
++ }
++ 
++ extern inline void remove_wait_queue(struct wait_queue ** p, struct wait_queue * wait)
++ {
++ 	unsigned long flags;
++ 	struct wait_queue * tmp;
++ 
++ 	__asm__ __volatile__("pushfl ; popl %0 ; cli":"=r" (flags));
++ 	if (*p == wait)
++ 		if ((*p = wait->next) == wait)
++ 			*p = NULL;
++ 	tmp = wait;
++ 	while (tmp && tmp->next != wait)
++ 		tmp = tmp->next;
++ 	if (tmp)
++ 		tmp->next = wait->next;
++ 	wait->next = NULL;
++ 	__asm__ __volatile__("pushl %0 ; popfl"::"r" (flags));
++ }
++ 
++ extern inline void select_wait(struct wait_queue ** wait_address, select_table * p)
++ {
++ 	struct select_table_entry * entry = p->entry + p->nr;
++ 
++ 	if (!wait_address)
++ 		return;
++ 	entry->wait_address = wait_address;
++ 	entry->wait.task = current;
++ 	add_wait_queue(wait_address,&entry->wait);
++ 	p->nr++;
++ }
+  
+  static unsigned long inline _get_base(char * addr)
+  {
+*** 0.96c.pl1/linux/include/linux/sys.h	Wed Jun 17 05:25:11 1992
+--- linux/include/linux/sys.h	Wed Jul 15 21:01:13 1992
+***************
+*** 112,117 ****
+--- 112,118 ----
+  extern int sys_newlstat();
+  extern int sys_newfstat();
+  extern int sys_newuname();
++ extern int sys_iopl();
+  
+  fn_ptr sys_call_table[] = { sys_setup, sys_exit, sys_fork, sys_read,
+  sys_write, sys_open, sys_close, sys_waitpid, sys_creat, sys_link,
+***************
+*** 133,139 ****
+  sys_truncate, sys_ftruncate, sys_fchmod, sys_fchown, sys_getpriority,
+  sys_setpriority, sys_profil, sys_statfs, sys_fstatfs, sys_ioperm,
+  sys_socketcall, sys_syslog, sys_setitimer, sys_getitimer, sys_newstat,
+! sys_newlstat, sys_newfstat, sys_newuname };
+  
+  /* So we don't have to do any more manual updating.... */
+  int NR_syscalls = sizeof(sys_call_table)/sizeof(fn_ptr);
+--- 134,140 ----
+  sys_truncate, sys_ftruncate, sys_fchmod, sys_fchown, sys_getpriority,
+  sys_setpriority, sys_profil, sys_statfs, sys_fstatfs, sys_ioperm,
+  sys_socketcall, sys_syslog, sys_setitimer, sys_getitimer, sys_newstat,
+! sys_newlstat, sys_newfstat, sys_newuname, sys_iopl };
+  
+  /* So we don't have to do any more manual updating.... */
+  int NR_syscalls = sizeof(sys_call_table)/sizeof(fn_ptr);
+*** 0.96c.pl1/linux/include/linux/tty.h	Sat Jul 18 22:29:05 1992
+--- linux/include/linux/tty.h	Wed Jul 15 15:51:40 1992
+***************
+*** 30,36 ****
+  	unsigned long data;
+  	unsigned long head;
+  	unsigned long tail;
+! 	struct task_struct * proc_list;
+  	unsigned char buf[TTY_BUF_SIZE];
+  };
+  
+--- 30,36 ----
+  	unsigned long data;
+  	unsigned long head;
+  	unsigned long tail;
+! 	struct wait_queue * proc_list;
+  	unsigned char buf[TTY_BUF_SIZE];
+  };
+  
+***************
+*** 126,136 ****
+  /*
+   * so that interrupts won't be able to mess up the
+   * queues, copy_to_cooked must be atomic with repect
+!  * to itself, as must tty->write. These are the flag bits.
+   */
+! #define TTY_WRITE_BUSY 1
+! #define TTY_READ_BUSY 2
+! #define TTY_CR_PENDING 4
+  
+  #define TTY_WRITE_FLUSH(tty) tty_write_flush((tty))
+  #define TTY_READ_FLUSH(tty) tty_read_flush((tty))
+--- 126,161 ----
+  /*
+   * so that interrupts won't be able to mess up the
+   * queues, copy_to_cooked must be atomic with repect
+!  * to itself, as must tty->write. These are the flag
+!  * bit-numbers. Use the set_bit() and clear_bit()
+!  * macros to make it all atomic.
+   */
+! #define TTY_WRITE_BUSY 0
+! #define TTY_READ_BUSY 1
+! #define TTY_CR_PENDING 2
+! 
+! /*
+!  * These have to be done with inline assembly: that way the bit-setting
+!  * is guaranteed to be atomic. Both set_bit and clear_bit return 0
+!  * if the bit-setting went ok, != 0 if the bit already was set/cleared.
+!  */
+! extern inline int set_bit(int nr,int * addr)
+! {
+! 	char ok;
+! 
+! 	__asm__ __volatile__("btsl %1,%2\n\tsetb %0":
+! 		"=q" (ok):"r" (nr),"m" (*(addr)));
+! 	return ok;
+! }
+! 
+! extern inline int clear_bit(int nr, int * addr)
+! {
+! 	char ok;
+! 
+! 	__asm__ __volatile__("btrl %1,%2\n\tsetnb %0":
+! 		"=q" (ok):"r" (nr),"m" (*(addr)));
+! 	return ok;
+! }
+  
+  #define TTY_WRITE_FLUSH(tty) tty_write_flush((tty))
+  #define TTY_READ_FLUSH(tty) tty_read_flush((tty))
+*** 0.96c.pl1/linux/include/linux/fs.h	Sat Jul 18 22:29:05 1992
+--- linux/include/linux/fs.h	Wed Jul 15 15:19:53 1992
+***************
+*** 6,11 ****
+--- 6,14 ----
+  #ifndef _FS_H
+  #define _FS_H
+  
++ #include <linux/limits.h>
++ #include <linux/wait.h>
++ 
+  #include <sys/types.h>
+  #include <sys/dirent.h>
+  #include <sys/vfs.h>
+***************
+*** 41,57 ****
+  #define MAJOR(a) (((unsigned)(a))>>8)
+  #define MINOR(a) ((a)&0xff)
+  
+- #define NR_OPEN 32
+- #define NR_INODE 128
+- #define NR_FILE 128
+- #define NR_SUPER 8
+- #define NR_HASH 307
+- #define NR_BUFFERS nr_buffers
+- #define BLOCK_SIZE 1024
+- #define BLOCK_SIZE_BITS 10
+- #define MAX_CHRDEV 16
+- #define MAX_BLKDEV 16
+- 
+  #ifndef NULL
+  #define NULL ((void *) 0)
+  #endif
+--- 44,49 ----
+***************
+*** 78,83 ****
+--- 70,76 ----
+  #define MS_NOSUID    2 /* ignore suid and sgid bits */
+  #define MS_NODEV     4 /* disallow access to device special files */
+  #define MS_NOEXEC    8 /* disallow program execution */
++ #define MS_SYNC     16 /* writes are synced at once */
+  
+  /*
+   * Note that read-only etc flags are inode-specific: setting some file-system
+***************
+*** 89,94 ****
+--- 82,88 ----
+  #define IS_NOSUID(inode) ((inode)->i_flags & MS_NOSUID)
+  #define IS_NODEV(inode) ((inode)->i_flags & MS_NODEV)
+  #define IS_NOEXEC(inode) ((inode)->i_flags & MS_NOEXEC)
++ #define IS_SYNC(inode) ((inode)->i_flags & MS_SYNC)
+  
+  /* the read-only stuff doesn't really belong here, but any other place is
+     probably as bad and I don't want to create yet another include file. */
+***************
+*** 108,114 ****
+  	unsigned char b_dirt;		/* 0-clean,1-dirty */
+  	unsigned char b_count;		/* users using this block */
+  	unsigned char b_lock;		/* 0 - ok, 1 -locked */
+! 	struct task_struct * b_wait;
+  	struct buffer_head * b_prev;
+  	struct buffer_head * b_next;
+  	struct buffer_head * b_prev_free;
+--- 102,108 ----
+  	unsigned char b_dirt;		/* 0-clean,1-dirty */
+  	unsigned char b_count;		/* users using this block */
+  	unsigned char b_lock;		/* 0 - ok, 1 -locked */
+! 	struct wait_queue * b_wait;
+  	struct buffer_head * b_prev;
+  	struct buffer_head * b_next;
+  	struct buffer_head * b_prev_free;
+***************
+*** 131,138 ****
+  	unsigned long i_data[16];
+  	struct inode_operations * i_op;
+  	struct super_block * i_sb;
+! 	struct task_struct * i_wait;
+! 	struct task_struct * i_wait2;	/* for pipes */
+  	unsigned short i_count;
+  	unsigned short i_flags;
+  	unsigned char i_lock;
+--- 125,132 ----
+  	unsigned long i_data[16];
+  	struct inode_operations * i_op;
+  	struct super_block * i_sb;
+! 	struct wait_queue * i_wait;
+! 	struct wait_queue * i_wait2;	/* for pipes */
+  	unsigned short i_count;
+  	unsigned short i_flags;
+  	unsigned char i_lock;
+***************
+*** 154,171 ****
+  	off_t f_pos;
+  };
+  
+- typedef struct {
+- 	struct task_struct * old_task;
+- 	struct task_struct ** wait_address;
+- } wait_entry;
+- 
+- typedef struct select_table_struct {
+- 	int nr, woken;
+- 	struct task_struct * current;
+- 	struct select_table_struct * next_table;
+- 	wait_entry entry[NR_OPEN*3];
+- } select_table;
+- 
+  struct super_block {
+  	unsigned long s_ninodes;
+  	unsigned long s_nzones;
+--- 148,153 ----
+***************
+*** 182,188 ****
+  	struct inode * s_covered;
+  	struct inode * s_mounted;
+  	unsigned long s_time;
+! 	struct task_struct * s_wait;
+  	unsigned char s_lock;
+  	unsigned char s_rd_only;
+  	unsigned char s_dirt;
+--- 164,170 ----
+  	struct inode * s_covered;
+  	struct inode * s_mounted;
+  	unsigned long s_time;
+! 	struct wait_queue * s_wait;
+  	unsigned char s_lock;
+  	unsigned char s_rd_only;
+  	unsigned char s_dirt;
+*** 0.96c.pl1/linux/include/linux/string.h	Thu Jul  2 01:06:49 1992
+--- linux/include/linux/string.h	Wed Jul 15 06:58:53 1992
+***************
+*** 273,279 ****
+  
+  extern inline char * strtok(char * s,const char * ct)
+  {
+! register char * __res __asm__("si");
+  __asm__("testl %1,%1\n\t"
+  	"jne 1f\n\t"
+  	"testl %0,%0\n\t"
+--- 273,279 ----
+  
+  extern inline char * strtok(char * s,const char * ct)
+  {
+! register char * __res;
+  __asm__("testl %1,%1\n\t"
+  	"jne 1f\n\t"
+  	"testl %0,%0\n\t"
+***************
+*** 324,335 ****
+  	"jne 8f\n\t"
+  	"movl %0,%1\n"
+  	"8:"
+! #if __GNUC__ == 2
+! 	:"=r" (__res)
+! #else
+! 	:"=b" (__res)
+! #endif
+! 	,"=S" (___strtok)
+  	:"0" (___strtok),"1" (s),"g" (ct)
+  	:"ax","cx","dx","di");
+  return __res;
+--- 324,330 ----
+  	"jne 8f\n\t"
+  	"movl %0,%1\n"
+  	"8:"
+! 	:"=b" (__res),"=S" (___strtok)
+  	:"0" (___strtok),"1" (s),"g" (ct)
+  	:"ax","cx","dx","di");
+  return __res;
+*** 0.96c.pl1/linux/include/linux/unistd.h	Wed Jun 17 14:41:25 1992
+--- linux/include/linux/unistd.h	Wed Jul 15 20:58:31 1992
+***************
+*** 116,121 ****
+--- 116,122 ----
+  #define __NR_lstat		107
+  #define __NR_fstat		108
+  #define __NR_uname		109
++ #define __NR_iopl		110
+  
+  extern int errno;
+  
+*** 0.96c.pl1/linux/include/linux/fcntl.h	Thu Jul  2 00:56:39 1992
+--- linux/include/linux/fcntl.h	Tue Jul 14 16:04:33 1992
+***************
+*** 3,20 ****
+  
+  #include <sys/types.h>
+  
+! /* open/fcntl - NOCTTY, NDELAY isn't implemented yet */
+! #define O_ACCMODE	00003
+! #define O_RDONLY	   00
+! #define O_WRONLY	   01
+! #define O_RDWR		   02
+! #define O_CREAT		00100	/* not fcntl */
+! #define O_EXCL		00200	/* not fcntl */
+! #define O_NOCTTY	00400	/* not fcntl */
+! #define O_TRUNC		01000	/* not fcntl */
+! #define O_APPEND	02000
+! #define O_NONBLOCK	04000
+  #define O_NDELAY	O_NONBLOCK
+  
+  /* Defines for fcntl-commands. Note that currently
+   * locking isn't supported, and other things aren't really
+--- 3,21 ----
+  
+  #include <sys/types.h>
+  
+! /* open/fcntl - O_SYNC isn't implemented yet */
+! #define O_ACCMODE	  0003
+! #define O_RDONLY	    00
+! #define O_WRONLY	    01
+! #define O_RDWR		    02
+! #define O_CREAT		  0100	/* not fcntl */
+! #define O_EXCL		  0200	/* not fcntl */
+! #define O_NOCTTY	  0400	/* not fcntl */
+! #define O_TRUNC		 01000	/* not fcntl */
+! #define O_APPEND	 02000
+! #define O_NONBLOCK	 04000
+  #define O_NDELAY	O_NONBLOCK
++ #define O_SYNC		010000
+  
+  /* Defines for fcntl-commands. Note that currently
+   * locking isn't supported, and other things aren't really
+*** /dev/null	Sat Jul 18 22:26:09 1992
+--- linux/include/linux/mouse.h	Wed Jul 15 04:15:55 1992
+***************
+*** 0 ****
+--- 1,61 ----
++ /*
++  * linux/include/linux/mouse.h: header file for Logitech Bus Mouse driver
++  * by James Banks
++  *
++  * based on information gleamed from various mouse drivers on the net
++  *
++  * Heavily modified by David giller (rafetmad@oxy.edu)
++  *
++  * Minor modifications for Linux 0.96c-pl1 by Nathan Laredo
++  * gt7080a@prism.gatech.edu (13JUL92)
++  *
++  */
++ 
++ #ifndef _MOUSE_H
++ #define _MOUSE_H
++ 
++ #define MOUSE_IRQ		5
++ 
++ #define	MSE_DATA_PORT		0x23c
++ #define	MSE_SIGNATURE_PORT	0x23d
++ #define	MSE_CONTROL_PORT	0x23e
++ #define MSE_INTERRUPT_PORT	0x23e
++ #define	MSE_CONFIG_PORT		0x23f
++ 
++ #define	MSE_ENABLE_INTERRUPTS	0x00
++ #define	MSE_DISABLE_INTERRUPTS	0x10
++ 
++ #define	MSE_READ_X_LOW		0x80
++ #define	MSE_READ_X_HIGH		0xa0
++ #define	MSE_READ_Y_LOW		0xc0
++ #define	MSE_READ_Y_HIGH		0xe0
++ 
++ /* Magic number used to check if the mouse exists */
++ #define MSE_CONFIG_BYTE		0x91
++ #define MSE_DEFAULT_MODE	0x90
++ #define MSE_SIGNATURE_BYTE	0xa5
++ 
++ /* useful macros */
++ 
++ #define MSE_INT_OFF()	outb(MSE_DISABLE_INTERRUPTS, MSE_CONTROL_PORT)
++ #define MSE_INT_ON()	outb(MSE_ENABLE_INTERRUPTS, MSE_CONTROL_PORT)
++  
++ struct mouse_status
++ 	{
++ 	char		buttons;
++ 	char		latch_buttons;
++ 	int		dx;
++ 	int		dy;	
++ 
++ 	int 		present;
++ 	int		ready;
++ 	int		active;
++ 
++ 	struct inode    *inode;
++ 	};
++ 
++ /* Function Prototypes */
++ extern long mouse_init(long);
++ 
++ #endif
++ 
+*** /dev/null	Sat Jul 18 22:26:09 1992
+--- linux/include/linux/msdos_fs.h	Thu Jul 16 00:35:11 1992
+***************
+*** 0 ****
+--- 1,190 ----
++ /*
++  * The MS-DOS filesystem constants/structures
++  */
++ 
++ #ifndef _MSDOS_FS_H
++ #define _MSDOS_FS_H
++ 
++ #include <sys/types.h>
++ #include <linux/fs.h>
++ 
++ #define MSDOS_ROOT_INO  1
++ #define SECTOR_SIZE     512 /* sector size (bytes) */
++ #define SECTOR_BITS	9 /* log2(SECTOR_SIZE) */
++ #define MSDOS_DPB	(MSDOS_DPS*2) /* dir entries per block */
++ #define MSDOS_DPB_BITS	5 /* log2(MSDOS_DPB) */
++ #define MSDOS_DPS	(SECTOR_SIZE/sizeof(struct msdos_dir_entry))
++ #define MSDOS_DPS_BITS	4 /* log2(MSDOS_DPS) */
++ #define MSDOS_DIR_BITS	5 /* log2(sizeof(struct msdos_dir_entry)) */
++ 
++ #define MSDOS_SUPER_MAGIC 0x4d44 /* MD */
++ 
++ #define FAT_CACHE    8 /* FAT cache size */
++ 
++ #define ATTR_RO      1  /* read-only */
++ #define ATTR_HIDDEN  2  /* hidden */
++ #define ATTR_SYS     4  /* system */
++ #define ATTR_VOLUME  8  /* volume label */
++ #define ATTR_DIR     16 /* directory */
++ #define ATTR_ARCH    32 /* archived */
++ 
++ #define ATTR_NONE    0 /* no attribute bits */
++ #define ATTR_UNUSED  (ATTR_VOLUME | ATTR_ARCH | ATTR_SYS)
++ 	/* attribute bits that are copied "as is" */
++ 
++ #define DELETED_FLAG 0xe5 /* marks file as deleted when in name[0] */
++ 
++ #define D_START    0 /* i_data[0]: first cluster or 0 */
++ #define D_ATTRS    1 /* i_data[1]: unused attribute bits */
++ #define D_BUSY     2 /* i_data[2]: file is either deleted but still open, or
++ 				   inconsistent (mkdir) */
++ #define D_DEPEND   3 /* i_data[3]: pointer to inode that depends on the current
++ 				   inode */
++ #define D_OLD	   4 /* i_data[4]: pointer to the old inode this inode depends
++ 				   on */
++ #define D_BINARY   5 /* i_data[5]: file contains non-text data */
++ 
++ #define SET_DIRTY(i) (i)->i_dirt = (i)->i_data[D_DIRT] = 1
++ 
++ #define MSDOS_SB(s) ((struct msdos_sb_info *) s)
++ 
++ #define MSDOS_NAME 11 /* maximum name length */
++ #define MSDOS_DOT    ".          " /* ".", padded to MSDOS_NAME chars */
++ #define MSDOS_DOTDOT "..         " /* "..", padded to MSDOS_NAME chars */
++ 
++ #define MSDOS_FAT12 4086 /* maximum number of clusters in a 12 bit FAT */
++ 
++ struct msdos_boot_sector {
++ 	char ignored[13];
++ 	unsigned char cluster_size; /* sectors/cluster */
++ 	unsigned short reserved;    /* reserved sectors */
++ 	unsigned char fats;	    /* number of FATs */
++ 	unsigned char dir_entries[2];/* root directory entries */
++ 	unsigned char sectors[2];   /* number of sectors */
++ 	unsigned char media;	    /* media code (unused) */
++ 	unsigned short fat_length;  /* sectors/FAT */
++ 	unsigned short secs_track;  /* sectors per track (unused) */
++ 	unsigned short heads;	    /* number of heads (unused) */
++ 	unsigned long hidden;	    /* hidden sectors (unused) */
++ 	unsigned long total_sect;   /* number of sectors (if sectors == 0) */
++ };
++ 
++ struct msdos_sb_info { /* space in struct super_block is 28 bytes */
++ 	unsigned short cluster_size; /* sectors/cluster */
++ 	unsigned char fats,fat_bits; /* number of FATs, FAT bits (12 or 16) */
++ 	unsigned short fat_start,fat_length; /* FAT start & length (sec.) */
++ 	unsigned short dir_start,dir_entries; /* root dir start & entries */
++ 	unsigned short data_start;   /* first data sector */
++ 	unsigned long clusters;      /* number of clusters */
++ 	uid_t fs_uid;
++ 	gid_t fs_gid;
++ 	unsigned short fs_umask;
++ 	unsigned char name_check; /* r = releaxed, n = normal, s = strict */
++ 	unsigned char conversion; /* b = binary, t = text, a = auto */
++ }; /* 28 bytes */
++ 
++ struct msdos_dir_entry {
++ 	char name[8],ext[3]; /* name and extension */
++ 	unsigned char attr;  /* attribute bits */
++ 	char unused[10];
++ 	unsigned short time,date,start; /* time, date and first cluster */
++ 	unsigned long size;  /* file size (in bytes) */
++ };
++ 
++ struct fat_cache {
++ 	int device; /* device number. 0 means unused. */
++ 	int ino; /* inode number. */
++ 	int file_cluster; /* cluster number in the file. */
++ 	int disk_cluster; /* cluster number on disk. */
++ 	struct fat_cache *next; /* next cache entry */
++ };
++ 
++ /* Determine whether this FS has kB-aligned data. */
++ 
++ #define MSDOS_CAN_BMAP(mib) (!(((mib)->cluster_size & 1) || \
++     ((mib)->data_start & 1)))
++ 
++ /* Convert attribute bits and a mask to the UNIX mode. */
++ 
++ #define MSDOS_MKMODE(a,m) (m & (a & ATTR_RO ? 0444 : (a & ATTR_HIDDEN ? 0 : \
++     0777)))
++ 
++ /* Convert the UNIX mode to MS-DOS attribute bits. */
++ 
++ #define MSDOS_MKATTR(m) (!(m & 0600) ? ATTR_HIDDEN : ((m & 0600) == 0400 ? \
++     ATTR_RO : ATTR_NONE))
++ 
++ 
++ static inline struct buffer_head *msdos_sread(int dev,int sector,void **start)
++ {
++  	struct buffer_head *bh;
++ 
++ 	if (!(bh = bread(dev,sector >> 1))) return NULL;
++     	*start = bh->b_data+((sector & 1) << SECTOR_BITS);
++ 	return bh;
++ }
++ 
++ 
++ /* misc.c */
++ 
++ extern int is_binary(char conversion,char *extension);
++ extern void lock_creation(void);
++ extern void unlock_creation(void);
++ extern int msdos_add_cluster(struct inode *inode);
++ extern int date_dos2unix(unsigned short time,unsigned short date);
++ extern void date_unix2dos(int unix_date,unsigned short *time,
++     unsigned short *date);
++ extern int msdos_get_entry(struct inode *dir,int *pos,struct buffer_head **bh,
++     struct msdos_dir_entry **de);
++ extern int msdos_scan(struct inode *dir,char *name,struct buffer_head **res_bh,
++     struct msdos_dir_entry **res_de,int *ino);
++ extern int msdos_parent_ino(struct inode *dir,int locked);
++ 
++ /* fat.c */
++ 
++ extern int fat_access(struct super_block *sb,int this,int new_value);
++ extern int msdos_smap(struct inode *inode,int sector);
++ extern int fat_free(struct inode *inode,int skip);
++ extern void cache_init(void);
++ void cache_lookup(struct inode *inode,int cluster,int *f_clu,int *d_clu);
++ void cache_add(struct inode *inode,int f_clu,int d_clu);
++ void cache_inval_inode(struct inode *inode);
++ void cache_inval_dev(int device);
++ int get_cluster(struct inode *inode,int cluster);
++ 
++ /* namei.c */
++ 
++ extern int msdos_lookup(struct inode *dir,const char *name,int len,
++ 	struct inode **result);
++ extern int msdos_create(struct inode *dir,const char *name,int len,int mode,
++ 	struct inode **result);
++ extern int msdos_mkdir(struct inode *dir,const char *name,int len,int mode);
++ extern int msdos_rmdir(struct inode *dir,const char *name,int len);
++ extern int msdos_unlink(struct inode *dir,const char *name,int len);
++ extern int msdos_rename(struct inode *old_dir,const char *old_name,int old_len,
++ 	struct inode *new_dir,const char *new_name,int new_len);
++ 
++ /* inode.c */
++ 
++ extern void msdos_put_inode(struct inode *inode);
++ extern void msdos_put_super(struct super_block *sb);
++ extern struct super_block *msdos_read_super(struct super_block *s,void *data);
++ extern void msdos_statfs(struct super_block *sb,struct statfs *buf);
++ extern int msdos_bmap(struct inode *inode,int block);
++ extern void msdos_read_inode(struct inode *inode);
++ extern void msdos_write_inode(struct inode *inode);
++ 
++ /* dir.c */
++ 
++ extern struct file_operations msdos_dir_operations;
++ extern struct inode_operations msdos_dir_inode_operations;
++ 
++ /* file.c */
++ 
++ extern struct file_operations msdos_file_operations;
++ extern struct inode_operations msdos_file_inode_operations;
++ extern struct inode_operations msdos_file_inode_operations_no_bmap;
++ 
++ extern void msdos_truncate(struct inode *inode);
++ 
++ #endif
+*** /dev/null	Sat Jul 18 22:26:09 1992
+--- linux/include/linux/wait.h	Wed Jul 15 16:46:10 1992
+***************
+*** 0 ****
+--- 1,19 ----
++ #ifndef _LINUX_WAIT_H
++ #define _LINUX_WAIT_H
++ 
++ #include <linux/limits.h>
++ 
++ struct wait_queue {
++ 	struct task_struct * task;
++ 	struct wait_queue * next;
++ };
++ 
++ typedef struct select_table_struct {
++ 	int nr;
++ 	struct select_table_entry {
++ 		struct wait_queue wait;
++ 		struct wait_queue ** wait_address;
++ 	} entry[NR_OPEN*3];
++ } select_table;
++ 
++ #endif
+*** /dev/null	Sat Jul 18 22:26:09 1992
+--- linux/include/linux/limits.h	Wed Jul 15 15:19:24 1992
+***************
+*** 0 ****
+--- 1,16 ----
++ #ifndef _LINUX_LIMITS_H
++ #define _LINUX_LIMITS_H
++ 
++ #define NR_OPEN 32
++ #define NR_INODE 128
++ #define NR_FILE 128
++ #define NR_SUPER 8
++ #define NR_HASH 307
++ #define NR_BUFFERS nr_buffers
++ #define BLOCK_SIZE 1024
++ #define BLOCK_SIZE_BITS 10
++ #define MAX_CHRDEV 16
++ #define MAX_BLKDEV 16
++ 
++ 
++ #endif
+*** 0.96c.pl1/linux/include/asm/io.h	Tue Jun  2 12:25:20 1992
+--- linux/include/asm/io.h	Tue Jul 14 05:15:21 1992
+***************
+*** 11,23 ****
+  
+  extern void inline outb(char value, unsigned short port)
+  {
+! __asm__ volatile ("outb %0,%1"
+  		::"a" ((char) value),"d" ((unsigned short) port));
+  }
+  
+  extern void inline outb_p(char value, unsigned short port)
+  {
+! __asm__ volatile ("outb %0,%1\n\t"
+  #ifdef REALLY_SLOW_IO
+  		  "outb %0,$0x80\n\t"
+  		  "outb %0,$0x80\n\t"
+--- 11,23 ----
+  
+  extern void inline outb(char value, unsigned short port)
+  {
+! __asm__ __volatile__ ("outb %0,%1"
+  		::"a" ((char) value),"d" ((unsigned short) port));
+  }
+  
+  extern void inline outb_p(char value, unsigned short port)
+  {
+! __asm__ __volatile__ ("outb %0,%1\n\t"
+  #ifdef REALLY_SLOW_IO
+  		  "outb %0,$0x80\n\t"
+  		  "outb %0,$0x80\n\t"
+***************
+*** 30,36 ****
+  extern unsigned char inline inb(unsigned short port)
+  {
+  	unsigned char _v;
+! __asm__ volatile ("inb %1,%0"
+  		:"=a" (_v):"d" ((unsigned short) port));
+  	return _v;
+  }
+--- 30,36 ----
+  extern unsigned char inline inb(unsigned short port)
+  {
+  	unsigned char _v;
+! __asm__ __volatile__ ("inb %1,%0"
+  		:"=a" (_v):"d" ((unsigned short) port));
+  	return _v;
+  }
+***************
+*** 38,44 ****
+  extern unsigned char inline inb_p(unsigned short port)
+  {
+  	unsigned char _v;
+! __asm__ volatile ("inb %1,%0\n\t"
+  #ifdef REALLY_SLOW_IO
+  		  "outb %0,$0x80\n\t"
+  		  "outb %0,$0x80\n\t"
+--- 38,44 ----
+  extern unsigned char inline inb_p(unsigned short port)
+  {
+  	unsigned char _v;
+! __asm__ __volatile__ ("inb %1,%0\n\t"
+  #ifdef REALLY_SLOW_IO
+  		  "outb %0,$0x80\n\t"
+  		  "outb %0,$0x80\n\t"
+*** 0.96c.pl1/linux/include/asm/memory.h	Fri Apr 24 18:26:25 1992
+--- linux/include/asm/memory.h	Tue Jul 14 05:15:21 1992
+***************
+*** 7,13 ****
+   */
+  #define memcpy(dest,src,n) ({ \
+  void * _res = dest; \
+! __asm__ ("cld;rep;movsb" \
+  	::"D" ((long)(_res)),"S" ((long)(src)),"c" ((long) (n)) \
+  	:"di","si","cx"); \
+  _res; \
+--- 7,13 ----
+   */
+  #define memcpy(dest,src,n) ({ \
+  void * _res = dest; \
+! __asm__ __volatile__ ("cld;rep;movsb" \
+  	::"D" ((long)(_res)),"S" ((long)(src)),"c" ((long) (n)) \
+  	:"di","si","cx"); \
+  _res; \
+*** 0.96c.pl1/linux/include/asm/system.h	Fri Apr 24 18:26:25 1992
+--- linux/include/asm/system.h	Tue Jul 14 05:13:01 1992
+***************
+*** 1,5 ****
+  #define move_to_user_mode() \
+! __asm__ ("movl %%esp,%%eax\n\t" \
+  	"pushl $0x17\n\t" \
+  	"pushl %%eax\n\t" \
+  	"pushfl\n\t" \
+--- 1,5 ----
+  #define move_to_user_mode() \
+! __asm__ __volatile__ ("movl %%esp,%%eax\n\t" \
+  	"pushl $0x17\n\t" \
+  	"pushl %%eax\n\t" \
+  	"pushfl\n\t" \
+***************
+*** 13,26 ****
+  	"mov %%ax,%%gs" \
+  	:::"ax")
+  
+! #define sti() __asm__ ("sti"::)
+! #define cli() __asm__ ("cli"::)
+! #define nop() __asm__ ("nop"::)
+  
+! #define iret() __asm__ ("iret"::)
+  
+  #define _set_gate(gate_addr,type,dpl,addr) \
+! __asm__ ("movw %%dx,%%ax\n\t" \
+  	"movw %0,%%dx\n\t" \
+  	"movl %%eax,%1\n\t" \
+  	"movl %%edx,%2" \
+--- 13,26 ----
+  	"mov %%ax,%%gs" \
+  	:::"ax")
+  
+! #define sti() __asm__ __volatile__ ("sti"::)
+! #define cli() __asm__ __volatile__ ("cli"::)
+! #define nop() __asm__ __volatile__ ("nop"::)
+  
+! #define iret() __asm__ __volatile__ ("iret"::)
+  
+  #define _set_gate(gate_addr,type,dpl,addr) \
+! __asm__ __volatile__ ("movw %%dx,%%ax\n\t" \
+  	"movw %0,%%dx\n\t" \
+  	"movl %%eax,%1\n\t" \
+  	"movl %%edx,%2" \
+***************
+*** 50,56 ****
+  		((limit) & 0x0ffff); }
+  
+  #define _set_tssldt_desc(n,addr,type) \
+! __asm__ ("movw $232,%1\n\t" \
+  	"movw %%ax,%2\n\t" \
+  	"rorl $16,%%eax\n\t" \
+  	"movb %%al,%3\n\t" \
+--- 50,56 ----
+  		((limit) & 0x0ffff); }
+  
+  #define _set_tssldt_desc(n,addr,type) \
+! __asm__ __volatile__ ("movw $232,%1\n\t" \
+  	"movw %%ax,%2\n\t" \
+  	"rorl $16,%%eax\n\t" \
+  	"movb %%al,%3\n\t" \
+*** 0.96c.pl1/linux/include/asm/segment.h	Fri Apr 24 18:26:25 1992
+--- linux/include/asm/segment.h	Tue Jul 14 05:15:21 1992
+***************
+*** 94,99 ****
+  
+  extern inline void set_fs(unsigned long val)
+  {
+! 	__asm__("mov %0,%%fs"::"r" ((unsigned short) val));
+  }
+  
+--- 94,99 ----
+  
+  extern inline void set_fs(unsigned long val)
+  {
+! 	__asm__ __volatile__("mov %0,%%fs"::"r" ((unsigned short) val));
+  }
+  
+*** 0.96c.pl1/linux/include/asm/irq.h	Sat Jul 18 22:29:14 1992
+--- linux/include/asm/irq.h	Tue Jul 14 15:22:18 1992
+***************
+*** 46,56 ****
+  	"jmp 1f\n" \
+  	"1:\tjmp 1f\n" \
+  	"1:\tmovb $0x20,%al\n\t" \
+! 	"outb %al,$0xA0" \
+  	"jmp 1f\n" \
+  	"1:\tjmp 1f\n" \
+  	"1:\toutb %al,$0x20\n\t"
+  
+  #define IRQ_NAME2(nr) nr##_interrupt()
+  #define IRQ_NAME(nr) IRQ_NAME2(IRQ##nr)
+  	
+--- 46,70 ----
+  	"jmp 1f\n" \
+  	"1:\tjmp 1f\n" \
+  	"1:\tmovb $0x20,%al\n\t" \
+! 	"outb %al,$0xA0\n\t" \
+  	"jmp 1f\n" \
+  	"1:\tjmp 1f\n" \
+  	"1:\toutb %al,$0x20\n\t"
+  
++ #define UNBLK_FIRST(mask) \
++ 	"inb $0x21,%al\n\t" \
++ 	"jmp 1f\n" \
++ 	"1:\tjmp 1f\n" \
++ 	"1:\tandb $~(" #mask "),%al\n\t" \
++ 	"outb %al,$0x21\n\t"
++ 
++ #define UNBLK_SECOND(mask) \
++ 	"inb $0xA1,%al\n\t" \
++ 	"jmp 1f\n" \
++ 	"1:\tjmp 1f\n" \
++ 	"1:\tandb $~(" #mask "),%al\n\t" \
++ 	"outb %al,$0xA1\n\t"
++ 
+  #define IRQ_NAME2(nr) nr##_interrupt()
+  #define IRQ_NAME(nr) IRQ_NAME2(IRQ##nr)
+  	
+***************
+*** 70,75 ****
+--- 84,94 ----
+  	"pushl $" #nr "\n\t" \
+  	"call _do_IRQ\n\t" \
+  	"addl $8,%esp\n\t" \
++ 	"testl %eax,%eax\n\t" \
++ 	"jne ret_from_sys_call\n\t" \
++ 	"cli\n\t" \
++ 	UNBLK_##chip(mask) \
++ 	"sti\n\t" \
+  	"jmp ret_from_sys_call");
+  
+  #endif
+*** 0.96c.pl1/linux/net/kern_sock.h	Sat May  2 22:25:46 1992
+--- linux/net/kern_sock.h	Wed Jul 15 16:09:48 1992
+***************
+*** 33,39 ****
+  	struct socket *conn;		/* server socket connected to */
+  	struct socket *iconn;		/* incomplete client connections */
+  	struct socket *next;
+! 	struct task_struct **wait;	/* ptr to place to wait on */
+  	void *dummy;
+  };
+  
+--- 33,39 ----
+  	struct socket *conn;		/* server socket connected to */
+  	struct socket *iconn;		/* incomplete client connections */
+  	struct socket *next;
+! 	struct wait_queue **wait;	/* ptr to place to wait on */
+  	void *dummy;
+  };
+  
+***************
+*** 52,58 ****
+  		       int *usockaddr_len, int peer);
+  	int (*read)(struct socket *sock, char *ubuf, int size, int nonblock);
+  	int (*write)(struct socket *sock, char *ubuf, int size, int nonblock);
+! 	int (*select)(struct socket *sock, int which);
+  	int (*ioctl)(struct socket *sock, unsigned int cmd, unsigned long arg);
+  };
+  
+--- 52,58 ----
+  		       int *usockaddr_len, int peer);
+  	int (*read)(struct socket *sock, char *ubuf, int size, int nonblock);
+  	int (*write)(struct socket *sock, char *ubuf, int size, int nonblock);
+! 	int (*select)(struct socket *sock, int sel_type, select_table * wait);
+  	int (*ioctl)(struct socket *sock, unsigned int cmd, unsigned long arg);
+  };
+  
+*** 0.96c.pl1/linux/net/socket.c	Thu Jul  2 00:48:29 1992
+--- linux/net/socket.c	Wed Jul 15 16:09:14 1992
+***************
+*** 44,51 ****
+  static int sock_readdir(struct inode *inode, struct file *file,
+  			struct dirent *dirent, int count);
+  static void sock_close(struct inode *inode, struct file *file);
+! /*static*/ int sock_select(struct inode *inode, struct file *file, int which,
+! 		       select_table *seltable);
+  static int sock_ioctl(struct inode *inode, struct file *file,
+  		      unsigned int cmd, unsigned int arg);
+  
+--- 44,50 ----
+  static int sock_readdir(struct inode *inode, struct file *file,
+  			struct dirent *dirent, int count);
+  static void sock_close(struct inode *inode, struct file *file);
+! static int sock_select(struct inode *inode, struct file *file, int which, select_table *seltable);
+  static int sock_ioctl(struct inode *inode, struct file *file,
+  		      unsigned int cmd, unsigned int arg);
+  
+***************
+*** 64,70 ****
+  
+  static struct socket sockets[NSOCKETS];
+  #define last_socket (sockets + NSOCKETS - 1)
+! static struct task_struct *socket_wait_free = NULL;
+  
+  /*
+   * obtains the first available file descriptor and sets it up for use
+--- 63,69 ----
+  
+  static struct socket sockets[NSOCKETS];
+  #define last_socket (sockets + NSOCKETS - 1)
+! static struct wait_queue *socket_wait_free = NULL;
+  
+  /*
+   * obtains the first available file descriptor and sets it up for use
+***************
+*** 289,306 ****
+  	return sock->ops->ioctl(sock, cmd, arg);
+  }
+  
+! /*static*/ int
+! sock_select(struct inode *inode, struct file *file, int which,
+! 	    select_table *seltable)
+  {
+  	struct socket *sock;
+  
+  	PRINTK("sock_select: inode = 0x%x, kind = %s\n", inode,
+! 	       (which == SEL_IN) ? "in" :
+! 	       (which == SEL_OUT) ? "out" : "ex");
+  	if (!(sock = socki_lookup(inode))) {
+! 		printk("sock_write: can't find socket for inode!\n");
+! 		return -EBADF;
+  	}
+  
+  	/*
+--- 288,304 ----
+  	return sock->ops->ioctl(sock, cmd, arg);
+  }
+  
+! static int
+! sock_select(struct inode *inode, struct file *file, int sel_type, select_table * wait)
+  {
+  	struct socket *sock;
+  
+  	PRINTK("sock_select: inode = 0x%x, kind = %s\n", inode,
+! 	       (sel_type == SEL_IN) ? "in" :
+! 	       (sel_type == SEL_OUT) ? "out" : "ex");
+  	if (!(sock = socki_lookup(inode))) {
+! 		printk("sock_select: can't find socket for inode!\n");
+! 		return 0;
+  	}
+  
+  	/*
+***************
+*** 307,325 ****
+  	 * handle server sockets specially
+  	 */
+  	if (sock->flags & SO_ACCEPTCON) {
+! 		if (which == SEL_IN) {
+  			PRINTK("sock_select: %sconnections pending\n",
+  			       sock->iconn ? "" : "no ");
+  			return sock->iconn ? 1 : 0;
+  		}
+  		PRINTK("sock_select: nothing else for server socket\n");
+  		return 0;
+  	}
+- 
+  	/*
+  	 * we can't return errors to select, so its either yes or no.
+  	 */
+! 	return sock->ops->select(sock, which) ? 1 : 0;
+  }
+  
+  void
+--- 305,328 ----
+  	 * handle server sockets specially
+  	 */
+  	if (sock->flags & SO_ACCEPTCON) {
+! 		if (sel_type == SEL_IN) {
+  			PRINTK("sock_select: %sconnections pending\n",
+  			       sock->iconn ? "" : "no ");
++ 			if (sock->iconn)
++ 				return 1;
++ 			select_wait(&inode->i_wait, wait);
+  			return sock->iconn ? 1 : 0;
+  		}
+  		PRINTK("sock_select: nothing else for server socket\n");
++ 		select_wait(&inode->i_wait, wait);
+  		return 0;
+  	}
+  	/*
+  	 * we can't return errors to select, so its either yes or no.
+  	 */
+! 	if (sock->ops && sock->ops->select)
+! 		return sock->ops->select(sock, sel_type, wait);
+! 	return 0;
+  }
+  
+  void
+*** 0.96c.pl1/linux/net/unix.c	Thu Jul  2 00:48:29 1992
+--- linux/net/unix.c	Wed Jul 15 04:37:51 1992
+***************
+*** 53,59 ****
+  			   int nonblock);
+  static int unix_proto_write(struct socket *sock, char *ubuf, int size,
+  			    int nonblock);
+! static int unix_proto_select(struct socket *sock, int which);
+  static int unix_proto_ioctl(struct socket *sock, unsigned int cmd,
+  			    unsigned long arg);
+  
+--- 53,59 ----
+  			   int nonblock);
+  static int unix_proto_write(struct socket *sock, char *ubuf, int size,
+  			    int nonblock);
+! static int unix_proto_select(struct socket *sock, int sel_type, select_table * wait);
+  static int unix_proto_ioctl(struct socket *sock, unsigned int cmd,
+  			    unsigned long arg);
+  
+***************
+*** 519,529 ****
+  }
+  
+  static int
+! unix_proto_select(struct socket *sock, int which)
+  {
+  	struct unix_proto_data *upd, *peerupd;
+  
+! 	if (which == SEL_IN) {
+  		upd = UN_DATA(sock);
+  		PRINTK("unix_proto_select: there is%s data available\n",
+  		       UN_BUF_AVAIL(upd) ? "" : " no");
+--- 519,529 ----
+  }
+  
+  static int
+! unix_proto_select(struct socket *sock, int sel_type, select_table * wait)
+  {
+  	struct unix_proto_data *upd, *peerupd;
+  
+! 	if (sel_type == SEL_IN) {
+  		upd = UN_DATA(sock);
+  		PRINTK("unix_proto_select: there is%s data available\n",
+  		       UN_BUF_AVAIL(upd) ? "" : " no");
+***************
+*** 533,542 ****
+  			PRINTK("unix_proto_select: socket not connected (read EOF)\n");
+  			return 1;
+  		}
+! 		else
+! 			return 0;
+  	}
+! 	if (which == SEL_OUT) {
+  		if (sock->state != SS_CONNECTED) {
+  			PRINTK("unix_proto_select: socket not connected (write EOF)\n");
+  			return 1;
+--- 533,542 ----
+  			PRINTK("unix_proto_select: socket not connected (read EOF)\n");
+  			return 1;
+  		}
+! 		select_wait(sock->wait,wait);
+! 		return 0;
+  	}
+! 	if (sel_type == SEL_OUT) {
+  		if (sock->state != SS_CONNECTED) {
+  			PRINTK("unix_proto_select: socket not connected (write EOF)\n");
+  			return 1;
+***************
+*** 544,550 ****
+  		peerupd = UN_DATA(sock->conn);
+  		PRINTK("unix_proto_select: there is%s space available\n",
+  		       UN_BUF_SPACE(peerupd) ? "" : " no");
+! 		return (UN_BUF_SPACE(peerupd) > 0);
+  	}
+  	/* SEL_EX */
+  	PRINTK("unix_proto_select: there are no exceptions here?!\n");
+--- 544,553 ----
+  		peerupd = UN_DATA(sock->conn);
+  		PRINTK("unix_proto_select: there is%s space available\n",
+  		       UN_BUF_SPACE(peerupd) ? "" : " no");
+! 		if (UN_BUF_SPACE(peerupd) > 0)
+! 			return 1;
+! 		select_wait(sock->wait,wait);
+! 		return 0;
+  	}
+  	/* SEL_EX */
+  	PRINTK("unix_proto_select: there are no exceptions here?!\n");

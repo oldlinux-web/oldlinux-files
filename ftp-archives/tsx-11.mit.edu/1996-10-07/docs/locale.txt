@@ -1,0 +1,1302 @@
+                             LOCALE TUTORIAL
+
+         Written by Patrick D'Cruze (pdcruze@orac.iinet.com.au)
+                 with contributions from Mitchum DSouza
+            (m.dsouza@mrc-applied-psychology.cambridge.ac.uk)
+
+Topics:
+
+1	An introduction to locale and catalogs
+1.1	What is locale?
+1.2	What are message catalogs?
+1.3	What is the format of a message catalog?
+2	What routines are involved?
+2.1	Setlocale()
+2.2	Catopen()
+2.3	Catgets()
+2.4	Catclose()
+2.5	Xtract
+2.6	Gencat
+3	Writing locale software
+3.1	Writing and modifying software to support message catalogs
+3.2	Writing software that is to be used on locale and non-locale systems
+4	Where are the message catalogs stored?
+5	Frequently Asked Questions
+
+
+Section 1.	Introduction to locales and catalogs
+
+1.1	What is a locale?
+
+There are many attributes that are needed to define a country's cultural
+conventions.  These attributes include the country's native language,
+the formatting of the date and time, the representation of numbers, the
+symbols for currency, etc.    These local "rules" are termed the
+country's locale.  The locale represents the knowledge needed to support
+the country's native attributes.
+
+There are 5 major areas which may vary between countries and hence locales.
+
+Characters and Codesets
+The codeset most commonly used through out the USA and most English
+speaking parts of the world is the ASCII codeset.  However, there are
+many characters needed by various locales that are not found within this
+codeset.  The 8-bit ISO 8859-1 code set has most of the special
+characters needed to handle the major European languages.  However, in
+many cases, the ISO 8859-1 font is not adequate.  Hence each locale will
+need to specify which codeset they need to use and will need to have the
+appropriate character handling routines to cope with the codeset.
+
+Currency
+The symbols used vary from country to country as does the position used
+by the symbol.  Software needs to be able to transparently display
+currency figures in the native mode for each locale.
+
+Dates
+The format of date varies between locales.  eg, Christmas day in 1994,
+is written as 12/25/94 in the USA and as 25/12/94 in Australia.  Some
+locales require time to be specified in 24-hour mode rather than as AM
+or PM.
+
+Numbers
+Numbers can be represented differently in different locales.  eg, the
+following numbers are all written correctly for their respective locales:
+
+	12,345.67	English
+	12.345,67	French
+	1,2345.67	Asia
+
+Messages
+The most obvious area is the language support within a locale.  An easy
+mechanism has to be provided for developers and users to easily change
+the language that the software uses to communicate to the user.
+
+
+This Locale tutorial will only concentrate on the area of native message
+support for software.  At a later stage, it will be updated to
+illustrate the ease with which developers can add support for other
+locale attributes.  In addition it must be emphasized that the locale
+routines and functions are used most frequently by text-based software
+ie, software which operates within an xterm or a virtual console. 
+Different routines exist for software that interacts with X Windows, and
+these too will be covered in a later revision of this document.
+
+
+1.2	What is a Message Catalog?
+
+Software communicates to users by writing text messages to the screen. 
+These messages can be scattered throughout many lines of source code. 
+To support various languages, it is necessary to translate these text
+messages into different languages.  It is infeasible to hardcode these
+messages into the source code for two reasons:
+
+1).  To translate the messages into another language, translators would
+have to go hunting through the source code for these messages.  This is
+obviously inefficient and many times, translators may not even have
+access to the source code.
+
+2).  Supporting a new language will mean that the text messages within
+the code, needs to be translated, and then the code needs to be
+recompiled.  This needs to be done for every language.
+
+The solution is to have all textual message stored in an external
+message catalog.  Whenever the software needs to display a message, the
+software tells the operating system to look up the appropriate message
+in the catalog and display it on the screen.
+
+The benefits this brings is that:
+a) the catalog can be translated without needing access to the source code
+b) the source code only needs to be compiled once.  To support a new
+   language, its only a matter of translating the message catalog and
+   shipping the translated catalog to the user
+c) All of the message are collated into one place.
+
+
+1.3	What is the format of a message catalog?
+
+Once the text messages have been extracted from the source code, they
+are stored within an ordinary text file which is commonly referred to as
+a message file.  The text file often has the following structure:
+
+	1	Cannot open file foo.bar
+	2	Cannot write to file foo.bar
+	3	Cannot access directory
+	...	...
+
+While this is a useful representation for programmers and translators,
+it is an inefficient form for the operating system to access.  The
+operating system would be able to access the text messages a lot faster
+if they were stored in some sort of binary database form.  And this is
+indeed what is done.
+
+A message catalog is a binary representation of the messages used within
+the software.  The message text files are compiled using the gencat
+software into a binary message catalog.  The compiled message catalog is
+in a machine-specific format and is not portable between different
+machines and architectures, however this is of little concern.  It is
+trivial to recompile the message text files on other platforms - the
+gencat software operates identically on other platforms.
+
+Programmers and translators store the text messages used by their
+software within message files and these files are then compiled into a
+message catalog.  However, a single piece of software may contain
+hundreds of printf() statements, each one consisting of a unique
+message.  Each of these messages needs to be stored in a message file. 
+It is entirely unreasonable to expect to have all of these stored within
+a single message text file.  Editing, changing, deleting, and adding new
+messages would grow to be a major inconvenience.
+
+The solution is to break up messages into sets.  Each set contains
+messages for a different part of the software.  Combining all of the
+sets together gives the sum total of all messages used within the
+software.  These sets can then be compiled into a single message
+catalog.  The software can then access a particular message within a
+particular set within the message catalog.
+
+This makes the programmers job, (and the translators job) a lot easier. 
+The programmer can assign separate sets for major subroutines.  Then
+when a subroutine is modified or changed, only its corresponding message
+set needs to be changed.  All others sets can be left alone.
+
+eg,
+For software gnubar we have two major areas requiring communication to
+the user - displaying errors, and reporting results.
+
+So we create 2 message files (or sets):
+	errors.m
+	results.m
+(We adopt the practice of using .m to signify a message file).
+
+All of the error messages are stored within the errors.m file, and
+similarly, result messages are stored in the results.m file.  We then
+modify the software so that whenever an error message needs to be
+printed, the software accesses the errors set, and prints the
+corresponding error message.  Similarly for the results set.
+
+Both of these files are then compiled to form the message catalog for
+gnubar.  The resulting catalog is usually named:
+	gnubar.cat
+This catalog consists of 2 sets - errors and results, each of which
+contains numerous messages.
+
+To access a particular message, the software needs to specify which set
+the message is located in, and the message number to be displayed from
+that set.
+
+
+Section 2.	What routines are involved?
+
+The 4 core routines for accessing and dealing with message catalogs
+within your source code are setlocale(), catopen(), catgets(), and
+catclose().
+
+NB.  Remember that Message Catalogs are but one element of a locale. 
+Other elements will be covered in later revisions of this document.
+
+Note for Linux users: To access and use the locale functions you will
+need to use libc.so.4.4.4c or greater (I'd recommend using at least
+libc.so.4.5.26 or higher as this includes a lot of improvements in the
+locale routines).  You will also need the include files locale.h and
+nl_types.h - if you have a libc that supports locale functions, then you
+will also most likely have these include files too.
+
+
+2.1	SETLOCALE()
+
+The first thing a program needs to do is to establish the locale to use.
+ It does this using the setlocale() function.  This is defined as:
+
+	#include <locale.h>
+
+	char *setlocale(int category, const char *locale);
+
+The category argument tells the setlocale() function which attributes to
+set.  The choices are:
+
+LC_COLLATE	Changes the behavior of the strcoll() and strxfrm() functions.
+LC_CTYPE	Changes the behavior of the character-handling functions:
+			isalpha(), islower(), isupper(), isprint(), ...
+LC_MESSAGES	Changes the language in which messages are displayed.
+LC_MONETARY	Changes the information returned by localeconv().
+LC_NUMERIC	Changes the radix character for numeric conversions.
+LC_TIME		Changes the behavior of the strftime() function.
+LC_ALL		Changes all of the above.
+
+In our examples, we will only be dealing with the Message catalogs,
+hence we only need to set the LC_MESSAGES category within the
+setlocale() function.  The LC_ALL category could also be used.  However
+it is good programming practise to only use those categories that you
+need within your software.  The reason for this will be explained
+shortly.
+
+The locale argument is the name of a locale.  Two special locale names are:
+	C		this makes all attributes function as defined in the
+			C standard.
+	POSIX		this is the same as the above.
+
+Usually, the locale argument will be:
+	""
+(empty quotes).  This will select the user's native locale.  This is
+done by the operating system as follows:
+
+1. If the user has an environment variable LC_ALL defined, and it is not
+null, then the value of this environment variable is used as the locale
+argument.
+
+2. If the user has an environment variable that has the same name as the
+category, and which is not null, then this is used as the locale
+argument.
+
+3.  If the LANG environment variable is defined and is not null, then
+this value is used as the locale argument.
+
+If the resulting value is the same as a valid, supported locale, then
+the locale is changed.  If the value however does not name a supported
+locale and is not null, setlocale() will return a NULL pointer and the
+locale will not be changed from the default "C" locale.
+
+At program startup, the operating system performs the following
+setlocale() function:
+	setlocale(LC_ALL, "C");
+
+This if your software doesn't make any setlocale() calls, or cannot
+change the locale (due to no valid environment variables being set),
+then the software will use the default C locale.
+
+If setlocale() is unable to change the locale, then NULL is returned.
+
+Good programming practice dictates that you should only use the locale
+categories suitable for your software.  An example will illustrate why.
+
+eg,
+main()
+{
+	setlocale(LC_ALL, "");
+....
+}
+
+The software will now set all the locale categories to the value of
+either the LC_ALL environment variable if set, or else the value of the
+LANG environment variable.  Otherwise, it will use the default "C"
+locale.
+
+Now suppose, the user wishes to have all messages displayed on their
+screen in English, but wishes to use the other attributes from the
+French locale.  The user does this by pointing the LC_MESSAGES variable
+to the English locale, but setting the LANG variable to the French
+locale.
+
+Now the above example (using LC_ALL) will ignore the LC_MESSAGES
+environment variable and will instead use the LANG variable.  Hence
+messages will be displayed in French.  The user can either have all
+attributes set for English or all the attributes set for French.
+
+Admittedly this would be a very rare situation but if your software only
+needs to access the Messages attribute, then only this category needs to
+be set.  If your software needs to access 4 categories, then you should
+use 4 setlocale() functions.
+
+
+It is the user's responsibility to correctly set their environment
+variables.  It is also easy for a user to alter their environment,
+simply by changing their environment variables.  It is wise to include
+information on the correct setting of these variables with your software
+as many users may be unaware of the correct procedures or settings. 
+These issues will be covered in a later section.
+
+
+
+2.2	CATOPEN()
+
+The setlocale() function only establishes the correct locale for the
+program to use.  To access a catalog, the catalog must first be opened. 
+The catopen() function is used for this.  It is defined as follows:
+
+	#include <nl_types.h>
+
+	nl_catd catopen(char *name, int flag);
+
+Catopen() opens a message catalog and returns a catalog descriptor. 
+name specifies the name of the message catalog to be opened.  If name
+specifies an absolute path, (i.e. contains a `/') then name specifies a
+pathname for the message catalog.  Otherwise, the environment variable
+NLSPATH is used with name substituted for %N.  If NLSPATH does not exist
+in the environment, or if a message catalog cannot be opened in any of 
+the paths specified by NLSPATH, then the following paths are searched in
+order
+
+              /usr/lib/locale/LC_MESSAGES
+              /usr/lib/locale/name/LC_MESSAGES
+
+In all cases LC_MESSAGES stands for the current setting of the
+LC_MESSAGES category of locale from a previous call to setlocale() and
+defaults to the "C" locale.  In the last search path name refers to the
+catalog name.
+
+The  flag argument to catopen is used to indicate the type of loading
+desired. This should be either MCLoadBySet or MCLoadAll.  The former 
+value indicates that only the required set from the catalog is loaded
+into memory when needed, whereas the latter causes the initial call to
+catopen() to load the entire catalog into memory.
+
+catopen() returns a message catalog descriptor of type nl_catd on
+success.  On failure, it returns -1.
+
+Sample usage:
+	static nl_catd	catfd = 0;
+
+	catfd = catopen("foo.cat", MCLoadBySet);
+	if (catfd == -1)
+		printf("Failed to open the message catalog");
+
+
+
+2.3	CATGETS()
+
+Once a message catalog has been opened, we need a routine to access the
+catalog and retrieve messages from it.  This is the purpose of the
+catgets() routine.  It is defined as:
+
+	#include <nl_types.h>
+
+	char *catgets(nl_catd catfd, int set_number, int message_number, char
+*message);
+
+catgets() reads the message message_number, in set set_number, from the
+message catalog identified by catfd.  catfd is a catalog descriptor
+returned from an earlier call to catopen(3).  The fourth argument 
+message points to a default message string which will be returned by
+catgets() if the identified message catalog is not currently open, or
+damaged.  The message-text is contained in an internal buffer area and
+should be copied by the application if it is to be saved or modified. 
+The return string is always terminated with a null byte.
+
+On success, catgets() returns a pointer to an internal buffer area
+containing the null-terminated message string.  catgets() returns a
+pointer to message if it fails because the message catalog specified by
+catfd is not currently open. Otherwise, catgets() returns a pointer to 
+an  empty string if the message catalog is available but does not
+contain the specified message.
+
+Sample usage:
+
+	printf(catgets(catfd, 3, 7, "Error accessing block %d"), block_num);
+
+The above routine attempts to access the 7th message in the 3rd set of
+the message catalog.  If this message cannot be accessed for any reason,
+then the message "Error accessing block %d" is printed instead.
+
+
+2.4	CATCLOSE()
+
+Once the software has finished using a particular message catalog, the
+catalog should be closed so that the operating system can free up the
+memory used to store the catalog.  The catalog is closed by the use of
+the catclose() function.  It is defined as:
+
+	#include <nl_types.h>
+
+	void catclose(nl_catd catfd);
+
+catclose() closes the message catalog identified by catfd.  It
+invalidates any subsequent references to the message catalog defined by
+catfd.
+
+catclose() returns 0 on success, or -1 on failure.
+
+
+Sample usage:
+
+	....
+	catclose(catfd);
+	exit(0);
+	}
+
+These are the 4 C routines needed to access catalogs within your
+software.  The next section will cover tools that are available to help
+you extract existing messages from your software, and will detail the
+gencat software for compiling message text files into message catalogs.
+
+Before we discuss xtract and gencat, we'll outline the format of the
+text message files.  Gencat requires the message file to be in a
+specific format so that it can compile the messages into a message
+catalog.
+
+A sample message file is given below:
+
+	$set 2 #chmod
+	$ #1 Original Message:(invalid mode)
+	# invalid mode
+	$ #2 Original Message:(virtual memory exhausted)
+	# virtual memory exhausted
+	...
+
+The first line is used to establish the set number for this message
+file.  The "set" keyword must exist in all message files.  The second
+field is the set number for this message file and must be unique for the
+message catalog.  The third field (minus the # sign) is the name which
+can also be used to identify this set (the set number can also be used).
+ (More on this later).
+
+The second line is the unique id for this message.  The only important
+things here are the $ sign and the second field (the #num).  The $ sign
+is always needed to distinguish between a text message, and a message id
+(or set command).  The second field (minus the # sign) is the message
+id.  Everything after this second field is ignored.  It is often helpful
+to include the original message to aid translators and others who have
+to modify or edit the message file.
+
+The third line (minus the # sign) is the actual text message.  In this
+case, it is the text message for the first message in this second set. 
+Similarly, the fifth line is the text for the second message in this
+second set.
+
+When translating message files into other languages, it is only
+necessary to translate the "text" lines, ie lines starting with a #
+sign.  Anything with a $ sign at the beginning should not be touched.
+
+
+The above format for the message file matches the arguments for the
+catgets() routine perfectly.  The catgets() routine requires the
+set_number and the message_number to be integers, which of course they
+are in the message file structure outlined above.  Thus to print the
+first message from the second set:
+
+	$set 2 #chmod
++------------^
+| +--------v
+| |	$ #1 Original Message:(invalid mode)
+| |	# invalid mode
+| |
+| |	$ #2 Original Message:(virtual memory exhausted)
+| |	# virtual memory exhausted
+| |	...
+| |
+| |   we use the following arguments:
+| |
+| |	printf(catgets(catfd, 2, 1, "invalid mode"));
+| +------------------------------^
++-----------------------------^
+
+
+While the locale functions and routines will function perfectly, it
+doesn't make for an intuitive way of writing software.  ie, whenever a
+software developer needs to print a text message, they first need to
+look up the message, find its set number and message number, and then
+copy these into the software.  This can become unwieldy when software
+needs to access several sets or catalogs or messages.  Looking up these
+hard to remember numbers is a pain.
+
+Instead of using an integer to refer to a set number or message number,
+it would be much easier to use names or ascii text to refer to them.  We
+can do this if we use #defines to map the ascii names to integers.
+
+To do this requires a few additional steps (over using the standard
+integer access methods).  The first thing to do is to change the message
+identifiers from numbers to ascii names.  So instead of having:
+
+	...
+	$ #1
+	# text for message 1
+	$ #2
+	# text for message 2
+	...
+
+We will have:
+
+	...
+	$ #Label1
+	# text for message 1
+	$ #Label2
+	# text for message 2
+
+Note we do not need to make any alterations for the set numbering as a
+name is already present for this.  The first line of every message file
+contains 3 fields:
+
+	$set 2 #chmod
+
+The second field determines that this is the second set within this
+message catalog.  The third field (minus the # sign) is the name which
+can also be used to access this set.
+
+The new message file looks like this:
+
+	$set 2 #chmod
+	$ #Invalid_Mode   Original Message:(invalid mode)
+	# invalid mode
+	$ #VM_exhausted   Original Message:(virtual memory exhausted)
+	# virtual memory exhausted
+	...
+
+To access the second message from this second set we can now use the
+following code:
+
+	printf(catgets(catfd, chmodSet, chmodVM_exhausted, "virtual memory
+exhausted"));
+
+The set_number argument in the catopen() routine is always the set name
+(chmod) appended with the word "Set" => "chmodSet".  The message_number
+argument is always the set name (chmod) appended with the message id
+string (VM_exhausted) => chmodVM_exhausted.
+
+In order to use these ascii names however, the software needs to
+associate these names with an integer because the catopen() routine only
+accepts integers for the set_number and message_number arguments.  We
+make this association by asking the gencat software (explained further
+below in detail) to generate an include file which is used by the
+software to map these names to integers.
+
+For the above message file, the generated include file looks like this:
+
+	#define chmodSet		0x2
+	#define chmodInvalid_Mode	0x1
+	#define chmodVM_exhausted	0x2
+	...
+
+This header file was generated from the chmod.m message file.  We adopt
+the practice of naming these header files as xxx-nls.h so in our case
+this header file is called:
+	chmod-nls.h
+
+We now have one thing left to do and that is to include this header file
+in the software.  So we now include the line:
+
+	#include "chmod-nls.h"
+
+at the beginning of our software.  With that, we can now take advantage
+of a much more flexible and intuitive means of referring to message sets
+and messages.
+
+
+
+2.5	XTRACT
+
+xtract is some software written using yacc to extract messages from
+source code.  It needs to be compiled into a binary and can be found on
+sunsite.unc.edu:/pub/Linux/utils/nls/catalogs/locale-package.tar.gz
+
+xtract searches through the source code for any string messages
+contained within quotes, and prints out any it finds to stdout.
+
+It is used as follows:
+
+	xtract < source_code.c > message_file.m
+
+eg, to extract the messages from file foobar.c and place them in the
+message file foobar.m:
+
+	xtract < foobar.c > foobar.m
+
+The resulting message file contains all the messages that xtract could
+find within the source.  The messages have all been placed in the
+correct format.
+
+A little bit of editing however is required of the resulting message
+file.  The first two lines need to be deleted and in their place, an
+appropriate "set" line needs to be inserted.
+
+ie,
+the original message file will look like this:
+
+	$ #0 Original Message:(configuration probelms)
+	# configuration problems
+	$ #1 Original Message:(cannot open file)
+	# cannot open file
+	$ #2 Original Message:(error accessing file)
+	# error accessing file
+	....
+
+This is not in the correct message file format because it is lacking a
+line to establish the set number for this message file.  Thus the
+following line needs to be inserted at the very beginning of the message
+file:
+
+	$set X #descriptor
+
+where X = the set number for this message file
+and descriptor is a suitable text descriptor for this set
+
+Thus thus the resulting message file would look something like this:
+
+	$set 17 #database
+	$ #0 Original Message:(configuration probelms)
+	# configuration problems
+	$ #1 Original Message:(cannot open file)
+	# cannot open file
+	$ #2 Original Message:(error accessing file)
+	# error accessing file
+	....
+
+
+2.6	GENCAT
+
+Gencat is the software used to compile message files into message
+catalogs.  The command line switches it understands are detailed below:
+
+gencat [-new] [-lang C|C++|ANSIC] catfile msgfile [-h <header-file>]
+
+A description of the flags:
+    -new        Erase the msg catalog and start a new one.
+                The default behavior is to update the catalog with the
+                specified msgfile(s).  This will instead cause the old
+                one to be deleted and a whole new one started.
+    -lang <l>   This governs the form of the include file.
+                Currently supported is C, C++ and ANSIC.  The latter two are
+                identical in output.  This argument is position dependent,
+                you can switch the language back and forth in between
+		include files if you care to.
+    -h <hfile>  Output identifiers to the specified header files.
+                This creates a header file with all of the appropriate
+                #define's in it.  Without this it would be up to you to
+                ensure that you keep your code in sync with the catalog file.
+                The header file is created from all of the previous msgfiles
+                on the command line, so the order of the command line is
+                important.  This means that if you just put it at the end of
+                the command line, all the defines will go in one file
+                    gencat foo.m bar.m zap.m -h all.h
+                If you prefer to keep your dependencies down you can specify
+                one after each message file, and each .h file will receive
+                only the identifiers from the previous message file
+                    gencat foo.m -h foo.h bar.m -h bar.h zap.m -h zap.h
+                As an added bonus, if you run the following sequence:
+                    gencat foo.m -h foo.h
+                the file foo.h will NOT be modified the second time.  gencat
+                checks to see if the contents have changed before modifying
+                things.  This means that you won't get spurious rebuilds of
+                your source every time you change a message.  You can thus use
+                a Makefile rule such as:
+
+                MSGSRC=foo.m bar.m
+                GENFLAGS=-or -lang C
+                GENCAT=gencat
+                NLSLIB=nlslib/OM/C
+                $(NLSLIB):      $(MSGSRC)
+                        @for i in $?; do cmd="$(GENCAT) $(GENFLAGS) $@
+$$i -h `b
+asename $$i .m`.H"; echo $$cmd; $$cmd; done
+
+                foo.o:  foo.h
+
+                The for-loop isn't too pretty, but it works.  For each .m
+                file that has changed we run gencat on it.  foo.o depends on
+                the result of that gencat (foo.h) but foo.h won't actually
+                be modified unless we changed the order (or added new members)
+                to foo.m.
+
+
+The gencat software has two purposes and is usually used in 2 passes. 
+The first use is to generate the header files from the message files so
+that the software can use descriptive names when referring to sets and
+messages.
+
+The following command will accomplish this:
+
+	gencat -new /dev/null foobar.m -h foobar-nls.h
+
+The gencat software will take the foobar.m message file and produce a
+header file called foobar-nls.h which can the be included in the
+software.  The -new and /dev/null flags indicate that gencat should also
+generate a new message catalog but send the resultant catalog to the bit
+bucket.
+
+If you want to generate multiple header files for multiple message
+files, you have to use the following command:
+
+	gencat -new /dev/null aaa.m -h aaa-nls.h bbb.m -h bbb-nls.m ....
+
+This will generate a header file for each message file.  For each
+message set that your software accesses, you will need to include the
+corresponding header file.  If you would like to compile just one
+solitary header file for all your message sets, the following command
+can be used:
+
+	gencat -new /dev/null aaa.m bbb.m ccc.m -h foobar-nls.m
+
+
+The other use for the gencat software is in generating message catalogs
+from the message files.  To generate a new message catalog, the
+following command can be used:
+
+	gencat -new foobar.cat foobar.m
+
+This will take the foobat.m message file and compile it into a message
+catalog called foobar.cat.  To compile multiple message sets into one
+catalog, the following command can be used:
+
+	gencat -new foobar.cat foobar1.m foobar2.m foobar3.m ...
+
+The usual way for compiling message catalogs is via a Makefile.  In this
+case, it is often easier to define a variable (say, MESSAGEFILES) to
+contain the list of message files which need to be compiled into a
+catalog.  eg, in the above example we would have a line within the
+Makefile reading:
+
+	MESSAGEFILES = foobar1.m foobar2.m foobar3.m ....
+
+Then to compile these files into a catalog, we use the following line
+within the Makefile:
+
+	gencat -new foobar.cat $(MESSAGEFILES)
+
+
+
+SECTION 3.	Writing locale software
+
+
+3.1	Writing and modifying software to support message catalogs
+
+So how do I modify or write new software that supports message catalogs?
+ Here are the steps involved.
+
+STEP 1:		(only applicable if modifying existing software)
+	The first thing to do is to extract text messages from the existing
+software and place them into a message file.  The xtract software is
+used to do this.  Its operation is covered elsewhere in this document,
+but briefly you use it as follows:
+
+	source code == foobar.c
+	message file == foobar.m
+
+	xtract < foobar.c > foobar.m
+
+	We now have to insert the appropriate set number declaration at the
+beginning of the message file.  ie, insert a line:
+
+		$set X #bbb
+
+	where X = the set number for this message file
+	    bbb = the variable name used to access this message set
+
+STEP 2:		(only applicable if creating a new message file)
+	If creating a new message file from scratch, it is important to
+remember the correct order and structure of the message file.  There are
+3 key elements of a message file:
+		- the message set identifier
+		- the actual message identifier
+		- the text for each message identifier
+	The format of the message file has been covered in an earlier section
+of this document.  This format must be adhered to otherwise problems
+will arise when compiling the message files into a message catalog.
+
+	Briefly, the format must be as follows:
+
+		$set 2 #chmod
+		$ #Invalid_Mode   Original Message:(invalid mode)
+		# invalid mode
+		$ #VM_exhausted   Original Message:(virtual memory exhausted)
+		# virtual memory exhausted
+		...
+
+	The first line is the message set identifier.  All other lines starting
+with a $ sign are message identifiers.  The lines immediately following
+these are the actual messages displayed.
+
+
+STEP 3:
+	Whether modifying a message file extracted from step 1, or creating a
+new message file from scratch, it is much easier to use names to refer
+to messages and sets rather than numbers.  To use names, we need to
+assign a unique name to be the set identifier, and assign unique names
+to the messages within that set.
+
+	The first line of every message file is the set identifier line.  Its
+format is as follows:
+
+		$set X #bbb
+
+	where X = the set number for this message file
+	    bbb = the name used to access this message set
+
+	X must be a unique number for this set.  So too does the name (bbb). 
+Subsequent accesses to this set can either use the number (X) as the set
+identifier or the set name (bbb).  It is up to you which you decide to
+use.  However if you do decide to use the set name, remember that in
+your software, you must append the set name with the word "Set" to
+access it.  ie, the complete set name for accessing this set is "bbbSet".
+
+STEP 4:
+	Now that we are using names as set identifiers and message identifiers,
+we have to create a header file which maps these names to integers which
+can be used by the message catalog routines within libc.  The gencat
+software is used to generate a header file from a message file.  Its
+operation is explained elsewhere in this document.  But briefly, we use
+the following command and arguments to generate the header file:
+
+	Message file == foobar.m
+	Header file == foobar-nls.h
+
+		gencat -new /dev/null foobar.m -h foobar-nls.h
+
+	Gencat will then take the message file listed and generate an
+appropriate set of defines in the header file.  This header file must
+now be included in the software.
+
+	We recommend adopting the practise of naming your gencat generated
+header files "xxx-nls.h".  The "-nls" name will help you to distinguish
+locale specific header files from other header files used by your
+software.
+
+STEP 5:
+	We are now ready to start modifying the source code.  The first thing
+we need to do is to include the appropriate header files.  We will
+usually need to include at least 3 files:
+
+		#include <locale.h"
+		#include <nl_types.h>
+		#include "foobar-nls.h"
+
+	The first header file <locale.h> defines various variables used by the
+setlocale() and other C routines, such as the LC_* variables
+(LC_MESSAGES, LC_TIME, LC_ALL, etc).
+
+	The second header file <nl_types.h> defines variables that are used by
+the catopen() and catclose() routines and also defines the nl_catd
+catalog file descriptor variable.
+
+	The third header file is the set of defines for the message file(s)
+used by your software and allows you to use names in catgets() routines
+when referring to message and sets.
+
+STEP 6:
+	The next thing to do is to declare one or more global catalog
+descriptor variables.  We need a catalog descriptor when we access a
+message catalog.  Usually, software will only need to access their own
+message catalog and hence we only need to define one message catalog
+descriptor.  This is defined before main():
+
+		/* Message catalog descriptor */
+		static nl_catd catfd = -1;
+
+	Now whenever we need to refer to or access the message catalog, we use
+the catfd file descriptor variable.
+
+STEP 7:
+	Within main() the first thing we need to do is to set the locale used
+by the software.  This is done by calling the setlocale() function.  The
+operation of the setlocale() routine is described elsewhere in this
+document.  However the usual arguments when dealing with message
+catalogs is to use the following form:
+
+		setlocale(LC_MESSAGES,"");
+
+	This will set the LC_MESSAGE locale routines, to the appropriate
+directory as specified by the user within their environment variables.
+
+STEP 8:
+	We now have the software accessing the proper directories when it needs
+to look for message catalogs and/or other locale information.  We now
+need to open the message catalog used by our software.  This is achieved
+by using the catopen() routine.
+
+	The easiest way to do this is to use the following line:
+
+		catfd = catopen("foobar",MCLoadBySet);
+
+	The catopen() routine has 2 arguments: the name of the message catalog
+to open, and the type of loading desired.  Message catalogs are usually
+stored in the appropriate directory as:
+
+			foobar.cat
+	However, we do not need to include the ".cat" extension when using
+catopen() to open the catalog.  Indeed adding the ".cat" extension will
+most likely cause the catopen() routine to fail to open the message
+catalog and you will be left using the default message stored within
+your software.
+
+	The type of loading desired is either to load the message catalog a set
+at a time or to load the complete set into memory all at once. 
+Obviously loading the catalog set by set uses up less memory than
+loading the complete catalog at once.  However, access will be slightly
+slower because each new access to a different set will require the new
+set to be loaded into memory.  The choice is left to the programmer.
+
+	A more robust way of opening and initializing the message catalog is
+presented below.  Software often spans multiple subroutines and files
+and a message catalog may be opened and closed in many different places.
+ It can sometimes become tricky to keep track of whether a catalog is
+open or closed.  To alleviate this, it is helpful to define a catalog
+initialization routine which checks to see if the catalog is currently
+open.  If not, it opens the catalog.  This 5 line routine is presented
+below:
+
+		catinit ()
+		{
+			if (catfd == (nl_catd)-1)
+				catfd = catopen("foobar",MCLoadBySet);
+		}
+
+	The routine first checks to see if the catalog is open.  If it is, it
+immediately returns.  If not, it opens the message catalog and then
+returns.  It is thus fairly easy to insert this catinit() routine into
+your source code and various subroutines.  The first time you call this
+routine should be immediately after the setlocale() line in main(). 
+Thereafter, you can call this routine whenever you are unsure whether
+the catalog is open or closed.
+
+STEP 9:
+	Now we are finally ready to start accessing the message catalog and
+retrieving messages from it.  We do this via the catgets() routine.
+
+	The catgets() function has 4 arguments.
+
+		catgets(catfd, set_identifier, message_identifier, *message);
+
+	The catfd catalog descriptor is the descriptor returned from the
+catinit() or catopen() routines.  It is used by the catgets() function
+to determine which message catalog to access (more than one message
+catalog may be opened at one time within the software).
+
+	The set_identifier is the variable used to identify which set to access
+within the message catalog.  This can either be the set number or else
+the set name (which needs to be appended with the word "Set").
+
+	The message_identifier is the name or number used to identifier a
+particular message within the set.  If the name is used, it must be
+remembered that the name of the set must be prepended to the message
+name.
+
+	The *message is the default string which is used if the catgets routine
+cannot access the message catalog (perhaps it was not installed or
+cannot be read).  It can be a unique message.
+
+	eg,
+		catgets(catfd, errorsSet, errorsVM_exhausted, "Virtual memory has been
+exhausted");
+
+	this will attempt to obtain the VM_exhausted message from the errors
+set.  If successful, the retrieved message is pointed to.  If not, then
+the text string "Virtual memory has been exhausted" is used in its place.
+
+	We recommend that you adopt the practice of always using the standard
+English messages as the default string.  If the catalog cannot be opened
+for any reason, then the software will resort to using the standard
+English messages which are stored internally within the compiled binary.
+
+	The catgets() routine merely returns a pointer to an internal buffer
+area containing the null-terminated message string.  We need to print
+out this message string to the user.  Hence we just encapsulate the
+catgets() routine around a printf() statement.  This will ensure the
+message is printed out.
+	eg,
+		printf(catgets(catfd, errorsSet, errorsVM_Exhausted, "Virtual memory
+has been exhausted"));
+
+	This will attempt to access the desired message and print it out.  It
+will either successfully retrieve the message and print it out, or else
+print out the default message.
+
+	A few examples of the old approach (hard coded messages) versus the new
+approach (message catalogs) will illustrate how to use the catgets()
+function.
+
+
+	Example 1:
+	BEFORE:
+		printf("Incorrect read permission");
+
+	AFTER:
+		printf(catgets(catfd, errorsSet, errorsIncorrect_Perm, "incorrect read
+permission");
+
+
+	Example 2:
+	BEFORE:
+		printf("Cannot change to directory %s", dir_name);
+
+	AFTER:
+		(extract from the message catalog)
+		...
+		$ #Cant_chdir
+		# Cannot change to directory %s
+		...
+
+		printf(catgets(catfd, errorsSet, errorsCant_chdir, "Cannot change to
+directory %s"), dir_name);
+
+
+	Variables and other printf formatting codes are used transparently. 
+The codes can easily be included within the message files and catalogs
+as can all escape codes.
+
+STEP 10:
+	Just before the software is about to exit (or when we have finished
+using a message catalog), we need to close the catalog.  The simple line
+to do this is:
+
+		catclose(catfd);
+
+
+And that's basically it.  Little or no error checking needs to be done. 
+If the catalog cannot be opened for any reason, then the software uses
+the default stored message.  It is a good idea though to check for
+errors while debugging the software.  There are many reasons why the
+catalog cannot be opened by the operating system (incorrect directory
+location, incorrect name, incorrect file permissions, incorrect set or
+message identifiers, etc) and checking for these errors while debugging
+can help correct these mistakes.
+
+Below is a sample program that incorporates all of the features
+necessary to employ message catalogs:
+
+---
+#include <stdio.h>
+#include <nl_types.h>
+#include <locale.h>
+#include "foobar-nls.h"
+
+static nl_catd catfd = -1;
+
+void main()
+{
+	char temp_name;
+
+	setlocale(LC_MESSAGES,"");
+	catinit ();
+
+	printf(catgets(catfd, foobarSet, foobarRandom_Name, "Random text with
+string %s"), temp_name);
+
+	catclose(catfd);
+	exit(0);
+}
+
+catinit ()
+{
+	if (catfd != (nl_catd)-1)
+		catfd = catopen("foobar",MCLoadBySet);
+}
+---
+
+
+A Makefile for the above program is given below:
+
+-------
+all: foobar catalog
+
+foobar: foobar.o
+	gcc -o foobar -O2 foobar.c
+
+foobar.o: foobar-nls.h
+
+foobar-nls.h: foobar-nls.m
+	gencat -new /dev/null foobar-nls.m -h foobar-nls.h
+
+catalog:
+	gencat -new foobar.cat foobar.m
+
+
+install: all
+	install -o root -m 0755 foobar /usr/local/bin
+	install -o root -m 0755 foobar.cat /etc/locale/C
+
+clean:
+	/bin/rm -f foobar *.o foobar-nls.h foobar.cat core
+-------
+
+It is up to you where you group the message files.  It may be easier to
+group the message files in another directory and separate the source
+code from the message files.
+
+
+
+3.2	Writing software that is to be used on locale and non-locale systems
+
+It is fairly easy to abstract out the locale specific functions from the
+rest of the code.  The usual method of doing this is via a define
+statement.
+
+eg, within the Makefile add the following:
+
+	DEFINES = -DNLS
+
+	foobar.o	foobar.c
+		gcc $(DEFINES) foobar.c
+
+Now within foobar.c we have the following:
+
+	#ifdef NLS
+		printf(catgets(catfd, chmodSet, chmodVM_exhausted, "Virtual Memory
+exhausted"));
+	#else
+		printf("Virtual Memory exhausted");
+	#endif
+
+These #ifdef/#endif statements will need to surround every locale
+specific function.  These will include the <locale.h> and <nl_types.h>
+include files, the catfd static descriptor variable, the catinit()
+routine, catopen(), catclose(), catgets(), and setlocale().  As can be
+seen, this can get quite messy and can make the code very hard to read. 
+A solution to using all the #ifdef NLS/#endif statements involves using
+a macro for the software.
+
+The macro file would include all the #include and variable descriptors
+for the locale specific version as well as defining routines to handle
+printing messages in both a locale capable system and a non-capable
+system.  A sample macro package has been included below:
+
+---
+#ifdef NLS
+#include <locale.h>
+#include <nl_types.h>
+
+extern nl_catd catfd;
+void catinit ();
+#endif
+
+
+/* Define Macros used */
+
+#ifdef NLS
+#define NLS_CATCLOSE(catfd) catclose (catfd);
+#define NLS_CATINIT catinit ();
+#define NLS_CATGETS(catfd, arg1, arg2, fmt) \
+    catgets ((catfd), (arg1), (arg2), (fmt))
+#else
+#define NLS_CATCLOSE(catfd) /* empty */
+#define NLS_CATINIT /* empty */
+#define NLS_CATGETS(catfd, arg1, arg2, fmt) fmt
+#endif
+---
+
+Now instead of having to do:
+	#ifdef NLS
+		printf(catgets(catfd, chmodSet, chmodVM_exhausted, "Virtual Memory
+exhausted"));
+	#else
+		printf("Virtual Memory exhausted");
+	#endif
+
+all the time, we could rewrite this as:
+
+	printf(NLS_CATGETS(catfd, chmodSet, chmodVM_exhausted, "Virtual Memory
+exhausted"));
+
+This will handle both cases very easily.  Hence the changes now needed
+to support a locale version and a non-locale version are:
+- include a -DNLS define in the makefile if the system supports locale
+functions
+- #include the macro file into your source code
+- surround your
+	#include "foobar-nls.h"
+   with #ifdef NLS/#endif statements.
+
+
+Section 4.	Where are the message catalogs stored?
+
+The following is the situation as I have managed to ascertain from
+various people.  It should only be regarded as a very rough guide until
+I have had time to check the X/Open Portability Guide 4 standards.
+
+Message catalogs and other locale attributes are stored in a nest of
+subdirectories.  The nest has two possible base points:
+	/usr/lib/locale
+	/usr/local/lib/locale
+The first is used by the software accompanying the base operating
+system.  The second is used by externally installed packages - packages
+which are not considered part of the base OS.
+
+Under these directories, we now have the following subdirectories:
+	LC_COLLATE
+	LC_CTYPE
+	LC_MESSAGES
+	LC_MONETARY
+	LC_NUMERIC
+	LC_TIME
+
+Notes: These are not to be confused with the variables of the same name.
+ These are the actual subdirectory names and do not change (unlike their
+variable counterparts).  To avoid confusion, the variables will now be
+referred to as $(LC_MESSAGES) etc.
+
+Under these subdirectories are the various country subdirectories.
+eg, under /usr/lib/locale/LC_MESSAGES we could have the following directories:
+	C
+	POSIX       ->   C
+	en_US.88591
+	de_DE.88591
+	fr_BE.88591
+
+And under these directories, the language and code specific message
+catalogs are stored.  Hence, the message catalog for the "ls" binary on
+an American English speaking system would be stored under:
+	/usr/lib/locale/LC_MESSAGES/en_US.88591/ls.cat
+
+The general format is as follows:
+	/usr/lib/locale/LC_MESSAGES/xx_YY.ZZZ/mm.cat
+	^^^^^^^^^^^^^^^ ^^^^^^^^^^^ ^^^^^^^^^ ^^^^^^
+	     root         category    lang    catalog
+
+The root does not change - its either /usr/lib/locale for system
+software or /usr/local/lib/locale for externally installed software.
+
+The category is only dependent upon the type of locale functions the
+software is attempting to access.  If the software was looking up
+information on the monetary variables for the particular locale, then it
+would be searching in:
+	/usr/lib/locale/LC_MONETARY/xx_YY.ZZZ/
+for the information.
+
+The lang component is possibly the most important and is the component
+that determines which variables and directories the system searches in
+to obtain the info it needs.  The format of the lang component is as
+follows:
+	language_country.characterset
+
+The following examples will illustrate it:
+	en_US.88591		English language in the USA using the ISO 88591 character set
+	de_DE.88591		German language in Germany using the ISO 88591 character set
+	fr_BE.88591		French language in Belgium using the ISO 88591 character set
+
+The lang component is set by the user through the $(LANG) environment
+variable.  The user will establish the correct language, country and
+character set, and set his $(LANG) environment variable accordingly. 
+The OS will then use the $(LANG) environment variable when searching the
+appropriate subdirectories to find the information or message catalogs
+that it needs - as detailed by the setlocale() command.
+
+
+We've outlined the two default places above that the system uses to
+store message catalogs and other locale attributes.  However, the system
+must also be able to handle users who cannot install message catalogs in
+either of these places (doing so usually requires superuser privileges)
+and instead must install message catalogs within their own personal home
+directories.  The system can accommodate message catalogs store here (or
+in any other non-standard place) by the use of the NLSPATH environment
+variable.
+
+The NLSPATH environment variable lists directories which the OS examines
+to find the necessary message catalogs.
+eg,
+	NLSPATH=/usr/lib/locale/LC_MESSAGES/%L/%N:/usr/local/lib/locale/LC_MESSAGES/%L
+/%N:~/messages/%N
+		where	%L represents the value of the LANG environment variable
+		and	%N = the name of the catalog
+		These two values (%L and %N) are substituted by the OS at evaluation time.
+The the user can store their own message catalogs within their home
+directories and have the system automatically access them.  They can
+even override the default message catalogs stored on the system by
+rearranging the order of the entries for the NLSPATH environment
+variable.
+
+
+
+Section 5.	Frequently Asked Questions
+
+Q.	How do I know if the Unix platform I am using supports the locale routines?
+A.	A Unix platform that supports the full range of locale functions must
+have two include files:
+		locale.h
+	and	nl_types.h
+These are usually found in /usr/include.  If one or both of these files
+are missing, then the OS may only support a subset of the locale
+functions.  Both are included with Linux.
+
+
+
+The material covered in this document is variously copyrighted by
+Alfalfa Software, Mitchum DSouza, and Patrick D'Cruze  -  1989-1994.
+
+Please send any suggestions, feedback, or notification of errors to the
+author.  I can be contacted at:
+                        pdcruze@orac.iinet.com.au

@@ -1,0 +1,572 @@
+From:     Digestifier <Linux-Misc-Request@senator-bedfellow.mit.edu>
+To:       Linux-Misc@senator-bedfellow.mit.edu
+Reply-To: Linux-Misc@senator-bedfellow.mit.edu
+Date:     Wed, 10 Nov 93 21:14:16 EST
+Subject:  Linux-Misc Digest #289
+
+Linux-Misc Digest #289, Volume #1                Wed, 10 Nov 93 21:14:16 EST
+
+Contents:
+  [ANSWER] Re: Error with ext2fs? (Stephen Tweedie)
+  SLIP & pl13 working: patch for dip 3.2.2 (Arjan de Vet)
+  X_S3 Xstones (Peter Suetterlin)
+  Can one installing Yggdrasil from a remote CD ? (Björn Smith)
+  LGX list of problems #1 (Ian Parkin)
+  HELP - Linux counter moral issue (Harald T. Alvestrand)
+
+----------------------------------------------------------------------------
+
+Crossposted-To: comp.os.linux.help
+From: sct@dcs.ed.ac.uk (Stephen Tweedie)
+Subject: [ANSWER] Re: Error with ext2fs?
+Date: Wed, 10 Nov 1993 10:53:03 GMT
+
+
+Hi,
+
+> I'm running SLS 1.03, and ext2fs 0.3 (which came with the SLS
+> installation).  Recently I've been getting:
+
+> ext2_new_block: Unable to locate free bit in block group 16.
+
+> message popping up with great regularity even though there is lots of
+> room (between 8 and 14 meg) left on the hard drive partition.
+
+This was fixed a long time ago, but SLS still has the older version of
+the software...
+
+You are seeing a problem which doesn't arise during normal ext2fs
+operation, but which can easily result from an inconsistent state left
+after a crash.  The pre-calculated free block count for your last
+block group is inconsistent with the number of real free blocks.  
+Unfortunately, older versions of e2fsck would not correct this problem
+if it occured in the last block group of a filesystem.  The problem
+may prevent allocation of new blocks to some files (those files
+growing within that block group), but should not lead to data loss,
+since the SLS e2fsck should still be able to correct any really
+dangerous inconsistencies.
+
+Anyway, the solution is to grab a more recent version of e2fsck.  Any
+version after 0.3c should be able to correct this problem.  The latest
+version always appears in /pub/linux/BETA/ext2fs on ftp.ibp.fr and
+tsx-11.mit.edu.  If you have trouble compiling it, there should be a
+pre-compiled binary somewhere on sunsite.unc.edu, although I can't
+remember exactly where (look in the ls-lR file).
+
+Cheers,
+ Stephen.
+---
+Stephen Tweedie <sct@dcs.ed.ac.uk>   (JANET: sct@uk.ac.ed.dcs)
+Department of Computer Science, Edinburgh University, Scotland.
+
+------------------------------
+
+From: devet@adv.win.tue.nl (Arjan de Vet)
+Crossposted-To: comp.os.linux.help
+Subject: SLIP & pl13 working: patch for dip 3.2.2
+Date: 10 Nov 1993 11:59:04 +0100
+
+In article <1993Nov8.150023.38976@ans.net>, Dan Simoes <dans@ans.net> wrote:
+
+> I am running SLS 1.03 with dip 3.2.2a.
+>After upgrading to the pl13 kernel, SLIP no longer worked.
+>Here's what I did:
+[...]
+>- /etc/route add default gw <slipserver>: better, but not perfect.
+>- /etc/route add <slipserver>: that did it!!!
+>
+>In short, I still have the same dip script I was using with pl12
+>(edited from the example in the man page or docs), but now I call
+>it with the following script, called slip:
+>
+>#!/bin/sh
+># run dip script
+>dip <myscriptfile>
+># add a gateway route
+>/etc/route add default gw <slipserver>
+># add a route to the server 
+>/etc/route add <slipserver>
+
+I reversed the two route statements and I hacked them into dip some time
+ago: here's a patch for dip from net-010 (yes, very old but it works for
+me!). With this modified dip, SLIP and pl13 work for me without `network
+unreachable errors'.
+
+diff -urw net-010/dip/Makefile net-010-adv/dip/Makefile
+--- net-010/dip/Makefile        Fri May 28 18:56:09 1993
++++ net-010-adv/dip/Makefile    Fri Oct  8 19:27:21 1993
+@@ -18,7 +18,8 @@
+ OBJS   = dip.o serial.o ipdump.o attach.o term.o modem.o \
+          command.o login.o p_slip.o p_ppp.o 
+ 
+-
++CFLAGS = -O -DDEBUG
++LIBS   = -lbsd
+ PROGS  = dip
+ SUBDIRS        =
+ 
+diff -urw net-010/dip/attach.c net-010-adv/dip/attach.c
+--- net-010/dip/attach.c        Tue Jun  8 14:58:49 1993
++++ net-010-adv/dip/attach.c    Fri Oct  8 19:51:57 1993
+@@ -30,7 +30,14 @@
+ #endif
+   if (system(buff) != 0) return(-1);
+ 
+-  sprintf(buff, "%s add %s", _PATH_BIN_ROUTE, inet_ntoa(dip->rmt_ip));
++  sprintf(buff, "%s add ", _PATH_BIN_ROUTE);
++  sprintf(&buff[strlen(buff)], " %s", inet_ntoa(dip->rmt_ip));
++#ifdef DEBUG
++  syslog(LOG_ERR, ">>> ATTACH \"%s\"\n", buff);
++#endif
++  if (system(buff) != 0) return(-1);
++
++  sprintf(buff, "%s add default", _PATH_BIN_ROUTE);
+   sprintf(&buff[strlen(buff)], " gw %s", inet_ntoa(dip->rmt_ip));
+ #ifdef DEBUG
+   syslog(LOG_ERR, ">>> ATTACH \"%s\"\n", buff);
+diff -urw net-010/dip/dip.h net-010-adv/dip/dip.h
+--- net-010/dip/dip.h   Mon May 31 16:33:43 1993
++++ net-010-adv/dip/dip.h       Fri Oct  8 19:32:47 1993
+@@ -43,8 +43,8 @@
+ #define DEF_MTU                296
+ #define DEF_PROT       "SLIP"
+ #define DEF_MODEM      "HAYES"
+-#define DEF_SPEED      19200
+-#define DEF_PORT       ""
++#define DEF_SPEED      38400
++#define DEF_PORT       "cua1"
+ 
+ /* Function prototyping according to ANSI. */
+ #ifndef _PROTOTYPE
+
+Arjan
+
+--
+Arjan de Vet                             <Arjan.de.Vet@adv.win.tue.nl> (home)
+Eindhoven University of Technology, the Netherlands <devet@win.tue.nl> (work)
+
+------------------------------
+
+From: suettpet@sun1.ruf.uni-freiburg.de (Peter Suetterlin)
+Subject: X_S3 Xstones
+Date: 10 Nov 1993 11:24:21 GMT
+
+Just in case anyone is interested:
+  486DX/2-66VL w S3/805 Localbus Graphic      60731 xstones
+  SUN Sparc 10/30 GX                          90633 xstones
+(486 tested under XFree-2.0 w X_S3)
+
+If not:  cat >/dev/null
+
+==================   Peter 'PIT' Suetterlin   =================
+|   Kiepenheuer Institut     |   Sternfreunde Breisgau e.V    |
+|   fuer Sonnenphysik        |                                |
+|   0761/3198-210            |   0761/71571                   |
+-<ps@kis.uni-freiburg.de>-<suettpet@sun1.ruf.uni-freiburg.de>--
+
+------------------------------
+
+From: smith@compound.se (Björn Smith)
+Subject: Can one installing Yggdrasil from a remote CD ?
+Date: Wed, 10 Nov 1993 09:40:12 GMT
+
+I`ve recently bought the Yggdrasil LGX (fall 1993) CD and thought
+there was some way of NFS installation like SLS.
+
+The reason is that we have a SVR4 host system with CD and a network
+to which I`d like to connect my laptop and install Linux on it.
+
+Is there any way one could modify the Yggdrasil boot floppy having
+it nfs mounting <host>:/cdrom1 rather than local mounting of some
+CDROM device ?
+
+Thanks in advance for any kind of help or pointers !
+-- 
+Bj|rn Smith     Compound Systems, phone +46 8 7923689
+UUCP:           {uunet,mcsun}!seunet!comsys!smith
+Domain Address: smith@compound.se
+
+------------------------------
+
+From: iparkin@betelgeuse.bt.co.uk (Ian Parkin)
+Subject: LGX list of problems #1
+Reply-To: iparkin@betelgeuse.bt.co.uk
+Date: 10 Nov 93 13:26:57 GMT
+
+After a week or so of collating email & net posts here is a list of the
+problems currently identified in LGX F93. A list of contributors is included 
+at the end of the document and thanks go to all of them.
+
+Without further ado :-
+
+-- START --
+
+This is a document that attempts to list some of the problems associated
+with the Yggdrasil Fall 93 CD-ROM of LGX. The list assumes that you have 
+successfully managed to install the LGX onto your system and that you are 
+reasonably well versed in the ways of Unix.
+
+Please note that I have not been able to test all the suggested fixes as
+my Linux machine is a stand-alone box not connected to the net and I do not 
+use some of the more exotic features available - no news/mail. So all fixes
+should be thought about carefully before they are implemented. If you are
+in any doubt and your use of LGX is not impacted by a particular problem
+then remember the phrase 'Why fix that which works ?' If you do make a major
+mistake don't worry as you can simply mount your LGX CD-ROM and retrieve 
+any files you may require. This last point does not imply that you can
+apply the fixes blindly without thinking about them first.
+
+Also please note that my system is based upon the complete installation which 
+seems to have fewer 'undesirables' than the runtime installation.
+
+I hope this list is useful to someone.
+
+Any questions, corrections and comments can be directed to me via email at
+'twod@socrates.demon.co.uk'.
+
+Thanks
+
+Ian Parkin
+
+
+Broken Links :-
+============
+
+/usr/lib/emacs/19.19/etc/DOC-19.19.4 -> DOC 
+                                        [ ../../lucid/etc/DOC ]
+
+/var/etc/fsck.ext2                   -> /bin/e2fsck 
+                                        [ rm /etc/fsck.ext2; 
+                                        ln -s /bin/fsck.ext2 /bin/e2fsck ]
+
+/usr/bin/named.off                   -> ////usr/net/daemons/named.off 
+                                        [ ?? ]
+
+/usr/bin/nsquery                     ->  ////usr/net/bin/nsquery 
+                                        [ ?? ]
+
+/usr/bin/nstest                      -> ///usr/net/bin/nstest 
+                                        [ ?? ]
+
+/usr/include/pixrect                 -> ../src/X11/contrib/lib/xview-3.2/lib/pixrect 
+                                        [ /usr/openwin/include/pixrect ?? ]
+
+/usr/lib/zoneinfo/posixrules         -> localtime
+                                        [ Find the file in /usr/lib/zoneinfo 
+                                        that contains your time zone info and 
+                                        copy it to localtime. ]
+
+/usr/include/sys/soundcard.h         -> ../linux/soundcard.h
+                                        [ ?? ]
+
+/usr/bin/zcat                        -> /usr/bin/gzip 
+                                        [ /bin/gzip ]
+
+
+Missing & Useful Links :-
+======================
+
+( The usefulness of these is, of course, subjective :-) )
+
+[1] : ln -s /usr/man/man1/tcsh.1 /usr/man/man1/csh.1
+
+[2] : ln -s /bin/more /usr/bin/more ( for mail to work correctly )
+
+
+Wrong Permissions :-
+=================
+
+[01] : chmod 4755 /usr/X386/bin/Xs3 - To allow non-root users to use this 
+                                        server.
+
+[02] : If you opt for the runtime installation many directories are incorrectly
+        installed as world writable. This appears to be a fault with the
+        installation script as the permissions on the CD-ROM and for the 
+        complete installation are correct. The below lists the directories and
+        is a simple shell script fix. Note I assume all directories are chmod
+        755 and owned by root. 
+
+        #!/bin/bash
+        dirs="
+        /home
+        /usr            
+        /usr/X386
+        /usr/X386/bin
+        /usr/X386/lib
+        /usr/X386/lib/X11
+        /usr/X386/lib/X11/fonts
+        /usr/X386/lib/X11/fonts/75dpi
+        /usr/X386/lib/X11/fonts/misc
+        /usr/bin
+        /usr/include
+        /usr/include/X11
+        /usr/include/X11/bitmaps
+        /usr/lib
+        /usr/local
+        /usr/local/bin
+        /usr/man
+        /usr/net
+        /usr/net/bin
+        /usr/sound
+        /usr/sound/samples
+        /var/tmp
+        /var/tmp/.X11-unix"
+
+        for dir in ${dirs}
+        do
+          chown 0.0 ${dir}
+          chmod 755 ${dir}
+        done
+ 
+
+[03] :  mail cannot update a users mailbox without /usr/spool/mail being 
+        world writable. 
+
+        [ Two schools of thought on this one :
+          1 :-  As root 'chmod 1777 /usr/spool/mail'. Setting the sticky bit 
+                will ensure that only the owner of a mail file can alter it. 
+                smail correctly sets the mail as the relevant owner.group 
+                with chmod 600. 
+          2 :- Recompile smail using the sources provided specifying /tmp as
+                the lock directory ]
+
+[04] : Several UUCP programs are installed with incorrect permissions.
+        [ chown uucp /usr/bin/uucp; chown uucp /usr/bin/uustat;
+        chown uucp /usr/bin/uuname; chown uucp /usr/bin/cu; 
+        chown uucp /usr/bin/kermit ]
+
+
+Non-Running or Problematic Software :-
+===================================
+
+[01] : /usr/lib/keytables/uk.map  - This appears to be wrong in that I cannot
+        use Alt-F<n> to change the VC.
+        [ Installed Slackware loadkeys & uk.map and produced a map file
+          using dumpkeys which then works OK ]
+
+[02] : Asteroids does not operate correctly :
+
+        >it just doesn't accept input.  This is because asteroids doesn't do a 
+        > XGrabKeyboard, and anything you type gets sent to the root window.  
+        > Watching the rocks fly around is interesting, but I'd rather use 
+        > xfishtank for mobile wallpaper.
+
+        Using twm as my window manager I can use asteroids from any xterm.
+        Upon entering 'asteroids' I am prompted to put my mouse in the current
+        window and hit return. Keys are basically the cursor keys, space, 
+        enter, q, h, p and s.
+
+[03] : /usr/bin/X11/xfilemanager core dumps
+
+[04] : /usr/bin/calshell core dumps
+
+[05] : /usr/bin/inews core dumps
+
+[06] : /usr/bin/top suffers from a 'floating point exception' resulting in
+        it's immediate demise.
+
+[07] : /bin/pax - What does it do ? Try ''pax +help'', as suggested by pax 
+        itself, only to receive the same error message indicating you should
+        try ''pax +help''.
+
+[08] : /usr/bin/script is problematic when starting. More often than not I
+        see :-
+
+        # script
+        Script started, file is typescript
+        Script done, file is typescript
+
+        i.e. the script has finished immediately. 
+
+        Even recompiling the supplied source code does not cure this problem.
+
+[09] : /usr/bin/chsh. I cannot change my login shell to any of the listed
+        shells as they cannot be found, despite the fact that they exist. 
+        Also when prompted for a numeric value, representing a shell, try 
+        entering 'q'. Again compiling the source file does not help
+
+
+The Kernel :-
+==========
+
+[01] : There are been various post regarding the kernel. The Yggdrasil does
+        claim it to be 0.99.13 but it appears not to be judging, by the sources.
+        I tried for several days to get the kernel to compile, before giving up
+        and replacing the LGX kernel structure with the latest source from 
+        tsx-11.mit.edu. This has enabled me to build my own kernel that is 
+        smaller and loads a lot faster then the Yggdrasil kernel.
+
+[02] : If you have an UltraStor you need to set it's port (mailbox) to 230 
+        or LILO hangs.
+
+[03] : It has been reported that /etc/lilo/install fails as lilo is not in 
+        /etc. This is not the case in the complete installation.
+
+Below are some of the points raised :
+
+> The directory /usr/include/linux should be a symbolic link but isn't.
+> Linux header files are duplicated, one set under /usr/include other
+> under /usr/src/linux/include.
+
+> The proc filesystem sources don't get installed.
+
+> The LGX linux header files are different (and incompatible) with the
+> pl13 kernel sources on sunsite.unc.edu.
+
+> You can't rebuild the LGX kernel sources without in2000 support.
+
+> You can't rebuild the LGX kernel sources without sound-blaster cd-rom
+> support.
+
+> The install program didn't copy some files.  Do a mkdir 
+> /usr/src/linux/fs/proc and copy the files off the cdrom from the same 
+> directory into the newly made directory.
+
+> It seems that I've had to change way too many source files to get the
+> thing to compile.  It's starting to smell like I've got source files
+> from mixed patch levels or something like that.
+
+> I think I'll start over with the 0.99.13 sources from sunsite.
+
+
+Missing Files :-
+=============
+
+[01] : If you opt for the runtime installation the file /usr/bin/ranlib is not
+        installed. This file is installed in the complete installation.
+
+[02] : If you opt for the runtime installation not all of the X libraries in
+        /usr/X386/lib are installed. They are correctly installed for the
+        complete installation.
+
+[03] :  Man pages exist for certain commands, but the commands themselves do
+        not exist :- answer autoreply bpe cccp checkalias cpp1 ezview fastmail
+        frm gen-index jetpack lcasep listalias mkfnames mkmanifest newalias
+        newmail news-recovery newslog nntpxmit nptx othello pathproc pfdisk
+        printmail psc rcsclean rcsfile rcsfreeze readmsg rstat_svc sc subst
+        sxpm tkdrop tkfb ugidd wnewmail xdtm xjewel xless xmahjongg xmenu.
+        [ The above is a list compiled by a few quick & dirty shell scripts,
+        so may not be 100% accurate ].
+
+[04] : Missing manual pages : zsh
+
+[05] : The fonts installed for ghostscript-2.6.1 are from the
+        ghostscript-2.5.2 package, so a number of those listed in Fontmap
+        (Nimbus, URWAntiquaT, URWGroteskT) are not available.
+
+
+Miscellaneous Problems :-
+======================
+
+[01] : vi does not use the cursor keys - Set ${TERM} to vt100.
+
+[02] : The rc.local file plays some music. If there is no sound board installed
+        then the PC's speaker is used. This has caused at least one machine to
+        lock up. Simply comment out or delete the relevant lines in the 
+        rc.local file.
+
+[03] :  It has been reported that the ez demo scripts do not work correctly 
+        unless the environmental variable ${ANDREWDIR} is set to /usr/andrew.
+
+[04] : Both the booklet & CD-ROM both state a minimum RAM requirement of 4 MB.
+        This is the minimum required for gcc, and is below the minimum of 8 MB
+        that is recommended in order to run X. Although not a problem this
+        could be misleading.
+
+[05] : There is a /usr/bin/rogue.exp file but no rogue :-(.
+
+[06] : Some manual pages are in the incorrect format or the 'man' command is
+        not expecting all possible formats :-
+
+        # man modf
+        syntax error near `(d'
+        -c:1: `(cd /usr/man ; /usr/bin/gtbl e (david@prism.demon.co.uk)'
+
+        [ nroff -man ./modf.3 > /tmp/modf; mv /tmp/modf ./modf.3 ]
+        
+[07] : /usr/bin/robohunt expects /usr/games/fortune to exist. It doesn't. 
+
+[08] : The user guest is gid 0 in /etc/passwd.
+
+[09] : The version of ldd is 1.1. Xfree-2.0 requires version 1.3. So if you 
+        intend to port Xfree-2.0 make sure you get ldd 1.3 as well.
+
+
+List Of Contributors :-
+====================
+grante@aquarius.rosemount.com 
+jrs@CERF.NET
+pclink@qus102.qld.tne.oz.au
+jimo@hebron.connected.com
+hschmidt@cs.tu-berlin.de
+
+[ Still looking for more contributors BTW - The more bugs we nail now the 
+better the next release of LGX *should* be. If anyone knows of any other bugs,
+however small, please email me at 'twod@socrates.demon.co.uk'. ]
+
+
+------------------------------
+
+From: hta@uninett.no (Harald T. Alvestrand)
+Subject: HELP - Linux counter moral issue
+Date: 10 Nov 1993 14:01:25 GMT
+
+Hello,
+I have a "moral" problem regarding the Linux counter.
+
+I have had some exchanges with a particular sitemaster that
+wanted to register 500 Linux users at that site.
+
+I still haven't implemented "friend counting", so the assumption is
+that each FROM address gets one vote.
+
+Now, this sitemaster seems to have decided to do a mass registration
+by sending in the whole /etc/passwd file at once using a script.
+(It is QUITE plain that the votes were script-generated, but all the
+FROM addresses are different)
+
+This will have the interesting effect of sending this country to
+the head of the class where Linux usage is concerned - FAR ahead
+of everybody else.
+
+Now, I can do several things:
+
+- Ignore it, and let the votes be counted
+- Delete all votes from this site, keeping the statistics as they are,
+  but not gathering the information
+- Recommending that other Linux admins do a "mass registration" of their
+  users, ensuring a certain "evenness" to the count.
+
+What does the readership of c.o.l.misc think I should do?
+
+BTW, the current count (including perhaps half the 500 users) is now
+about 3.700 users.
+  
+-- 
+                   Harald Tveit Alvestrand
+                Harald.T.Alvestrand@uninett.no
+      G=Harald;I=T;S=Alvestrand;O=uninett;P=uninett;C=no
+                      +47 7 59 70 94
+My son's name is Torbjørn. The letter between "j" and "r" is o with a slash.
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Misc-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.misc) via:
+
+    Internet: Linux-Misc@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Misc Digest
+******************************

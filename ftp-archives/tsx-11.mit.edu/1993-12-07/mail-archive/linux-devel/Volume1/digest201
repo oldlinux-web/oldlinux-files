@@ -1,0 +1,580 @@
+From:     Digestifier <Linux-Development-Request@senator-bedfellow.mit.edu>
+To:       Linux-Development@senator-bedfellow.mit.edu
+Reply-To: Linux-Development@senator-bedfellow.mit.edu
+Date:     Sun, 31 Oct 93 16:13:18 EST
+Subject:  Linux-Development Digest #201
+
+Linux-Development Digest #201, Volume #1         Sun, 31 Oct 93 16:13:18 EST
+
+Contents:
+  Re: GCC crashing Linux: kernel bug (Dana Jacobsen)
+  Re: GCC crashing Linux: kernel bug (Michael O'Reilly)
+  Re: GCC crashing Linux: kernel bug (Linus Torvalds)
+  Re: GCC crashing Linux: kernel bug (John P. Norris)
+  Re: ugly name for core dumps (core.imagename) -> patch for "img.core" (Johan Myreen)
+  mmap? how do I read the bios from my program? (Mark Swanson)
+  Re: Slowness in scsi disk access (Matthias Urlichs)
+  Re: Andrew File System (Peter Desnoyers)
+  Re: Slowness in scsi disk access (Eric Youngdale)
+  Diskless LINUX support (Dirk Koeppen)
+  Re: Andrew File System (Charles T Wilson -- Personal Account)
+  Is dosemu still being developed? (Thaddeus H. Wood)
+  Re: MCA Support > Please (Uri Blumenthal)
+
+----------------------------------------------------------------------------
+
+From: jacobsd@heart (Dana Jacobsen)
+Subject: Re: GCC crashing Linux: kernel bug
+Date: 31 Oct 93 07:02:12 GMT
+
+In <boutellCFqEzt.1nL@netcom.com> boutell@netcom.com (Drinks All The Water) writes:
+>For those just tuning in: gcc, and no other program I have found,
+>sometimes crashes my linux system. Other executing programs then fail as 
+>soon as they try to do anything involving access to pages not in memory,
+>as far as I can tell. 
+>[...]
+
+  I am also having problems with memory usage crashing my system, but it
+sounds different than this.  My problem is that after using large
+amounts of memory (well into swap), the machine will lock up.  Caps Lock
+doesn't light up, the screen is frozen (running X11), the disk light goes
+off.  The first few times this happened, I waited an hour or so since I
+had heard that Linux was a little slow in recovering from memory overuse,
+but nothing ever happened.
+
+  Some more information:  A Gateway 486/66V with 16 meg of RAM, 16 meg
+of swap partition.  This happened under both pl12 and pl13.  This first
+became apparent when running multiple copies of my gaussian elimination
+program that statically allocates 9 meg.  Interestingly, Linux does not
+seem to check that it's overallocating -- adding up the PS "SIZE" line
+yields a number larger than the total VM -- after a while lots of paging
+happens, then it crashes.  I have had xv do this also.
+
+  This is pretty important to me, since I'm telling people at work that
+this is a good environment to do work cheaply (as compared to buying
+more Suns, which certainly have their place, but they are very expensive).
+We routinely run models that take 10-50 meg -- most of them run OK
+paged (only a few need 64 or more meg or real memory, and we have Suns
+that can handle that) and it's very easy to accidently have something
+take 100 meg instead of 10 (reproject a 1km DEM instead of 10km), and
+it's unacceptable to have a machine crash because of that.
+
+  Is there any way to try to log the problem?  No messages are printed
+in any file that I can find.  It's also annoying in that my /etc/wtmp
+gets corrupted every crash.  Thanks for any help.
+--
+Dana Jacobsen        jacobsd@solar.cor2.epa.gov        Computer Sciences Corp.
+
+"We arrive here as we are in reality, and when the page is turned and that
+ reality is revealed to us -- that part of our reality which we would prefer
+ to pass over in silence -- then we don't like it any more."
+  -- Solaris, by Stanislaw Lem
+
+------------------------------
+
+From: oreillym@tartarus.uwa.edu.au (Michael O'Reilly)
+Crossposted-To: comp.os.linux.misc
+Subject: Re: GCC crashing Linux: kernel bug
+Date: 31 Oct 1993 07:36:29 GMT
+
+Drinks All The Water (boutell@netcom.com) wrote:
+
+: ABOUT THE PROBLEM
+
+: For those just tuning in: gcc, and no other program I have found,
+: sometimes crashes my linux system. Other executing programs then fail as 
+: soon as they try to do anything involving access to pages not in memory,
+: as far as I can tell. 
+
+I mailed this, but I'll post it as well, as people seem to be having
+problems. 
+
+This is just a Q&D memory tester that found some problems on the first
+posters machine. Let's see if I can write this twice with no
+mistakes... :)
+
+compile it, let it run for a few hours, and see what happens.
+Note: this assumes an unloaded 8 meg machine (It tests 4 megs of
+memory).
+
+If you NMI errors, or it dumps core etc etc, then you have bad ram.
+
+Followups to comp.os.linux.misc (this def doesn't belong in
+development). 
+
+----
+void main(void)
+{
+        unsigned int *p = (unsigned int *) malloc(1024 * 1024 * 4);
+        int i;
+        
+        while (1) {
+                for (i = 0; i < 1024 * 1024;++i)
+                        p[i] = i;
+                for (i = 0; i < 1024 * 1024;++i)
+                        if (p[i] != i) scream();
+                for (i = 0; i < 1024 * 1024;++i)
+                        p[i] = ~i;
+                for (i = 0; i < 1024 * 1024;++i)
+                        if (p[i] != ~i) scream();
+                for (i = 0; i < 1024 * 1024;++i)
+                        p[i] = i * 13;
+                for (i = 0; i < 1024 * 1024;++i)
+                        if (p[i] != i * 13) scream();
+                /* probly add some sort of mem move test */
+        }
+}
+scream()
+{
+        printf("Memory error... dying\n");
+        exit(1);
+}
+
+------------------------------
+
+From: torvalds@klaava.Helsinki.FI (Linus Torvalds)
+Subject: Re: GCC crashing Linux: kernel bug
+Date: 31 Oct 1993 10:45:40 +0200
+
+In article <boutellCFqEzt.1nL@netcom.com>,
+Drinks All The Water <boutell@netcom.com> wrote:
+>
+>For those just tuning in: gcc, and no other program I have found,
+>sometimes crashes my linux system. Other executing programs then fail as 
+>soon as they try to do anything involving access to pages not in memory,
+>as far as I can tell. 
+
+Ok, I hope I have this fixed now. Anyway, there are two major
+possibilities:
+
+ - bad floating point unit: some clone 387's lock up the machine
+   completely when swapping.  IIT/Cyrix chips are prime suspects.  If
+   you have one of these, give lilo the "no387" option at bootup (the
+   kernel needs to have math emulation compiled in, of course), and see
+   if they go away.  If the lockups do go away, there is nothing more to
+   do: it's a hardware bug, and doesn't seem to be solvable in software
+   (and I've tried to add timeouts etc: it seems that the 387 hang will
+   completely lock up the bus, so nothing will work after that). 
+
+ - there was a possibility of the kernel hanging due to needing more
+   buffer space, but no new buffers ever being created.  This should be
+   fixed in one of the ALPHA releases.  Knock wood. 
+
+The latest ALPHA, btw, is ALPHA-pl13p.tar.gz, and should have the memory
+management changes finally stable.  Don't use the m-o releases, as they
+have known bugs.  The alpha-releases can be found (as always) on
+nic.funet.fi in the directory pub/OS/Linux/PEOPLE/Linus. 
+
+                Linus
+
+------------------------------
+
+From: zonni@supernalle.cs.hut.fi (John P. Norris)
+Subject: Re: GCC crashing Linux: kernel bug
+Date: 31 Oct 1993 11:04:58 GMT
+
+Yes, i have noticed this bug too, happens much more often when you run X.
+I don't even have to GCC anything, just running EMACS sometimes is enough.
+
+When i had 8M memory this problem was daily, with 16M it happens around once
+or twice per week.
+
+Methinks that kernel paging is f****d, but then again, i aint no kernel guru.
+
+--Z--
+--
+//John Norris
+
+------------------------------
+
+From: jem@snakemail.hut.fi (Johan Myreen)
+Subject: Re: ugly name for core dumps (core.imagename) -> patch for "img.core"
+Date: 31 Oct 93 15:18:39 GMT
+
+In article <2atf0a$se@smurf.sub.org> urlichs@smurf.sub.org (Matthias Urlichs) writes:
+
+>In comp.os.linux.development, article <JEM.93Oct29175457@delta.hut.fi>,
+>  jem@snakemail.hut.fi (Johan Myreen) writes:
+
+>> >True. I haven't seen any objection to naming the corefile of "foo" 
+>> >"foo.core".
+>> 
+>> Quite a lot of people are still using the Minix file system, with a
+>> maximum file name length of 14.
+
+>So you drop back to just "core" if the name is too long.
+
+Oh, I can choose between 'core' and 'foo.core'?
+
+>Ten-character program names are too bothersome to type anyway. ;-)
+
+Who said anything about typing them? Pressing tab usually completes
+the name quite nicely... An a fact is that programs like this do exist,
+take 'xfilemanager' for example. Interesting things happen when
+somebody writes a program with a 14 character long name. Now where did
+that executable go...?
+
+Oh well, I guess it's time for lazy old-timers like me to finally
+convert their partitions to one of the extended file systems... I
+guess we are a minority anyway.
+
+-- 
+Johan Myreen
+jem@cs.hut.fi
+60 11'55" N, 24 53'30" E
+
+
+------------------------------
+
+From: ag010@Freenet.carleton.ca (Mark Swanson)
+Subject: mmap? how do I read the bios from my program?
+Date: Sun, 31 Oct 1993 16:55:45 GMT
+
+
+I'm trying to develop a device driver to auto-probe for a networking card.
+I need to be able to read the first few bytes of an on-board BIOS to
+make sure I'm talking to the right piece of hardware.
+this gives me a segv error.
+int *mem_base = (int *) 0xc8000;
+int x=0;
+x=mem_base[0];
+printf("X=%d.\n",x);
+
+Do I need some sort of mmap call to map out this protected space so 
+my little prog can read it?
+btw, is there a good book on this level of UNIX programming out
+there?
+Thank you very much.
+-- 
+Mark Swanson.    ag010@freenet.carleton.ca
+
+------------------------------
+
+From: urlichs@smurf.sub.org (Matthias Urlichs)
+Subject: Re: Slowness in scsi disk access
+Date: 31 Oct 1993 10:27:35 +0100
+
+In comp.os.linux.development, article <icB9Bc3w165w@xivic.bo.open.de>,
+  ws@xivic.bo.open.de (Wolfgang Schelongowski) writes:
+> 
+>   "IDE will generally _always_ beat 8-bit / 5MHz SCSI ..."
+... in raw throughput to one single disk.
+
+With concurrent access to more than one or two disks, however, SCSI should be 
+faster.
+
+-- 
+It's really quite a simple choice: Life, Death, or Los Angeles.
+-- 
+Matthias Urlichs        \ XLink-POP Nürnberg   | EMail: urlichs@smurf.sub.org
+Schleiermacherstraße 12  \  Unix+Linux+Mac     | Phone: ...please use email.
+90491 Nürnberg (Germany)  \   Consulting+Networking+Programming+etc'ing      42
+
+------------------------------
+
+From: peterd@vogan.dev.cdx.mot.com (Peter Desnoyers)
+Subject: Re: Andrew File System
+Date: Sun, 31 Oct 1993 13:04:37 GMT
+
+ctwilson@rock.concert.net (Charles T Wilson -- Personal Account) writes:
+
+>In article <2anvou$6if@senator-bedfellow.MIT.EDU>,
+>Salvatore Valente <svalente@ATHENA.MIT.EDU> wrote:
+>>Lots of random people have written:
+>>
+>>> AFS is the intellectual property of Transarc corp.  A clone *might* be
+>>> possible, but lacking source, it might be hard to write without being
+>>> plagaristic; it's pretty sophisticated.
+
+>for the record, this was me :)
+
+Salvatore Valente pointed me towards a list of AFS specs on
+grand.central.org, available via AFS or anonymous FTP. There are a few
+hundred pages there and I only spent maybe 20 minutes perusing them,
+but it looks like there might actually be enough information to write
+a working AFS implementation - i.e. they seem to define all the
+interfaces within RPC, and they define the format of the RPC protocol.
+
+Whether that would be enough to come up with an AFS implementation
+that would *interoperate* with Transarc's AFS is an entirely different
+question. [for instance, the spec could have bugs or differences from
+the Transarc implementation]
+
+It would be really neat if someone wrote a free AFS implementation.
+However, such an effort might be doomed by:
+
+- bad specs. If Transarc has the only working implementation, and they
+  wrote the specs after the fact, then no one's ever debugged the
+  specs by writing an implementation from them.
+
+- complexity. It seems to be a lot bigger than NFS.
+
+- does Transarc have any patents related to AFS? 
+
+                                Peter Desnoyers
+-- 
+
+------------------------------
+
+From: eric@tantalus.nrl.navy.mil (Eric Youngdale)
+Subject: Re: Slowness in scsi disk access
+Date: Sun, 31 Oct 1993 18:31:26 GMT
+
+In article <1993Oct29.142450.3659@siemens.co.at> fuer@nessie.gud.siemens.co.at (Gerhard Fuernkranz) writes:
+>Eric, are you *really* sure, that SVR4 fsflush does *not* write all dirty
+>buffers back to disk, even if you
+
+        I have no idea what the SVr4 daemon does - there is no man page for it,
+and I do not have access to any of the sources that would describe it.
+I am going on what other people are telling me that it does.
+
+>    1) wait long enough (eventually much more than 30 sec. when
+>       enough mem/buffers are free) and
+>    2) you don't produce new dirty pages in the meantime ?
+
+        Im my current implementation, the bdflush daemon searches the first
+N% of the buffer cache for dirty buffers to write out, and it will write
+out at most M buffers each time it is activated.  M and N are user settable
+parameters that can be modified at runtime via the same syscall interface that
+you use to start the daemon in the first place.  It is activated every so often
+by various conditions (usually because some other part of the buffer cache is
+having difficulty finding clean buffers.
+
+>There are two reasons, why I hate sync every 30 seconds:
+>
+>    1) It produces a load peak every 30 seconds (has already been
+>       discussed in this thread).
+
+        Agreed.  The bdflush parameters can be selected so that all of the I/O
+is queued, and the load peaks are much smaller.  In addition, since it is a
+daemon that does the flushing, the user processes do not stall if you run out
+of clean pages.
+
+>    2) It writes temporary files (e.g. during compilation)
+>       to disk, even if the whole file fits into the buffer cache
+>       and the file will be removed 1 minute later. Bdflush with an
+>       LRU strategy would write other (old) blocks to disk instead
+>       and the temp file would no longer exist, when its buffers were
+>       old enough (This example assumes, that you have a machine with
+>       lots of memory).
+
+        Again, this is part of the reason that I write bdflush to only search
+the first N% of the buffer cache.  The default is something like 25%.  I have
+already noticed that the sync latency is much improved when the daemon is
+running, and I am now able to consistently get iozone benchmarks of something
+like 1.2Mb/sec going to a raw partition.  I still have some more work to do - I
+am debugging the clustering code and my changes to the block device code, and
+once this is done the filesystems need a small amount of attention.
+
+        I guess in the end, if the clustering really works as well for everyone
+else as it does for me, the idea is that there would not be much of a need to
+go to a larger blocksize filesystem.  In theory, the raw I/O speed for my disk
+would seem to be somewhere in the neighborhood of 1.8Mb/sec, and I am not sure
+why I am still on the low side - I think that bdflush needs some tuning, or
+perhaps I need to add a new tripwire to wake it up.
+
+
+        I guess I would be kind of uneasy about replacing update with bdflush
+entirely, mainly because it could mean that some dirty pages would not get
+written back for a considerable amount of time.  
+
+        If we wanted to replace update entirely, we could modify the buffer
+heads so that they contain a timestamp when last brelse'd, and bdflush could
+also flush buffers that are more than 30 seconds old.  Actually, update might
+be changed to be another kernel daemon who did this instead of sync() - it
+might be easier to do it this way than to try and load too much functionality
+into bdflush().
+
+        Anyway, once the basic pieces are in place, it is pretty easy to hack
+it to do that which we want.  There is a simple function that you can call from
+the buffer cache anywhere to wake up bdflush(), and you can even wait for it to
+run if you want to (useful if we are really tight on memory).
+
+        As long as I am writing, I should add that I ended up creating a true
+free list which is separate from the rest of the buffer cache (what was called
+the free_list before, and I now call the lru_list).  The idea is that buffers
+on the free list are always available for the taking by getblk.  There is a
+refill function that is called when the free_list is empty, and it tries to
+locate 64 buffers that are clean and moves them to the free list.  The number
+of buffers that are moved, is also a parameter that is settable at run time via
+the bdflush syscall.  There is a fourth settable parameter as well, which I
+cannot remember the funciton of off the top of my head.
+
+        I have been making incremental releases as I get various features
+installed - I tend to put things on tsx-11 in pub/linux/ALPHA/scsi/cluster*.
+I hope that sometime today I can have the clustering done which will basically
+mean that all of the changes that I envision will be done.  Note that there may
+still be bugs, but I usually try and run them for a while so that there are no
+obvious problems.  You should probably have a recent backup if you want to try
+these out, just in case.
+
+-Eric
+
+
+-- 
+"The woods are lovely, dark and deep.  But I have promises to keep,
+And lines to code before I sleep, And lines to code before I sleep."
+
+------------------------------
+
+Crossposted-To: de.comp.os.linux,comp.os.linux
+From: dirk@incom.de (Dirk Koeppen)
+Subject: Diskless LINUX support
+Reply-To: dirk@incom.de
+Date: Sun, 31 Oct 1993 12:19:10 GMT
+
+Hi,
+
+I have a Boot PROM (TCP/IP BOOT-PROM) which is available for over 30 network  
+controllers and is based on BOOTP/TFTP. As the PROM has a builtin application  
+interface in order to use the BOOTP and TFTP features of the PROM it should be  
+not that hard to make LINUX working on it.
+
+Several commercial UNIXs like UnixWare and SCO are already based on the PROMs  
+application interface in order to boot diskless.
+
+Now I am looking for someone who is interested to make LINUX supporting the  
+PROMs application interface. Please send me an email if you are interested.
+
+Many thanks in advance,
+dirk 
+
+
+
+--
+                   Dirk Koeppen EDV-Beratungs-GmbH
+            Holzwiesenweg 22 * D-63073 Offenbach * Germany
+  Phone: +49 69 89 3000 * FAX: +49 69 89 3004 * email: dirk@incom.de
+
+------------------------------
+
+From: ctwilson@rock.concert.net (Charles T Wilson -- Personal Account)
+Subject: Re: Andrew File System
+Date: 31 Oct 1993 19:47:35 GMT
+
+In article <peterd.752072677@vogan.dev.cdx.mot.com>,
+Peter Desnoyers <peterd@vogan.dev.cdx.mot.com> wrote:
+>ctwilson@rock.concert.net (Charles T Wilson -- Personal Account) writes:
+>
+>>In article <2anvou$6if@senator-bedfellow.MIT.EDU>,
+>>Salvatore Valente <svalente@ATHENA.MIT.EDU> wrote:
+>>>Lots of random people have written:
+>
+>Salvatore Valente pointed me towards a list of AFS specs on
+>grand.central.org, available via AFS or anonymous FTP. There are a few
+>hundred pages there and I only spent maybe 20 minutes perusing them,
+>but it looks like there might actually be enough information to write
+>a working AFS implementation - i.e. they seem to define all the
+>interfaces within RPC, and they define the format of the RPC protocol.
+>
+>Whether that would be enough to come up with an AFS implementation
+>that would *interoperate* with Transarc's AFS is an entirely different
+>question. [for instance, the spec could have bugs or differences from
+>the Transarc implementation]
+>
+>It would be really neat if someone wrote a free AFS implementation.
+
+Yep....from my personal experience using AFS, it's going to be a very
+big job, though...there's an awful lot to implement.
+
+>However, such an effort might be doomed by:
+>
+>- bad specs. If Transarc has the only working implementation, and they
+>  wrote the specs after the fact, then no one's ever debugged the
+>  specs by writing an implementation from them.
+
+Distinctly possible....I don't have any working knowledge of these specs.
+ 
+>- complexity. It seems to be a lot bigger than NFS.
+
+I have little doubt of this...it has lots of features.
+ 
+>- does Transarc have any patents related to AFS? 
+
+I can't answer that off of the top of my head, but my best guess is yes.
+I have some documentation in my office.  I'll check the copyright notices
+tomorrow.
+
+-- 
+/-----------------------------------------------------------------------\
+|  Tom Wilson                      |  "I can't complain, but sometimes  |
+|  ctwilson@rock.concert.net       |   I still do."                     |
+|                                  |                -Joe Walsh          |
+
+------------------------------
+
+From: pustule@cats.ucsc.edu (Thaddeus H. Wood)
+Subject: Is dosemu still being developed?
+Date: 31 Oct 1993 20:13:29 GMT
+
+
+Greetings, all.  I was just wondering if dosemu is still 
+under development.  Seeing that there has not been a new
+release in quite some time.  Anyone have any info??  Is
+anyone in touch with Howlin' Bob?
+
+Inquiring minds want to know! :)
+-- 
+ Thaddeus H. Wood  715 Washington St. Suite D  Santa Cruz, CA  95060
+  pustule@cats.ucsc.edu -- +1 408.423.8733 -- pustule@gorn.echo.com
+             "At the prompt, please type 'kill -HUP $$'"
+
+------------------------------
+
+From: uri@yktnews.UUCP (Uri Blumenthal)
+Subject: Re: MCA Support > Please
+Date: Sun, 31 Oct 1993 16:47:36 GMT
+
+From article <2avec1$8sv@hecate.umd.edu>, by ceham@w3eax.umd.edu (Maurice De Vidts NE3S):
+> I would greatly appreciate if someone would POST an "official" update
+> about the subject, since many of us linux-less PS/2 users are
+> stranded.                                               
+
+Two things are to be done to get Linux up and runnng on MCA:
+        1) ESDI support, publication 68X2234, form # S68X-2234.
+        2) SCSI support, pubs 68X2397 and 68X2365.
+
+[I'm working on ESDI, but I'm so bogged down with my "official"
+work I don't have the slightest idea when any progress will
+be made, if at all.]
+
+To get display to work with anything better than 640x480x16 one
+will need to port some XGA and/or V256C (ThinkPad-700 chip).
+
+> In addition, I would not mind working on it myself if someone would
+> give me some pointers on what specifically needs to be 
+> fixed. 
+
+Well, the task list's in the open.
+
+Regards,
+Uri.
+============
+<Disclaimer>
+-- 
+Regards,
+Uri.      uri@watson.ibm.com     scifi!angmar!uri 
+============
+<Disclaimer>
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

@@ -1,0 +1,339 @@
+MS-DOS FS, version 12
+=====================
+
+
+FILES
+=====
+
+    README	    This file.
+    CHANGES	    Change history.
+    Makefile	    Makefile for fromdos and rename.
+    dosfs.patch	    Patch from alpha.8 to alpha.11
+    dosfs.tar       MS-DOS FS for the 0.99pl7 kernel.
+    fromdos.c	    CRLF->NL / NL->CRLF converter.
+    test.pl	    Regression test script in Perl.
+    rename.c	    Interface to the rename system call. Used by test.pl
+    smount.c	    Very simple mount program.
+    fsperf.c	    File system performance test.
+
+
+INSTALLATION
+============
+
+This update of the MS-DOS FS can only be added to a 0.99pl7 kernel with the
+6-APR ALPHA-diffs. You can either overwrite the old sources by extracting
+dosfs.tar or patch the sources from dosfs.patch. Patching is preferred, but
+many people find it more convenient to replace the sources from a TAR
+archive.
+
+This patch may or may not work with other kernel versions.
+
+Step 1: Kernel
+
+    Update the kernel sources if needed and delete all old *.o files that
+    may be in fs/msdos. Then run make and boot the resulting image.
+
+Step 2: Basic utilities
+
+    Run make to compile smount.c, fromdos.c, fsperf.c. Move the resulting
+    executables to an appropriate place and create a link from 'todos'
+    to 'fromdos'.
+
+Now you're ready to use the MS-DOS FS. If you have Perl, you should
+run the regression test now. (See below.)
+
+
+MOUNTING
+========
+
+An MS-DOS FS is mounted by specifying the FS type "msdos" with the
+-t option:
+
+    mount -t msdos /dev/whatever /wherever
+
+The following mount options are recognized:
+
+    conv=binary|text|auto		(default is "binary")
+    check=relaxed|normal|strict		(default is "normal")
+    uid=<number>			(default is current euid)
+    gid=<number>			(default is current egid)
+    umask=<number>			(default is current umask)
+    debug				(default is off)
+    fat=<number>			(default is auto-detection)
+    quiet				(default is off)
+
+The MS-DOS FS can perform CRLF<-->NL (MS-DOS text format to UNIX text
+format) conversion in the kernel. The following conversion modes are
+available:
+
+  binary	no translation is performed.
+  text		CRLF<-->NL translation is performed on all files.
+  auto		CRLF<-->NL translation is performed on all files that
+		don't have a "well-known binary" extension. The list
+		of known extensions can be found at the beginning of
+		fs/msdos/misc.c
+
+The conversion mode is chosen with the conv=<mode> mount option, e.g.
+mount -t msdos -o conv=auto ...
+
+Programs that do computed lseeks won't like in-kernel text conversion.
+
+For FS' mounted in binary mode, a conversion tool (fromdos/todos) is
+provided.
+
+The kernel displays format information at mount time. Please include a
+verbatim copy of those numbers in your bug report if the FS should
+refuse to mount a valid MS-DOS disk.
+
+When translating a name to MS-DOS conventions, three different levels
+of pickyness can be chosen:
+
+  relaxed	Upper and lower case are accepted and equivalent, long
+		name parts are truncated (e.g. verlongname.foobar
+		becomes verylong.foo), leading and embedded spaces are
+		accepted in each name part (name and extension).
+  normal	Like "relaxed", but many special characters (*, ?, <,
+		spaces, etc.) are rejected.
+  strict	Like "normal", but names may not contain long parts and
+		special characters that are sometimes used on Linux,
+		but are not accepted by MS-DOS are rejected. (+, =,
+		spaces, etc.)
+
+The check is chosen by specifying the check=<level> mount option,
+e.g. mount -t msdos -o check=strict ...
+Default is "normal".
+
+The options uid=..., gid=... and umask=... determine the ownership and
+permissions of files. All files are implicitly chowned to the specified
+uid/gid and the bits in umask are removed from file permissions before
+they become visible to user programs. The root of the value of umask
+defaults to octal.
+
+The fat option overrides the automatic FAT type detection. Only the
+values 12 and 16 are accepted.
+
+The MS-DOS FS prints a version string and a list of file system para-
+meters if the option debug is set or if the parameters appear to be
+inconsistent.
+
+If the option quiet is set, attempts to chown or chmod files do not
+yield errors, although they fail. Use with caution !
+
+If the MS-DOS FS detects an inconsistency, it reports an error and sets
+the file system read-only. The file system can be made writeable again
+by remounting it, e.g. mount -o remount,rw /dev/foo /bar
+
+If the MS-DOS FS and your mount program don't agree on mount option
+processing, smount should be used in order to pass mount options. It's
+a very simple interface to the mount system call, that doesn't know
+about /etc/fstab and doesn't update /etc/mtab.
+
+
+REGRESSION TEST
+===============
+
+A regression test script is included that can be used to verify basic
+file system operation. It currently only analyzes the static behaviour
+of the FS. No attempt is made to detect race conditions.
+
+To perform the regression test, do the following:
+
+Step 1: rename utility
+
+    Because at least some versions of Perl on Linux implement rename by
+    using link and unlink, a separate C program is used as an interface
+    to the rename system call. Run  make rename  to build it. The rename
+    executable must be in the directory from which test.pl is started.
+
+Step 2: Test location
+
+    Insert an empty MS-DOS floppy disk into /dev/fd0 or /dev/fd1. If you
+    don't have an empty MS-DOS floppy, you can create one with fdformat
+    and mformat. Mount the floppy as MS-DOS FS, e.g.
+    mount -t msdos /dev/fd0 /fd
+    Alternatively, the test can also be run on an empty subdirectory.
+
+Step 3: Running the script
+
+    Run test.pl with the mount point and the name check mode as
+    arguments, e.g.
+    ./test.pl /fd normal
+    The regression test only works on an MS-DOS FS, because it tests
+    special behaviour of that FS type.
+
+Step 4: Checking what's left
+
+    The test should not leave any directories or files on the test disk.
+    The number of free blocks that is reported by df should also be the
+    same as before the test. Finally, you should be able to umount the
+    MS-DOS disk.
+
+If any of the above fails, please don't hesitate to report it to
+almesber@bernina.ethz.ch
+
+Contribution of new tests that verify yet untested parts of the code or
+tests that exhibit bugs will be thankfully accepted.
+
+
+ACCESS PERMISSIONS
+==================
+
+All files in an MS-DOS FS are owned by the real uid/real gid that are
+in effect for the mount system call. File modes are 0777 (0666 if the
+file system is mounted noexec) minus the current umask at mount time.
+
+Read-only and hidden attributes are translated into appropriate mode
+settings. If file modes are changed, an attempt is made to find
+sensible attributes based on the mode bits of the owner.
+
+
+FROMDOS/TODOS
+=============
+
+fromdos removes all CRs from a file and truncates it at the first ^Z.
+todos converts NLs to CRLFs.
+
+Both tools are either invoked as filters, e.g. fromdos <foo.doc | more
+or with one or more file names. Those files are converted in place,
+e.g. todos foo.c bar.c gna.c
+
+If invoked with the option -l, fromdos and todos convert between the
+PC and the Latin-1 character set.
+
+
+FSPERF
+======
+
+fsperf tests the performance of common file system operations. Unlike
+common disk benchmarks, fsperf tries to ignore the time spent moving
+data from or to the disk but keeps as much data as possible in the
+buffer cache.
+
+In order to get consistent results, the update process should be killed
+before running fsperf.
+
+fsperf is invoked as follows:
+
+  fsperf path
+
+where path is an unused name in the top-level directory of a file
+system. WARNING: fsperf tries to delete any existing file or directory
+with that name !
+
+fsperf repeats each set of operations ten times. This can be changed
+with the -i option, e.g. fsperf -i 5 /mnt/perf
+
+The size of files created to measure sequential read and write
+performance should be considerably lower than the total amount of
+physical memory. The file size defaults to 4 MB and can be changed
+with the -m option, e.g. fsperf -m 2 /mnt/perf  -m 0 disables
+sequential file access tests.
+
+The number of directory entries created to measure directory operation
+performance defaults to 100. This can be changed with the -e option,
+e.g. fsperf -e 1000 /mnt/perf  -e 0 disables directory operation
+performance tests.
+
+Note: 
+
+  - fsperf performs expensive operations to ensure good caching between
+    tests. The reported time multiplied with the number of iterations
+    and the file size or number of directory operations is therefore
+    typically only a small fraction of the effective run time.
+  - directory operations (except directory reads) get slower if the
+    number of directory entries is increased.
+  - the effective timer resolution is (100*megabytes) Hz or
+    (100*entries) Hz.
+  - the results depend on CPU speed and also to a lesser degree on disk
+    throughput. Therefore, only timings obtained on the same machine
+    and with file systems on the same disk should be compared.
+  - file system fragmentation influences the performance results.
+
+
+INCOMPATIBILITIES
+=================
+
+Any program that does any of the following things may exhibit problems
+when used on the MS-DOS FS:
+
+  - tries to use links. (Perl)
+  - assumes that statfs returns block counts for 1 kB blocks.
+
+There are some more restrictions listed in the known problems section.
+
+
+KNOWN PROBLEMS
+==============
+
+Adaptive text conversion fails for CONFIG.SYS.
+    The extension .SYS usually indicates that a file is binary. There is
+    one very prominent exception: CONFIG.SYS ...
+
+Non-root file accesses may yield unexpected errors.
+    If the "file system owner" is not equal to the user who is accessing
+    the file system, some programs may generate unusual errors when
+    modifying or creating files. This happens because all files that are
+    created on the MS-DOS FS are implicitly chowned to the file system
+    owner. Work-around: only the user who owns the file system should
+    have write permission for it.
+
+mv, cp, tar, ... complain about "Operation not permitted"
+    Those programs use chown or chmod, which usually conflicts with the
+    rules the MS-DOS FS uses for file ownership and permissions (see
+    above). If the mount option quiet is specified, chown and chmod are
+    still no-ops, but the MS-DOS FS pretends they were successful.
+
+Neither hard nor soft links are supported.
+    MS-DOS does not know about symbolic links and "hard links" are only
+    used for directories. They can't be used for files because there is
+    no inode level.
+
+Performance may still be poor.
+    Sometimes, data is read in from the disk just to be overwritten a
+    few cycles later. May be improved in a later release.
+
+bmap is not supported on certain formats.
+    MS-DOS formats that have odd cluster sizes or offsets have no block
+    to block mapping. Therefore, bmap is disabled on such file systems.
+    This currently only means that you certainly can't swap on them.
+
+File creation fails unexpectedly.
+    The MS-DOS FS is picky about file names. Usually, only lower case
+    letters may be used and MS-DOS device names ("con", "nul", etc.)
+    are not accepted.
+
+readdir returns incorrect inode numbers for files that have been
+renamed accross directories while being open.
+    This can't be fixed without scanning the inode tables for each
+    entry returned by readdir. Very few programs should notice that
+    anyway. The inode number is correct ("jumps") as soon as the file
+    is closed.
+
+Files change their inode numbers when being renamed accross
+directories.
+    This is a design limitation for which no easy fix exists. (See
+    above.)
+
+
+CREDITS
+=======
+
+Although the code has been heavily modified, it is based on the
+original Minix FS by Linus Torvalds and has a certain structural
+resemblance to it. Much of the detail know-how about how MS-DOS
+manages its disks has been taken from the Mtools package by Emmet P.
+Gray.
+
+I'd also like to thank all alpha testers, especially (in alphabetic
+order) H. Peter Anvin, Roger Binns, Wayne Davison, Drew Eckhardt,
+David Engel, Michael Gordon, Andrew Haylett, Zane H. Healy, Mika P.
+Liljeberg, Fabian Mueller, Andreas Priebe, Asbjorn Riedel, Luca
+Simoncini, Stephen Tweedie, and Eric Youngdale for reporting problems
+or success and making valuable suggestions, and last but not least
+Hongjiu Lu for quick help on a GCC problem I hit.
+
+
+BUG REPORTS AND SUCH
+====================
+
+Please send all bug reports to almesber@bernina.ethz.ch

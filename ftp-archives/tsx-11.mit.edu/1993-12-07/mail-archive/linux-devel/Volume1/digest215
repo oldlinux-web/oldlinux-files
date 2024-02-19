@@ -1,0 +1,708 @@
+From:     Digestifier <Linux-Development-Request@senator-bedfellow.mit.edu>
+To:       Linux-Development@senator-bedfellow.mit.edu
+Reply-To: Linux-Development@senator-bedfellow.mit.edu
+Date:     Sun, 7 Nov 93 23:14:03 EST
+Subject:  Linux-Development Digest #215
+
+Linux-Development Digest #215, Volume #1          Sun, 7 Nov 93 23:14:03 EST
+
+Contents:
+  Re: POP-2 Client (Optimetrics Inc.)
+  SIGHUP on login shell doesn't kill -su (Ulrich Kunitz)
+
+----------------------------------------------------------------------------
+
+From: omi@garnet.msen.com (Optimetrics Inc.)
+Subject: Re: POP-2 Client
+Date: 8 Nov 1993 00:50:03 GMT
+
+BARRY TITMARSH (BTITMARS@ESOC.BITNET) wrote:
+: Any one developed a pop-2 client ??
+: i have one for POP-3
+: to save me some re programing work
+: any one got the same but for POP-2 proto.
+: thanks.
+
+If I recall correctly, I found this on ugle.unit.no.  It's a pop2 daemon
+and it compiled up without a hitch on a Silicon Graphics Iris 4D/35.  I
+haven't had need to try to use it on my Linux box, but you're welcome to
+give it a shot.  Let me know how it works.
+
+                Pete Seegers
+                seegers@omi.com
+
+===================< cut here >=======================
+
+/*
+ * popd - Post Office Protocol server
+ */
+/*
+
+
+ This version has been modified by Paul Moore to run from inetd
+
+ To install this do the following:
+
+ 1) Add a line to inetd.conf, as follows:
+   
+    pop2 stream tcp nowait root /etc/popd popd /usr/mail/
+
+ 2) Add a line to /etc/services, as follows
+
+    pop2 109/tcp
+
+    Dont forget to remake maps if YP is running
+
+ Log: Tested Successfully on HP9000 300/800 HP-UX 7.0 eilif@imm.unit.no
+
+
+ * This server implements the POP2 protocol described in RFC937.
+ * It should work with any system derived from Unix 4.2/4.3 BSD.
+ * It adds two small features to the standard protocol:
+ *
+ * (1) a user may check for the existence of mail without providing
+ *     a password. This speeds up the process considerably.
+ * (2) the non-standard command "save" is supported. If a "save"
+ *     command is issued, any message deleted from the user's mail
+ *     spool file is saved in the "save" file (by default this is
+ *     named by appending ".bak" to the spool file). 
+ *
+ */
+#include <sys/types.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <sys/file.h>
+#include <signal.h>
+#include <errno.h>
+#include <stdio.h>
+#include <netinet/in.h>
+#include <netdb.h>
+#include <sgtty.h>
+#include <sys/socket.h>
+#include <pwd.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+#define null 0
+#define helo 1
+#define fold 2
+#define raed 3
+#define retr 4
+#define acks 5
+#define ackd 6
+#define nack 7
+#define quit 8
+#define save 9
+#define NKEYS 9
+
+#define NACK 0
+#define ACK 1
+
+struct key_word {
+        char    *key;
+        int     val;
+        int     args;
+        } key, keytab[] = {
+                { "null", null, 0 } ,
+                { "helo", helo, 2 } ,
+                { "fold", fold, 1 } ,
+                { "read", raed, 1 } ,
+                { "retr", retr, 0 } ,
+                { "acks", acks, 0 } ,
+                { "ackd", ackd, 0 } ,
+                { "nack", nack, 0 } ,
+                { "quit", quit, 0 } ,
+                { "save", save, 1 } ,           /* Non standard */
+        };
+
+int state_tab [4][NKEYS] = {
+        {1,5,5,5,5,5,5,4,5},
+        {5,1,2,5,5,5,5,4,1},
+        {5,1,2,3,5,5,5,4,1},
+        {5,5,5,5,2,2,2,4,5}
+        };
+
+/******************************************************************************
+                State Diagram corresponding to the state transition table
+                represented by the variable state_tab[][]
+
+                             |
+                             | helo 
+                             |
+                            \|/
+                       --------------      quit           -----------
+              ------->|      1       |-----------------> |     4     |
+       fold  |         --------------                     -----------
+    or save  |         |   |      /|\                         /|\
+              ---------    |       |                           |
+                           |       |                           |
+                      read |       | fold or save              |
+                          \|/      |                           |
+                       --------------      quit                |
+              ------->|      2       |-------------------------
+       read  |         --------------                          |
+             |         |   |      /|\                          |
+              ---------    |       | ack(s/d)                  |
+                      retr |       |                           |
+                          \|/      |                           |
+                       --------------      quit                |
+                      |      3       |-------------------------
+                       --------------           
+                                                 ---------
+                                                |    5    |
+                                                |  error  |
+                                                 ---------
+*******************************************************************************/ 
+        
+#define LOCK_SH 1
+#define LOCK_EX 2
+#define LOCK_UN 8
+
+struct flock flk;
+int     myargc, cur_msg, msg_cnt, cur_msg_len;
+char    myargv[4][30];
+char    *mdir;
+int     cur_state = 0;
+struct  passwd *pwd;
+#define MAXMSGS 1000
+char    mailbox[128];
+#ifdef  SGI
+#define MAILDIR "/usr/mail"
+#else
+#define MAILDIR "/usr/spool/"
+#endif
+char    savebox[128];
+#define SAVEFILE ".bak"
+int     savefd = -1;
+char    tmplate[] = "/tmp/popXXXXX";
+char    mailtmp[16];
+FILE    *ftmp, *fmail;
+int     nmsg, nlines;
+int     opened;
+
+int fd_stdin;
+
+extern int errno;
+
+struct message {
+        long    headp;
+        int     deleted;
+        int     lines;
+};
+
+struct message msg[MAXMSGS+2];
+        
+int result, flags;
+int oursock, hissock;
+char    line[BUFSIZ];
+
+main (argc,argv)
+int argc;
+char **argv;
+{
+        int s;
+
+        /* ************************** */
+        /*  param1 = mail directory     */
+        /* **************************** */
+
+        if(argc == 2)
+                mdir = argv[1];
+        else
+                mdir = MAILDIR;
+        strcpy (line, "+ POP2 Unix Server on ");
+        gethostname(&line[strlen(line)], 1024-strlen(line));
+        strcat (line, "\r\n");
+
+/* We can assume that the input and output sockets are connected by */
+/* inetd when it spawns us */
+
+    hissock = oursock = 0;
+
+    do_pop();
+}
+
+/* here to do all the real protocol work... */
+/* assumes that socket is already open and we're about to prompt */
+do_pop ()
+{
+    /* provide initial prompt */
+    net_out(line);
+    
+    /* now get right down to business */
+    while ((result = parse()) > 0) ;
+    return (result);
+}
+
+/* Main parser - guides us through states and checks protocol compliance */
+parse ()
+{
+        int token, next_state, i, slen;
+        token = lexical();
+        if (token < 0) return (-1);
+        next_state = state_tab [cur_state] [token-1];
+        
+        /* things to do when we enter a state */
+        switch (next_state) {
+                /* about to open folder */
+                case 1:
+                        switch (token) {
+                        case helo:
+                                strcpy(mailbox, mdir);
+                                strcat(mailbox, myargv[1]);
+                                if (myargc == 2 && strlen(myargv[2])) {
+                                    if (check_user(myargv[1], myargv[2])) 
+                                        return (-1);
+                                    msg_cnt = openit(mailbox);
+                                } else
+                                    msg_cnt = checkit(mailbox);
+                                sprintf (line, "#%d\r\n",msg_cnt);
+                                net_out (line);
+                                break;
+                        case fold:
+                                strcpy (mailbox, myargv[1]);
+                                msg_cnt = openit(mailbox);
+                                sprintf (line, "#%d\r\n",msg_cnt);
+                                net_out (line);
+                                break;
+                        case save:
+                                if (myargc == 1 && strlen(myargv[1]))
+                                        strcpy (savebox, myargv[1]);
+                                else {
+                                        strcpy (savebox, mailbox);
+                                        strcat (savebox, SAVEFILE);
+                                }
+                                if (openbk(savebox)) sprintf (line,
+                                        "+ OK, saving to %s\r\n", savebox);
+                                else sprintf (line, 
+                                        "- Can't access file %s\r\n", savebox);
+                                net_out (line);
+                                break;
+                        default:
+                                net_out ("- unexpected...\r\n");
+                                break;
+                        }
+
+                        break;
+
+                case 2: if (!opened) {
+                                net_out ("- Error...no open mailbox\r\n");
+                                return(-1);
+                        }
+                        switch (token) {
+                                case raed:      if (myargc != 0) {
+                                                    cur_msg = atoi (myargv[1]);
+                                                }
+                                                if ( cur_msg < 1 ) {
+                                                net_out ("- ill msg num\r\n");
+                                                    return (-1);
+                                                }
+                                                break;
+                                case ackd:      msg[cur_msg].deleted++;
+                                case acks:      cur_msg++;
+                                                break;
+                                default:        null;
+                        }
+                        
+                        cur_msg_len = msglen (cur_msg);
+                        sprintf (line, "=%d\r\n",cur_msg_len);
+                        net_out (line);
+                        break;
+                case 3: if (!cur_msg_len) {
+                                net_out ("- zero length message\r\n");
+                                return (-1);
+                        }
+                        outmsg (cur_msg);
+                        break;
+                case 4: net_out ("+ OK Exiting...\r\n");
+                        closeit ();
+                        return (0);
+                case 5: net_out ("- Syntax Error...\r\n");
+                        return (-1);
+                /* nothing else ever expected... */
+                default: break;
+        }
+        cur_state = next_state;
+        return (1);
+    }
+
+/*
+ * Check userid and password
+ */
+check_user (user, passwd)
+char *user, *passwd;
+{
+        char *namep, *crypt();
+        struct passwd *getpwnam();
+
+        pwd = getpwnam(user);
+        if (!pwd) {
+                net_out ("- logon incorrect\r\n");
+                return (-1);
+        }
+        namep = crypt(passwd, pwd->pw_passwd);
+        if (strcmp(namep, pwd->pw_passwd)) {
+                net_out ("- logon incorrect\r\n");
+                return (-1);
+        }
+
+        /* got valid user here, become him... */
+        setgid (pwd->pw_gid);
+        initgroups(user, pwd->pw_gid);
+        setuid (pwd->pw_uid);
+        /* make filenames relative to home directory */
+        chdir (pwd->pw_dir);
+}
+
+
+/* perform lexical analysis on incomming stuff */
+lexical ()
+{
+        int result = 0;
+        char inline[100];       /* main input comes here */
+        int i;
+
+        for (i = 0; i < 3; i++) myargv[i][0] = '\0';
+        myargc = -1;
+        while (myargc < 0) {
+                if (my_gets (inline) < 0) return (-1);
+                myargc = sscanf (inline, "%s%s%s",myargv[0],myargv[1],
+                                                    myargv[2]);
+                myargc--;
+        }
+        key = keytab[whatkey(myargv[0])];
+        if (key.val == null) {
+                        sprintf (line, "- Invalid command '%s'\r\n", myargv[0]);
+                        net_out(line);
+                        return (-1);
+                }
+        if (key.args && ((key.args - myargc) > 1)) {
+                sprintf (line, "- wna for '%s'\r\n", myargv[0]);
+                net_out(line);
+                return (-1);
+        }
+        return (key.val);
+}
+
+
+/* Now determine which keyword we've got... */
+whatkey (s)
+  char s[4];
+  {
+        int i;
+  /* First convert input to lower case... */
+        for (i = 0; i < 4; i++) {
+                s[i] = (('A' <= s[i]) && ('Z' >= s[i])) ?
+                            s[i] + 040 : s[i];
+                }
+
+        for (i = NKEYS; i > 0; i--) {
+                if (!strncmp (keytab[i].key, s, 4)) return (keytab[i].val);
+                }
+                
+        return (null);
+}               
+
+/*
+ * check the mailbox for existence of mail.
+ */
+checkit(mailbox)
+char *mailbox;
+{
+        struct stat statb;
+
+        if (stat(mailbox, &statb) == 0 && statb.st_size > 0) return(1);
+        return(0);
+}
+
+/*
+ * open the specified mailbox
+ */
+openit(mailbox)
+char *mailbox;
+{
+        struct stat statb;
+
+        if (opened) closeit();
+        nmsg = 0; nlines = 0;
+        strcpy(mailtmp, tmplate);
+        mktemp(mailtmp);
+        unlink(mailtmp);
+        if ((ftmp = fopen(mailtmp, "w")) == NULL) {
+                return(0);
+        }
+
+        if ((fmail = fopen(mailbox, "r+")) == NULL) {
+                fclose(ftmp); unlink(mailtmp);
+                return(0);
+        }
+        if (fstat(fileno(fmail), &statb) != 0 || statb.st_size == 0) {
+                fclose(ftmp); unlink(mailtmp);
+                fclose(fmail);
+                return(0);
+        }
+        
+        flock(fileno(fmail), LOCK_EX);
+        while (fgets(line, BUFSIZ, fmail) != NULL) {
+                if (strncmp("From ", line, 5) == 0) {
+                        msg[nmsg++].lines = nlines;
+                        nlines = 0;
+                        msg[nmsg].headp = ftell(fmail) - strlen(line);
+                } else nlines++;
+                fputs(line, ftmp);
+        }
+        msg[nmsg].lines = nlines;
+        msg[nmsg+1].headp = ftell(fmail);
+        flock(fileno(fmail), LOCK_UN);
+        fclose(fmail);
+        fclose(ftmp);
+        ftmp = fopen(mailtmp, "r");
+        cur_msg = 1;
+
+        opened++;
+        return (nmsg);
+}
+
+closeit()
+{
+
+        struct stat statb;
+        int changed = 0;
+        int nlines;
+        int f, i, j;
+
+        if (!opened) return;
+        for (i = 1; i <= nmsg; i++) 
+                if (msg[i].deleted) {
+                        changed++;
+                        break;
+                }
+        if (!changed) {
+                fclose(fmail);
+                fclose(ftmp);
+                unlink(mailtmp);
+                opened = 0;
+                return;
+        }
+
+        signal(SIGINT, SIG_IGN);
+        signal(SIGHUP, SIG_IGN);
+        signal(SIGQUIT, SIG_IGN);
+        f = open(mailbox, O_RDWR);
+        flock(f, LOCK_EX);
+        fstat(f, &statb);
+        if (statb.st_size != msg[nmsg+1].headp) {
+                /*
+                 * there is new mail
+                 */
+                if ((fmail = fopen(mailbox, "r")) == NULL) return;
+                fseek(fmail, msg[nmsg+1].headp, 0);
+                fclose(ftmp);
+                ftmp = fopen(mailtmp, "a");
+                fseek(ftmp, msg[nmsg+1].headp, 0);
+                nlines = 0;
+                while(fgets(line, BUFSIZ, fmail) != NULL) {
+                        nlines++;
+                        fputs(line, ftmp);
+                }
+                nmsg++;
+                msg[nmsg].lines = nlines - 1;
+                msg[nmsg+1].headp = ftell(ftmp);
+                fclose(fmail);
+                fclose(ftmp);
+                ftmp = fopen(mailtmp, "r");
+        }
+        if ((fmail = fopen(mailbox, "w")) != NULL) {
+                /* if (savefd >= 0) flock(savefd, LOCK_EX); */
+                for (i = 1; i <= nmsg; i++) {
+                        if (!msg[i].deleted || savefd >= 0) {
+                                fseek(ftmp, msg[i].headp, 0);
+                                for (j = 0; j <= msg[i].lines; j++) {
+                                        fgets(line, BUFSIZ, ftmp);
+                                        if (msg[i].deleted) 
+                                            write(savefd, line, strlen(line));
+                                        else fputs(line, fmail);
+                                }
+                        }
+                }
+                /* if (savefd >= 0) flock(savefd, LOCK_SH); */
+                fclose(fmail);
+        }
+        flock(f, LOCK_UN);
+        close(f);
+        fclose(ftmp);
+        unlink(mailtmp);
+        opened = 0;
+}
+
+
+/* 
+ * Compute a message's length. <lf> counts as <cr><lf>
+ */
+msglen (n)
+{
+        struct message *m = &msg[n];
+        int len;
+
+        if (n > nmsg) return(0);
+        len = msg[n+1].headp - m->headp;
+        fseek(ftmp, m->headp, 0);
+        fgets(line, BUFSIZ, ftmp);
+        len -= strlen(line);
+        len += m->lines;
+        return (len);
+}
+
+/* 
+ * Output msg to primary, convert to net standard ascii.
+ * We are already positioned at the first line.
+ */
+outmsg (n)
+{
+        int i;
+        char *s;
+
+        for (i = 0; i < msg[n].lines; i++) {
+                s = fgets(line, BUFSIZ, ftmp);
+                s += (strlen(line) - 1);
+                strcpy(s, "\r\n");
+                net_out(line);
+        }
+}       
+
+/* write a string to the net */
+net_out (s)
+char *s;
+{
+        write (hissock, s, strlen(s));
+}
+
+/* something to read an entire line from the network */
+my_gets (s)
+char *s;
+{
+    int i = 0;
+    char c;
+
+    while ((c = my_getc()) != '\n') {
+        if (c == EOF) return (-1);
+        if (c != '\r') s[i++] = c;
+    }
+    s[i] = 0;
+    return (0);
+}
+
+char    ibuf[1024];
+int     inptr, ilen;
+/* get one character of input from the network... */
+my_getc ()
+{
+    for (;;) {
+        if (inptr < ilen) return (ibuf[inptr++]);
+        ilen = read(hissock, ibuf, 1024);
+        inptr = 0;
+        if (ilen == 0) return (-1);
+    }
+}
+
+/*
+ * open a backup file for deleted messages
+ */
+openbk(savefile)
+char *savefile;
+{
+        if (savefd >= 0) close(savefd);
+        if ((savefd = open(savefile, O_CREAT|O_WRONLY|O_APPEND, 0600)) < 0) {
+                return(0);
+        }
+        flock(savefd, LOCK_EX);
+        return (1);
+}
+flock(i,m)
+int i;
+int m;
+{
+        flk.l_whence=0;
+        flk.l_len=0;
+        switch(m)
+        {
+        case LOCK_SH:
+                flk.l_type = F_RDLCK;
+                break;
+        case LOCK_EX:
+                flk.l_type = F_WRLCK;
+                break;
+        case LOCK_UN:
+                flk.l_type = F_UNLCK;
+        }
+    fcntl(i,F_SETLKW,&flk);
+}
+
+
+------------------------------
+
+From: kunitz@interworld.in-berlin.de (Ulrich Kunitz)
+Subject: SIGHUP on login shell doesn't kill -su
+Date: Sun, 7 Nov 1993 21:44:30 GMT
+
+Hi Linuxer,
+
+I found following problem:
+
+I was logged in a Linux box over a serial line. I executed su - foo. After
+a while I lost the CARRIER. After that I wasn't able to login again into
+the box.
+
+The sysop reported to me, that he found that -su (actually the shell) of
+foo was still running and getty couldn't open the serial line again.
+
+What I found out until now is following:
+
+The -su process is still reading from the tty.  It didn't get a SIGHUP
+because there aren't any stopped jobs in its process group.  The process
+group of the tty is set to the pid of the login shell when the login shell
+exits and executes do_exit (/usr/src/linux/kernel.c). But ps -jax reports
+before the SIGHUP is sent that the TPGID of tty is the PGID of -su. The
+problem seems independent from the shell used.
+
+I tried some fast hacks. The best until now is a rewrite of
+has_stopped_jobs to has_no_zombie_jobs. I think that there is a bug in
+tty_ioctl.c, where a setting of the pgrp of a tty is possible without
+signalling the processes of the current foreground process group that they
+are becoming background.
+
+But I don't know a lot about job control, so I'm not able to fix the
+problem at the moment. Stevens "Advanced Programming in a UNIX environment"
+says only that tcsetpgrp can generate a SIGTTOU. But it doesn't say what
+tcsetpgrp is actually doing.
+
+I hope that somebody will know better.
+
+Ciao, Uli
+-- 
+   ///// Ulrich Kunitz
+  /////  Mail: kunitz@informatik.hu-berlin.de, kunitz@interworld.in-berlin.de
+ /////   Voice:  (030) 513 11 52
+/////    BoBo says: The white wooden houses are still burning!
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

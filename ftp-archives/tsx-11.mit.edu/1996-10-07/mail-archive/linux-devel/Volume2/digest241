@@ -1,0 +1,594 @@
+From:     Digestifier <Linux-Development-Request@senator-bedfellow.mit.edu>
+To:       Linux-Development@senator-bedfellow.mit.edu
+Reply-To: Linux-Development@senator-bedfellow.mit.edu
+Date:     Thu, 29 Sep 94 09:13:17 EDT
+Subject:  Linux-Development Digest #241
+
+Linux-Development Digest #241, Volume #2         Thu, 29 Sep 94 09:13:17 EDT
+
+Contents:
+  FTAPE support for TRAKKER parallel port tape drive (Rick Macdonald - Calgary Canada)
+  Re: [STATUS] Linus Floppy Driver Development (Greg Harewood)
+  C-News cleanup release finds bug in GNU 'join' (Steve Robbins)
+  xircom pocket ethernet support ???
+  ParcPlace OI builder?? (David A. Vohwinkel)
+  Re: ParcPlace OI builder?? (NightHawk)
+  Re: getopt in libc broken? (NightHawk)
+  Re: linux+slip+bootp. How? (James Harper)
+  Re: Could TCP/IP be implemented over SCSI? (Jason Venner)
+  AMD/Automounter (Was Re: [STATUS] Linus Floppy Driver Development) (Mitchum DSouza)
+  ISODE (Mike Jagdis)
+  CD-ROM w/ read-only mount. Why? (Carlos Antunes)
+  Re: Doom Music + PAS-16 (Kristoffer T Ongbongan)
+  Re: Linux Console Device (Andries Brouwer)
+  Re: Could TCP/IP be implemented over SCSI? (Ian McCloghrie)
+  Re: Could TCP/IP be implemented over SCSI? (Mark A. Davis)
+  string.h and bzero/bcopy/bcmp etc ("Stephen Davies")
+
+----------------------------------------------------------------------------
+
+From: macdonal@cuug.ab.ca (Rick Macdonald - Calgary Canada)
+Subject: FTAPE support for TRAKKER parallel port tape drive
+Date: Wed, 28 Sep 1994 22:19:00 GMT
+
+I've been talking to Colorado about their dev kit for the Trakker
+parallel port tape drive. Not many details yet, but,
+assuming they will give out the info is there any technical reason 
+that it couldn't be made to work under Linux?
+
+I was very surprised when their tech support said the interface was
+NOT proprietary. Norton seemed to think it was a few months ago...
+
+...RickM...
+
+------------------------------
+
+From: gjh@ukc.ac.uk (Greg Harewood)
+Subject: Re: [STATUS] Linus Floppy Driver Development
+Date: Wed, 28 Sep 94 16:20:41 GMT
+Reply-To: gjh@ukc.ac.uk (Greg Harewood)
+
+In article <35sheg$b71@earth.baylor.edu>,
+Pyramids-R-Us <ges@earth.baylor.edu> wrote:
+>In article <DHOLLAND.94Sep17154858@husc7.harvard.edu>,
+>David Holland <dholland@husc7.harvard.edu> wrote:
+>>I additionally think it's not reasonable to force the user to look up
+>>the filesystem type and issue a mount command before reading from the
+>>disk. Floppies should mount themselves (like on Macs and Amigas) to
+>>the greatest extent possible given the hardware.
+>
+...
+>Aonther problem is that there is no simple way to mount a floppy.
+>The big question is 'where?'  since a floppy can be mounted on ANY
+
+This is easy. It also implies the biggest gain by having this code
+exist - in the kernel, or as a loaded driver.
+
+You mount by volume name. Whenever a disk is inserted for the first
+time, a mount point is created, eg  /rmv/MSDOS6_0   ie /rmv for
+removable media, and then the volume name. The disk can be removed
+at any time, but any time the disk is accessed, the console gets
+a message to "Please insert disk MSDOS6_0 in any drive". We would
+want to intercept this under X and have a window pop up. File accesses
+to the floppy would block until the disk was inserted. If disks turn
+out to have identical names (MSDOS disks are bad for this), then
+either it could be named implicitly, or a serial number recorded as
+a hidden file on the disk, and be mounted as /rmv/serialno.
+
+Also a soft link /rmv/fd0 should always point to the currently mounted
+floppy; that way, programs can cd to the disk, and end up with a
+correct path for the actual volume name.
+
+Greg
+
+------------------------------
+
+From: steve@CIM.McGill.CA (Steve Robbins)
+Crossposted-To: news.software.b
+Subject: C-News cleanup release finds bug in GNU 'join'
+Date: 29 Sep 1994 02:13:24 -0400
+
+Thanks to the stress-testing that C-News gives shell utilities, I
+found a bug in GNU's 'join' command (from shellutils 1.9).
+
+This affects linux in particular as most people rely on GNU utilities
+exclusively.  [Another annoying thing on linux: the standard includes
+insist on #define'ing atol(), which breaks the declaration in
+c-news/include/libc.h.  This appears to be fixed in the latest alpha
+libc for linux, but you'll have to delete the line from the c-news
+file, or surround it with #ifndef atol for now]
+
+The bug with join is that the -a option is supposed to:
+
+       -a file-number
+              Print a line for each unpairable line in file file-
+              number  (either  1 or 2), in addition to the normal
+              output.
+
+but in fact, it simply dumped the line from file1 or file2, rather
+than outputting the fields in the order demanded by the '-o' option.
+Plus, '-a3' is supposed to print unapairables in BOTH files -- at
+least on SunOS 4.1, so I added that too.
+
+Here's the diffs against v1.9.
+
+===================================================================
+RCS file: join.c,v
+retrieving revision 1.1
+diff -u -r1.1 join.c
+--- 1.1 1994/09/29 04:33:36
++++ join.c      1994/09/29 05:42:46
+@@ -314,24 +314,6 @@
+     fputs (empty_filler, stdout);
+ }
+ 
+-/* Print LINE, with its fields separated by `tab'. */
+-
+-static void
+-prline (line)
+-     struct line *line;
+-{
+-  int i;
+-
+-  for (i = 0; i < line->nfields; ++i)
+-    {
+-      prfield (i, line);
+-      if (i == line->nfields - 1)
+-       putchar ('\n');
+-      else
+-       putchar (tab ? tab : ' ');
+-    }
+-}
+-
+ /* Print the join of LINE1 and LINE2. */
+ 
+ static void
+@@ -355,7 +337,10 @@
+     {
+       int i;
+ 
+-      prfield (join_field_1, line1);
++      if (join_field_1 < line1->nfields) 
++       prfield (join_field_1, line1);
++      else
++       prfield (join_field_2, line2);
+       for (i = 0; i < join_field_1 && i < line1->nfields; ++i)
+        {
+          putchar (tab ? tab : ' ');
+@@ -389,7 +374,7 @@
+      FILE *fp2;
+ {
+   struct seq seq1, seq2;
+-  struct line line;
++  struct line line, null_line = { NULL, NULL, 0, NULL };
+   int diff, i, j, eof1, eof2;
+ 
+   /* Read the first line of each file. */
+@@ -404,7 +389,7 @@
+       if (diff < 0)
+        {
+          if (print_unpairables_1)
+-           prline (&seq1.lines[0]);
++           prjoin (&seq1.lines[0], &null_line);
+          freeline (&seq1.lines[0]);
+          seq1.count = 0;
+          getseq (fp1, &seq1);
+@@ -413,7 +398,7 @@
+       if (diff > 0)
+        {
+          if (print_unpairables_2)
+-           prline (&seq2.lines[0]);
++           prjoin (&null_line, &seq2.lines[0]);
+          freeline (&seq2.lines[0]);
+          seq2.count = 0;
+          getseq (fp2, &seq2);
+@@ -474,22 +459,22 @@
+ 
+   if (print_unpairables_1 && seq1.count)
+     {
+-      prline (&seq1.lines[0]);
++      prjoin (&seq1.lines[0], &null_line);
+       freeline (&seq1.lines[0]);
+       while (get_line (fp1, &line))
+        {
+-         prline (&line);
++         prjoin (&line, &null_line);
+          freeline (&line);
+        }
+     }
+ 
+   if (print_unpairables_2 && seq2.count)
+     {
+-      prline (&seq2.lines[0]);
++      prjoin (&null_line, &seq2.lines[0]);
+       freeline (&seq2.lines[0]);
+       while (get_line (fp2, &line))
+        {
+-         prline (&line);
++         prjoin (&null_line, &line);
+          freeline (&line);
+        }
+     }
+@@ -599,6 +584,8 @@
+            print_unpairables_1 = 1;
+          else if (val == 2)
+            print_unpairables_2 = 1;
++         else if (val == 3)
++           print_unpairables_1 = print_unpairables_2 = 1;
+          else
+            error (2, 0, "invalid file number for `-a'");
+          break;
+
+-- 
+                Steve Robbins -- Consultant in Computerology
+                         steve@cim.mcgill.ca
+
+------------------------------
+
+From: root@nimir.demon.co.uk ()
+Subject: xircom pocket ethernet support ???
+Date: Wed, 28 Sep 1994 17:05:58 GMT
+
+Is anyone working on a driver for the Xircom parallel
+port ethernet adaptor ????
+
+
+What is the difference between this and the dlink ????
+
+
+
+Thanks
+
+Steve Hunt    hunt@nimir.demon.co.uk
+              hunt@nimir.com
+
+------------------------------
+
+Crossposted-To: comp.os.linux.misc
+From: vohwi-d@acsu.buffalo.edu (David A. Vohwinkel)
+Subject: ParcPlace OI builder??
+Date: Wed, 28 Sep 1994 15:13:35 GMT
+
+
+Does anyone know what happened to OI from ParcPlace ??  I haven't heard
+anything about it? IS it still available? Anyone know where it is?
+and can you buy any manuals for it?
+
+        Thanks
+
+-- 
+  David A Vohwinkel        
+Unix Consulting   ^ ^     vohwi-d@acsu.buffalo.edu
+  & Operations    0 0    @ The State University of New York at Buffalo   
+==============oOO=(_)=OOo====================================================
+
+------------------------------
+
+From: fsosi@j51.com (NightHawk)
+Crossposted-To: comp.os.linux.misc
+Subject: Re: ParcPlace OI builder??
+Date: 28 Sep 1994 16:15:40 -0400
+
+David A. Vohwinkel (vohwi-d@acsu.buffalo.edu) wrote:
+
+: Does anyone know what happened to OI from ParcPlace ??  I haven't heard
+: anything about it? IS it still available? Anyone know where it is?
+: and can you buy any manuals for it?
+
+The old OI binaries were compiled with g++ 2.4.5, which is not compatible
+with the new one. But the new one couldn't compile it. I was told they
+will make a new binary for a working gcc 2.6.x.
+
+NH
+
+
+------------------------------
+
+From: fsosi@j51.com (NightHawk)
+Subject: Re: getopt in libc broken?
+Date: 28 Sep 1994 16:16:38 -0400
+
+David Martin (dmartin@lerc.nasa.gov) wrote:
+
+: I have libc 4.5.26.  I've noticed a strange behavior with the getopt()
+: function.  getopt() doesn't terminate when it encounters a string (a
+: non-argument) in the argument list.  Most noticeably, the rsh command:
+
+: rsh machine ls -l /etc/motd
+
+: The code for rsh is correct and it compiles and runs correctly on my
+: AIX system.  On Linux, getopt() examines the entire list, rather than
+: stopping at the first non-argument (in this case "machine").  So Linux
+: will interpret the -l option as being for rsh, and try to run the ls
+: command on machine as the user "/etc/motd".
+
+: Are there any plans to change/correct this behavior?  Please send
+: comments through e-mail (dmartin@lerc.nas.gov).
+
+It has been fixed in 4.6.x.
+
+NH
+
+------------------------------
+
+Crossposted-To: comp.os.linux.admin
+Subject: Re: linux+slip+bootp. How?
+From: loon@ironbark.ucnv.edu.au (James Harper)
+Date: 28 Sep 1994 12:34:43 GMT
+
+Sowmya Raman (raman@ewl.uky.edu) wrote:
+: Iam trying to use bootpc on my linux box to get an valid ip over SLIP and I am 
+: running into some problems. First of all the ioctl SIOCGIFADDR fails to get
+: hardware address obviously because its a slip connection I am trying to
+: make. I tried commenting out the ioctl and tried again and now I get my ip
+: as 127.0.0.1.
+: My questions are
+: (1) Does the bootp client on linux work with slip connections?
+
+tried it and couldn't do it, think that was because the slip connection doesn't
+have an ethernet address (ie in the form xx:xx:xx:xx:xx:xx). the reason i
+was trying it was to get a computer to telnet in, the computer was local so
+I tried it with plip which does have an ethernet address type setup but
+still couldn't get it working. I did end up getting it working using rarp tho
+and maybe that would work over slip???
+
+: (2) Is there any RFC that deals with slip and bootp?
+: (3) Has anybody successfully used bootpc over SLIP connections?
+
+LOON
+
+------------------------------
+
+From: jason@idiom.berkeley.ca.us (Jason Venner)
+Subject: Re: Could TCP/IP be implemented over SCSI?
+Date: 28 Sep 1994 16:56:33 GMT
+
+
+With differential scsi, your scsi bus can extend quite a distance.
+With SCSI 2 fast wide/SCSI3 I think you are limited to 256 id's and 256 feet
+for the scsi bus.
+
+So: given a little change in technology, networking via scsi will make a lot 
+of sense.
+
+------------------------------
+
+From: Mitchum.DSouza@mrc-apu.cam.ac.uk (Mitchum DSouza)
+Subject: AMD/Automounter (Was Re: [STATUS] Linus Floppy Driver Development)
+Date: 28 Sep 1994 17:03:45 GMT
+
+In article <ADC.94Sep26123716@zeta.coe.neu.edu>, adc@zeta.coe.neu.edu (Albert D.
+Cahalan) writes:
+|> In article <wpp.780578439@marie> wpp@marie.physik.tu-berlin.de (Kai Petzke)
+|> writes:
+|>    mwikholm@at8.abo.fi (Mats 'MaDsen' Wikholm) writes:
+|> 
+|>    >possible to automagically mount the floppy only when it is accessed. I
+|>    >mean that you don't have  to have it mounted before  you access it  so
+|>    >when you try to access it the system checks if it is mounted and if it
+|>    >isn't it  gets mounted. If there's   no disk in  it you  get a flaming
+|>    >error.
+|> 
+|>    That sounds like a good idea.  Actually, the NFS automounter works
+|>    that way.  Can it be changed to handle floppy mounts as well?
+|> 
+|> Also unmount after 90 seconds of inactivity or when all files are closed.
+
+Its funny how so many people want this feature from AMD. For a very good reason 
+(performance mainly) UFS mounts (of which a floopy is one) are made not to 
+timeout. As you have the source and it is eaisly compileable I suggest you
+look at the file
+
+        amd/ufs_ops.c
+
+around the last few lines there is a bitwise or'ed field in the ufs_ops 
+structure saying FS_NOTIMEOUT. Take this out and recompile and UFS mounts
+will timeout.
+
+Mitch
+
+------------------------------
+
+From: jaggy@purplet.demon.co.uk (Mike Jagdis)
+Subject: ISODE
+Date: Sun, 25 Sep 1994 23:38:00 +0000
+
+* In message <Cwnvr4.18J@dfw.net>, Aleph One said:
+
+AO> I'am about to try to port the ISODE v7.0 package to linux..
+
+What on earth for? The last public release was 8.0 (and there's even a patch 
+to that).
+
+AO> In any case i was wondering if anyone has doen this
+AO> already as i dont like to do things other people have done.
+
+Yeah, and PP 6.0. Look in sunsite.unc.edu:/pub/Linux/Incoming/isode.
+
+                                Mike  
+ 
+
+------------------------------
+
+From: cmsa@softsousa.pt (Carlos Antunes)
+Subject: CD-ROM w/ read-only mount. Why?
+Reply-To: Carlos.Antunes@softsousa.pt
+Date: Thu, 29 Sep 1994 10:15:37 GMT
+
+Hello, fellow linuxers!
+
+The kernel 1.1.51 (and before) requires that you explicitly specify read-only
+to mount a CD-ROM unit. Isn't this redundant? Shouldn't the default be
+read-only, as it was in previous kernels?
+
+Thanx!
+
+Regards,
+Carlos Antunes.
+-- 
+Carlos Antunes @ SoftSousa               Developing for 32bit MS Windows(tm)      
+Voice: 351-1-3975303                      Windows NT(tm) and Windows'95(tm)
+Fax  : 351-1-3975889                     Console, GUI or Kernel Mode Drivers 
+
+------------------------------
+
+From: kristoff@GAS.UUG.Arizona.EDU (Kristoffer T Ongbongan)
+Subject: Re: Doom Music + PAS-16
+Date: 27 Sep 1994 22:40:26 GMT
+
+Alexandra Griffin (acg@kzin.cen.ufl.edu) wrote:
+: In article <Cvzxqq.6o0@acsu.buffalo.edu>,
+: Matthew D Stock <stock@cs.buffalo.edu> wrote:
+: >
+: >Sounds works fine for me...  I've got a SB16.
+: >
+: [...]
+: >
+: >What do you mean the SGI version doesn't have sound?  My Elan runs with
+: >Doom with sound.
+
+: It's not the digitized sound effects but the *MUSIC* that's missing
+: from the non-DOS versions.  This is played over the FM/Adlib section
+: of the soundcard.
+
+: Anyone know why music was not included outside of the DOS release?  I
+: would think it would be much simpler to implement than the digitized
+: fx (no need for synchronization with game events), and the impact of
+: FM sound on CPU usage is trivial.
+
+: The music scores for DOOM are stored in the .WAD files, right?  Wonder
+: how difficult it would be to extract & convert these to .MID files or
+: something, for playing in the background as DOOM runs? :-)
+
+: -- alex
+
+Yeah.. why not.. I kinda miss the music coming out of MIDI.
+
+KRis.
+
+
+--
+krismon@hh.sbay.org            The Electronic Battlefield Series FAQ    
+kristoff@gas.uug.arizona.edu   http://www.hh.sbay.org/~krismon/public.html 
+Prodigy: GRTV13B               ftp://hh.sbay.org/users/krismon/ebsfaq
+
+------------------------------
+
+From: aeb@cwi.nl (Andries Brouwer)
+Subject: Re: Linux Console Device
+Date: Thu, 29 Sep 1994 11:58:32 GMT
+
+pp000932@interramp.com writes:
+
+>I have been playing around a little with the Linux console and am curious how 
+>or if it can be switched into an 8 bit character mode and how to get it to 
+>support color ANSI sequences (similar to 'ansipc' emulation present in 
+>Coherent's console driver).  I can use DEC SI/SO to switch in/out DEC 
+>graphics character sets, and it seems to perform correctly as a vt100 
+>console, but I am looking for ANSI color support.  Is there an escape sequence 
+>which controls the console's mode of operation?
+
+Lots of ^M's - are you posting from a DOS machine?
+I am not sure precisely what you want - it seems that you already have
+all that you ask for.
+The Linux console is always in an 8-bit character mode.
+It does support colour. You might look at the output of
+setterm -foreground xxx -background yyy.
+
+
+------------------------------
+
+From: ianm@qualcomm.com (Ian McCloghrie)
+Subject: Re: Could TCP/IP be implemented over SCSI?
+Date: 27 Sep 1994 15:43:03 -0700
+
+lim@vector.gs.tandem.com (myers_lincoln) writes:
+>       I read in the SCSI FAQ that two SCSI hosts can share SCSI peripherals
+>on the same bus.  Is it possible for these two hosts to send commands to each
+>other?
+
+It is possible, yes.  I've heard of it being done before.  It's not
+terribly practical though, because the maximum length of a scsi bus
+is on the other of 6 meters, which doesn't give you much to work
+with...  You've also gotta be careful not to have the two systems
+both try to access one drive at the same time.
+
+>having SoundCardNet.  Sound Cards would record each other's audio output from
+>across the room.  True short range wireless communication, though sleeping in
+
+Ulch.  Your error rate would be atrocious, I would imagine.
+
+"Hey!  John!  Turn your music down, it's making me drop packets!"
+
+--
+Ian McCloghrie    work: ianm@qualcomm.com     home: ian@egbt.org
+  ____   GCS d-- H s+:+ !g p? au a- w+ v- C++$ UL++++ US++$ P+>++
+  \bi/   L+++ 3 E+ N++ K--- W--- M-- V-- -po+ Y+ t+ 5+++ jx R G'''
+   \/    tv- b+++ D- B-- e- u* h- f+ r n- y*
+
+The above represents my personal opinions and not necessarily those
+of my employer, Qualcomm Inc.
+
+------------------------------
+
+From: mark@taylor.infi.net (Mark A. Davis)
+Subject: Re: Could TCP/IP be implemented over SCSI?
+Date: Thu, 29 Sep 1994 12:09:47 GMT
+
+dwm@shell.portal.com (David - Morris) writes:
+
+>While ya'll are at it, shared scsi hard drives and/or CDROMs might be
+>intersting as well ... even if restrictions to one host r/w others r/o.
+>Source trees, netnets, etc. would be obvious candidates.
+
+Actually, I think that is allowed within the SCSI specs..... Same SCSI
+bus, with two controllers, one in each host.  I don't know how it is
+done, but I'm quite sure I heard that somebody had done it before to
+share a tape drive....
+-- 
+  /--------------------------------------------------------------------------\
+  | Mark A. Davis     | Lake Taylor Hospital | Norfolk,VA (804)-461-5001x431 |
+  | Director/SysAdmin | Information Systems  |    mark@taylor.infi.net       |
+  \--------------------------------------------------------------------------/
+
+------------------------------
+
+From: "Stephen Davies" <scldad@sdc.com.au>
+Subject: string.h and bzero/bcopy/bcmp etc
+Date: Mon, 26 Sep 94 21:57:05 PDT
+
+Could someone please explain for me why string.h has different types
+for the "size" parameter in bzero etc depending on whether or not 
+__linux__ is defined. So far as I can see, the size_t version is correct
+in terms of BSD compatability and of common sense; the size cannot be 
+negative.
+
+Cheers and thanks,
+Stephen.
+
+========================================================================
+Stephen Davies Consulting                              scldad@sdc.com.au
+Adelaide, South Australia.                           Voice: 61-8-2728863
+Computing & Network solutions.                       Fax  : 61-8-2741015
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

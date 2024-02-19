@@ -1,0 +1,330 @@
+
+
+
+                                      - 1 -
+
+
+
+          _1_.  _u_s_e_r_f_s _- _f_i_l_e_s_y_s_t_e_m_s _i_m_p_l_e_m_e_n_t_e_d _a_s _u_s_e_r _p_r_o_c_e_s_s_e_s_.
+          _1_._1  _I_n_t_r_o_d_u_c_t_i_o_n
+          Userfs  is a mechanism by which normal user processes can be
+          a Linux filesystem.  There are many uses for this, including
+          Prototype filesystems
+               Prototype  new  block  allocation  algorithms in a user
+               process and debug with gdb before going into  the  com-
+               pile-crash-reboot cycle of kernel development.
+          Infrequent use filesystems
+               You  want to mount "FooBaz 0X" filesystems under Linux,
+               but you don't want it that often, and you don't need it
+               to  be  maximum  speed.   Rather than trying to get the
+               kernel  itself  to  understand,  or  write  specialised
+               tools, write a filesystem program.
+          Add capabilities to existing filesystems Want   compression,
+               encryption, ACLs?  Have a process to mirror an existing
+               file  tree, but with your own extentions and semantics.
+          Completely virtual filesystems and new interfaces
+               Add a filesystem-type interface to an  existing  mecha-
+               nism,  or a filesystem interface as a new way of repre-
+               senting data.  Sick of FTP?  How about
+
+                    $$ ccdd //ffttpp//ttssxx--1111..mmiitt..eedduu//ppuubb//LLiinnuuxx
+                    $$ ccpp RREEAADDMMEE $$HHOOMMEE
+
+               Or mail?
+
+                    $$ ccdd //mmaaiill
+                    $$ llss
+                    000011 000022 000033
+                    $$ ccaatt **//FFrroomm
+                    FFrroomm:: ssbbgg@@ssooccss..uuttss..eedduu..aauu
+                    FFrroomm:: lleerrooyy@@ssooccss..uuttss..eedduu..aauu ((LLeerrooyy))
+                    FFrroomm:: ttlluukkkkaa@@vviinnkkkkuu..hhuutt..ffii
+                    $$ ccaatt **//SSuubbjjeecctt
+                    MMoorree tthhiinnggss
+                    ((nnoonnee))
+                    TThhaatt uusseerrffss tthhiinngg
+                    $$
+
+          You get the idea.
+
+          _1_._2  _I_n_s_t_a_l_l_a_t_i_o_n
+          To install, apply the patch "userfs.diff" in the normal  way
+          (its  against  a  straight  0.99  pl10 kernel, with no ALPHA
+          patches), and unpack "userfs-kernel.tar" in  the  top  level
+          source tree directory (where the top-level Makefile is).  Do
+          a "make config; make depend; make", and install.
+          Since this is an ALPHA release, you should know what  you're
+          doing,  and  know  how to fix up simple compilation problems
+          with the kernel.  I'd be surprised if it just worked.
+
+          _1_._3  _B_u_g_s_, _c_o_m_m_e_n_t_s_, _e_t_c
+          When you find a bug, tell  me.   Please  send  me  the  code
+          you're  using,  the  kernel version, whatever changes you've
+
+
+
+
+
+
+
+                                      - 2 -
+
+
+
+          made to userfs kernel code, and instructions or a script  to
+          reproduce the bug.  Don't just tell me "it broke."
+          If you've made changes to the kernel code, please send it to
+          me rather than sending it out to the world.  Please send  me
+          comments,  ideas for new kernel features, or things that you
+          think would make good filesystems but  you  can't  do  right
+          now.
+          All mail to Jeremy Fitzhardinge <<jjeerreemmyy@@ssww..oozz..aauu>>
+
+          _1_._4  _T_h_e_o_r_y _o_f _o_p_e_r_a_t_i_o_n
+          This  patch  installs  a new filesystem type into the kernel
+          ("userfs").  The filesystem itself is very  simple;  all  it
+          does  it  takes the normal kernel filesystem requests, wraps
+          them up into well-defined packets and squirts  them  down  a
+          file descriptor and waits for the reply.
+          The  following  is  not  a comprehensive tutorial on writing
+          filesystems, a detailed "how it works" or  specification  of
+          the existing code.  It is intended to give some idea of what
+          I was thinking, and basic concepts to  bear  in  mind  while
+          poking about in my kernel or user code.
+
+          _1_._4_._1  _P_r_i_o_r_i_t_i_e_s
+          I  had  a  number  of goals which I wanted satisfied by this
+          thing (from most to least important):
+          Flexibility
+               I want the process to have as much power as  a  kernel-
+               resident  filesystem as possible.  I wanted to keep the
+               interfaces as generic  and  flexible.   This  has  been
+               mostly achieved.
+          Robustness
+               Since  I  see  prototyping and development an major use
+               for userfs, it seems important to make  sure  that  the
+               kernel  code  can't  (at worst) crash or lock up if the
+               user code fails.  As it stands, it should be impossible
+               for  a user process to crash the kernel, but it is pos-
+               sible for a bad user process to lock up processes  try-
+               ing  to  use the filesystem, and it is possible for the
+               kernel  to  muck  up  reference  counts  and  make  the
+               filesystem  un-umountable.   It  is also possible for a
+               process to go strange while it is being mounted,  leav-
+               ing  a half-mounted filesystem.  The mountpoint becomes
+               a nulled out inode, but the kernel refuses  to  unmount
+               it  (because it isn't mounted), and refuses to mount on
+               it (because it's busy).
+          Availability to users
+               I'd like any user to be able to write a filesystem pro-
+               cess.    Traditionally,  filesystems  are  things  that
+               embody the security of Unix,  and  are  therefore  very
+               much  superuser-only things.  However, there are only a
+               couple of really sensitive features that  shouldn't  be
+               able to be controlled by any user: suid executables and
+               device nodes.  Since a  trusted  superuser  process  is
+               still  required to call the mount system call, and that
+               process can set the no-suid and  no-device  flags,  the
+               filesystem  code  can't use these as security holes.  I
+
+
+
+
+
+
+
+                                      - 3 -
+
+
+
+               can't think of anything else that  needs  special  care
+               from  a  security  point  of  view.  However, since the
+               filesystem is completely under the control of the  pro-
+               cess,  one  can make no assumptions about its contents.
+               For example "." and ".." may not  do  expected  things,
+               symlinks  may  point to places other than what readlink
+               returns.  This makes navigating such filesystems a  new
+               and interesting experience.
+          Efficiency
+               Efficiency  is  my  lowest  priority,  but  it is still
+               important.  Unfortunately the  other  requirements  (as
+               usual)  make  things less efficient.  The most signifi-
+               cant inefficiency is the context switches  between  the
+               kernel  and the process.  I think the most benefits can
+               be gained by reducing the number of these.   There  are
+               several approaches to this:
+               o    If  the process wants a well-defined behaviour for
+                    an operation, then it should be done in  the  ker-
+                    nel.   The  best  example  of  this  is permission
+                    checking - if the process wants normal  unix  per-
+                    mission  checking  then  it  doesn't need to do it
+                    itself.  Otherwise it can take all the  permission
+                    requests from the kernel, and implement other per-
+                    mission policies.  This is currently  implemented.
+                    When  the  filesystem is first mounted, the kernel
+                    asks the process what  requests  it  will  accept.
+                    From  that  point  the  kernel  will  do  sensible
+                    default actions  for  requests  that  the  process
+                    doesn't  want  to  handle rather than sending them
+                    down the connection.
+               o    Group requests commonly issued together into  one.
+                    This  is  hard,  since  the  main kernel tells the
+                    filesystem code  very  little  about  what  it  is
+                    doing,  so  it  is  hard  to know what to do next.
+                    However, there  are  a  couple  of  single  kernel
+                    requests  that  are implemented in the protocol as
+                    two or more transactions.  This could be fixed  in
+                    future.
+               o    Data  can  be  cached  in the kernel.  This is the
+                    most tricky, since kernel  caching  or  read-ahead
+                    limits  the amount of control the process can have
+                    over the data once read.  I think  this  could  be
+                    optionally  implemented,  depending on whether the
+                    process says it is OK to do  caching,  and  if  so
+                    what  kinds.   The  easiest to implement initially
+                    would be directory readahead; it should have quite
+                    good  speed  gains for directory search operations
+                    like "ls" and "pwd".
+               A number of people have suggested adding shared  memory
+               between  the  kernel  and the filesystem process.  This
+               would be quite limiting least likely option to  improve
+               things.  At the moment, the filesystem makes no assump-
+               tions about the nature  of  the  file  descriptors  for
+               talking  to  the  process.   To implement shared memory
+               between the kernel and the process would  require  some
+
+
+
+
+
+
+
+                                      - 4 -
+
+
+
+               way of finding the process on the other end of the file
+               descriptors (if any), and playing  around  with  memory
+               maps.   This  still  wouldn't cut down on the number of
+               context switches at all.
+
+          _1_._4_._2  _P_r_o_t_o_c_o_l
+          The protocol used is machine independent, using network byte
+          order and defined type sizes.  The code to do the packetisa-
+          tion and depacketisation is  generated  automatically  by  a
+          program,  given the description of each packet.  This is not
+          fully portable, but  it  avoids  byte  order  and  structure
+          alignment problems.
+          A  packet to or from the kernel has two parts.  The first is
+          a header that contains a sequence number, an operation type,
+          a  packet  type,  size of the following data, and a protocol
+          version number.  The packet type can either be a request,  a
+          reply or an enquiry.  Requests and enquiries are always from
+          the kernel to the process, and the process only  ever  sends
+          replies to the kernel.  A reply's header has one extra field
+          - an error  field,  containing  an  error  number.   Replies
+          always  have the same sequence number as their corresponding
+          request or enquiry.
+          Following a request or reply packet is the  optional  opera-
+          tion-specific data.  This is passed through the protocol for
+          interpretation by the operation routines at each end.
+          The kernel may have multiple outstanding requests.  In other
+          words,  the kernel may send a new request before receiving a
+          reply to a previous one.   This  allows  the  filesystem  to
+          block one process for a slow operation while other processes
+          can  use  the  filesystem  for  shorter  operations.    This
+          improves  performance  on,  for  example, an ftp filesystem,
+          where one process may  be  using  a  fast  local  link,  and
+          another  may be using a slow international one, and each has
+          to wait for its own requests to  be  satisfied.   Of  course
+          this requires the filesystem process to be written with some
+          form  of  multi-threading.   If  the  process   just   reads
+          requests,  acts  on  them  and replies then it can do so and
+          ignore any kernel requests until it is ready  to  deal  with
+          them.
+
+          _1_._4_._3  _H_a_n_d_l_e_s
+          The  base  element  of  a  filesystem is a file.  The kernel
+          needs to be  able  to  uniquely  identify  a  file.   Within
+          itself,  it  uses devices and inodes.  A device is what dis-
+          tinguished mounted filesystems  from  one  another,  and  an
+          inode  is  what distinguishes files within a filesystem from
+          each other.  Inode numbers are generated by each filesystem,
+          and are used by the kernel to refer to specific files to the
+          filesystem specific code.  User process filesystems  are  no
+          exception.   Between  the  kernel and the process, files are
+          refered to by using "handles", which are essentially 32  bit
+          numbers.   When  a process first mentions a file to the ker-
+          nel, it gives it a handle, which the  kernel  uses  for  all
+          later operations on the file.  It the the handle which iden-
+          tifies the file, rather than the name, so it is important to
+
+
+
+
+
+
+
+                                      - 5 -
+
+
+
+          use  distinct  handles  for distinct files, and never change
+          the handle of a file once it has been given to the kernel.
+
+          _1_._5  _R_a_n_d_o_m _o_p_e_r_a_t_i_o_n _s_p_e_c_i_f_i_c _a_d_v_i_c_e _a_n_d _b_l_u_r_b
+          This may eventually accurately describe the whole  protocol,
+          but for now its a list of interesting points and things that
+          have bitten me.
+
+          _1_._5_._1  _M_o_u_n_t_i_n_g
+          The mount is initiated by a user process calling  the  mount
+          system  call,  with  the  "userfs"  filesystem type.  In the
+          filesystem  specific  data,  the  process  passes  two  file
+          descriptor  numbers  for  the  kernel  to read and write to.
+          These can by any kind of file descriptor at all.  Most  com-
+          monly  they  would  be  pipes  or  sockets,  but there is no
+          restriction to that alone.  All the kernel requires that the
+          one it talks to the process with is writable, and the one it
+          gets replies from is readable.
+          The most important request  is  mounting.   Most  important,
+          because  it  is  the  only  request  that the process has to
+          implement.  The request itself is not that complex.  All  it
+          does  is  return a handle of the file (in the general sense,
+          which covers directories,  file,  symlinks,  block  devices,
+          pipes,  etc)  at the root of the filesystem.  Most commonly,
+          this will be a directory.
+          After the process returns the root handle, the  kernel  will
+          probe  the  process  to see what operations it is willing to
+          support.  This is done by sending a series of enquire  pack-
+          ets  to  the  process.  The process should reply with normal
+          reply packets, with the errno field either set to 0 if it is
+          supported  or  ENOSYS if it isn't.  No real operation should
+          be done, and no additional information should be sent in the
+          reply.   If  the  process replies ENOSYS to an operation, it
+          will never receive it again, and the kernel will use a  sen-
+          sible  default  for it (typically what the kernel would nor-
+          mally do for an in-kernel filesystem if it  doesn't  support
+          the operation).
+
+          _1_._5_._2  _R_e_a_d_i_n_g _I_n_o_d_e_s
+          A  pretty  common  thing  for  the filesystem to be doing is
+          reading inodes.  For the process, this involves filling  out
+          a  structure  much like the kernel's inode structure and the
+          stat structure.  For this version, it's important  thing  is
+          to  make sure the nlinks field is non-zero.  If it is 0 then
+          the kernel will never "put" the inode, and it will make  the
+          filesystem un-umountable.
+
+
+
+
+
+
+
+
+
+
+
+
+

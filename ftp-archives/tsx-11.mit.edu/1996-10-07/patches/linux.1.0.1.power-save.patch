@@ -1,0 +1,402 @@
+        ===================================================
+        +=+=+=+=+= linux.1.0.1.power-save.patch +=+=+=+=+=+
+        ===================================================
+
+
+	There is some change in v1.1.54, and the original 
+  "linux.1.0.power-save.patch" by Christoph Rimek <chrimek@toppoint.de>
+  will no longer patch correctly, I finally got a little time to hacked
+  it a little. It should now patch cleanly with v1.1.54 and later...
+
+  Note: All honor goes to Christoph Rimek.
+
+						  -- James Zhu
+						<asolis@csulb.edu>
+
+Change Log:
+
+  * memsetw() is needed in the new kernel, because it is used in vc_resize
+    which is called in vt.c -- a change in patch v1.1.54
+
+  * Patch cleanly with new kernel (v1.1.54 or later ..) .
+
+
+
+
+The Following is readme in the original patch from Christoph Rimek:
+
+********
+
+"In my last posting (of 30-apr-94) I published the raw code to support the
+new generation of monitors that know the VESA Power Saving Protocol (PSP).
+Recently I found the time to code and can now present:
+
+Patch (based on Linux Kernel revision 1.0) for handling the Power Saving
+feature of the new monitor generation. The code works on all these monitors
+(mine is a Smile 1506) and should run on *all* video adapter cards (change
+some i/o-adresses), although tested only on two different VGA-cards: a  
+cheap Cirrus Logic (5428) and a miro Crystal 8S (S3-805).
+
+The only affected module is driver/char/console.c and within this the
+two functions blank_screen and unblank_screen and a few new variable  
+definitions. If activated, the function memsetw is no longer needed.
+
+(memsetw() is needed in the new kernel, because it is used in vc_resize()
+which is called in vt.c -- a change in patch v1.1.54    -- James Zhu )
+
+The file config.in in the main kernel source directory has got two new
+variables to define: CONFIG_VESA_PSPM (Power Saving Protocol Monitor)
+and CONFIG_PSPM_FORCE_OFF. I have placed these lines into the character
+device section right after the SELECTION part. You can choose from two
+options:
+
+(1) CONFIG_VESA_PSPM YES to activate these patches.
+    The code will save the current setting of your video adapters'
+    register settings and then program the controller to turn off
+    the vertical sycnchronisation pulse. For details how this is
+    achived refer to the code fragments following.
+
+(2) CONFIG_PSPM_FORCE_OFF
+    If your monitor locally has an Off_Mode timer then you should not
+    force your video card to send the OFF-signal - your monitor will
+    power down by itself.
+    If your monitor cannot handle this and needs the Off-signal directly,
+    or if you like your monitor to power down immediately when the
+    blank_timer times out, then you chose this option.
+
+On the other hand I'd recommend to not chose this second option unless
+it is absolutely necessary. Powering down a monitor to the Off_State with
+an approx. power consumption of 3-5 Watts is a rather strong action for
+the CRT and it should not be done every now and then. If the software only  
+sends the signal to enter Standby mode, you have the chance to interfere
+before the monitor powers down. Do not set a too short period, if you love
+your hardware :-)) .
+
+Another advantage of leaving the power down handling to the monitor is
+that your always can use the same kernel and change the OFF timeout
+locally at your monitor. My model lets me chose the timeout in steps
+of five minutes: 0-5-10-15-...
+
+
+If requested, in the future it may be possible to install another timer
+to provide a configurable delay between the two stages Standby and Off
+similar to the "setterm -blank"-feature.
+
+After all blah-blah now the diff-outputs for the patches.
+
+I'm not sure whether it is necessary to encapsule the saving of the video
+adapter registers in a cli/sti-pair, while this code comes to execution
+only when the machine (keyboard) is idle. When setting the registers I
+think it is better not to allow any interruption of the sequences.
+
+Please let me know about your experiences with this code.
+
+-cr
+
+
+--
+Christoph Rimek, Kiel, Germany  (+49 431 18307)      chrimek@toppoint.de
+
+***********************************************************************"
+
+
+Good Luck ...
+
+
+
+James Zhu
+asolis@csulb.edu (temp. addr)
+
+UCF Linux User Group
+linux@pegasus.cc.ucf.edu
+
+
+
+* Save the following into two file and patch against:
+
+linux/arch/i386/config.in
+linux/drivers/char/console.c
+
+------------------------- cut here ---------------------
+*** config.in.orig	Sun Jul 24 16:35:21 1994
+--- config.in	Sun Jul 24 16:36:11 1994
+***************
+*** 170,175 ****
+--- 170,184 ----
+  bool 'Microsoft busmouse support' CONFIG_MS_BUSMOUSE n
+  bool 'ATIXL busmouse support' CONFIG_ATIXL_BUSMOUSE n
+  bool 'Selection (cut and paste for virtual consoles)' CONFIG_SELECTION n
++  
++ comment 'VESA PSP Power Saving. (Answer yes, only if you have a Green Monitor)'
++  
++ bool 'VESA Power Saving Protocol Monitor support' CONFIG_VESA_PSPM n
++ if [ "$CONFIG_VESA_PSPM" = "y" ]; then
++ bool 'Force OFF signal to be sent to VESA PSP Monitor' CONFIG_PSPM_FORCE_OFF y
++ fi
++ 
++ comment 'Tape Backup Support'
+  
+  bool 'QIC-02 tape support' CONFIG_QIC02_TAPE n
+  if [ "$CONFIG_QIC02_TAPE" = "y" ]; then
+
+------------------------------- cut here ------------------------------
+*** console.c.orig	Sat Oct 22 18:19:41 1994
+--- console.c	Sun Oct 23 13:30:11 1994
+***************
+*** 123,128 ****
+--- 123,172 ----
+  static char sel_buffer[SEL_BUFFER_SIZE] = { '\0' };
+  #endif /* CONFIG_SELECTION */
+  
++ #ifdef CONFIG_VESA_PSPM
++ /*
++  * This section(s) handles the VESA Power Saving Protocol that let a  *
++  * monitor be powered down whenever not needed for a longer time.     *
++  * VESA protocol defines:                                             *
++  *                                                                    *
++  *  Mode/Status               HSync   VSync   Video                           
++  *  ----------------------------------------------                    *
++  *  "On"              on      on      active                          *
++  *  "Suspend" {either}        on      off     blank                           
++  *            {  or  }        off     on      blank                           
++  *  "Off"               off   off     blank   <<  PSPM_FORCE_OFF      *
++  *                                                                    *
++  * Original code taken from the Power Management Utility (PMU) of     *
++  * Huang shi chao, delivered together with many new monitor models    *
++  * capable of the VESA Power Saving Protocol.                         *
++  * Adapted to Linux by Christoph Rimek (chrimek@toppoint.de)  15-may-94       
++  */
++ 
++ #define seq_port_reg  (0x3c4)         /* Sequencer register select port */      
++ #define seq_port_val  (0x3c5)         /* Sequencer register value port  */      
++ #define video_misc_rd (0x3cc)         /* Video misc. read port        */
++ #define video_misc_wr (0x3c2)         /* Video misc. write port       */
++ 
++ /* structure holding original VGA register settings */
++ static struct {
++       unsigned char   SeqCtrlIndex;           /* Sequencer Index reg.   */
++       unsigned char   CrtCtrlIndex;           /* CRT-Contr. Index reg.  */
++       unsigned char   CrtMiscIO;              /* Miscellaneous register */
++ #ifdef CONFIG_PSPM_FORCE_OFF
++       unsigned char   HorizontalTotal;        /* CRT-Controller:00h */
++       unsigned char   HorizDisplayEnd;        /* CRT-Controller:01h */
++       unsigned char   StartHorizRetrace;      /* CRT-Controller:04h */
++       unsigned char   EndHorizRetrace;        /* CRT-Controller:05h */
++ #endif
++       unsigned char   Overflow;               /* CRT-Controller:07h */
++       unsigned char   StartVertRetrace;       /* CRT-Controller:10h */
++       unsigned char   EndVertRetrace;         /* CRT-Controller:11h */
++       unsigned char   ModeControl;            /* CRT-Controller:17h */
++       unsigned char   ClockingMode;           /* Seq-Controller:01h */
++ } vga;
++ #endif /* CONFIG_VESA_PSPM */
++  
++ 
+  #define NPAR 16
+  
+  static void con_setsize(unsigned long rows, unsigned long cols);
+***************
+*** 287,292 ****
+--- 331,346 ----
+  #define vcmode		(vt_cons[currcons]->vc_mode)
+  #define structsize	(sizeof(struct vc_data) + sizeof(struct vt_struct))
+  
++ 
++ /* #ifndef CONFIG_VESA_PSPM */
++ /* This function only needed for fast screen buffer filling in        */
++ /* blank_screen, may be spared if hardware blanks screen.  /CR        */
++ 
++ /**************************************************************************\
++  * Note: This function is NEEDED since v1.1.54, it is used in vt_resize() *
++  *       -- a change since v1.1.54                     ---- James Zhu     *
++ \**************************************************************************/
++ 
+  static void * memsetw(void * s, unsigned short c, unsigned int count)
+  {
+  __asm__("cld\n\t"
+***************
+*** 297,302 ****
+--- 351,357 ----
+  	:"cx","di");
+  return s;
+  }
++ /*  #endif */
+  
+  int vc_cons_allocated(unsigned int i)
+  {
+***************
+*** 2025,2031 ****
+--- 2080,2088 ----
+  
+  void blank_screen(void)
+  {
++ #ifndef CONFIG_VESA_PSPM
+  	int currcons;
++ #endif
+  
+  	if (console_blanked)
+  		return;
+***************
+*** 2036,2041 ****
+--- 2093,2135 ----
+  	}
+  	timer_table[BLANK_TIMER].fn = unblank_screen;
+  
++ 
++ #ifdef CONFIG_VESA_PSPM
++       /* save original values of VGA controller registers */
++       cli();
++       vga.SeqCtrlIndex = inb_p(seq_port_reg);
++       vga.CrtCtrlIndex = inb_p(video_port_reg);
++       vga.CrtMiscIO = inb_p(video_misc_rd);
++       sti();
++ #ifdef CONFIG_PSPM_FORCE_OFF
++       outb_p(0x00,video_port_reg);                    /* HorizontalTotal */
++       vga.HorizontalTotal = inb_p(video_port_val);
++       outb_p(0x01,video_port_reg);                    /* HorizDisplayEnd */
++       vga.HorizDisplayEnd = inb_p(video_port_val);
++       outb_p(0x04,video_port_reg);                    /* StartHorizRetrace */
++       vga.StartHorizRetrace = inb_p(video_port_val);
++       outb_p(0x05,video_port_reg);                    /* EndHorizRetrace */
++       vga.EndHorizRetrace = inb_p(video_port_val);
++ #endif
++       outb_p(0x07,video_port_reg);                    /* Overflow */
++       vga.Overflow = inb_p(video_port_val);
++       outb_p(0x10,video_port_reg);                    /* StartVertRetrace */
++       vga.StartVertRetrace = inb_p(video_port_val);
++       outb_p(0x11,video_port_reg);                    /* EndVertRetrace */
++       vga.EndVertRetrace = inb_p(video_port_val);
++       outb_p(0x17,video_port_reg);                    /* ModeControl */
++       vga.ModeControl = inb_p(video_port_val);
++       outb_p(0x01,seq_port_reg);                      /* ClockingMode */
++       vga.ClockingMode = inb_p(seq_port_val);
++ 
++       /* assure that video is enabled */
++       /* "0x20" is VIDEO_ENABLE_bit in register 01 of sequencer */
++       cli();
++       outb_p(0x01,seq_port_reg);
++       outb_p(vga.ClockingMode | 0x20,seq_port_val);
++       sti();
++ #else
++ 
+  	/* try not to lose information by blanking, and not to waste memory */
+  	currcons = fg_console;
+  	has_scrolled = 0;
+***************
+*** 2044,2052 ****
+  	set_origin(fg_console);
+  	get_scrmem(fg_console);
+  	unblank_origin = origin;
+- 	memsetw((void *)blank_origin, BLANK, video_mem_term-blank_origin);
+  	hide_cursor();
+  	console_blanked = fg_console + 1;
+  }
+  
+  void unblank_screen(void)
+--- 2138,2183 ----
+  	set_origin(fg_console);
+  	get_scrmem(fg_console);
+  	unblank_origin = origin;
+  	hide_cursor();
++ 
++ #endif /* CONFIG_VESA_PSPM */
++ 
+  	console_blanked = fg_console + 1;
++ 
++ #ifdef CONFIG_VESA_PSPM
++       cli();
++       /* test for vertical retrace in process.... */
++       if ((vga.CrtMiscIO & 0x80) == 0x80)
++               outb_p(vga.CrtMiscIO & 0xef,video_misc_wr);
++ 
++       /*  Set <End of vertical retrace> to minimum (0) and            *
++        *  <Start of vertical Retrace> to maximum (incl. overflow)     *
++        *  Result: turn off vertical sync (VSync) pulse                */
++       outb_p(0x10,video_port_reg);            /* StartVertRetrace */
++       outb_p(0xff,video_port_val);            /* maximum value */
++       outb_p(0x11,video_port_reg);            /* EndVertRetrace */
++       outb_p(0x40,video_port_val);            /* minimum (bits 0..3)  */
++       outb_p(0x07,video_port_reg);            /* Overflow */
++       outb_p(vga.Overflow | 0x84,video_port_val);     /* bits 9,10 of  */
++                                                       /* vert. retrace */
++ #ifdef CONFIG_PSPM_FORCE_OFF
++       /*  Set <End of horizontal retrace> to minimum (0) and  *
++        *  <Start of horizontal Retrace> to maximum            *
++        *  Result: turn off horizontal sync (HSync) pulse      */
++       outb_p(0x04,video_port_reg);            /* StartHorizRetrace */
++       outb_p(0xff,video_port_val);            /* maximum */
++       outb_p(0x05,video_port_reg);            /* EndHorizRetrace */
++       outb_p(0x00,video_port_val);            /* minimum (0) */
++ #endif
++       /* restore both index registers */
++       outb_p(vga.SeqCtrlIndex,seq_port_reg);
++       outb_p(vga.CrtCtrlIndex,video_port_reg);
++       sti();
++ #else
++ 	memsetw((void *)blank_origin, BLANK, video_mem_term-blank_origin);
++ 
++ #endif /* CONFIG_VESA_PSPM */
++ 
+  }
+  
+  void unblank_screen(void)
+***************
+*** 2079,2087 ****
+--- 2210,2253 ----
+  	}
+  
+  	console_blanked = 0;
++ 
++ #ifdef CONFIG_VESA_PSPM
++       /* restore original values of VGA controller registers */
++       cli();
++       outb_p(vga.CrtMiscIO,video_misc_wr);
++ #ifdef CONFIG_PSPM_FORCE_OFF
++       outb_p(0x00,video_port_reg);            /* HorizontalTotal */
++       outb_p(vga.HorizontalTotal,video_port_val);
++       outb_p(0x01,video_port_reg);            /* HorizDisplayEnd */
++       outb_p(vga.HorizDisplayEnd,video_port_val);
++       outb_p(0x04,video_port_reg);            /* StartHorizRetrace */
++       outb_p(vga.StartHorizRetrace,video_port_val);
++       outb_p(0x05,video_port_reg);            /* EndHorizRetrace */
++       outb_p(vga.EndHorizRetrace,video_port_val);
++ #endif
++       outb_p(0x07,video_port_reg);            /* Overflow */
++       outb_p(vga.Overflow,video_port_val);
++       outb_p(0x10,video_port_reg);            /* StartVertRetrace */
++       outb_p(vga.StartVertRetrace,video_port_val);
++       outb_p(0x11,video_port_reg);            /* EndVertRetrace */
++       outb_p(vga.EndVertRetrace,video_port_val);
++       outb_p(0x17,video_port_reg);            /* ModeControl */
++       outb_p(vga.ModeControl,video_port_val);
++       outb_p(0x01,seq_port_reg);              /* ClockingMode */
++       outb_p(vga.ClockingMode,seq_port_val);
++ 
++       /* restore index/control registers */
++       outb_p(vga.SeqCtrlIndex,seq_port_reg);
++       outb_p(vga.CrtCtrlIndex,video_port_reg);
++       sti();
++ #else
++ 
+  	set_scrmem(fg_console, offset);
+  	set_origin(fg_console);
+  	set_cursor(fg_console);
++ 
++ #endif /* CONFIG_VESA_PSPM */
++ 
+  	if (resetorg)
+  		__set_origin(blank__origin);
+  }
+***************
+*** 2458,2465 ****
+--- 2624,2633 ----
+  /* Pauline Middelink reports that we should use 0xA0000 for the bwmap as well.. */
+  #define blackwmap ((char *)0xa0000)
+  #define cmapsz 8192
++ #ifndef seq_port_reg  /* avoid re-definition */
+  #define seq_port_reg (0x3c4)
+  #define seq_port_val (0x3c5)
++ #endif
+  #define gr_port_reg (0x3ce)
+  #define gr_port_val (0x3cf)
+  

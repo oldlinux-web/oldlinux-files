@@ -1,0 +1,176 @@
+Hi, Folks,
+
+I am making a major move toward ELF.
+
+1. Make libc 5.0.0 for ELF only, which is libc 4.6.30 + new stuff.
+2. Make libc 4.7.1 for a.out only, which is libc 4.6.27 + minimal
+   bugs fixes.
+3. A new set of the gcc/binutils binary releases based on the latest
+   snapshots. I have modified the configuration files such that
+   i486-linux means ELF and i486-linuxaout means a.out. I had to
+   use i486-linuxaout since that was the only one supported by
+   both gcc and binutils. The new gcc binaries will include
+
+   a. An ELF compiler in ELF.
+   b. An a.out compiler in ELF. You can invoke it by using
+      "gcc -b i486-linuxaout". It expects the a.out as in
+      /usr/i486-linuxaout/bin and the *.o, *.a and *.sa files
+      in /usr/i486-linuxaout/lib.
+
+   The new binutils binaries will include ar, encaps, gprof, ld,
+   nm, objcopy, objdump, ranlib, size, strings and strip in ELF,
+   which supports ELF, a.out and COFF. They will be installed
+   under /usr/bin. The ELF as will be in /usr/bin and the a.out
+   one will be in /usr/i486-linuxaout/bin.
+
+   The patches for the snapshot sources will be provided with
+   the binaries.
+4. The shared ELF C, math, curses and termcap libraries are in
+   /lib. Other ELF *.o, *.so* and *.a files will be installed in
+   /usr/lib. For people who have installed the previous ELF shared
+   libraries, those libraries other than libc.so, libm.so,
+   libcurses.so, libtermcap.so, libdl.so and dynamic linker have
+   to be move to /usr/lib.
+5. We need to move all the a.out *.o, *.a and *.sa files to
+   /usr/i486-linuxaout/lib.
+6. The header files from libc 4.7.1 will be installed in
+   /usr/i486-linuxaout/include.
+7. Modify /etc/ld.so.conf to reflect the changes.
+9. We need patches for kernel and modules to compile them in
+   ELF.
+10. The old tools 2.16 won't work with patches. I don't think we
+   should use it anymore.
+
+We need a plan to migrate to ELF. Most of users may not be able
+to do it own their own. A fool-proof script would be nice.
+
+Here is the procedure I used. I may have missed something.
+
+1. mdkir -p /usr/i486-linuxaout/bin
+   mdkir -p /usr/i486-linuxaout/lib
+2. Move all the a.out *.o, *.a, *.so.* and *.sa from /usr/lib and
+    other places, like /usr/local/lib ..., to
+   /usr/i486-linuxaout/lib:
+
+   cd /usr/lib
+   mv *.o *.a *.so.* *.sa /usr/i486-linuxaout/lib
+
+3. Remove /usr/lib/ldscripts if there is any.
+
+4. Remove all the unnecessary files in /lib/elf:
+
+   cd /lib/elf
+   rm -f libbfd* libdb* libg* libios* libstd*
+
+   You should only keep libc.so*, libm.so*, libcurses.so*,
+   libtermcap.so*, libdl.so* and ld-linux.so* in /lib/elf.
+
+5.
+   cd /usr/i486-linux/lib
+   rm *.so
+   mv *.o *.so* *.a /usr/lib
+
+   You also need to make a few symlinks from *.so.? to *.so to keep
+   the linker happy.
+
+6. Remove /usr/i486-linuxelf:
+
+   rm -rf /usr/i486-linuxelf
+
+7. Edit /etc/ld.so.conf to include /usr/i486-linuxaout/lib.
+   Mine has:
+
+----
+/lib/elf
+/usr/X11R6/lib
+/usr/local/lib
+/usr/i486-linuxaout/lib
+----
+
+8. Backup all your old a.out ld and as which are in /usr/bin. Don't
+   put them in /usr/i486-linuxaout/bin. Then remove them.
+
+9. Install the Linux binutils 950328
+
+10.Backup all your old compiler binaries which should be in
+   /usr/lib/gcc-lib. The directories should look like i486-linux
+   and i486-linuxelf. Then remove the old compilers:
+
+   cd /usr/lib/gcc-lib
+   rm -rf i486-linux
+   mv i486-linuxelf i486-linux
+   cd /usr/bin
+   rm -f gcc-elf g++-elf gcc-ss
+
+11. Put the specs file appended here in /tmp/specs and do
+
+   cd /usr/lib/gcc-lib/i486-linux
+   for f in 2.6*
+   do
+     cp /tmp/specs $f/
+   done
+
+11. For the first stage, there are 3 compilers are provided:
+
+	a. gcc 2.6.4-950305 in ELF to generate ELF binaries.
+	b. gcc 2.6.4-950305 in ELF to generate a.out binaries.
+	c. gcc 2.5.8 in ELF to generate a.out binaries.
+
+  You should install them all. I have used all of them to compile
+  the Linux kernel 1.2.0/1.2.1/1.2.2 in a.out and ELF without much
+  problems. You need to apply my kernel ELF patch first.
+
+After you have done all these above, you have converted yourself to
+ELF.
+
+
+03/29/95
+-- 
+H.J. Lu
+NYNEX Science and Technology, Inc.			hjl@nynexst.com
+-----specs-----
+*asm:
+%{V} %{v:%{!V:-V}} %{Qy:} %{!Qn:-Qy} %{n} %{T} %{Ym,*} %{Yd,*} %{Wa,*:%*}
+
+*asm_final:
+%{pipe:-}
+
+*cpp:
+%{fPIC:-D__PIC__ -D__pic__} %{fpic:-D__PIC__ -D__pic__} %{!m386:-D__i486__} %{posix:-D_POSIX_SOURCE}
+
+*cc1:
+
+
+*cc1plus:
+
+
+*endfile:
+%{!shared:crtend.o%s} %{shared:crtendS.o%s} crtn.o%s
+
+*link:
+-m elf_i386 %{shared:-shared}   %{!shared:     %{!ibcs:       %{!static: 	%{rdynamic:-export-dynamic} 	%{!dynamic-linker:-dynamic-linker /lib/ld-linux.so.1}} 	%{static:-static}}}
+
+*lib:
+%{!shared: %{mieee-fp:-lieee} %{p:-lgmon} %{pg:-lgmon}      %{!ggdb:-lc} %{ggdb:-lg}}
+
+*libgcc:
+%{!shared:-lgcc}
+
+*startfile:
+%{!shared:      %{pg:gcrt1.o%s} %{!pg:%{p:gcrt1.o%s} %{!p:crt1.o%s}}}   crti.o%s %{!shared:crtbegin.o%s} %{shared:crtbeginS.o%s}
+
+*switches_need_spaces:
+
+
+*signed_char:
+%{funsigned-char:-D__CHAR_UNSIGNED__}
+
+*predefines:
+-D__ELF__ -Dunix -Di386 -Dlinux -Asystem(unix) -Asystem(posix) -Acpu(i386) -Amachine(i386)
+
+*cross_compile:
+0
+
+*multilib:
+. ;
+

@@ -1,0 +1,222 @@
+This is a binary distribution of sunrpc-4.0 compiled for Linux.
+
+It is the RPC (Remote Procedure Call) and XDR (eXternal Data Represenation)
+library together with support programs.  The original freely distributable
+sunrpc was written by Sun Microsystems for BSD systems.  I did not include
+any secure_rpc stuff because I don't think it is very widely used and the
+secure_rpc distribution didn't include the necessary DES encrpytion.
+
+I did a fair amount of hacking to get it to work with Linux.  Plus
+I fixed a couple of ugly bugs.
+
+The archive includes:
+
+	README			this file
+	etc/rpc			RPC services files
+	etc/portmap		RPC portmapper daemon
+	etc/rpcinfo		RPC status reporting program
+	usr/bin/rpcgen		RPC protocol compiler
+	usr/bin/rstat		RPC sample remote status program
+	usr/lib/librpclib.a	RPC and XDR library
+	usr/include/rpc/*	RPC library include files
+	usr/include/rpcsvc/*	RPC protocol descriptions and header files
+	usr/man/man[1358]/*	RPC man pages
+
+The binaries were compiled with version 4.1 jump-table libraries.
+They will not work with Linux TCP/IP 0.8.1 without the kernel patch at the
+end of this file.  I have sent it to Ross and he may include in the next
+release.  Even if you don't apply the patch you can still use the library
+and header files for porting.
+
+You must have a /usr/etc/inet/protocols file for some of the programs
+to work.  Here is one I cooked up:
+
+$ cat /usr/etc/inet/protocols
+# protocols - standard well defined IP protocols
+ip	0
+icmp	1
+ggp	2
+tcp	6
+egp	8
+pup	12
+udp	17
+idp	22
+raw	255
+
+Also make sure you have the following lines in /usr/etc/inet/services:
+
+$ grep sunrpc /usr/etc/inet/services
+sunrpc		111/tcp
+sunrpc		111/udp
+
+Here is how you use the portmapper.  In your rc/rc.local/rc.net or whatever
+put the following fragment after you configure TCP/IP:
+
+if [ -f /etc/portmap ]
+then
+	echo "Starting portmapper..."
+	/etc/portmap
+fi
+
+Then if you have TCP/IP in your kernel and have applied the patch you
+can say:
+
+$ /etc/rpcinfo -p
+   program vers proto   port
+    100000    2   tcp    111  portmapper
+    100000    2   udp    111  portmapper
+
+If you get "Connection refused" you probably haven't applied the patch.
+
+If all is well you can go to another machine on the net and say:
+
+$ /etc/rpcinfo -p your-hostname
+   program vers proto   port
+    100000    2   tcp    111  portmapper
+    100000    2   udp    111  portmapper
+
+This is not very useful unless you have some RPC services to provide.
+I have not yet finished porting rstat_svc which is very BSD-kernel oriented.
+When I do, you will be apply to run Sun's Performance Meter to display
+information about your Linux machine.
+
+I will be releasing my port of a mount daemon and nfs server daemon shortly.
+
+You don't need to run the portmapper or apply the patch to use RPC services
+on other machines.  The only programs in this distribution that can do that
+are rpcinfo and rstat.
+
+Enjoy,
+
+Rick Sladkey
+jrs@world.std.com
+
+Patch relative to TCP/IP version 0.8.1 follows:
+
+*** sock.h~	Thu Sep 10 12:34:07 1992
+--- sock.h	Tue Sep 15 01:12:37 1992
+***************
+*** 41,47 ****
+    unsigned long inuse:1, dead:1, urginline:1,
+                  intr:1, blog:1, done:1, reuse:1, keepopen:1, linger:1,
+                  delay_acks:1, timeout:3, destroy:1, ack_timed:1, no_check:1,
+!                 exp_growth:1;
+    int proc;
+    volatile struct sock *next;
+    volatile struct sock *pair;
+--- 41,47 ----
+    unsigned long inuse:1, dead:1, urginline:1,
+                  intr:1, blog:1, done:1, reuse:1, keepopen:1, linger:1,
+                  delay_acks:1, timeout:3, destroy:1, ack_timed:1, no_check:1,
+!                 exp_growth:1, user_bound:1;
+    int proc;
+    volatile struct sock *next;
+    volatile struct sock *pair;
+*** sock.c~	Sat Sep 12 12:26:56 1992
+--- sock.c	Tue Sep 15 01:10:05 1992
+***************
+*** 729,735 ****
+         if (!suser())
+  	 {
+  	    free_s ((void *)sk, sizeof (*sk));
+! 	    return (-EPERM);
+  	 }
+  
+         if (!protocol)
+--- 729,735 ----
+         if (!suser())
+  	 {
+  	    free_s ((void *)sk, sizeof (*sk));
+! 	    return (-EACCES);
+  	 }
+  
+         if (!protocol)
+***************
+*** 748,754 ****
+         if (!suser())
+  	 {
+  	    free_s ((void *)sk, sizeof (*sk));
+! 	    return (-EPERM);
+  	 }
+  
+         if (!protocol)
+--- 748,754 ----
+         if (!suser())
+  	 {
+  	    free_s ((void *)sk, sizeof (*sk));
+! 	    return (-EACCES);
+  	 }
+  
+         if (!protocol)
+***************
+*** 800,805 ****
+--- 800,806 ----
+    sk->state = TCP_CLOSE;
+    sk->dead = 0;
+    sk->ack_timed = 0;
++   sk->user_bound = 0;
+  
+    /* this is how many unacked bytes we will accept for
+       this socket.  */
+***************
+*** 936,942 ****
+  	return (0);
+       }
+    /* check this error. */
+!   if (sk->state != TCP_CLOSE) return (-EIO);
+    verify_area (uaddr, addr_len);
+    memcpy_fromfs (&addr, uaddr, min (sizeof (addr), addr_len));
+    if (addr.sin_family && addr.sin_family != AF_INET)
+--- 937,944 ----
+  	return (0);
+       }
+    /* check this error. */
+!   if (sk->state != TCP_CLOSE) return (-EINVAL);
+!   if (sk->user_bound) return (-EINVAL);
+    verify_area (uaddr, addr_len);
+    memcpy_fromfs (&addr, uaddr, min (sizeof (addr), addr_len));
+    if (addr.sin_family && addr.sin_family != AF_INET)
+***************
+*** 957,963 ****
+      }
+  
+    if (snum <= PROT_SOCK && !suser())
+!     return (-EPERM);
+  
+    if (my_ip_addr(addr.sin_addr.s_addr) || addr.sin_addr.s_addr == 0)
+      sk->saddr = addr.sin_addr.s_addr;
+--- 959,965 ----
+      }
+  
+    if (snum <= PROT_SOCK && !suser())
+!     return (-EACCES);
+  
+    if (my_ip_addr(addr.sin_addr.s_addr) || addr.sin_addr.s_addr == 0)
+      sk->saddr = addr.sin_addr.s_addr;
+***************
+*** 980,985 ****
+--- 982,988 ----
+    sk->dummy_th.source = net16(sk->num);
+    sk->daddr = 0;
+    sk->dummy_th.dest = 0;
++   sk->user_bound = 1;
+    return (0);
+  }
+  
+***************
+*** 1290,1296 ****
+  
+        case IP_SET_DEV:
+         if (!suser())
+! 	 return (-EPERM);
+         return (ip_set_dev((struct ip_config *)arg));
+  #if 0
+      case IP_ADD_ROUTE:
+--- 1293,1299 ----
+  
+        case IP_SET_DEV:
+         if (!suser())
+! 	 return (-EACCES);
+         return (ip_set_dev((struct ip_config *)arg));
+  #if 0
+      case IP_ADD_ROUTE:

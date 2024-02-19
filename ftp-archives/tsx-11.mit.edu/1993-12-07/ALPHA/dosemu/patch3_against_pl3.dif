@@ -1,0 +1,216 @@
+*** dosipc.d	Tue Nov 30 23:05:07 1993
+--- dosipc.c	Thu Dec  2 17:33:12 1993
+***************
+*** 720,726 ****
+    ipc_sendpkt2parent(&pkt);
+  }
+  
+! #define SCANQ_LEN 50
+  u_short scan_queue[SCANQ_LEN];
+  int scan_queue_start=0;
+  int scan_queue_end=0;
+--- 720,726 ----
+    ipc_sendpkt2parent(&pkt);
+  }
+  
+! #define SCANQ_LEN 10
+  u_short scan_queue[SCANQ_LEN];
+  int scan_queue_start=0;
+  int scan_queue_end=0;
+***************
+*** 730,751 ****
+  
+  int parent_nextscan()
+  {
+!   int chr;
+!   lastscan = scan_queue[scan_queue_start];
+!   if (scan_queue_start != scan_queue_end)
+!     scan_queue_start = (scan_queue_start+1)%SCANQ_LEN;
+!   scanned=1;
+!   if (!config.console_keyb)
+!     chr=lastscan;
+!   else
+!     chr=convKey(lastscan);
+!   k_printf("parent nextscan found chr = 0x%02x, latscan = 0x%04x\n", chr, lastscan);
+!   k_printf("key 96 0x%02x, 97 0x%02x, kbc1 0x%02x, kbc2 0x%02x\n", *(u_char *)0x496, *(u_char *)0x497, *(u_char *)0x417, *(u_char *)0x418);
+!   if (chr) {
+!     k_printf("IPC/KBD: (child) putting key in buffer\n");
+!     if (InsKeyboard(chr))
+!       dump_kbuffer();
+!     else error("ERROR: InsKeyboard could not put key into buffer!\n");
+    }
+    return 0; /* no error */
+  }
+--- 730,756 ----
+  
+  int parent_nextscan()
+  {
+!   int lastchr;
+!   if (!scanned && (scan_queue_start != scan_queue_end)) {
+!     lastchr = scan_queue[scan_queue_start];
+!     if (scan_queue_start != scan_queue_end)
+!       scan_queue_start = (scan_queue_start+1)%SCANQ_LEN;
+!     scanned=1;
+!     if (!config.console_keyb) {
+!       lastscan = lastchr>>8;
+!     }
+!     else {
+!       lastscan = lastchr;
+!       lastchr=convKey(lastscan);
+!     }
+!     k_printf("parent nextscan found lastchr = 0x%02x, lastscan = 0x%04x\n", lastchr, lastscan);
+!     k_printf("key 96 0x%02x, 97 0x%02x, kbc1 0x%02x, kbc2 0x%02x\n", *(u_char *)0x496, *(u_char *)0x497, *(u_char *)0x417, *(u_char *)0x418);
+!     if (lastchr) {
+!       k_printf("IPC/KBD: (child) putting key in buffer\n");
+!       if (InsKeyboard(lastchr))
+!         dump_kbuffer();
+!       else error("ERROR: InsKeyboard could not put key into buffer!\n"); 
+!     }
+    }
+    return 0; /* no error */
+  }
+***************
+*** 797,803 ****
+     I_printf("parent got set scan %x\n",pkt.u.key);
+     scan_queue[scan_queue_end] = pkt.u.key;
+     scan_queue_end = (scan_queue_end+1)%SCANQ_LEN;
+- 
+     if (config.keybint)
+  	queue_hard_int(9,NULL,NULL);
+     else
+--- 802,807 ----
+***************
+*** 859,871 ****
+    {
+  	struct ipcpkt pkt;
+  	
+!   	printf("IPC/INTERRUPT: 0x%02x, fd=%x\n", rrtn, fd);
+  	pkt.cmd = DMSG_SENDINT;
+          if (rrtn < 8)
+  	  pkt.u.key = rrtn+8;
+          else
+  	  pkt.u.key = rrtn+0x68;
+- 	printf("pkt.u.key = 0x%02x\n", pkt.u.key);
+  	ipc_wakeparent();
+  	ipc_sendpkt2parent(&pkt);
+      } 
+--- 863,874 ----
+    {
+  	struct ipcpkt pkt;
+  	
+!   	h_printf("IPC/INTERRUPT: 0x%02x, fd=%x\n", rrtn, fd);
+  	pkt.cmd = DMSG_SENDINT;
+          if (rrtn < 8)
+  	  pkt.u.key = rrtn+8;
+          else
+  	  pkt.u.key = rrtn+0x68;
+  	ipc_wakeparent();
+  	ipc_sendpkt2parent(&pkt);
+      } 
+*** emu.d	Tue Nov 30 23:05:07 1993
+--- emu.c	Thu Dec  2 17:33:16 1993
+***************
+*** 946,951 ****
+--- 946,952 ----
+  	    case 0x60:
+  /* #define new8042 */
+  #ifndef new8042
++ 	      k_printf("direct 8042 about to read1: 0x%02x\n", lastscan);
+  	      parent_nextscan();
+  	      k_printf("direct 8042 read1: 0x%02x\n", lastscan);
+  /*	      tmp=lastscan;
+***************
+*** 1555,1562 ****
+  
+  	run_int(0x1c);
+  	/*	printf("Run 0x1c\n"); */
+- /* update the Bios Data Area timer dword if interrupts enabled */
+- 	if (cpu.iflag) timer_tick();
+  	return;
+  }
+  
+--- 1556,1561 ----
+***************
+*** 2219,2228 ****
+        case 0x0f  :
+        case 0x09  : /* IRQ1, keyb data ready */
+  	g_printf("IRQ->interrupt %x\n", i);
+        case 0x08  :
+  	int08();
+! /*	goto default_handling; */
+! 	return;
+        case 0x10 : /* VIDEO */
+  	int10();
+  	return;
+--- 2218,2227 ----
+        case 0x0f  :
+        case 0x09  : /* IRQ1, keyb data ready */
+  	g_printf("IRQ->interrupt %x\n", i);
++ 	goto default_handling;
+        case 0x08  :
+  	int08();
+! 	goto default_handling;
+        case 0x10 : /* VIDEO */
+  	int10();
+  	return;
+***************
+*** 2417,2422 ****
+--- 2416,2424 ----
+  
+      /* if (config.mouse_flag) mouse_curtick(); */
+  
++ /* update the Bios Data Area timer dword if interrupts enabled */
++     if (cpu.iflag) timer_tick();
++ 
+      /* this is severely broken */
+      if (config.timers)
+        {
+***************
+*** 2762,2778 ****
+            int_queue_head->int_queue_ptr->interrupt > 0x07) {
+  
+  
+  /* Keep queue up to latest lastscan */
+          if (int_queue_head->int_queue_ptr->interrupt == 0x09) {
+    	  if (!scanned) {
+  	 	k_printf("run count = %d, scanned = %d\n", int_count[1], scanned);
+  		parent_nextscan();
+- 		if (int_count[1] - 1) scanned=0;
+  	  }
+          }
+        
+- 	int_count[int_queue_head->int_queue_ptr->interrupt - 8]--;
+- 
+  	if (int_queue_head->int_queue_ptr->interrupt == 0xb ||
+  	    int_queue_head->int_queue_ptr->interrupt == 0xc)
+  	  serial_run();
+--- 2764,2780 ----
+            int_queue_head->int_queue_ptr->interrupt > 0x07) {
+  
+  
++ 	int_count[int_queue_head->int_queue_ptr->interrupt - 8]--;
++ 
+  /* Keep queue up to latest lastscan */
+          if (int_queue_head->int_queue_ptr->interrupt == 0x09) {
+    	  if (!scanned) {
+  	 	k_printf("run count = %d, scanned = %d\n", int_count[1], scanned);
+  		parent_nextscan();
+  	  }
++ 	  if (int_count[1]) scanned=0;
+          }
+        
+  	if (int_queue_head->int_queue_ptr->interrupt == 0xb ||
+  	    int_queue_head->int_queue_ptr->interrupt == 0xc)
+  	  serial_run();
+*** termio.d	Thu Dec  2 17:31:53 1993
+--- termio.c	Thu Dec  2 17:33:18 1993
+***************
+*** 1117,1122 ****
+--- 1117,1123 ----
+  	if (key_flag(KKF_E0) && (scancode == 0x2a || scancode == 0xaa)) {
+  		clr_key_flag(KKF_E0);
+  		clr_key_flag(KKF_E1);
++ 		clr_key_flag(KKF_FIRSTID);
+  		resetid=0;
+  		firstid=0;
+  		return(0);

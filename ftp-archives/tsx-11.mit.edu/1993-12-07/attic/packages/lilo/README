@@ -1,0 +1,891 @@
+LILO  -  Generic Boot Loader for Linux ("LInux LOader") by Werner Almesberger
+=============================================================================
+
+This is an ALPHA test release of a new boot loader. Be sure to have some
+means to boot your system from a different media if you install LILO on your
+hard disk.
+
+
+NOTE: Most of the documentation has moved into the LaTeX document doc.tex.
+      This is only a minimal description for those who can't print or pre-
+      view LaTeX documents.
+
+
+Features
+--------
+
+  - does not depend on the file system. (Tested with Minix, EXT FS and MS-DOS
+    FS.)
+  - can be used to boot from floppies and from hard disks.
+  - can replace the master boot record.
+  - can boot non-Linux systems (MS-DOS, DR DOS, OS/2, ...) and unstripped
+    kernels.
+  - supports up to 16 different boot images that can be selected at boot
+    time. The root disk/partition can be set independently for each
+    image. Images can be protected by passwords.
+  - boot sector, file map and boot images can be all on different disks or
+    partitions.
+
+
+Restrictions and known problems
+-------------------------------
+
+  - booting non-Linux systems from the second hard disk ("D:") is not yet
+    supported.
+
+
+Files
+-----
+
+Files contained in lilo.9.tar.Z:
+
+  README	This file.
+  INCOMPAT	List of incompatibilities.
+  QuickInst	Quick installation script
+  Makefile	Makefile for everything else.
+  *.c, *.h	LILO map installer source.
+  *.S		LILO boot loader source.
+  activate.c	Simple boot partition setter.
+  dparam.s	Disk parameter dumper source.
+  disktab	Sample disk parameter table.
+  install.new   Replacement of /etc/lilo/install for new-style
+		configurations.
+  mkck		Compound kernel maker.
+
+Files created after  make  (among others):
+
+  boot.b	Combined boot sector.
+  chain.b	Chain loader.
+  lilo		LILO installer.
+  activate	Simple boot partition setter.
+  dparam.com	MS-DOS executable of the disk parameter dumper.
+
+
+!! STOP READING HERE IF YOU CAN USE THE LaTeX VERSION OF THE DOCUMENTATION !!
+
+    The LaTeX part is generally more up to date and contains more useful
+    hints and examples. The following sections have been trimmed to make
+    it easier to maintain them, e.g. by removing as many version-dependen-
+    cies as possible.
+
+
+Installation
+------------
+
+LILO 0.7 (and newer) is compatible with all kernels that don't support
+presetting of a swap device. This change has probably occurred at some
+0.97 version.  If the swap device preset code is disabled, you can also
+use 0.96c-pl1 (or newer) kernels.
+
+This section describes one possible installation of LILO. Please read
+"Booting basics" in the LaTeX document for the whole story.
+
+*** QUICK INSTALLATION ***
+
+    If you want to install LILO on your hard disk and if you don't want
+    to use all its features, you can use the quick installation script.
+    Read QuickInst for details.
+
+
+Normal installation:
+
+Step 1: Extract all files from lilo.9.tar.Z in a new directory, configure
+        the Makefile if necessary, then run make to compile and assemble
+        all parts.
+Step 2: Read the "LILO installer" section in this README and be sure to
+	understand what the command-line options do.
+Step 3: Do  make install  to copy all LILO files to /etc/lilo
+Step 4: Get a working bootimage and a rootimage. If you have reason to be
+        paranoid about your boot sector, mount the rootimage and copy your
+        current boot sector to a file on it, e.g.
+	dd if=/dev/hda2 of=/fd/boot_sector bs=512 count=1
+Step 5: Create a shell script /etc/lilo/install that installs LILO on your
+        hard disk, e.g.
+	# cat >/etc/lilo/install
+	#!/bin/sh
+	$ROOT/etc/lilo/lilo <possibly_some_options> -C /etc/lilo/config $*
+	^D
+	# chmod 755 /etc/lilo/install
+
+	A sample /etc/lilo/install file named install.new is included in
+	the LILO distribution.
+
+        Then create a configuration file /etc/lilo/config, e.g.
+        # cat >/etc/lilo/config
+        install=/etc/lilo/boot.b
+        <image_description>
+        ...
+	^D
+
+	Be sure to use absolute paths for all files. Relative paths may
+	cause unexpected behaviour when using the -r option.
+
+Step 6:	Now, you can check what LILO would do if you
+	were about to install it on your hard disk:
+	/etc/lilo/install -v -v -v -t
+Step 7:	If necessary, install a boot partition switcher. Run /etc/lilo/install
+        to install LILO on your hard disk. If necessary, mark that partition
+        "active".
+Step 8: Reboot.
+
+
+SCSI installation:
+
+  Like non-SCSI installation, but you might have to put the parameters of
+  your SCSI drive into the file /etc/lilo/disktab. The LILO map installer
+  issues an error message if it can't determine the parameters without
+  /etc/lilo/disktab.
+
+
+IMPORTANT: You have to re-build the map file (i.e. run /etc/lilo/install)
+           whenever any of the boot images is replaced or moved (e.g. after
+           the kernel is recompiled.)
+
+
+The boot prompt
+---------------
+
+Immediately after it's loaded, LILO checks, whether one of the following
+is happening:
+
+  - any of the [Shift], [Control] or [Alt] keys is being pressed.
+  - [CapsLock] or [ScrollLock] is set.
+
+If this is the case, LILO displays the  boot:  prompt and waits for the name
+of a boot image. Otherwise, it boots the default boot image (the default
+boot image is either the first boot image or the image that has been
+selected at the boot prompt) or -- if a delay has been specified -- waits
+for one of the listed activities until that amount of time has passed.
+
+The boot prompt can also be invoked by sending a break if LILO has been
+configured to be operated from a serial line. In this mode, input from both
+the console keyboard and the serial line is accepted.
+
+At the boot prompt, the name of the image to boot can be entered. Typing
+errors can be corrected with [BackSpace], [Delete], [Ctrl U] and [Ctrl X]. A
+list of known images can be obtained by pressing [?] (on the US keyboard) or
+[Tab].
+
+If [Enter] is pressed and no file name has been entered, the default image
+is booted.
+
+Images can be protected by passwords. When trying to boot such an image,
+a password prompt appears and the password has to be entered. The normal
+editing keys ([BackSpace], [Ctrl U], etc.) can be used.
+
+When using a modern kernel (0.98pl3 or newer.), LILO is also able to pass
+command-line options to it. Command-line options are words that follow the
+name of the boot image and that are separated by spaces. Currently, the
+kernel recognizes the option  root=<device>  and init starting with version
+1.7 of Peter Orbaek's poeigl package and version 2.1 of Miquel van
+Smoorenburg's SysV-style init also recognize the option  single .
+
+single  boots the system in single-user mode. This bypasses all system
+initialization procedures and directly starts a root shell on the console.
+Multi-user mode can be entered by exiting the single-user shell or by
+rebooting.
+
+root=<device>  changes the root device. This overrides settings that may
+have been made in the boot image and on the LILO command line. <device> is
+the hexadecimal device number.
+
+vga=<mode>  alters the VGA mode set at startup. The values NORMAL,
+EXTENDED, ASK or a decimal number are recognized. EXTENDED can be
+abbreviated to EXT, the mode part is case-insensitive. (See also section
+"New-style configuration".)
+
+Other options of the type "variable=<value>" than  root  and  vga  cause
+the respective variables to be set in the environment passed to init. The
+case of the variable name is preserved.
+
+Example:
+
+boot: linux single root=200
+
+LILO always passes the string "BOOT_IMAGE=<name>" to the kernel, where
+<name> is the name by which the kernel is identified (e.g. the label). This
+variable can be used in /etc/rc to select different behaviour, depending on
+the kernel.
+
+When booting automatically, the word "auto" is also passed on the command
+line. This can be used by init to suppress interactive prompts in the boot
+phase.
+
+
+LILO Installer
+--------------
+
+The LILO installer accepts the following command-line options:
+
+  -b boot_device
+
+	Sets the name of the device that contains the boot sector. If -b is
+	omitted, the boot sector is read from (and possibly written to) the
+	device that is currently mounted as root. A BIOS device code can be
+	specified.
+
+  -c
+
+	Tries to merge read requests for adjacent sectors into a single read
+	request. This drastically reduces load time and keeps the map
+	smaller.
+
+  -C config_file
+
+	Specifies the new-style configuration file that is used by the map
+	installer. If -C is omitted, old-style configuration is used.
+
+  -d tsecs
+
+	Specifies the number of tenths of a second LILO should wait before
+	booting the first image. This is useful on systems that immediately
+	boot from the hard disk after enabling the keyboard. LILO doesn't
+	wait if -d is omitted.
+
+  -D
+
+	Selects dump mode. Dumps are used during migration from earlier
+	versions of LILO. -D also implies -t and disables all other
+	informational messages.
+
+  -f disktab_file
+
+	Specifies the name of the disk parameter table. The map installer
+	looks for /etc/lilo/disktab if -f is omitted.
+
+  -i boot_sector
+
+	Install the specified file as the new boot sector. If -i is omitted,
+ 	the old boot sector is modified. A BIOS device code can be specified.
+
+  -I name [ options ]
+
+	Translates the specified label name to the path of the corresponding
+	kernel image and prints that path on standard output. This can be
+	used to rebuild files that depend on the kernel (e.g. the ps
+	database). The image name can be obtained from the environment
+	variable BOOT_IMAGE. An error message is issued and a non-zero exit
+	code is returned if no matching label name can be found. If an
+	options argument is present, the following characters specify
+	additional filtering:
+
+	    i  only traditional boot images are found.
+	    u  only (compound) unstripped kernels are found.
+
+  -l
+
+	Generate linear sector addresses instead of sector/head/cylinder
+	addresses. Linear addresses are translated at run time and do not
+	depend on disk geometry. This is experimental and is not (yet)
+	intended for common use.
+
+  -m map_file
+
+	Specifies the location of the map file. If -m is omitted, a file
+	/etc/lilo/map is used. A BIOS device code can be specified.
+
+  -P
+
+	Perform certain corrections on corrupt partition tables, see
+        FIX-TABLE.
+
+  -q
+
+	List the currently mapped files.
+
+  -r root_dir
+
+	Change the root directory to root_dir before doing anything else.
+ 	This is typically used when running off a floppy, with the normal
+	root mounted at some directory. The -r option is implied if the
+	environment variable ROOT is set.
+
+  -R word ...
+
+	Stores the specified words in the map file. The boot loader uses
+	those words as the default command line when booting the next time.
+	That command line is removed from the map file by the boot loader
+	by overwriting the sector immediately after reading it. The first
+	word has to be the name of a boot image. If -R is not followed by
+	any words, the current default command line in the map file is
+	erased. -R is typically used in reboot scripts, e.g.
+
+	    #!/bin/sh
+	    if /etc/lilo/install -R "$*"; then
+		echo | shutdown -r now
+	    fi
+
+	An error message is issued and a non-zero exit code is returned if
+	the command line is not accepted.
+
+
+  -s backup_file
+
+	Copy the old boot sector to backup_file instead of
+	/etc/lilo/boot.<number>
+
+  -S backup_file
+
+	Like -s, but overwrite an old backup copy if it already exists.
+
+  -t
+	Test only. This performs the entire installation procedure except
+	replacing the map file and writing the modified boot sector. This
+	can be used in conjunction with the -v option to verify that LILO
+	will use sane values.
+
+  -v
+
+	Turns on lots of progress reporting. Repeating -v will turn on more
+	reporting. (-v -v -v -v -v is the highest verbosity level and
+	displays all sector mappings before and after compaction.)
+
+There are two ways how image files can be specified: the traditional
+approach is to specify them on the command line, typically in
+/etc/lilo/install. The new, preferred method uses a configuration file
+/etc/lilo/config. There is a section that describes the migration
+procedure.
+
+
+Old-style configuration
+-----------------------
+
+If no image files are specified on the command line, the currently mapped
+files are listed. Only the options -m, -v and -r can be used in this mode.
+
+If at least one file name is specified, a new map is created for those files
+and they are registered in the boot sector. If the root device has been
+set in the images, it is copied into the descriptors in the boot sector.
+Changing the root device specification in a boot image after the map file
+has been built has no effect.
+
+If no root device has been set (or if this is not a traditional boot image),
+the current root device is used. The root device can be overridden by
+appending it to the image specification, e.g.
+
+      lilo foo,/dev/hda1
+            ^      ^
+          image   root
+
+Either numbers or device names can be used.
+
+It is perfectly valid to use different root settings for the same image,
+because LILO stores them in the image descriptors and not in the images
+themselves. Example:
+
+    lin-hd=/linux,/dev/hda2 \
+    lin-fd=/linux,/dev/fd0
+
+The image files can reside on any media that is accessible at boot time.
+There's no need to put them on the root device, although this certainly
+doesn't hurt.
+
+LILO uses the first file name (without its path) of each image specification
+to identify that image. A different name can be used by prefixing the
+specification with <label>=, e.g.
+
+    msdos=/etc/lilo/chain.b+/dev/sda1@/dev/sda
+
+
+New-style configuration
+-----------------------
+
+For new-style configuration, the file /etc/lilo/install always looks like
+this:
+
+$ROOT/etc/lilo/lilo -C /etc/lilo/config $*
+
+The configuration information is stored in the file /etc/lilo/config and
+consists of variable assignments. The following syntax rules apply:
+
+  - flag variables consist of a single word and are followed by whitespace
+    or the end of the file.
+  - string variables consist of the variable name, optional whitespace, an
+    equal sign, optional whitespace, the value and required whitespace or
+    the end of the file.
+  - a non-empty sequence of blanks, tabs, newlines and comments counts as
+    whitespace.
+  - variable names are case-insensitive. Values are usually case-sensitive,
+    but there are a few exceptions. (See below.)
+  - tabs and newlines are special characters and may not be part of a
+    variable name or a value. The use of other control characters and
+    non-ASCII characters is discouraged.
+  - blanks and equal signs may only be part of a variable name or a value
+    if they are escaped by a backslash. An equal sign may not be the only
+    character in a name or value.
+  - an escaped tab is converted to an escaped blank. An escaped newline is
+    removed from the input stream.
+  - comments begin with a number sign and end with the next newline. All
+    characters (including backslashes) until the newline are ignored.
+
+/etc/lilo/config begins with a possibly empty options section. Most options
+can also be set from the command line, but storing permanent options in the
+configuration file is more convenient. The following options are recognized:
+
+  boot=boot_device  is equivalent to -b boot_device.
+
+  compact  is equivalent to -c.
+
+  delay=tsecs  is equivalent to -d tsecs.
+
+  linear  is equivalent to -l.
+
+  install=boot_sector  is equivalent to -i boot_sector.
+
+  disktab=disktabfile  is equivalent to -f disktab_file}.
+
+  map=map_file  is equivalent to -m map_file}.
+
+  message=message_file  specifies a file containing a message that is
+    displayed before the boot prompt. No message is displayed when waiting
+    for a shifting key after printing "LILO ". The FF character ([Ctrl L])
+    clears the local screen. The size of the message file is limited to
+    65535 bytes. The map file has to be rebuild if the message file is
+    changed or moved.
+
+  verbose=level  is equivalent to  level  repetitions of -v. If -v is
+    additionally specified on the command line, level  is increased.
+
+  backup=backup_file  is equivalent to -s backup_file.
+
+  force-backup=backup_file  is equivalent to -S backup_file.
+    backup=backup_file is ignored if force-backup appears in the same
+    configuration file.
+
+  prompt  forces entering the boot prompt without expecting any prior
+    keypresses. Unattended reboots are impossible if prompt is set and
+    timeout isn't.
+
+  timeout=tsecs  sets a timeout (in tenths of a second) for keyboard input.
+    If no key is pressed for the specified time, the first image is
+    automatically booted. Similarly, password input is aborted if the user
+    is idle for too long. The default timeout is infinite.
+
+  serial=parameters  enables control from a serial line. The specified serial
+    port is initialized and LILO is accepting input from it and from the PC's
+    keyboard. Sending a break on the serial line corresponds to pressing a
+    shift key on the console in order to get LILO's attention. All boot
+    images should be password-protected if the serial access is less secure
+    than access to the console, e.g. if the line is connected to a modem. The
+    parameter string has the following syntax:
+    <port>,<bps><parity><bits>
+    The components <bps>, <parity> and <bits> can be omitted. If a component
+    is omitted, all following components have to be omitted too. Additionally,
+    the comma has to be omitted if only the port number is specified.
+
+      <port> the number of the serial port, zero-based. 0 corresponds to
+	/dev/ttys0 alias COM1, etc. All four ports can be used (if present).
+      <ps> the baud rate of the serial port. The following baud rates are
+	supported: 110, 150, 300, 600, 1200, 2400, 4800 and 9600. Default is
+	2400.
+      <parity> the parity used on the serial line. LILO ignores input parity
+	and strips the 8th bit. The following (upper or lower case)
+	characters are used to describe the parity: N for no parity, E for
+	even parity and O for odd parity.
+      <bits> the number of bits in a character. Only 7 and 8 bits are
+	supported. Default is 8 if parity is "none", 7 if parity is "even"
+	or "odd".
+
+    If serial is set, the value of delay is automatically raised to 20.
+    Example: serial=0,2400n8  sets COM1 to the default parameters.
+
+  fix-table  allows LILO to adjust 3D addresses in partition tables. Each
+    partition entry contains a 3D (sector/head/cylinder) and a linear address
+    of the first and the last sector of the partition. If a partition is not
+    cylinder-aligned and if certain other operating systems (e.g. PC/MS-DOS
+    or OS/2) are using the same disk, they may change the 3D address. LILO
+    can store its boot sector only on partitions where both address types
+    correspond. \LILO\ re-adjusts incorrect 3D start addresses if fix-table
+    is set.
+    WARNING  This does not guarantee that other operating systems may not
+      attempt to reset the address later. It is also possible that this
+      change has other, unexpected side-effects. The correct fix is to
+      re-partition the drive with a program that does align partitions to
+      cylinders.
+
+  password  sets a password for all images. (See below.)
+
+  restricted  relaxes the password protection. (See below.)
+
+  optional  makes all images optional. (See below.)
+
+Additionally, the kernel configuration parameters  root ,  vga  and
+ramdisk  can be set in the options section. They are used as defaults if
+they aren't specified in the configuration sections of the respective
+kernel images. See below for a description.
+
+If the option -q is specified on the command line, the currently mapped
+files are listed. Otherwise, a new map is created for the images described
+in /etc/lilo/config and they are registered in the boot sector.
+
+Each image description begins with a special variable and is followed by
+optional variables. The following variables can be used for all image
+descriptions that describe a Linux kernel:
+
+  root=root_device  specifies the device that should be mounted as root.
+    If the special name  current  is used, the root device is set to the
+    device on which the root file system is currently mounted. If the root
+    has been changed with -r, the respective device is used.  If this variable
+    is omitted, the root device setting that is contained in the boot image is
+    used. It can be changed with the rdev aka setroot program.
+
+  vga=mode  specifies the VGA text mode that should be selected when
+    booting. The following values are recognized (case is ignored):
+
+      normal  select normal 80x25 text mode.
+      extended  select 80x50 text mode. The word "extended" can be
+	   abbreviated to "ext".
+      ask  stop and ask for user input (at boot time). A system where this
+           option is being used is unable to reboot automatically.
+      <number>  use the corresponding text mode. A list of available
+	modes can be obtained by booting with vga=ask and pressing [Enter].
+
+    If this variable is omitted, the VGA mode setting that is contained in
+    the boot image is used. Some versions of setroot support manipulation
+    of the VGA text mode setting in the boot image.
+
+  ramdisk=size  specifies the size of the optional RAM disk. A value of zero
+    indicates that no RAM disk should be created. If this variable is omitted,
+    the RAM disk size that is configured into the boot image is used.
+
+The variables VGA and RAMDISK are only available when running a kernel that
+supports them, e.g. 0.98pl6 and later. If one of ROOT, VGA or RAMDISK is
+omitted in the configuration file and the corresponding value in the boot
+image is changed, LILO will use the new value.
+
+It is perfectly valid to use different root settings for the same image,
+because LILO stores them in the image descriptors and not in the images
+themselves. Example:
+
+image = /linux
+  label = lin-hd
+  root = /dev/hda2
+image = /linux
+  label = lin-fd
+  root = /dev/fd0
+
+The image files can reside on any media that is accessible at boot time.
+There's no need to put them on the root device, although this certainly
+doesn't hurt.
+
+LILO uses the main file name (without its path) of each image specification
+to identify that image. A different name can be used by setting the variable
+LABEL (see the example above). A different name for the  same entry can be
+used by specifying the ALIAS=name option.
+
+Images are protected by a password if the variable PASSWORD is set. If the
+variable RESTRICTED is set in addition to PASSWORD, a password is only
+required to boot the respective image if parameters are specified on the
+command line (e.g. single). PASSWORD and RESTRICTED can also be set in the
+options section to be the default password and password protection mode for
+all images.
+
+If an image section contains the variable OPTIONAL (or if that variable is set
+in the options section), the respective image is omitted if its main file is
+not available at map creation time. This is useful to specify test kernels
+that are not always present.
+
+
+Boot image types
+----------------
+
+LILO can boot the following types of images:
+
+  - "classic" boot images from a file
+  - "classic" boot images from a device
+  - unstripped kernel executables
+  - compound unstripped kernels
+  - the boot sector of some other operating system
+
+The image type is determined either by the syntax that is used for the image
+specification (old-style configuration) or by the name of the initial
+variable of the configuration section (new-style configuration).
+
+
+  Booting "classic" boot images from a file
+  -----------------------------------------
+
+  If defined, the root device definition is taken from the boot image.
+  The image is specified as follows:
+
+  OLD-STYLE
+
+	file_name [ :BIOS_code ]
+
+  I.e.  /linux
+
+  NEW-STYLE
+
+	image=name
+
+  The following additional variables are recognized: root, vga, ramdisk,
+  password, restricted, label, alias and optional.
+
+  Example:
+
+  image = /linux
+
+
+  Booting "classic" boot images from a device
+  -------------------------------------------
+
+  The root device setting in the image is ignored. The range of sectors
+  that should be mapped, has to be specified. Either a range (start-end)
+  or a start and a distance (start+number) have to be specified. start
+  and end are zero-based. If only the start if specified, only that sector
+  is mapped.
+
+  OLD-STYLE
+
+	device_name [ :BIOS_code] #start [ -end | +number ]
+
+  I.e.	/dev/fd0#1+512
+
+  NEW-STYLE
+
+	image=name
+
+  The following additional variables are recognized: root, vga, ramdisk,
+  password, restricted, label, alias, optional and range.
+
+  Example:
+
+  image = /dev/fd0
+    range = 1+512
+
+
+  Booting unstripped kernel executables
+  -------------------------------------
+
+  Unstripped kernel executables contain no root device information.
+  The setup code of the kernel has also to be added to the kernel. First,
+  it has to be copied to a suitable place and its header has to be removed,
+  e.g.
+
+	(dd of=/dev/null bs=32 count=1; dd) </usr/src/linux/boot/setup \
+	  >/etc/lilo/setup.b
+
+  OLD-STYLE
+
+  The image specification looks like this:
+
+	setup_name [ :BIOS_code ] +kernel_name [ :BIOS_code ]
+
+  I.e.	/etc/lilo/setup.b+/usr/src/linux/tools/system
+
+  NEW-STYLE
+
+	unstripped=name
+
+  The following additional variables are recognized: root, vga, ramdisk,
+  password, restricted, label, alias, optional, boot and setup.
+
+    boot=boot_sector  specifies the floppy boot sector that should be loaded.
+      It is used to provide defaults for settings like the root device, etc.
+      The boot sector file can be created like the setup file. (See above.)
+      The recommended name for the floppy boot sector file is
+      /etc/lilo/bsect.b. If this variable is omitted, a zero-filled sector is
+      loaded instead.
+  setup=setup_file  specifies the setup file that should be loaded. This
+      variable is required.
+
+  Example:
+
+  unstripped = /usr/src/linux/tools/system
+    setup = /etc/lilo/setup.b
+
+
+  Booting compound unstripped kernels
+  -----------------------------------
+
+  Compound unstripped kernels are like ordinary unstripped kernels, but
+  the kernel proper, the setup code and the floppy boot sector are in a
+  single file instead of three files. This avoids the risk of version
+  conflicts and generally makes the kernel easier to handle.
+
+  Compound kernels are generated with the mkck program. mkck is run in
+  the top-level directory of the kernel source and writes the kernel to
+  the file that has been specified on the command line. If no file has
+  been specified, the file name /linux is used. mkck should be run by
+  the kernel Makefile, e.g.
+
+  linux: $(CONFIGURE) Image
+          if [ -f /linux ]; then mv /linux /linux.old; fi
+          /etc/lilo/mkck
+          /etc/lilo/install
+
+
+	compound=name
+
+  The following additional variables are recognized: root, vga, ramdisk,
+  password, restricted, label, alias and optional.
+
+  Example:
+
+  compound = /linux
+
+
+  Booting a foreign operating system
+  ----------------------------------
+
+  LILO can even boot other operating systems, e.g. MS-DOS. This feature
+  is new and may not yet work totally reliably. (Reported to work with
+  PC-DOS 4.0, MS-DOS 5.0 and DR-DOS 6.0.) To boot an other operating
+  system, the name of a loader program, the device that contains the boot
+  sector and the device that contains the master boot record have to be
+  specified.
+
+  The boot sector is merged with the partition table and stored in the map
+  file.
+
+  Currently, only the loader chain.b exists.
+
+  OLD_STYLE
+
+	loader+boot_dev [ :BIOS_code ] @ [ part_dev ]
+
+  I.e.	/etc/lilo/chain.b+/dev/hda2@/dev/hda
+
+  NEW-STYLE
+
+	other=name
+
+  The following additional variables are recognized: password, restricted,
+  label, alias, optional, loader, table and unsafe.
+
+    loader=chain_loader  specifies the chain loader that should be used. If
+      this variable is omitted, /etc/lilo/chain.b is used.
+    table=device  specifies the device that contains the partition table.
+      LILO does not pass partition information to the booted operating
+      system if this variable is omitted. (Some operating systems have other
+      means to determine from which partition they has been booted.)
+    unsafe  do not access the boot sector at map creation time. This disables
+      some sanity checks. If the boot sector is on a floppy disk device,
+      using UNSAFE avoids the need to put a readable disk into the drive when
+      running the map installer. UNSAFE and TABLE are mutually incompatible.
+
+  Example:
+
+  other = /dev/hda2
+    table = /dev/hda
+
+LILO may create some device special files in your /tmp directory that are
+not removed if an error occurs. They are named /tmp/dev.<number>.
+
+
+Disk parameter table
+--------------------
+
+For floppies and IDE disks (or MFM, RLL, ESDI, etc.) and some SCSI disks,
+LILO can obtain the disk geometry information from the kernel. Unfortuna-
+tely, this is not possible with all SCSI adapters (The 0.99pl1 kernel
+provides geometry information for Adaptec AHA-1542 and AHA-1740, Future
+Domain TMC-1660 and TMC-1680 and WD-7000 adapters.) or with kernels older
+than 0.99pl0. In such cases, LILO reports either the error
+geo_query_dev HDIO_REQ
+or
+Device 0xXXXX: Got bad geometry XX/XX/XXX
+
+The file /etc/lilo/disktab is used to describe such disks. For each device
+(/dev/sda -> 0x800, /dev/sda1 -> 0x801, etc.), the BIOS code, the disk
+geometry and the offset of the first sector of that partition (measured in
+sectors) have to be specified, e.g.
+
+# /etc/lilo/disktab  -  LILO disk parameter table
+#
+# This table contains disk parameters for SCSI disks and non-
+# standard parameters of IDE disks. Parameters in disktab
+# _always_ override auto-detected disk parameters.
+
+# Dev.  BIOS    Secs/   Heads/  Cylin-  Part.
+# num.  code    track   cylin.  ders    offset
+
+0x800   0x80    32      64      631     0       # /dev/sda
+0x801   0x80    32      64      631     32      # /dev/sda1
+0x802   0x80    32      64      631     204800  # /dev/sda2
+
+(Those parameters are just a random example from my system. However, many
+SCSI controllers re-map the drives to 32 sectors and 64 heads. The number
+of cylinders does not have to be exact, but it shouldn't be lower than the
+number of effectively available cylinders.)
+
+Note that the device number and the BIOS code have to be specified as
+hexadecimal numbers with the 0x prefix.
+
+The disk geometry parameters can be obtained by booting MS-DOS and running
+the program DPARAM.COM with the hexadecimal BIOS code of the drive as its
+argument, e.g.  dparam 0x80  for the first hard disk. It displays the number
+of sectors per track, the number of heads per cylinder and the number of
+cylinders.
+
+The partition offset is printed by the Linux kernel when the SCSI disk is
+detected at boot time. Example:
+
+sd0 :
+ part 1 start 32 size 204768 end 204799
+ part 2 start 204800 size 1087488 end 1292287
+
+The first partition has an offset of 32 sectors, the second has an
+offset of 204800 sectors.
+
+Because many SCSI controllers don't support more than 1 GB when using the
+BIOS interface, LILO can't access files that are located beyond the 1 GB
+limit of large SCSI disks on such controllers and reports errors in these
+cases.
+
+
+Migration from old-style to new-style configuration
+---------------------------------------------------
+
+An existing pre-LILO 0.7 configuration can easily be replaced by a new-style
+configuration. The command-line option -D dumps the current settings on
+standard output. This is a typical migration procedure:
+
+  - upgrade to LILO 0.7 (or later)
+  - cd to /etc/lilo
+  - run  ./install -D >config
+  - add new variables VIDEO and RAMDISK to /etc/lilo/config if you want to
+    (and if your kernel supports it).
+  - run  ./lilo -C config -D | diff -c config -
+    to verify the correctness of the dump. LILO may change the order of
+    variables and the placement of whitespace in the second dump. It also
+    removes comments.
+  - rename /etc/lilo/install to /etc/lilo/install.old and copy install.new
+    from your LILO source directory to /etc/lilo/install
+  - add commands to create boot and setup files to the new /etc/lilo/install
+    if you're booting unstripped kernels.
+  - run  /etc/lilo/install
+
+
+LILO start message
+------------------
+
+When LILO loads itself, it displays the word "LILO". Each letter is printed
+before or after performing some specific action. If LILO fails at some point,
+the letters printed so far can be used to identify the problem.
+
+  <nothing>  No part of LILO has been loaded. LILO either isn't installed or
+    the partition on which its boot sector is located isn't active.
+  L  The first stage boot loader has been loaded and started, but it can't
+    load the second stage boot loader. This usually indicates a media failure
+    or a geometry mismatch (e.g. bad parameters in /etc/lilo/disktab).
+  LI  The first stage boot loader was able to load the second stage boot
+    loader, but has failed to execute it. This can either be caused by a
+    geometry mismatch or by moving /etc/lilo/boot.b without running the map
+    installer.
+  LIL  The second stage boot loader has been started, but it can't load the
+    descriptor table from the map file. This is typically caused by a media
+    failure or by a geometry mismatch.
+  LIL?  The second stage boot loader has been loaded at an incorrect address.
+    This is typically caused by a subtle geometry mismatch or by moving
+    /etc/lilo/boot.b without running the map installer.
+  LIL-  The descriptor table is corrupt. This can either be caused by a
+    geometry mismatch or by moving /etc/lilo/map without running the map
+    installer.
+  LILO  All parts of LILO have been successfully loaded.
+
+
+Bugs and such
+-------------
+
+Please send all bug reports to almesber@bernina.ethz.ch

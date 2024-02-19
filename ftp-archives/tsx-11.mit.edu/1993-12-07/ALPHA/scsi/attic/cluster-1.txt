@@ -1,0 +1,1912 @@
+	This is revision number 3 of the clustering diffs.
+New features this time around:
+
+	1) A real, honest to god free list is now present.
+The buffers in it are guaranteed to be clean, unlocked and not
+shared with any other process.  There is a refill function
+that keeps it supplied with buffers - right now it is written
+to supply 64 buffers any time it is called.  Also, there is a separate
+free list for each different size of buffer, but the LRU list is
+common for all of the different sizes.
+
+	2) A bdflush process is now present, and runs in the
+background when we need to write back some dirty buffers.  Currently
+this only scans at most 1/4 of the buffer cache, and will write back
+at most 500 buffers, which ever comes first.  These numbers are
+wild-assed guesses as to what would be appropriate, and tuning would
+probably help. A interactive method of altering parameters might also
+be good.  Note: you currently need to run the process in rc.  It may
+eventually be possible to get bdflush started automatically without
+having to run a process, but there are a lot of tricky and subtle
+issues at hand here.  The source code for bdflush is at the end of
+this message.
+
+
+	3) iozone on a naked partition consistently now yields numbers
+like 1.1-1.4Mb/sec.  I believe that further tuning would be good in
+order to improve performance.  In particular, if there is a big wad of
+dirty buffers coming through the LRU list, we do not detect this until
+it gets to the top.  At this point we wake up bdflush(), but until
+bdflush finishes, we have to crawl past this wad each time the refill
+function is called.  Even then, the refill function supplies 64
+buffers so the penalty is nowhere near as bad as it once was.  Some
+further adjustment of the amount of data that bdflush writes back
+would certainly be good, I guess.
+
+	There is code in buffer.c to generate clusters, and it is now
+used by the block device code.  I am finding that it is not terribly
+efficient to search for a page that we can reclaim, so it is best to
+limit the search to only a fraction of the buffer cache.  Currently
+this is set to 25%, I may back this off a little bit more.  This is
+a tuning parameter that can be modified at run time via the bdflush()
+syscall interface.
+
+	The only thing left to do is to modify the filesytems to
+request clustered buffers.  In the block devices, I basically do
+something like:
+
+	if((block % 4) == 0) generate_cluster(dev, block, blocksize);
+
+which as I look at it now is incorrect because it assumes a 1024 byte
+blocksize.  Nonetheless, once this is fixed, it could be added
+directly to getblk so that we always request clustered buffers.  It
+would be good if the filesystems were to try and align things on
+cluster boundaries, but as I understand it, ext2 tends to keep files
+contiguous so it probably should not matter that much.
+
+	One concern that have with this is the overhead of searching
+for a page that can be reclaimed to be used for a new cluster.  I am
+toying with the idea of discouraging the buffer cache from breaking
+apart clusters so that things are always done on a page basis.  In
+fact, the buffer cache would be reorganized so that things are
+generally done by handling pages.  This would speed up a number of
+parts of the buffer cache, but the filesystems are still expecting
+buffer headers.  Linus was also thinking along these lines, and as I
+look at it now, it is beginning to make more and more sense to me.
+There are still some things that need to be thought out before I can
+go ahead, but I suspect that on the whole it will lead to better
+performance.
+
+
+-Eric
+
+#include <linux/unistd.h>
+
+ _syscall2(int,bdflush, int, func, int, data);
+
+char * bdparam[] = {
+"Maximum fraction of LRU list to examine for dirty blocks",
+"Maximum number of dirty blocks to write each time bdflush activated",
+"Number of clean buffers to be loaded onto free list by refill_freelist",
+"Dirty block threshold for activating bdflush in refill_freelist"
+"Maximum fraction of LRU list to examine when looking for clusterable page",
+};
+
+set_param(number, value){
+  int i;
+  i = bdflush(2 + 1 +(number<<1) ,value);
+  if(i) printf("bdflush() returned %d\n", errno);
+}
+
+main(int argc, char * argv[]){
+  int i, j;
+  int data;
+
+  if(argc<2) {
+    if (fork())
+      exit(0);
+    for (i = 0; i < getdtablesize(); i++)
+      (void) close(i);
+    i = bdflush(0,0); /* Assume we want to start bdflush */
+  } else
+
+    /* print out the current parameters */
+  for(j=0; j<5; j++){
+    i = bdflush(2 + (j<<1) ,(int) &data);
+    printf("%d: %5d %s\n", j, data, bdparam[j]);
+    if (i) break;
+  };
+  if(i) printf("bdflush() returned %d\n", errno);
+}
+
+
+*************************************************************************************
+Required kernel diffs 
+*************************************************************************************
+
+
+*** ./fs/buffer.c.~1~	Thu Oct 28 23:04:02 1993
+--- ./fs/buffer.c	Sun Oct 31 18:37:59 1993
+***************
+*** 27,32 ****
+--- 27,33 ----
+  #include <linux/errno.h>
+  
+  #include <asm/system.h>
++ #include <asm/segment.h>
+  #include <asm/io.h>
+  
+  #ifdef CONFIG_SCSI
+***************
+*** 45,54 ****
+  extern int check_mcd_media_change(int, int);
+  #endif
+  
+  static int grow_buffers(int pri, int size);
+  
+  static struct buffer_head * hash_table[NR_HASH];
+! static struct buffer_head * free_list = NULL;
+  static struct buffer_head * unused_list = NULL;
+  static struct wait_queue * buffer_wait = NULL;
+  
+--- 46,61 ----
+  extern int check_mcd_media_change(int, int);
+  #endif
+  
++ #define NR_SIZES 4
++ static char buffersize_index[9] = {-1,  0,  1, -1,  2, -1, -1, -1, 3};
++ 
++ #define BUFSIZE_INDEX(X) (buffersize_index[(X)>>9])
++ 
+  static int grow_buffers(int pri, int size);
+  
+  static struct buffer_head * hash_table[NR_HASH];
+! static struct buffer_head * lru_list = NULL;
+! static struct buffer_head * free_list[NR_SIZES] = {NULL, };
+  static struct buffer_head * unused_list = NULL;
+  static struct wait_queue * buffer_wait = NULL;
+  
+***************
+*** 58,63 ****
+--- 65,91 ----
+  static int min_free_pages = 20;	/* nr free pages needed before buffer grows */
+  extern int *blksize_size[];
+  
++ /* Here is the parameter block for the bdflush process. */
++ static void wakeup_bdflush(int);
++ 
++ #define N_PARAM 5
++ 
++ static union bdflush_param{
++   struct {
++     int nfract;  /* Percentage of buffer cache to scan to search for clean blocks */
++     int ndirty;  /* Maximum number of dirty blocks to write out per wake-cycle */
++     int nrefill; /* Number of clean buffers to try and obtain each time we call refill */
++     int nref_dirt; /* Dirty buffer threshold for activating bdflush when trying to refill
++ 		      buffers. */
++     int clu_nfract;  /* Percentage of buffer cache to scan to search for free clusters */
++   } b_un;
++   unsigned int data[N_PARAM];
++ } bdf_prm = {{25, 500, 64, 256, 25}};
++ 
++ /* These are the min and max parameter values that can be assigned */
++ static bdflush_min[N_PARAM] = {  0,  10,    5,   25,  0};
++ static bdflush_max[N_PARAM] = {100,5000, 2000, 2000,100};
++ 
+  /*
+   * Rewrote the wait-routines to use the "new" wait-queue functionality,
+   * and getting rid of the cli-sti pairs. The wait-queue routines still
+***************
+*** 100,106 ****
+  	 */
+  repeat:
+  	retry = 0;
+! 	bh = free_list;
+  	for (i = nr_buffers*2 ; i-- > 0 ; bh = bh->b_next_free) {
+  		if (dev && bh->b_dev != dev)
+  			continue;
+--- 128,134 ----
+  	 */
+  repeat:
+  	retry = 0;
+! 	bh = lru_list;
+  	for (i = nr_buffers*2 ; i-- > 0 ; bh = bh->b_next_free) {
+  		if (dev && bh->b_dev != dev)
+  			continue;
+***************
+*** 192,198 ****
+  	int i;
+  	struct buffer_head * bh;
+  
+! 	bh = free_list;
+  	for (i = nr_buffers*2 ; --i > 0 ; bh = bh->b_next_free) {
+  		if (bh->b_dev != dev)
+  			continue;
+--- 220,226 ----
+  	int i;
+  	struct buffer_head * bh;
+  
+! 	bh = lru_list;
+  	for (i = nr_buffers*2 ; --i > 0 ; bh = bh->b_next_free) {
+  		if (bh->b_dev != dev)
+  			continue;
+***************
+*** 289,347 ****
+  	bh->b_next = bh->b_prev = NULL;
+  }
+  
+! static inline void remove_from_free_list(struct buffer_head * bh)
+  {
+  	if (!(bh->b_prev_free) || !(bh->b_next_free))
+! 		panic("VFS: Free block list corrupted");
+  	bh->b_prev_free->b_next_free = bh->b_next_free;
+  	bh->b_next_free->b_prev_free = bh->b_prev_free;
+! 	if (free_list == bh)
+! 		free_list = bh->b_next_free;
+  	bh->b_next_free = bh->b_prev_free = NULL;
+  }
+  
+  static inline void remove_from_queues(struct buffer_head * bh)
+  {
+  	remove_from_hash_queue(bh);
+! 	remove_from_free_list(bh);
+  }
+  
+! static inline void put_first_free(struct buffer_head * bh)
+  {
+! 	if (!bh || (bh == free_list))
+  		return;
+! 	remove_from_free_list(bh);
+! /* add to front of free list */
+! 	bh->b_next_free = free_list;
+! 	bh->b_prev_free = free_list->b_prev_free;
+! 	free_list->b_prev_free->b_next_free = bh;
+! 	free_list->b_prev_free = bh;
+! 	free_list = bh;
+  }
+  
+  static inline void put_last_free(struct buffer_head * bh)
+  {
+  	if (!bh)
+  		return;
+! 	if (bh == free_list) {
+! 		free_list = bh->b_next_free;
+! 		return;
+! 	}
+! 	remove_from_free_list(bh);
+  /* add to back of free list */
+! 	bh->b_next_free = free_list;
+! 	bh->b_prev_free = free_list->b_prev_free;
+! 	free_list->b_prev_free->b_next_free = bh;
+! 	free_list->b_prev_free = bh;
+  }
+  
+  static inline void insert_into_queues(struct buffer_head * bh)
+  {
+  /* put at end of free list */
+! 	bh->b_next_free = free_list;
+! 	bh->b_prev_free = free_list->b_prev_free;
+! 	free_list->b_prev_free->b_next_free = bh;
+! 	free_list->b_prev_free = bh;
+  /* put the buffer in new hash-queue if it has a device */
+  	bh->b_prev = NULL;
+  	bh->b_next = NULL;
+--- 317,430 ----
+  	bh->b_next = bh->b_prev = NULL;
+  }
+  
+! static inline void remove_from_lru_list(struct buffer_head * bh)
+  {
+  	if (!(bh->b_prev_free) || !(bh->b_next_free))
+! 		panic("VFS: LRU block list corrupted");
+! 	if(bh->b_dev == 0xffff) panic("LRU list corrupted");
+  	bh->b_prev_free->b_next_free = bh->b_next_free;
+  	bh->b_next_free->b_prev_free = bh->b_prev_free;
+! 	if (lru_list == bh)
+! 		lru_list = bh->b_next_free;
+! 	if(lru_list->b_next_free == lru_list)
+! 	  lru_list = NULL;
+! 	bh->b_next_free = bh->b_prev_free = NULL;
+! }
+! 
+! static inline void remove_from_free_list(struct buffer_head * bh)
+! {
+!         int isize = BUFSIZE_INDEX(bh->b_size);
+! 	if (!(bh->b_prev_free) || !(bh->b_next_free))
+! 		panic("VFS: Free block list corrupted");
+! 	if(bh->b_dev != 0xffff) panic("Free list corrupted");
+! 	if(!free_list[isize]){
+! #if 0
+! 	  printk("BH %x %x %x %x %x %x\n",
+! 		 bh->b_dev, bh->b_blocknr, bh->b_next, bh->b_prev,
+! 		 bh->b_next_free, bh->b_prev_free);
+! #endif
+! 	  panic("Free list empty");
+! 	};
+! 	if(bh->b_next_free == bh)
+! 	  free_list[isize] = NULL;
+! 	else {
+! 	  bh->b_prev_free->b_next_free = bh->b_next_free;
+! 	  bh->b_next_free->b_prev_free = bh->b_prev_free;
+! 	  if (free_list[isize] == bh)
+! 	    free_list[isize] = bh->b_next_free;
+! 	};
+  	bh->b_next_free = bh->b_prev_free = NULL;
+  }
+  
+  static inline void remove_from_queues(struct buffer_head * bh)
+  {
++         if(bh->b_dev == 0xffff) {
++ 	  remove_from_free_list(bh); /* Free list entries should not be in
++ 					the hash queue */
++ 	  return;
++ 	};
+  	remove_from_hash_queue(bh);
+! 	remove_from_lru_list(bh);
+! 	
+  }
+  
+! static inline void put_last_lru(struct buffer_head * bh)
+  {
+! 	if (!bh)
+  		return;
+! 	if (bh == lru_list) {
+! 		lru_list = bh->b_next_free;
+! 		return;
+! 	}
+! 	if(bh->b_dev == 0xffff) panic("Wrong block for lru list");
+! 	remove_from_lru_list(bh);
+! /* add to back of free list */
+! 
+! 	if(!lru_list) lru_list = bh;
+! 
+! 	bh->b_next_free = lru_list;
+! 	bh->b_prev_free = lru_list->b_prev_free;
+! 	lru_list->b_prev_free->b_next_free = bh;
+! 	lru_list->b_prev_free = bh;
+  }
+  
+  static inline void put_last_free(struct buffer_head * bh)
+  {
++         int isize;
+  	if (!bh)
+  		return;
+! 
+! 	isize = BUFSIZE_INDEX(bh->b_size);	
+! 	bh->b_dev = 0xffff;  /* So it is obvious we are on the free list */
+  /* add to back of free list */
+! 
+! 	if(!free_list[isize]) {
+! 	  free_list[isize] = bh;
+! 	  bh->b_prev_free = bh;
+! 	};
+! 
+! 	bh->b_next_free = free_list[isize];
+! 	bh->b_prev_free = free_list[isize]->b_prev_free;
+! 	free_list[isize]->b_prev_free->b_next_free = bh;
+! 	free_list[isize]->b_prev_free = bh;
+  }
+  
+  static inline void insert_into_queues(struct buffer_head * bh)
+  {
+  /* put at end of free list */
+! 
+!         if(bh->b_dev == 0xffff) {
+! 	  put_last_free(bh);
+! 	  return;
+! 	};
+! 	if(!lru_list) {
+! 	  lru_list = bh;
+! 	  bh->b_prev_free = bh;
+! 	};
+! 	bh->b_next_free = lru_list;
+! 	bh->b_prev_free = lru_list->b_prev_free;
+! 	lru_list->b_prev_free->b_next_free = bh;
+! 	lru_list->b_prev_free = bh;
+  /* put the buffer in new hash-queue if it has a device */
+  	bh->b_prev = NULL;
+  	bh->b_next = NULL;
+***************
+*** 416,435 ****
+    /* We need to be quite careful how we do this - we are moving entries
+       around on the free list, and we can get in a loop if we are not careful.*/
+  
+! 	bh = free_list;
+  	for (i = nr_buffers*2 ; --i > 0 ; bh = bhnext) {
+! 		bhnext = bh->b_next_free; 
+! 		if (bh->b_dev != dev)
+  			continue;
+! 		if (bh->b_size == size)
+  			continue;
+! 
+! 		wait_on_buffer(bh);
+! 		if (bh->b_dev == dev && bh->b_size != size)
+! 			bh->b_uptodate = bh->b_dirt = 0;
+! 		remove_from_hash_queue(bh);
+! /*    put_first_free(bh); */
+  	}
+  }
+  
+  /*
+--- 499,588 ----
+    /* We need to be quite careful how we do this - we are moving entries
+       around on the free list, and we can get in a loop if we are not careful.*/
+  
+! 	bh = lru_list;
+  	for (i = nr_buffers*2 ; --i > 0 ; bh = bhnext) {
+! 	  if(!bh) break;
+! 	  bhnext = bh->b_next_free; 
+! 	  if (bh->b_dev != dev)
+! 	    continue;
+! 	  if (bh->b_size == size)
+! 	    continue;
+! 	    
+! 	    wait_on_buffer(bh);
+! 	    if (bh->b_dev == dev && bh->b_size != size) {
+! 	      bh->b_uptodate = bh->b_dirt = 0;
+! 	    };
+! 	    remove_from_hash_queue(bh);
+! 	  }
+! }
+! 
+! #define BADNESS(bh) (((bh)->b_dirt<<1)+(bh)->b_lock)
+! 
+! void refill_freelist(int size)
+! {
+! 	struct buffer_head * bh, * tmp;
+! 	int buffers;
+! 	char skipped;
+! 	int needed;
+! 	int ndirty;
+! 
+! 	/* If there are too many dirty buffers, we wake up the update process
+! 	   now so as to ensure that there are still clean buffers available
+! 	   for user processes to use (and dirty) */
+! 
+! 	/* We are going to try and locate this much memory */
+! 	needed =bdf_prm.b_un.nrefill * size;  
+! 
+! 	while (nr_free_pages > min_free_pages && needed > 0 &&
+! 	       grow_buffers(GFP_BUFFER, size)) {
+! 		needed -= PAGE_SIZE;
+! 	}
+! 	/* OK, we cannot grow the buffer cache, now try and get some from
+! 	   the lru list */
+! 
+! repeat:
+! 	if(needed <= 0) return;
+! 	buffers = nr_buffers;
+! 	bh = NULL;
+! 
+! 	skipped = 0;
+! 	ndirty = 0;
+! 	for (bh = lru_list; buffers-- > 0 && needed > 0; 
+! 	     bh = tmp) {
+! 	        if (!bh) break;
+! 		tmp = bh->b_next_free;
+! 		if (bh->b_count || bh->b_size != size)
+  			continue;
+! 		if (mem_map[MAP_NR((unsigned long) bh->b_data)] != 1)
+  			continue;
+! 		if (bh->b_dirt && !bh->b_lock) ndirty++;
+! 		if(ndirty == bdf_prm.b_un.nref_dirt) wakeup_bdflush(0);
+! 		if (BADNESS(bh)) continue;
+! 
+! 		if(bh->b_dev == 0xffff) panic("Wrong list");
+! 		remove_from_queues(bh);
+! 		bh->b_dev = 0xffff;
+! 		put_last_free(bh);
+! 		needed -= bh->b_size;
+! 	      }
+! 
+! 	if(needed <= 0) return;
+! 
+! 	/* Too bad, that was not enough. Try a little harder to grow some. */
+! 
+! 	if (nr_free_pages > 5) {
+! 	  if (grow_buffers(GFP_BUFFER, size)) {
+! 	                needed -= PAGE_SIZE;
+! 			goto repeat;
+! 			};
+  	}
++ 	
++ /* and repeat until we find something good */
++ 	if (!grow_buffers(GFP_ATOMIC, size)) {
++ 	  wakeup_bdflush(1);
++ 	};
++ 	needed -= PAGE_SIZE;
++ 	goto repeat;
+  }
+  
+  /*
+***************
+*** 442,517 ****
+   * 14.02.92: changed it to sync dirty buffers a bit: better performance
+   * when the filesystem starts to get full of dirty blocks (I hope).
+   */
+- #define BADNESS(bh) (((bh)->b_dirt<<1)+(bh)->b_lock)
+  struct buffer_head * getblk(dev_t dev, int block, int size)
+  {
+! 	struct buffer_head * bh, * tmp;
+! 	int buffers;
+! 	static int grow_size = 0;
+  
+  repeat:
+  	bh = get_hash_table(dev, block, size);
+  	if (bh) {
+  		if (bh->b_uptodate && !bh->b_dirt)
+! 			put_last_free(bh);
+  		return bh;
+  	}
+- 	grow_size -= size;
+- 	if (nr_free_pages > min_free_pages && grow_size <= 0) {
+- 		if (grow_buffers(GFP_BUFFER, size))
+- 			grow_size = PAGE_SIZE;
+- 	}
+- 	buffers = nr_buffers;
+- 	bh = NULL;
+  
+! 	for (tmp = free_list; buffers-- > 0 ; tmp = tmp->b_next_free) {
+! 		if (tmp->b_count || tmp->b_size != size)
+! 			continue;
+! 		if (mem_map[MAP_NR((unsigned long) tmp->b_data)] != 1)
+! 			continue;
+! 		if (!bh || BADNESS(tmp)<BADNESS(bh)) {
+! 			bh = tmp;
+! 			if (!BADNESS(tmp))
+! 				break;
+! 		}
+! #if 0
+! 		if (tmp->b_dirt) {
+! 			tmp->b_count++;
+! 			ll_rw_block(WRITEA, 1, &tmp);
+! 			tmp->b_count--;
+! 		}
+! #endif
+! 	}
+  
+- 	if (!bh && nr_free_pages > 5) {
+- 		if (grow_buffers(GFP_BUFFER, size))
+- 			goto repeat;
+- 	}
+- 	
+- /* and repeat until we find something good */
+- 	if (!bh) {
+- 		if (!grow_buffers(GFP_ATOMIC, size))
+- 			sleep_on(&buffer_wait);
+- 		goto repeat;
+- 	}
+- 	wait_on_buffer(bh);
+- 	if (bh->b_count || bh->b_size != size)
+- 		goto repeat;
+- 	if (bh->b_dirt) {
+- 		sync_buffers(0,0);
+- 		goto repeat;
+- 	}
+- /* NOTE!! While we slept waiting for this block, somebody else might */
+- /* already have added "this" block to the cache. check it */
+  	if (find_buffer(dev,block,size))
+  		goto repeat;
+! /* OK, FINALLY we know that this buffer is the only one of its kind, */
+  /* and that it's unused (b_count=0), unlocked (b_lock=0), and clean */
+  	bh->b_count=1;
+  	bh->b_dirt=0;
+  	bh->b_uptodate=0;
+  	bh->b_req=0;
+- 	remove_from_queues(bh);
+  	bh->b_dev=dev;
+  	bh->b_blocknr=block;
+  	insert_into_queues(bh);
+--- 595,631 ----
+   * 14.02.92: changed it to sync dirty buffers a bit: better performance
+   * when the filesystem starts to get full of dirty blocks (I hope).
+   */
+  struct buffer_head * getblk(dev_t dev, int block, int size)
+  {
+! 	struct buffer_head * bh;
+!         int isize = BUFSIZE_INDEX(size);
+! 
+  
++ 	/* If there are too many dirty buffers, we wake up the update process
++ 	   now so as to ensure that there are still clean buffers available
++ 	   for user processes to use (and dirty) */
+  repeat:
+  	bh = get_hash_table(dev, block, size);
+  	if (bh) {
+  		if (bh->b_uptodate && !bh->b_dirt)
+! 			put_last_lru(bh);
+  		return bh;
+  	}
+  
+! 	while(!free_list[isize]) refill_freelist(size);
+  
+  	if (find_buffer(dev,block,size))
+  		goto repeat;
+! 
+! 	bh = free_list[isize];
+! 	remove_from_free_list(bh);
+! 
+! /* OK, FINALLY we know that this buffer is the only one of it's kind, */
+  /* and that it's unused (b_count=0), unlocked (b_lock=0), and clean */
+  	bh->b_count=1;
+  	bh->b_dirt=0;
+  	bh->b_uptodate=0;
+  	bh->b_req=0;
+  	bh->b_dev=dev;
+  	bh->b_blocknr=block;
+  	insert_into_queues(bh);
+***************
+*** 523,528 ****
+--- 637,643 ----
+  	if (!buf)
+  		return;
+  	wait_on_buffer(buf);
++ 	
+  	if (buf->b_count) {
+  		if (--buf->b_count)
+  			return;
+***************
+*** 663,668 ****
+--- 778,784 ----
+  		head = bh;
+  		bh->b_data = (char *) (page+offset);
+  		bh->b_size = size;
++ 		bh->b_dev = 0xffff;  /* Flag as unused */
+  	}
+  	return head;
+  /*
+***************
+*** 867,878 ****
+  static int grow_buffers(int pri, int size)
+  {
+  	unsigned long page;
+! 	struct buffer_head *bh, *tmp;
+  
+  	if ((size & 511) || (size > PAGE_SIZE)) {
+  		printk("VFS: grow_buffers: size = %d\n",size);
+  		return 0;
+  	}
+  	if(!(page = __get_free_page(pri)))
+  		return 0;
+  	bh = create_buffers(page, size);
+--- 983,998 ----
+  static int grow_buffers(int pri, int size)
+  {
+  	unsigned long page;
+! 	struct buffer_head *bh, *tmp, *tmp1;
+!         int isize;
+  
+  	if ((size & 511) || (size > PAGE_SIZE)) {
+  		printk("VFS: grow_buffers: size = %d\n",size);
+  		return 0;
+  	}
++ 
++         isize = BUFSIZE_INDEX(size);
++ 
+  	if(!(page = __get_free_page(pri)))
+  		return 0;
+  	bh = create_buffers(page, size);
+***************
+*** 880,897 ****
+  		free_page(page);
+  		return 0;
+  	}
+  	tmp = bh;
+  	while (1) {
+! 		if (free_list) {
+! 			tmp->b_next_free = free_list;
+! 			tmp->b_prev_free = free_list->b_prev_free;
+! 			free_list->b_prev_free->b_next_free = tmp;
+! 			free_list->b_prev_free = tmp;
+  		} else {
+  			tmp->b_prev_free = tmp;
+  			tmp->b_next_free = tmp;
+  		}
+! 		free_list = tmp;
+  		++nr_buffers;
+  		if (tmp->b_this_page)
+  			tmp = tmp->b_this_page;
+--- 1000,1030 ----
+  		free_page(page);
+  		return 0;
+  	}
++ 
++ 	/* Reverse the order of the buffer headers before we stick them
++ 	   on the free list. Clustering works better this way */
++ 
++ 	tmp = NULL;
++ 	while(bh){
++ 	  tmp1 = bh;
++ 	  bh = bh->b_this_page;
++ 	  tmp1->b_this_page = tmp;
++ 	  tmp = tmp1;
++ 	};
++ 	bh = tmp;
++ 
+  	tmp = bh;
+  	while (1) {
+! 		if (free_list[isize]) {
+! 			tmp->b_next_free = free_list[isize];
+! 			tmp->b_prev_free = free_list[isize]->b_prev_free;
+! 			free_list[isize]->b_prev_free->b_next_free = tmp;
+! 			free_list[isize]->b_prev_free = tmp;
+  		} else {
+  			tmp->b_prev_free = tmp;
+  			tmp->b_next_free = tmp;
+  		}
+! 		free_list[isize] = tmp;
+  		++nr_buffers;
+  		if (tmp->b_this_page)
+  			tmp = tmp->b_this_page;
+***************
+*** 899,904 ****
+--- 1032,1038 ----
+  			break;
+  	}
+  	tmp->b_this_page = bh;
++ 	wake_up(&buffer_wait);
+  	buffermem += PAGE_SIZE;
+  	return 1;
+  }
+***************
+*** 948,979 ****
+  int shrink_buffers(unsigned int priority)
+  {
+  	struct buffer_head *bh;
+! 	int i;
+  
+! 	if (priority < 2)
+  		sync_buffers(0,0);
+! 	bh = free_list;
+  	i = nr_buffers >> priority;
+  	for ( ; i-- > 0 ; bh = bh->b_next_free) {
+! 		if (bh->b_count || !bh->b_this_page)
+! 			continue;
+! 		if (bh->b_lock)
+! 			if (priority)
+! 				continue;
+! 			else
+! 				wait_on_buffer(bh);
+! 		if (bh->b_dirt) {
+! 			bh->b_count++;
+! 			ll_rw_block(WRITEA, 1, &bh);
+! 			bh->b_count--;
+! 			continue;
+  		}
+! 		if (try_to_free(bh, &bh))
+! 			return 1;
+  	}
+  	return 0;
+  }
+  
+  /*
+   * This initializes the initial buffer free list.  nr_buffers is set
+   * to one less the actual number of buffers, as a sop to backwards
+--- 1082,1300 ----
+  int shrink_buffers(unsigned int priority)
+  {
+  	struct buffer_head *bh;
+! 	int i, isize;
+  
+! 	if (priority < 2) {
+! 	        printk("Shrinking and syncing buffers to get memory\n");
+  		sync_buffers(0,0);
+! 	}
+! 
+! 	if(priority == 3) {
+! 	  printk("Wake up bdflush_wait to try and write back some dirty buffers\n");
+! 	  wakeup_bdflush(1);
+! 	};
+! 
+! 	/* First try the free lists, and see if we can get a complete page
+! 	   from here */
+! 	for(isize = 0; isize<NR_SIZES; isize++){
+! 	  bh = free_list[isize];
+! 	  if(!bh) continue;
+! 	  for (i=0 ; !i || bh != free_list[isize]; bh = bh->b_next_free, i++) {
+! 	    if (bh->b_count || !bh->b_this_page)
+! 	      continue;
+! 	    if (try_to_free(bh, &bh))
+! 	      return 1;
+! 	  }
+! 	}
+! 
+! 	/* Not enough in the free lists, now try the lru list */
+! 
+! 	bh = lru_list;
+  	i = nr_buffers >> priority;
++ 	  for ( ; i-- > 0 ; bh = bh->b_next_free) {
++ 	    if (bh->b_count || !bh->b_this_page)
++ 	      continue;
++ 	    if (bh->b_lock)
++ 	      if (priority)
++ 		continue;
++ 	      else
++ 		wait_on_buffer(bh);
++ 	    if (bh->b_dirt) {
++ 	      bh->b_count++;
++ 	      ll_rw_block(WRITEA, 1, &bh);
++ 	      bh->b_count--;
++ 	      continue;
++ 	    }
++ 	    if (try_to_free(bh, &bh))
++ 	      return 1;
++ 	  }
++ 	return 0;
++ }
++ 
++ /*
++  * try_to_reassign() checks if all the buffers on this particular page
++  * are unused, and reassign to a new cluster them if this is true.
++  */
++ static inline int try_to_reassign(struct buffer_head * bh, struct buffer_head ** bhp,
++ 			   dev_t dev, unsigned int starting_block)
++ {
++ 	unsigned long page;
++ 	struct buffer_head * tmp, * p;
++ 
++ 	*bhp = bh;
++ 	page = (unsigned long) bh->b_data;
++ 	page &= PAGE_MASK;
++ 	if(mem_map[MAP_NR(page)] != 1) return 0;
++ 	tmp = bh;
++ 	do {
++ 		if (!tmp)
++ 			return 0;
++ 		if (tmp->b_count || tmp->b_dirt || tmp->b_lock)
++ 			return 0;
++ 		tmp = tmp->b_this_page;
++ 	} while (tmp != bh);
++ 	tmp = bh;
++ 
++ 	while((unsigned int) tmp->b_data & (PAGE_SIZE - 1)) 
++ 	  tmp = tmp->b_this_page;
++ 
++ 	do {
++ 		p = tmp;
++ 		tmp = tmp->b_this_page;
++ 		remove_from_queues(p);
++ 		p->b_dev=dev;
++ 		p->b_uptodate = 0;
++ 		p->b_blocknr=starting_block++;
++ 		insert_into_queues(p);
++ 	} while (tmp != bh);
++ 	return 1;
++ }
++ 
++ /*
++  * Try to find a free cluster by locating a page where
++  * all of the buffers are unused.  We would like this function
++  * to be atomic, so we do not call anything that might cause
++  * the process to sleep.  The priority is somewhat similar to
++  * the priority used in shrink_buffers.
++  * 
++  * My thinking is that the kernel should end up using whole
++  * pages for the buffer cache as much of the time as possible.
++  * This way the other buffers on a particular page are likely
++  * to be very near each other on the free list, and we will not
++  * be expiring data prematurely.  For now we only canibalize buffers
++  * of the same size to keep the code simpler.
++  */
++ static int reassign_cluster(dev_t dev, 
++ 		     unsigned int starting_block, int size)
++ {
++ 	struct buffer_head *bh;
++         int isize = BUFSIZE_INDEX(size);
++ 	int ndirty;
++ 	int i;
++ 
++ 	while(!free_list[isize]) refill_freelist(size);
++ 
++ 	bh = free_list[isize];
++ 	if(bh)
++ 	  for (i=0 ; !i || bh != free_list[isize] ; bh = bh->b_next_free, i++) {
++ 	    if (!bh->b_this_page)	continue;
++ 	    if (try_to_reassign(bh, &bh, dev, starting_block)) {
++ /*	      printk("[%d] ", i); */
++ 	      return 4;
++ 	    };
++ 	  }
++ 
++ 	bh = lru_list;
++ 	ndirty = 0;
++ 	i = nr_buffers * bdf_prm.b_un.clu_nfract/100;
+  	for ( ; i-- > 0 ; bh = bh->b_next_free) {
+! 	  if (bh->b_count || !bh->b_this_page || bh->b_lock || bh->b_dirt)
+! 	    continue;
+! 	  if (bh->b_size != size) continue;
+! 	  if (bh->b_dirt && !bh->b_lock) ndirty++;
+! 	  if(ndirty == bdf_prm.b_un.nref_dirt) wakeup_bdflush(0);
+! 	  if (try_to_reassign(bh, &bh, dev, starting_block)) {
+! /*	    printk("{%d ", i); */
+! 	    return 4;
+! 	  };
+! 	}
+! /*	printk("@"); */
+! 	return 0;
+! }
+! 
+! /* This function tries to generate a new cluster of buffers
+!  * from a new page in memory.  We should only do this if we have
+!  * not expanded the buffer cache to the maximum size that we allow.
+!  */
+! static unsigned long try_to_generate_cluster(dev_t dev, int block, int size)
+! {
+! 	struct buffer_head * bh, * tmp, * arr[8];
+! 	unsigned long offset;
+! 	unsigned long page;
+! 	int nblock;
+! 
+! 	page = get_free_page(GFP_KERNEL);
+! 	if(!page) return 0;
+! 
+! 	bh = create_buffers(page, size);
+! 	if (!bh) {
+! 	  free_page(page);
+! 	  return 0;
+! 	};
+! 	nblock = block;
+! 	for (offset = 0 ; offset < PAGE_SIZE ; offset += size) {
+! 		tmp = get_hash_table(dev, nblock++, size);
+! 		if (tmp) {
+! 			brelse(tmp);
+! 			goto not_aligned;
+  		}
+! 	}
+! 	tmp = bh;
+! 	nblock = 0;
+! 	while (1) {
+! 		arr[nblock++] = bh;
+! 		bh->b_count = 1;
+! 		bh->b_dirt = 0;
+! 		bh->b_uptodate = 0;
+! 		bh->b_dev = dev;
+! 		bh->b_blocknr = block++;
+! 		nr_buffers++;
+! 		insert_into_queues(bh);
+! 		if (bh->b_this_page)
+! 			bh = bh->b_this_page;
+! 		else
+! 			break;
+! 	}
+! 	buffermem += PAGE_SIZE;
+! 	bh->b_this_page = tmp;
+! 	while (nblock-- > 0)
+! 		brelse(arr[nblock]);
+! 	return 4;
+! not_aligned:
+! 	while ((tmp = bh) != NULL) {
+! 		bh = bh->b_this_page;
+! 		put_unused_buffer_head(tmp);
+  	}
+  	return 0;
+  }
+  
++ unsigned long generate_cluster(dev_t dev, int b[], int size)
++ {
++   int i, offset;
++   
++   for (i = 0, offset = 0 ; offset < PAGE_SIZE ; i++, offset += size) {
++     if(i && b[i]-1 != b[i-1]) return 0;  /* No need to cluster */
++     if(find_buffer(dev, b[i], size)) return 0;
++   };
++ 
++   /* OK, we have a candidate for a new cluster */
++ 
++ 	if (nr_free_pages > min_free_pages) 
++ 	  return try_to_generate_cluster(dev, b[0], size);
++ 	else
++ 	  return reassign_cluster(dev, b[0], size);
++ }
++ 
+  /*
+   * This initializes the initial buffer free list.  nr_buffers is set
+   * to one less the actual number of buffers, as a sop to backwards
+***************
+*** 984,989 ****
+--- 1305,1311 ----
+  void buffer_init(void)
+  {
+  	int i;
++         int isize = BUFSIZE_INDEX(BLOCK_SIZE);
+  
+  	if (high_memory >= 4*1024*1024)
+  		min_free_pages = 200;
+***************
+*** 991,999 ****
+  		min_free_pages = 20;
+  	for (i = 0 ; i < NR_HASH ; i++)
+  		hash_table[i] = NULL;
+! 	free_list = 0;
+  	grow_buffers(GFP_KERNEL, BLOCK_SIZE);
+! 	if (!free_list)
+  		panic("VFS: Unable to initialize buffer free list!");
+  	return;
+  }
+--- 1313,1404 ----
+  		min_free_pages = 20;
+  	for (i = 0 ; i < NR_HASH ; i++)
+  		hash_table[i] = NULL;
+! 	lru_list = 0;
+  	grow_buffers(GFP_KERNEL, BLOCK_SIZE);
+! 	if (!free_list[isize])
+  		panic("VFS: Unable to initialize buffer free list!");
+  	return;
+  }
++ 
++ /* This is a simple kernel daemon, whose job it is to provide a dynamicly
++  * response to dirty buffers.  Once this process is activated, we write back
++  * a limited number of buffers to the disks and then go back to sleep again.
++  * In effect this is a process which never leaves kernel mode, and does not have
++  * any user memory associated with it except for the stack.  There is also
++  * a kernel stack page, which obviously must be separate from the user stack.
++  */
++ struct wait_queue * bdflush_wait = NULL;
++ struct wait_queue * bdflush_done = NULL;
++ 
++ static int bdflush_running = 0;
++ 
++ static void wakeup_bdflush(int wait)
++ {
++   if(!bdflush_running){
++     sync_buffers(0,0);
++     return;
++   };
++   wake_up(&bdflush_wait);
++   if(wait) sleep_on(&bdflush_done);
++ }
++ 
++ 
++ /* This is the interface to bdflush.  As we get more sophisticated, we can
++  * pass tuning parameters to this "process", to adjust how it behaves.  If you
++  * invoke this again after you have done this once, you would simply modify the tuning
++  * parameters.  We would want to verify each parameter, however, to make sure that it is
++  * reasonable.
++  */
++ 
++ asmlinkage int sys_bdflush(int func, int data)
++ {
++ 	int i, error;
++ 	int ndirty;
++ 	struct buffer_head * bh;
++ 
++ 	if(!suser()) return -EPERM;
++ 
++ 	/* Basically func 0 means start, 1 means read param 1, 2 means write param 1, etc */
++ 	if(func){
++ 	  i = (func-2) >> 1;
++ 	  if (i < 0 || i >= N_PARAM) return -EINVAL;
++ 	  if((func & 1) == 0) {
++ 	    error = verify_area(VERIFY_WRITE, (void *) data, sizeof(int));
++ 	    if(error) return error;
++ 	    put_fs_long(bdf_prm.data[i], data);
++ 	    return 0;
++ 	  };
++ 	  if(data < bdflush_min[i] || data > bdflush_max[i]) return -EINVAL;
++ 	  bdf_prm.data[i] = data;
++ 	  return 0;
++ 	};
++ 
++ 	if(bdflush_running++) return -EBUSY; /* Only one copy of this running at one time */
++ 
++ 	/* OK, from here on is the daemon */
++ 
++ 	while(1==1){
++ 	  printk("bdflush() activated...");
++ 
++ 	  bh = lru_list;
++ 	  ndirty = 0;
++ 	  if(bh) 
++ 	    for (i = nr_buffers * bdf_prm.b_un.nfract/100 ; i-- > 0 && ndirty < bdf_prm.b_un.ndirty; 
++ 		 bh = bh->b_next_free) {
++ 	      if (bh->b_lock || !bh->b_dirt)
++ 		continue;
++ 	      /* Should we write back buffers that are shared or not??
++ 		 currently dirty buffers are not shared, so it does not matter */
++ 	      bh->b_count++;
++ 	      ndirty++;
++ 	      ll_rw_block(WRITE, 1, &bh);
++ 	      bh->b_count--;
++ 	    }
++ 	  printk("sleeping again.\n");
++ 	  wake_up(&bdflush_done);
++ 	  sleep_on(&bdflush_wait);
++ 	}
++ }
++ 
++ 
++ 
+*** ./fs/block_dev.c.~1~	Sun Oct 31 13:37:08 1993
+--- ./fs/block_dev.c	Sun Oct 31 19:00:18 1993
+***************
+*** 14,26 ****
+  extern int *blk_size[];
+  extern int *blksize_size[];
+  
+  int block_write(struct inode * inode, struct file * filp, char * buf, int count)
+  {
+! 	int blocksize, blocksize_bits, i;
+! 	int block;
+  	int offset;
+  	int chars;
+  	int written = 0;
+  	int size;
+  	unsigned int dev;
+  	struct buffer_head * bh;
+--- 14,30 ----
+  extern int *blk_size[];
+  extern int *blksize_size[];
+  
++ #define NBUF 32
++ 
+  int block_write(struct inode * inode, struct file * filp, char * buf, int count)
+  {
+! 	int blocksize, blocksize_bits, i, j;
+! 	int block, blocks;
+  	int offset;
+  	int chars;
+  	int written = 0;
++ 	int cluster_list[4];
++ 	struct buffer_head * bhlist[NBUF];
+  	int size;
+  	unsigned int dev;
+  	struct buffer_head * bh;
+***************
+*** 51,60 ****
+--- 55,97 ----
+  		chars = blocksize - offset;
+  		if (chars > count)
+  			chars=count;
++ 
++ #if 0
+  		if (chars == blocksize)
+  			bh = getblk(dev, block, blocksize);
+  		else
+  			bh = breada(dev,block,block+1,block+2,-1);
++ 
++ #else
++ 		for(i=0; i<4; i++) cluster_list[i] = block+i;
++ 		if((block % 4) == 0) generate_cluster(dev, cluster_list, blocksize);
++ 		bh = getblk(dev, block, blocksize);
++ 
++ 		if (chars != blocksize && !bh->b_uptodate) {
++ 		  if(!filp->f_reada) bh = breada(dev,block,block+1,block+2,-1);
++ 		  else {
++ 		    /* Read-ahead before write */
++ 		    blocks = read_ahead[MAJOR(dev)] / (blocksize >> 9) / 2;
++ 		    if (block + blocks > size) blocks = size - block;
++ 		    if (blocks > NBUF) blocks=NBUF;
++ 		    bhlist[0] = bh;
++ 		    for(i=1; i<blocks; i++){
++ 		      if(((i+block) % 4) == 0) {
++ 			for(j=0; j<4; j++) cluster_list[j] = block+i+j;
++ 			generate_cluster(dev, cluster_list, blocksize);
++ 		      };
++ 		      bhlist[i] = getblk (dev, block+i, blocksize);
++ 		      if(!bhlist[i]){
++ 			while(i) brelse(bhlist[i--]);
++ 			return written? written: -EIO;
++ 		      };
++ 		    };
++ 		    ll_rw_block(READ, blocks, bhlist);
++ 		    for(i=1; i<blocks; i++) brelse(bhlist[i]);
++ 		      
++ 		  };
++ 		};
++ #endif
+  		block++;
+  		if (!bh)
+  			return written?written:-EIO;
+***************
+*** 70,80 ****
+  		bh->b_dirt = 1;
+  		brelse(bh);
+  	}
+  	return written;
+  }
+  
+- #define NBUF 32
+- 
+  int block_read(struct inode * inode, struct file * filp, char * buf, int count)
+  {
+  	unsigned int block;
+--- 107,116 ----
+  		bh->b_dirt = 1;
+  		brelse(bh);
+  	}
++ 	filp->f_reada = 1;
+  	return written;
+  }
+  
+  int block_read(struct inode * inode, struct file * filp, char * buf, int count)
+  {
+  	unsigned int block;
+***************
+*** 86,91 ****
+--- 122,128 ----
+  	struct buffer_head ** bhb, ** bhe;
+  	struct buffer_head * buflist[NBUF];
+  	struct buffer_head * bhreq[NBUF];
++ 	int cluster_list[4];
+  	unsigned int chars;
+  	unsigned int size;
+  	unsigned int dev;
+***************
+*** 143,148 ****
+--- 180,189 ----
+  		uptodate = 1;
+  		while (blocks) {
+  			--blocks;
++ #if 1
++ 			for(i=0; i<4; i++) cluster_list[i] = block+i;
++ 			if((block % 4) == 0) generate_cluster(dev, cluster_list, blocksize);
++ #endif
+  			*bhb = getblk(dev, block++, blocksize);
+  			if (*bhb && !(*bhb)->b_uptodate) {
+  				uptodate = 0;
+*** ./kernel/sched.c.~1~	Thu Oct 28 23:04:03 1993
+--- ./kernel/sched.c	Sat Oct 30 17:48:24 1993
+***************
+*** 125,131 ****
+  sys_newfstat, sys_uname, sys_iopl, sys_vhangup, sys_idle, sys_vm86,
+  sys_wait4, sys_swapoff, sys_sysinfo, sys_ipc, sys_fsync, sys_sigreturn,
+  sys_clone, sys_setdomainname, sys_newuname, sys_modify_ldt,
+! sys_adjtimex, sys_sigprocmask };
+  
+  /* So we don't have to do any more manual updating.... */
+  int NR_syscalls = sizeof(sys_call_table)/sizeof(fn_ptr);
+--- 125,131 ----
+  sys_newfstat, sys_uname, sys_iopl, sys_vhangup, sys_idle, sys_vm86,
+  sys_wait4, sys_swapoff, sys_sysinfo, sys_ipc, sys_fsync, sys_sigreturn,
+  sys_clone, sys_setdomainname, sys_newuname, sys_modify_ldt,
+! sys_adjtimex, sys_mprotect, sys_sigprocmask, sys_bdflush };
+  
+  /* So we don't have to do any more manual updating.... */
+  int NR_syscalls = sizeof(sys_call_table)/sizeof(fn_ptr);
+*** ./include/linux/sys.h.~1~	Thu Oct 28 23:04:02 1993
+--- ./include/linux/sys.h	Sat Oct 30 17:49:31 1993
+***************
+*** 133,139 ****
+--- 133,141 ----
+  extern int sys_old_syscall();
+  extern int sys_modify_ldt();
+  extern int sys_adjtimex();
++ extern int sys_mprotect();
+  extern int sys_sigprocmask();
++ extern int sys_bdflush();
+  
+  /*
+   * These are system calls that will be removed at some time
+*** ./include/linux/unistd.h.~1~	Thu Oct 28 23:04:03 1993
+--- ./include/linux/unistd.h	Sat Oct 30 17:31:43 1993
+***************
+*** 133,138 ****
+--- 133,139 ----
+  #define __NR_adjtimex		124
+  #define __NR_mprotect		125
+  #define __NR_sigprocmask	126
++ #define __NR_bdflush            127
+  
+  extern int errno;
+  
+*** ./drivers/block/ll_rw_blk.c.~1~	Sun Sep 26 15:26:18 1993
+--- ./drivers/block/ll_rw_blk.c	Sat Oct 30 12:06:26 1993
+***************
+*** 177,183 ****
+  			    !req->waiting &&
+  			    req->cmd == rw &&
+  			    req->sector + req->nr_sectors == sector &&
+! 			    req->nr_sectors < 254) {
+  				req->bhtail->b_reqnext = bh;
+  				req->bhtail = bh;
+  				req->nr_sectors += count;
+--- 177,183 ----
+  			    !req->waiting &&
+  			    req->cmd == rw &&
+  			    req->sector + req->nr_sectors == sector &&
+! 			    req->nr_sectors < 244) {
+  				req->bhtail->b_reqnext = bh;
+  				req->bhtail = bh;
+  				req->nr_sectors += count;
+***************
+*** 189,195 ****
+  			    !req->waiting &&
+  			    req->cmd == rw &&
+  			    req->sector - count == sector &&
+! 			    req->nr_sectors < 254)
+  			    	{
+  			    	req->nr_sectors += count;
+  			    	bh->b_reqnext = req->bh;
+--- 189,195 ----
+  			    !req->waiting &&
+  			    req->cmd == rw &&
+  			    req->sector - count == sector &&
+! 			    req->nr_sectors < 244)
+  			    	{
+  			    	req->nr_sectors += count;
+  			    	bh->b_reqnext = req->bh;
+*** ./drivers/scsi/scsi.c.~1~	Thu Oct 28 23:03:52 1993
+--- ./drivers/scsi/scsi.c	Thu Oct 28 23:16:04 1993
+***************
+*** 523,529 ****
+  {
+    Scsi_Cmnd * SCpnt = NULL;
+    int tablesize;
+!   struct buffer_head * bh;
+  
+    if ((index < 0) ||  (index > NR_SCSI_DEVICES))
+      panic ("Index number in allocate_device() is out of range.\n");
+--- 523,529 ----
+  {
+    Scsi_Cmnd * SCpnt = NULL;
+    int tablesize;
+!   struct buffer_head * bh, *bhp;
+  
+    if ((index < 0) ||  (index > NR_SCSI_DEVICES))
+      panic ("Index number in allocate_device() is out of range.\n");
+***************
+*** 547,562 ****
+    if (req) {
+      memcpy(&SCpnt->request, req, sizeof(struct request));
+      tablesize = scsi_devices[index].host->sg_tablesize;
+!     bh = req->bh;
+      if(!tablesize) bh = NULL;
+      /* Take a quick look through the table to see how big it is.  We already
+         have our copy of req, so we can mess with that if we want to.  */
+      while(req->nr_sectors && bh){
+! 	    tablesize--;
+  	    req->nr_sectors -= bh->b_size >> 9;
+  	    req->sector += bh->b_size >> 9;
+  	    if(!tablesize) break;
+! 	    bh = bh->b_reqnext;
+      };
+      if(req->nr_sectors && bh && bh->b_reqnext){  /* Any leftovers? */
+        SCpnt->request.bhtail = bh;
+--- 547,563 ----
+    if (req) {
+      memcpy(&SCpnt->request, req, sizeof(struct request));
+      tablesize = scsi_devices[index].host->sg_tablesize;
+!     bhp = bh = req->bh;
+      if(!tablesize) bh = NULL;
+      /* Take a quick look through the table to see how big it is.  We already
+         have our copy of req, so we can mess with that if we want to.  */
+      while(req->nr_sectors && bh){
+! 	    bhp = bhp->b_reqnext;
+! 	    if(!bhp || !CONTIGUOUS_BUFFERS(bh,bhp)) tablesize--;
+  	    req->nr_sectors -= bh->b_size >> 9;
+  	    req->sector += bh->b_size >> 9;
+  	    if(!tablesize) break;
+! 	    bh = bhp;
+      };
+      if(req->nr_sectors && bh && bh->b_reqnext){  /* Any leftovers? */
+        SCpnt->request.bhtail = bh;
+***************
+*** 569,577 ****
+        req->current_nr_sectors = bh->b_size >> 9;
+        req->buffer = bh->b_data;
+        SCpnt->request.waiting = NULL; /* Wait until whole thing done */
+!     } else
+        req->dev = -1;
+!       
+    } else {
+      SCpnt->request.dev = 0xffff; /* Busy, but no request */
+      SCpnt->request.waiting = NULL;  /* And no one is waiting for the device either */
+--- 570,579 ----
+        req->current_nr_sectors = bh->b_size >> 9;
+        req->buffer = bh->b_data;
+        SCpnt->request.waiting = NULL; /* Wait until whole thing done */
+!     } else {
+        req->dev = -1;
+!       wake_up(&wait_for_request);
+!     };      
+    } else {
+      SCpnt->request.dev = 0xffff; /* Busy, but no request */
+      SCpnt->request.waiting = NULL;  /* And no one is waiting for the device either */
+***************
+*** 598,604 ****
+    int dev = -1;
+    struct request * req = NULL;
+    int tablesize;
+!   struct buffer_head * bh;
+    struct Scsi_Host * host;
+    Scsi_Cmnd * SCpnt = NULL;
+    Scsi_Cmnd * SCwait = NULL;
+--- 600,606 ----
+    int dev = -1;
+    struct request * req = NULL;
+    int tablesize;
+!   struct buffer_head * bh, *bhp;
+    struct Scsi_Host * host;
+    Scsi_Cmnd * SCpnt = NULL;
+    Scsi_Cmnd * SCwait = NULL;
+***************
+*** 644,659 ****
+  	if (req) {
+  	  memcpy(&SCpnt->request, req, sizeof(struct request));
+  	  tablesize = scsi_devices[index].host->sg_tablesize;
+! 	  bh = req->bh;
+  	  if(!tablesize) bh = NULL;
+  	  /* Take a quick look through the table to see how big it is.  We already
+  	     have our copy of req, so we can mess with that if we want to.  */
+  	  while(req->nr_sectors && bh){
+! 	    tablesize--;
+  	    req->nr_sectors -= bh->b_size >> 9;
+  	    req->sector += bh->b_size >> 9;
+  	    if(!tablesize) break;
+! 	    bh = bh->b_reqnext;
+  	  };
+  	  if(req->nr_sectors && bh && bh->b_reqnext){  /* Any leftovers? */
+  	    SCpnt->request.bhtail = bh;
+--- 646,662 ----
+  	if (req) {
+  	  memcpy(&SCpnt->request, req, sizeof(struct request));
+  	  tablesize = scsi_devices[index].host->sg_tablesize;
+! 	  bhp = bh = req->bh;
+  	  if(!tablesize) bh = NULL;
+  	  /* Take a quick look through the table to see how big it is.  We already
+  	     have our copy of req, so we can mess with that if we want to.  */
+  	  while(req->nr_sectors && bh){
+! 	    bhp = bhp->b_reqnext;
+! 	    if(!bhp || !CONTIGUOUS_BUFFERS(bh,bhp)) tablesize--;
+  	    req->nr_sectors -= bh->b_size >> 9;
+  	    req->sector += bh->b_size >> 9;
+  	    if(!tablesize) break;
+! 	    bh = bhp;
+  	  };
+  	  if(req->nr_sectors && bh && bh->b_reqnext){  /* Any leftovers? */
+  	    SCpnt->request.bhtail = bh;
+***************
+*** 670,675 ****
+--- 673,679 ----
+  	    {
+  	      req->dev = -1;
+  	      *reqp = req->next;
++ 	      wake_up(&wait_for_request);
+  	    };
+  	} else {
+  	  SCpnt->request.dev = 0xffff; /* Busy */
+***************
+*** 1484,1491 ****
+  {
+    unsigned int nbits, mask;
+    int i, j;
+!   if((len & 0x1ff) || len > 4096)
+!     panic("Inappropriate buffer size requested");
+    
+    cli();
+    nbits = len >> 9;
+--- 1488,1495 ----
+  {
+    unsigned int nbits, mask;
+    int i, j;
+!   if((len & 0x1ff) || len > 8192)
+!     return NULL;
+    
+    cli();
+    nbits = len >> 9;
+*** ./drivers/scsi/scsi.h.~1~	Fri Oct  1 07:41:54 1993
+--- ./drivers/scsi/scsi.h	Sat Oct 30 12:25:00 1993
+***************
+*** 306,315 ****
+       char *  address; /* Location data is to be transferred to */
+       char * alt_address; /* Location of actual if address is a 
+  			    dma indirect buffer.  NULL otherwise */
+!      unsigned short length;
+       };
+  
+  #define ISA_DMA_THRESHOLD (0x00ffffff)
+  
+  void *   scsi_malloc(unsigned int);
+  int      scsi_free(void *, unsigned int);
+--- 306,317 ----
+       char *  address; /* Location data is to be transferred to */
+       char * alt_address; /* Location of actual if address is a 
+  			    dma indirect buffer.  NULL otherwise */
+!      unsigned int length;
+       };
+  
+  #define ISA_DMA_THRESHOLD (0x00ffffff)
++ #define CONTIGUOUS_BUFFERS(X,Y) ((X->b_data+X->b_size) == Y->b_data)
++ 
+  
+  void *   scsi_malloc(unsigned int);
+  int      scsi_free(void *, unsigned int);
+*** ./drivers/scsi/sd.c.~1~	Fri Oct 15 10:56:38 1993
+--- ./drivers/scsi/sd.c	Sat Oct 30 16:22:04 1993
+***************
+*** 370,378 ****
+      };
+      
+      if (!SCpnt) return; /* Could not find anything to do */
+!     
+!     wake_up(&wait_for_request);
+!     
+      /* Queue command */
+      requeue_sd_request(SCpnt);
+    };  /* While */
+--- 370,376 ----
+      };
+      
+      if (!SCpnt) return; /* Could not find anything to do */
+!         
+      /* Queue command */
+      requeue_sd_request(SCpnt);
+    };  /* While */
+***************
+*** 382,388 ****
+  {
+  	int dev, block, this_count;
+  	unsigned char cmd[10];
+! 	char * buff;
+  
+  repeat:
+  
+--- 380,389 ----
+  {
+  	int dev, block, this_count;
+  	unsigned char cmd[10];
+! 	int bounce_size, contiguous;
+! 	int max_sg;
+! 	struct buffer_head * bh, *bhp;
+! 	char * buff, *bounce_buffer;
+  
+  repeat:
+  
+***************
+*** 441,448 ****
+  
+  	SCpnt->this_count = 0;
+  
+! 	if (!SCpnt->request.bh || 
+! 	    (SCpnt->request.nr_sectors == SCpnt->request.current_nr_sectors)) {
+  
+  	  /* case of page request (i.e. raw device), or unlinked buffer */
+  	  this_count = SCpnt->request.nr_sectors;
+--- 442,473 ----
+  
+  	SCpnt->this_count = 0;
+  
+! 	contiguous = 1;
+! 	bounce_buffer = NULL;
+! 	bounce_size = (SCpnt->request.nr_sectors << 9);
+! 
+! 	/* First see if we need a bouce buffer for this request.  If we do, make sure
+! 	   that we can allocate a buffer.  Do not waste space by allocating a bounce
+! 	   buffer if we are straddling the 16Mb line */
+! 
+! 	if (SCpnt->request.bh &&
+! 	    ((int) SCpnt->request.bh->b_data) + (SCpnt->request.nr_sectors << 9) - 1 > 
+! 	    ISA_DMA_THRESHOLD && SCpnt->host->unchecked_isa_dma) {
+! 	  if(((int) SCpnt->request.bh->b_data) > ISA_DMA_THRESHOLD)
+! 	    bounce_buffer = scsi_malloc(bounce_size);
+! 	  if(!bounce_buffer) contiguous = 0;
+! 	};
+! 
+! 	if(contiguous && SCpnt->request.bh && SCpnt->request.bh->b_reqnext)
+! 	  for(bh = SCpnt->request.bh, bhp = bh->b_reqnext; bhp; bh = bhp, 
+! 	      bhp = bhp->b_reqnext) {
+! 	    if(!CONTIGUOUS_BUFFERS(bh,bhp)) { 
+! 	      if(bounce_buffer) scsi_free(bounce_buffer, bounce_size);
+! 	      contiguous = 0;
+! 	      break;
+! 	    } 
+! 	  };
+! 	if (!SCpnt->request.bh || contiguous) {
+  
+  	  /* case of page request (i.e. raw device), or unlinked buffer */
+  	  this_count = SCpnt->request.nr_sectors;
+***************
+*** 451,457 ****
+  
+  	} else if (SCpnt->host->sg_tablesize == 0 ||
+  		   (need_isa_buffer && 
+! 		    dma_free_sectors < 10)) {
+  
+  	  /* Case of host adapter that cannot scatter-gather.  We also
+  	   come here if we are running low on DMA buffer memory.  We set
+--- 476,482 ----
+  
+  	} else if (SCpnt->host->sg_tablesize == 0 ||
+  		   (need_isa_buffer && 
+! 		    dma_free_sectors <= 10)) {
+  
+  	  /* Case of host adapter that cannot scatter-gather.  We also
+  	   come here if we are running low on DMA buffer memory.  We set
+***************
+*** 462,468 ****
+  
+  	  if (SCpnt->host->sg_tablesize != 0 &&
+  	      need_isa_buffer && 
+! 	      dma_free_sectors < 10)
+  	    printk("Warning: SCSI DMA buffer space running low.  Using non scatter-gather I/O.\n");
+  
+  	  this_count = SCpnt->request.current_nr_sectors;
+--- 487,493 ----
+  
+  	  if (SCpnt->host->sg_tablesize != 0 &&
+  	      need_isa_buffer && 
+! 	      dma_free_sectors <= 10)
+  	    printk("Warning: SCSI DMA buffer space running low.  Using non scatter-gather I/O.\n");
+  
+  	  this_count = SCpnt->request.current_nr_sectors;
+***************
+*** 472,496 ****
+  	} else {
+  
+  	  /* Scatter-gather capable host adapter */
+- 	  struct buffer_head * bh;
+  	  struct scatterlist * sgpnt;
+  	  int count, this_count_max;
+  	  bh = SCpnt->request.bh;
+  	  this_count = 0;
+  	  this_count_max = (rscsi_disks[dev].ten ? 0xffff : 0xff);
+  	  count = 0;
+  	  while(bh && count < SCpnt->host->sg_tablesize) {
+  	    if ((this_count + (bh->b_size >> 9)) > this_count_max) break;
+  	    this_count += (bh->b_size >> 9);
+! 	    count++;
+  	    bh = bh->b_reqnext;
+  	  };
+  	  SCpnt->use_sg = count;  /* Number of chains */
+  	  count = 512;/* scsi_malloc can only allocate in chunks of 512 bytes*/
+  	  while( count < (SCpnt->use_sg * sizeof(struct scatterlist))) 
+  	    count = count << 1;
+  	  SCpnt->sglist_len = count;
+  	  sgpnt = (struct scatterlist * ) scsi_malloc(count);
+  	  if (!sgpnt) {
+  	    printk("Warning - running *really* short on DMA buffers\n");
+  	    SCpnt->use_sg = 0;  /* No memory left - bail out */
+--- 497,529 ----
+  	} else {
+  
+  	  /* Scatter-gather capable host adapter */
+  	  struct scatterlist * sgpnt;
+  	  int count, this_count_max;
++ 	  int counted;
++ 
+  	  bh = SCpnt->request.bh;
+  	  this_count = 0;
+  	  this_count_max = (rscsi_disks[dev].ten ? 0xffff : 0xff);
+  	  count = 0;
++ 	  bhp = NULL;
+  	  while(bh && count < SCpnt->host->sg_tablesize) {
+  	    if ((this_count + (bh->b_size >> 9)) > this_count_max) break;
+  	    this_count += (bh->b_size >> 9);
+! 	    if(!bhp || !CONTIGUOUS_BUFFERS(bhp,bh) ||
+! 	       ((unsigned int) bh->b_data-1) == ISA_DMA_THRESHOLD) count++;
+! 	    bhp = bh;
+  	    bh = bh->b_reqnext;
+  	  };
++ 	  if( ((unsigned int) SCpnt->request.bh->b_data-1) == ISA_DMA_THRESHOLD) count--;
+  	  SCpnt->use_sg = count;  /* Number of chains */
+  	  count = 512;/* scsi_malloc can only allocate in chunks of 512 bytes*/
+  	  while( count < (SCpnt->use_sg * sizeof(struct scatterlist))) 
+  	    count = count << 1;
+  	  SCpnt->sglist_len = count;
++ 	  max_sg = count / sizeof(struct scatterlist);
++ 	  if(SCpnt->host->sg_tablesize < max_sg) max_sg = SCpnt->host->sg_tablesize;
+  	  sgpnt = (struct scatterlist * ) scsi_malloc(count);
++ 	  memset(sgpnt, 0, count);  /* Zero so it is easy to fill */
+  	  if (!sgpnt) {
+  	    printk("Warning - running *really* short on DMA buffers\n");
+  	    SCpnt->use_sg = 0;  /* No memory left - bail out */
+***************
+*** 498,517 ****
+  	    buff = SCpnt->request.buffer;
+  	  } else {
+  	    buff = (char *) sgpnt;
+! 	    count = 0;
+! 	    bh = SCpnt->request.bh;
+! 	    for(count = 0, bh = SCpnt->request.bh; count < SCpnt->use_sg; 
+! 		count++, bh = bh->b_reqnext) {
+! 	      sgpnt[count].address = bh->b_data;
+! 	      sgpnt[count].alt_address = NULL;
+! 	      sgpnt[count].length = bh->b_size;
+! 	      if (((int) sgpnt[count].address) + sgpnt[count].length > 
+! 		  ISA_DMA_THRESHOLD & (SCpnt->host->unchecked_isa_dma)) {
+  		sgpnt[count].alt_address = sgpnt[count].address;
+  		/* We try and avoid exhausting the DMA pool, since it is easier
+  		   to control usage here.  In other places we might have a more
+  		   pressing need, and we would be screwed if we ran out */
+! 		if(dma_free_sectors < (bh->b_size >> 9) + 5) {
+  		  sgpnt[count].address = NULL;
+  		} else {
+  		  sgpnt[count].address = (char *) scsi_malloc(sgpnt[count].length);
+--- 531,555 ----
+  	    buff = SCpnt->request.buffer;
+  	  } else {
+  	    buff = (char *) sgpnt;
+! 	    counted = 0;
+! 	    for(count = 0, bh = SCpnt->request.bh, bhp = bh->b_reqnext;
+! 		count < SCpnt->use_sg && bh; 
+! 		count++, bh = bhp) {
+! 
+! 	      bhp = bh->b_reqnext;
+! 
+! 	      if(!sgpnt[count].address) sgpnt[count].address = bh->b_data;
+! 	      sgpnt[count].length += bh->b_size;
+! 	      counted += bh->b_size >> 9;
+! 
+! 	      if (((int) sgpnt[count].address) + sgpnt[count].length - 1 > 
+! 		  ISA_DMA_THRESHOLD && (SCpnt->host->unchecked_isa_dma) &&
+! 		  !sgpnt[count].alt_address) {
+  		sgpnt[count].alt_address = sgpnt[count].address;
+  		/* We try and avoid exhausting the DMA pool, since it is easier
+  		   to control usage here.  In other places we might have a more
+  		   pressing need, and we would be screwed if we ran out */
+! 		if(dma_free_sectors < (sgpnt[count].length >> 9) + 10) {
+  		  sgpnt[count].address = NULL;
+  		} else {
+  		  sgpnt[count].address = (char *) scsi_malloc(sgpnt[count].length);
+***************
+*** 522,527 ****
+--- 560,566 ----
+     operation */
+  		if(sgpnt[count].address == NULL){ /* Out of dma memory */
+  		  printk("Warning: Running low on SCSI DMA buffers");
++ #if 0
+  		  /* Try switching back to a non scatter-gather operation. */
+  		  while(--count >= 0){
+  		    if(sgpnt[count].alt_address) 
+***************
+*** 530,544 ****
+  		  this_count = SCpnt->request.current_nr_sectors;
+  		  buff = SCpnt->request.buffer;
+  		  SCpnt->use_sg = 0;
+! 		  scsi_free(buff, SCpnt->sglist_len);
+  		  break;
+  		};
+  
+- 		if (SCpnt->request.cmd == WRITE)
+- 		  memcpy(sgpnt[count].address, sgpnt[count].alt_address, 
+- 			 sgpnt[count].length);
+  	      };
+  	    }; /* for loop */
+  	  };  /* Able to malloc sgpnt */
+  	};  /* Host adapter capable of scatter-gather */
+  
+--- 569,640 ----
+  		  this_count = SCpnt->request.current_nr_sectors;
+  		  buff = SCpnt->request.buffer;
+  		  SCpnt->use_sg = 0;
+! 		  scsi_free(sgpnt, SCpnt->sglist_len);
+! #endif
+! 		  SCpnt->use_sg = count;
+! 		  this_count = counted -= bh->b_size >> 9;
+  		  break;
+  		};
+  
+  	      };
++ 
++ 	      /* Only cluster buffers if we know that we can supply DMA buffers
++ 		 large enough to satisfy the request.  Do not cluster a new
++ 		 request if this would mean that we suddenly need to start
++ 		 using DMA bounce buffers */
++ 	      if(bhp && CONTIGUOUS_BUFFERS(bh,bhp)) {
++ 		char * tmp;
++ 
++ 		if (((int) sgpnt[count].address) + sgpnt[count].length +
++ 		    bhp->b_size - 1 > ISA_DMA_THRESHOLD && 
++ 		    (SCpnt->host->unchecked_isa_dma) &&
++ 		    !sgpnt[count].alt_address) continue;
++ 
++ 		if(!sgpnt[count].alt_address) {count--; continue; }
++ 		if(dma_free_sectors > 10)
++ 		  tmp = scsi_malloc(sgpnt[count].length + bhp->b_size);
++ 		else {
++ 		  tmp = NULL;
++ 		  max_sg = SCpnt->use_sg;
++ 		};
++ 		if(tmp){
++ 		  scsi_free(sgpnt[count].address, sgpnt[count].length);
++ 		  sgpnt[count].address = tmp;
++ 		  count--;
++ 		  continue;
++ 		};
++ 
++ 		/* If we are allowed another sg chain, then increment counter so we
++ 		   can insert it.  Otherwise we will end up truncating */
++ 
++ 		if (SCpnt->use_sg < max_sg) SCpnt->use_sg++;
++ 	      };  /* contiguous buffers */
+  	    }; /* for loop */
++ 
++ 	    this_count = counted; /* This is actually how many we are going to transfer */
++ 
++ 	    if(count < SCpnt->use_sg || SCpnt->use_sg > 16){
++ 	      bh = SCpnt->request.bh;
++ 	      printk("Use sg, count %d %x %d\n", SCpnt->use_sg, count, dma_free_sectors);
++ 	      printk("maxsg = %x, counted = %d this_count = %d\n", max_sg, counted, this_count);
++ 	      while(bh){
++ 		printk("[%8.8x %x] ", bh->b_data, bh->b_size);
++ 		bh = bh->b_reqnext;
++ 	      };
++ 	      if(SCpnt->use_sg < 16)
++ 		for(count=0; count<SCpnt->use_sg; count++)
++ 		  printk("{%d:%8.8x %8.8x %d}  ", count,
++ 			 sgpnt[count].address,
++ 			 sgpnt[count].alt_address,
++ 			 sgpnt[count].length);
++ 	      panic("Ooops");
++ 	    };
++ 
++ 	    if (SCpnt->request.cmd == WRITE)
++ 	      for(count=0; count<SCpnt->use_sg; count++)
++ 		if(sgpnt[count].alt_address)
++ 		  memcpy(sgpnt[count].address, sgpnt[count].alt_address, 
++ 			 sgpnt[count].length);
+  	  };  /* Able to malloc sgpnt */
+  	};  /* Host adapter capable of scatter-gather */
+  
+***************
+*** 545,559 ****
+  /* Now handle the possibility of DMA to addresses > 16Mb */
+  
+  	if(SCpnt->use_sg == 0){
+! 	  if (((int) buff) + (this_count << 9) > ISA_DMA_THRESHOLD && 
+  	    (SCpnt->host->unchecked_isa_dma)) {
+! 	    buff = (char *) scsi_malloc(this_count << 9);
+! 	    if(buff == NULL) panic("Ran out of DMA buffers.");
+  	    if (SCpnt->request.cmd == WRITE)
+  	      memcpy(buff, (char *)SCpnt->request.buffer, this_count << 9);
+  	  };
+  	};
+- 
+  #ifdef DEBUG
+  	printk("sd%d : %s %d/%d 512 byte blocks.\n", MINOR(SCpnt->request.dev),
+  		(SCpnt->request.cmd == WRITE) ? "writing" : "reading",
+--- 641,661 ----
+  /* Now handle the possibility of DMA to addresses > 16Mb */
+  
+  	if(SCpnt->use_sg == 0){
+! 	  if (((int) buff) + (this_count << 9) - 1 > ISA_DMA_THRESHOLD && 
+  	    (SCpnt->host->unchecked_isa_dma)) {
+! 	    if(bounce_buffer)
+! 	      buff = bounce_buffer;
+! 	    else
+! 	      buff = (char *) scsi_malloc(this_count << 9);
+! 	    if(buff == NULL) {  /* Try backing off a bit if we are low on mem*/
+! 	      this_count = SCpnt->request.current_nr_sectors;
+! 	      buff = (char *) scsi_malloc(this_count << 9);
+! 	      if(!buff) panic("Ran out of DMA buffers.");
+! 	    };
+  	    if (SCpnt->request.cmd == WRITE)
+  	      memcpy(buff, (char *)SCpnt->request.buffer, this_count << 9);
+  	  };
+  	};
+  #ifdef DEBUG
+  	printk("sd%d : %s %d/%d 512 byte blocks.\n", MINOR(SCpnt->request.dev),
+  		(SCpnt->request.cmd == WRITE) ? "writing" : "reading",
+***************
+*** 886,892 ****
+  	   the read-ahead to 16 blocks (32 sectors).  If not, we use
+  	   a two block (4 sector) read ahead. */
+  	if(rscsi_disks[0].device->host->sg_tablesize)
+! 	  read_ahead[MAJOR_NR] = 32;
+  	/* 64 sector read-ahead */
+  	else
+  	  read_ahead[MAJOR_NR] = 4;  /* 4 sector read-ahead */
+--- 988,994 ----
+  	   the read-ahead to 16 blocks (32 sectors).  If not, we use
+  	   a two block (4 sector) read ahead. */
+  	if(rscsi_disks[0].device->host->sg_tablesize)
+! 	  read_ahead[MAJOR_NR] = 128 - (BLOCK_SIZE >> 9);
+  	/* 64 sector read-ahead */
+  	else
+  	  read_ahead[MAJOR_NR] = 4;  /* 4 sector read-ahead */
+***************
+*** 961,963 ****
+--- 1063,1066 ----
+  	  DEVICE_BUSY = 0;
+  	  return 0;
+  }
++ 
+*** ./drivers/scsi/aha1542.c.~1~	Thu Oct 28 23:03:51 1993
+--- ./drivers/scsi/aha1542.c	Thu Oct 28 23:14:36 1993
+***************
+*** 486,492 ****
+  	   (((int)sgpnt[i].address) & 1) || (sgpnt[i].length & 1)){
+  	  unsigned char * ptr;
+  	  printk("Bad segment list supplied to aha1542.c (%d, %d)\n",SCpnt->use_sg,i);
+! 	  for(i=0;i<SCpnt->use_sg++;i++){
+  	    printk("%d: %x %x %d\n",i,(unsigned int) sgpnt[i].address, (unsigned int) sgpnt[i].alt_address,
+  		   sgpnt[i].length);
+  	  };
+--- 486,492 ----
+  	   (((int)sgpnt[i].address) & 1) || (sgpnt[i].length & 1)){
+  	  unsigned char * ptr;
+  	  printk("Bad segment list supplied to aha1542.c (%d, %d)\n",SCpnt->use_sg,i);
+! 	  for(i=0;i<SCpnt->use_sg;i++){
+  	    printk("%d: %x %x %d\n",i,(unsigned int) sgpnt[i].address, (unsigned int) sgpnt[i].alt_address,
+  		   sgpnt[i].length);
+  	  };

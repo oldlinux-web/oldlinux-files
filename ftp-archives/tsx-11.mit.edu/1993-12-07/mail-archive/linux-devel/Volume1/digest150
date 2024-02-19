@@ -1,0 +1,579 @@
+From:     Digestifier <Linux-Development-Request@senator-bedfellow.mit.edu>
+To:       Linux-Development@senator-bedfellow.mit.edu
+Reply-To: Linux-Development@senator-bedfellow.mit.edu
+Date:     Fri, 8 Oct 93 18:13:10 EDT
+Subject:  Linux-Development Digest #150
+
+Linux-Development Digest #150, Volume #1          Fri, 8 Oct 93 18:13:10 EDT
+
+Contents:
+  adjtime() for Linux: tunable real time clock (time of day) (Harald Koenig)
+  Re: CFC/CFI: XSysadmin (Nan Zou)
+  Re: Linux Slowly Dying Off? + Lets make a game for Linux (Dale J. Chatham)
+  -m486 doing nothing? (Savio Lam)
+  Re: CFC/CFI: XSysadmin (Bill Heiser)
+  Re: adjtime() for Linux: tunable real time clock (time of day) (Torsten Duwe)
+  PAS 16 Programming Help Needed (John Stafford)
+  Re: GCC and structure field alignment (Lars Wirzenius)
+
+----------------------------------------------------------------------------
+
+From: koenig@nova.tat.physik.uni-tuebingen.de (Harald Koenig)
+Subject: adjtime() for Linux: tunable real time clock (time of day)
+Date: 8 Oct 93 15:26:05 GMT
+
+
+Hi,
+
+I implemented a tuneable day_of_time clock for Linux by using a 64 bit count 
+(unsigned long long jiffies64) instead of the 32 bit (unsigned long jiffies) 
+in linux/kernel/sched.c:do_timer().
+
+the upper 32 bits of jiffies64 will be copied to jiffies for compatibility,
+ so i've a time resolution of 2^(-32) clock ticks. this allows 
+
+- to fine tune the real time clock frequency (gettimeofday()) up to
+  20 usec per day  or 7.3 msec per year
+
+- implement adjtime() so that you can corrent the current time by
+  speeding up or slowing down the "real time" counter a bit
+  (switching to a slightly different add_per_clocktick for some number
+  of clock ticks  
+  aka. tick64_2 instead of tick64_1 for tick64_2_count clock ticks).
+
+
+below is the patch for 0.99pl13 (should work with most older pl's)
+and a prototype for adjtime() (adjtime is no syscall yet, maybe next weekend):
+i use a new entry to /proc (/proc/tickadj) to get the address of the 
+tuning constants in the kernel address space and read/modify them 
+via /dev/kmem. when adjtime() will be a system call this is much easier,
+but this version is better for development/debugging.
+
+NOTE that you have to do a 
+        make config
+after applying these patches (before making all) !!!
+
+there is a second call named tickadj(new,old) which has the same parameters
+as adjtime() but changes the global, permananent frequency (adjtime does a 
+one time correction of soem amount of time).
+new (first argument of tickadj) specifies the clock drift PER DAY in seconds.
+so, if your pc leaks 7.5 seconds a day (take a good wall clock, radio news,
+24 hours of time and to times the output of date(1) in the moment of the
+news bell), use 
+
+adjtime -t 7.5
+
+to speed up your PC clock (not the cmos clock! only Linux internal time)
+by 7.5 seconds a day...
+
+
+
+any comments? what syntax/semantic is recommended for tickadj()?
+is there any lookalike in bsd (like adjtime) one want to be compatible to?
+
+now, who has the first fully working port of xntp3 for Linux ???
+
+Harald
+
+PS: Linus, what's the official way of getting a new system call registered?
+(excactly two: adjtime and tickadj, maybe tickadj should be more general)
+
+PPS: a technical note/question to my kernel patches: 
+since i need a 64bit division in gettimeofday (linux/kernel/sys.c),
+i have to link the kernel image with /usr/lib/libgcc.a (for ___divdi3 etc.)
+
+now, what's about floating point arithmetic in kernel (for adjtime and
+tickadj)? or is it necessary to express all these computations by
+64bit expressions (could be hard and a bit unreadable)?
+what's about gcc-64-bit (long long) vs. handcoded 2 * 32bit routines for
+jiffies64 et.al.? are there any "kernel hackers design rules"?
+
+===============================================================================
+begin 644 adjtime.tgz
+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
+,_(_@7\>/EP8`>```
+`
+end
+-- 
+Harald Koenig, Inst.f.Theoret.Astrophysik  (koenig@tat.physik.uni-tuebingen.de)
+
+    All SCSI disks will from now on be required to send an email
+         notice 24 hours prior to complete hardware failure!
+
+------------------------------
+
+From: nan@matt.ksu.ksu.edu (Nan Zou)
+Crossposted-To: comp.os.linux
+Subject: Re: CFC/CFI: XSysadmin
+Date: 8 Oct 1993 01:48:59 -0500
+
+will@oliver (Michael Will) writes:
+
+>CFC / CFI      Call for Code / Call for Ideas :-)
+>Xsysadmin - this is what I want to write, only I think there already is
+>a lot of code outside? 
+
+I have been thinking about this for a while too.  I think it's a very
+good idea.  In fact, when I learn a little more about C and X11
+programming and when I have some free time I even plan to take it up
+myself.  However, the scope of my program idea is a lot more narrower:
+it only deals with user maintainance (adding/deleting).  Right now I use
+the add_user/delete_user program with their long and hard-to-remember
+command lines.  A X11 interface based on either OI/OB or Tcl/Tk would be
+much more intuitive.  It doesn't even have to be too complicated, just
+gather up the parameters and pass them to add_user/delete_user...  Like
+another poster said, a curses/ncurses based interface should also be
+available for those not running X.
+
+>Please contact me if you are working on something similar, have done something
+>alike or have something stuffed away which did not work to well...
+
+>I would like to make a LinuxConfigurationtool for
+>       - usermaintainement (incl. shadow-support)
+>       - uucp
+>       - smail
+>       - cnews / tin
+>       - internet
+>       - cron
+>       - printers
+
+>I do not know whether it is a good idea to put this all into one program,
+>especially since many people should contribute to this program - I cannot
+>do it all alone. 
+
+I think it's quite ambitious for you to tackle all aspects of
+system configuration.  Perhaps you should coordinate your efforts with
+the maintainers of these packages?
+
+-- Nan
+
+------------------------------
+
+From: dchatham@afit.af.mil (Dale J. Chatham)
+Subject: Re: Linux Slowly Dying Off? + Lets make a game for Linux
+Date: Fri, 8 Oct 1993 17:55:18 GMT
+
+> >soup@penrij.UUCP (John R. Campbell) writes:
+|> >>What I find amusing is that MS-Windoze has only proven itself as a game
+|> >>program and screen-saver environment.  Why worry about *real* applications?
+|> >>Most people only run MineSweeper and/or Solitaire...
+|> 
+|> >REALITY CHECK:
+|> 
+|> >Excel
+|> >Word for Windows
+|> >Ami Pro
+|> >Pagemaker...
+|> 
+|> >Etc etc etc etc etc etc etc.
+|> 
+|> Yeah, right.
+|> 
+|> How many people actually USE these versus the copies used to run solitaire
+|> or other Windoze-based games???
+|> 
+|> True, we've got one guy at the office who uses TinyTerm to drive several
+|> "terminals".  Of course, I run Linux w/ X-Windows & xterm/rlogin/telnets
+|> with 80x40 windows (on a 17" monitor).  Sure beats the Windoze turkey;
+|> I can actually do something useful locally (running 3 local xterms and
+|> two rlogins (or more) to 2 different systems.
+|> 
+
+To paraphrase a great American:  "Bovine Scatology!!"
+
+It may old, it may be clunky, it may be techically inferior.  However, in
+the real, non-academic world, folks actually do very useful stuff with
+the piece of refuse!
+
+Gotta give the devil his due.  Gates was there first with the only solution
+to the problem that most could afford!
+
+------------------------------
+
+From: lam836@cs.cuhk.hk (Savio Lam)
+Subject: -m486 doing nothing?
+Reply-To: lam836@cs.cuhk.hk
+Date: Fri, 8 Oct 1993 09:29:15 GMT
+
+        I just got POV-Ray 2.0 source from sunsite.unc.edu and compiled
+with '-O2 -m486'. I compared the binaries I compiled with the ones that
+come with the binary distribution (which are supposed to be compiled
+without using -m486) but found that they are the same! So I recompiled
+with only '-O2' and compared these with the ones I compiled early with
+'-O2 -m486' and they are the same! I tried with selection 1.5 and found
+the same result. Is there something wrong?
+
+Configuration:
+486DX2-66, 8M RAM,
+Linux 0.99pl13, gcc 2.4.5, libc 4.4.1 (all from Slackware 1.01).
+
+
+        Thanks.
+
+Regards,
+Savio Lam.
+
+--
+###############################################################################
+#                                 |        _                                  #
+# ------------------------------- |      _| |_                                #
+# Lam Lai Yin, Savio              |     |_   _|                               #
+#                                 |       | |                                 #
+# Internet: lam836@cs.cuhk.hk     |     /     \     Can't live with DOS?      #
+# Department of Computer Science  |    |  DOS  |                              #
+# Chinese University of Hong Kong |    |       |    Try Linux...              #
+# ------------------------------- |    |       |                              #
+#                                 |  ^^^^^^^^^^^^^                            #
+###############################################################################
+
+------------------------------
+
+Crossposted-To: comp.os.linux
+From: bill@bhhome.ci.net (Bill Heiser)
+Subject: Re: CFC/CFI: XSysadmin
+Date: Thu, 7 Oct 1993 02:25:34 GMT
+
+will@oliver (Michael Will) writes:
+
+
+>I would like to make a LinuxConfigurationtool for
+>       - usermaintainement (incl. shadow-support)
+>       - uucp
+>       - smail
+>       - cnews / tin
+>       - internet
+>       - cron
+>       - printers
+
+>I do not know whether it is a good idea to put this all into one program,
+>especially since many people should contribute to this program - I cannot
+>do it all alone. 
+
+I for one don't like using tools like that for sysadmin work .. I prefer
+to edit the files manually so I can see what is really being done.  But
+I agree there may be a "market" for such a tool.
+
+What I would suggest is something with an interface similar to
+SPARCworks by Sun (that is a Development environment, though, not
+a sysadmin package).  What I am referring to is the look and feel
+of SPARCworks.  I can explain in more detail if you aren't familiar
+with this package.
+
+-- 
+Bill Heiser   bill@bhhome.ci.net       heiser@world.std.com
+
+------------------------------
+
+From: duwe@immd4.informatik.uni-erlangen.de (Torsten Duwe)
+Subject: Re: adjtime() for Linux: tunable real time clock (time of day)
+Date: Fri, 8 Oct 1993 20:56:16 GMT
+
+In <koenig.750093965@nova> Harald Koenig writes:
+
+[description of incomplete implementation deleted]
+
+> any comments? what syntax/semantic is recommended for tickadj()?
+> is there any lookalike in bsd (like adjtime) one want to be compatible to?
+
+> now, who has the first fully working port of xntp3 for Linux ???
+
+> Harald
+
+Don't waste any more of your precious time on that task ! Philip Gladstone
+made a working port of xntp3 to Linux 0.99.11, which for some reason didn't
+make it into the standard distributions and unluckily became outdated due to
+changes in xntp's syscall interface, which ironically were inspired by
+Philip's port. Right now I've completely re-worked the port and updated the
+kernel patches required. The clean-up is almost finished and if I hadn't to
+write this followup it would probably be on its way to Linus by now. The
+patches to ntp v3.3 are already in the (kinda long) pipe to Dave Mills.
+If all goes well Linux-0.99.14 and ntp v3.4 will go together perfectly.
+
+Wait and see...
+
+        Torsten
+---
+ Torsten Duwe      duwe@informatik.uni-erlangen.de | /etc/init: respawn failed.
+ Friedrich-Alexander-Universität Erlangen-Nürnberg | fork license for
+ Informatik IV (Betriebssyteme, verteilte Systeme) | uid 0 has expired.
+
+
+
+------------------------------
+
+Crossposted-To: comp.sys.ibm.pc.soundcard
+Subject: PAS 16 Programming Help Needed
+From: stafford@husc9.harvard.edu (John Stafford)
+Date: 8 Oct 93 20:23:07 GMT
+
+The default mixer setting on the PAS16 driver are set so low that my CD player
+off line-in is barely audible with my speakers set on max. Normally (using
+the standard DOS driver) setting the speakers halfway is more than loud
+enough. Trying to fix it, I ran into the following in pas2_mixer.c. It 
+appears from the rest of the file to be the initialization levels for the
+various mixer settings:
+static unsigned short levels[SOUND_MIXER_NRDEVICES] = { 
+                                0x6464, /* Master Volume */
+                                0x3232, /* Bass */
+                                0x3232, /* Trebble */
+                                0x5050, /* FM */
+                                0x4b4b, /* PCM */
+                                0x3232, /* PC Speaker */
+                                0x4b4b, /* Ext Line */
+                                0x4b4b, /* Mic */
+                                0x4b4b, /* CD */
+I tried increasing the levels for Master Volume and Ext Line but there
+was no apparent result. Can anyone explain what these values mean and
+how to modify them?
+
+Thanks,
+John Stafford
+
+
+------------------------------
+
+From: wirzeniu@kruuna.Helsinki.FI (Lars Wirzenius)
+Subject: Re: GCC and structure field alignment
+Date: 8 Oct 1993 23:33:02 +0200
+
+bazyar@mrcnext.cso.uiuc.edu (Jawaid Bazyar) writes:
+>   Info docs?
+
+If your Linux has things properly installed, type
+
+        info
+
+on the command line or
+
+        C-h i
+
+inside Emacs, and you will be inside GNU's online documentation system.
+
+>   Um. It's not my compiler :) I maintain excellent docs on all my software
+> (well, I have to, being a commercial developer). Linux's main lack is
+> professional documentation.
+
+[ Attitude problem alert.  Man all flame stations.  :-) ]
+
+Why should there be professional documentation, when nobody's paying
+anyone anything for development?  (One part of professional is getting
+paid for it.)
+
+When you pay the gcc developers, or when you contribute to its
+development yourself, then and only then do you have the right to whine.
+
+>   That's silly, though. The whole point of bitfields is to compress
+> a bunch of small items into one word; if the compiler doesn't do that
+> then the compiler is broken.
+
+Quite.  But you're forgetting that what you think and what the compiler
+author thinks is proper alignment of members in a structure are two
+different things.  It's sometimes hard to believe, but there are in fact
+cases where there are good reasons for many different sorts of behaviour.
+
+If what you want to do is to describe a data item bit by bit or byte
+by byte, you shouldn't use bitfields or a structure, but an array of
+chars.  (Assuming you're interested in portability, that is.  If not,
+you shouldn't complain when things break; remember, you weren't 
+interested in portability.)
+
+> Most other C Compilers I've ever used work properly in this regard.
+
+That does not it only correct behaviour make.  Lot's of C compilers
+accept
+
+        void main(void) { ... }
+
+but that's still incorrect, unportable, and stupid.
+
+However, you should still take it to the GNU groups, since it doesn't
+have anything to do with Linux.
+
+--
+Lars.Wirzenius@helsinki.fi  (finger wirzeniu@klaava.helsinki.fi)
+It doesn't matter who you are, it's what you do that takes you far. --Madonna
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

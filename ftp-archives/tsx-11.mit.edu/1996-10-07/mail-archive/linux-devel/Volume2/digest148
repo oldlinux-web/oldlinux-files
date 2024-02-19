@@ -1,0 +1,625 @@
+From:     Digestifier <Linux-Development-Request@senator-bedfellow.mit.edu>
+To:       Linux-Development@senator-bedfellow.mit.edu
+Reply-To: Linux-Development@senator-bedfellow.mit.edu
+Date:     Sat, 10 Sep 94 06:13:07 EDT
+Subject:  Linux-Development Digest #148
+
+Linux-Development Digest #148, Volume #2         Sat, 10 Sep 94 06:13:07 EDT
+
+Contents:
+  Re: Don't use Linux?! (Ahmed Naas)
+  Re: Alpha Linux (H. Peter Anvin)
+  320x200 X resolution? (Sam Oscar Lantinga)
+  Re: Survey: who wants f77,cc,c++,hpf for linux? (stockman harlan w)
+  Re: Survey: who wants f77,cc,c++,hpf for linux? (stockman harlan w)
+  Re: ATI Mach64... Does it work...? (Thomas Pfarr)
+  Re: Mach64 XServer 90MHz limitation (Baba Buehler)
+  Re: Developing Distributed Filesystems for Linux? (John F Carr)
+  AFS Client Kernel Patch. . . (Grungie The Wise)
+  Re: A thought to improve security (Craig Woodward)
+  Re: Future of linux -- the sequel (Darin Johnson)
+  Re: DOSEMU 0.53p17 & mouse (Alberto Alonso; shisho or albund)
+  Re: Future of linux -- the sequel (Philippe Steindl)
+  IP multicast with linux? (Yufan Hu)
+
+----------------------------------------------------------------------------
+
+From: ahmed@oea.xs4all.nl (Ahmed Naas)
+Subject: Re: Don't use Linux?!
+Date: Fri, 9 Sep 1994 17:51:09 GMT
+
+Michael Schumacher (hightec@sbusol.rz.uni-sb.de) wrote:
+
+: PS: See 4. ;-)
+
+Ok, so all this racket is about introducing your shareware program :->
+Were can we get it from?
+
+-- 
+The above is a result of random neuron activity in the writer's brain.
+Ahmed M. Naas                                      ahmed@oea.xs4all.nl
+======================================================================
+
+------------------------------
+
+Crossposted-To: comp.lang.c
+From: hpa@ahab.eecs.nwu.edu (H. Peter Anvin)
+Subject: Re: Alpha Linux
+Reply-To: hpa@nwu.edu (H. Peter Anvin)
+Date: Sat, 10 Sep 1994 04:33:24 GMT
+
+[This is a general C issue so I am crossposting to comp.lang.c and
+setting followups there.]
+
+Followup to:  <COLEMAN.94Sep8111724@math36.gatech.edu>
+By author:    coleman@math36.gatech.edu (Richard Coleman)
+In newsgroup: comp.os.linux.development
+>
+> >   : Why drop one? 
+> >   : 16 bits = short int
+> >   : 32 bits = int
+> >   : 64 bits = long
+> >
+> >    128 bits = long long   :)
+> 
+> 
+> I've always thought that C should have some way
+> of letting you decided how many bytes to use
+> for your computation.  It could be as simple as
+> having the types
+> 
+> int8   ( = char )
+> int16  ( = short )
+> int24
+> int32  ( = int )
+> ...
+> 
+> up to some reasonable value like
+> int128.  Of course, other syntatic sugar
+> would probably be necessary, but the idea
+> *appears* simple enough.
+> 
+
+Here is a program I wrote that does just that:
+
+/*
+ * typesize.c    -- Generate typesize.h header file
+ *
+ * Written in 1994 by H. Peter Anvin <hpa@nwu.edu>
+ *
+ * This program is public domain, and makes the assumptions that:
+ *
+ * sizeof(char) == 1 (believe this one is true by definition)
+ * char == 8 bits unless CHAR_BIT is defined (in limits.h)
+ *
+ * The following external defines needs to be found out by an autoconf-
+ * style configure script or something like it:
+ *
+ * HAS_LIMITS_H     -- The include file <limits.h> exists
+ * HAS_LONG_LONG    -- The integral datatype "long long" exists
+ * HAS_QUAD         -- The integral datatype "quad" exists
+ * HAS_LONG_QUAD    -- The integral datatype "long quad" exists
+ * HAS_LONG_DOUBLE  -- The floating-point datatype "long double" exists
+ * 
+ * (The above defines do *not* require the datatypes to be distinct,
+ * just that they will compile without error.)
+ *
+ */
+
+#ifdef HAS_LIMITS_H
+#include <limits.h>
+#endif
+#include <stdio.h>
+
+char taken[256];                /* A primitive way of marking territory */
+#ifdef CHAR_BIT
+int bytesize = CHAR_BIT;        /* The size of a byte */
+#else
+int bytesize = 0;               /* Find out experimentally */
+#endif
+
+markint(f,length,name)
+FILE *f;
+int length;
+char *name;
+{
+  if ( length < 1 || length > 256 )
+    return 1;                   /* Don't know what this is */
+
+  if ( !taken[length-1] )
+    {
+      taken[length-1] = 1;
+
+      fprintf(f,"\n/* %d-bit integers */\n", length*bytesize);
+      fprintf(f,"#define HAS_INT%d 1\n", length*bytesize);
+      fprintf(f,"typedef %s int%d;\n", name, length*bytesize);
+      fprintf(f,"typedef unsigned %s uint%d;\n", name, length*bytesize);
+    }
+
+  return 0;
+}
+
+markfloat(f,length,name)
+FILE *f;
+int length;
+char *name;
+{
+  if ( length < 1 || length > 256 )
+    return 1;                   /* Don't know what this is */
+
+  if ( !taken[length-1] )
+    {
+      taken[length-1] = 1;
+
+      fprintf(f,"\n/* %d-bit floats */\n", length*bytesize);
+      fprintf(f,"#define HAS_FLOAT%d 1\n", length*bytesize);
+      fprintf(f,"typedef %s float%d;\n", name, length*bytesize);
+    }
+
+  return 0;
+}
+
+main()
+{
+  FILE *f;
+  int i;
+  unsigned char ch;
+
+  if ( sizeof(char) != 1 )
+    {
+      fprintf(stderr,"Weird compiler: sizeof(char) != 1\n");
+      exit(1);
+    }
+
+  f = fopen("typesize.h","wt");
+  if ( f == NULL )
+    {
+      fprintf(stderr,"Could not create typesize.h\n");
+      exit(1);
+    }
+
+  fprintf(f,"\
+/*\n\
+ * typesize.h\n\
+ *\n\
+ * Defines size-specific aliases for integer and floating-point data\n\
+ * types, and defines conditionals to find out about them.  This file\n\
+ * is compiler- and architecture specific and was automatically generated\n\
+ * by typesize.c.  Do not use except on the system and compiler that\n\
+ * compiled typesize.c.\n\
+ *\n\
+ */\n\n");
+
+  if ( !bytesize )
+    for ( ch = 1 ; ch ; ch = ch << 1 ) /* Not all C compilers like <<= */
+      bytesize++;      
+
+  fprintf(f,"/* The size of a byte (might be important) */\n");
+#ifdef HAS_LIMITS_H
+  fprintf(f,"#include <limits.h>\n");
+#ifdef CHAR_BIT
+  fprintf(f,"#define BYTESIZE CHAR_BIT\n");
+#else
+  fprintf(f,"#define BYTESIZE %d\n", bytesize);
+#endif
+#else
+  fprintf(f,"#define BYTESIZE %d\n", bytesize);
+#endif
+
+  for ( i = 0 ; i < 256 ; i++ )
+    taken[i] = 0;
+
+  markint(f,sizeof(int),"int");
+  markint(f,sizeof(char),"char");
+  markint(f,sizeof(short),"short");
+  markint(f,sizeof(long),"long");
+#ifdef HAS_LONG_LONG
+  markint(f,sizeof(long long),"long long");
+#endif
+#ifdef HAS_QUAD
+  markint(f,sizeof(quad),"quad");
+#endif
+#ifdef HAS_LONG_QUAD
+  markint(f,sizeof(long quad),"long quad");
+#endif
+
+  for ( i = 0 ; i < 256 ; i++ )
+    taken[i] = 0;
+
+  markfloat(f,sizeof(double),"double");
+  markfloat(f,sizeof(float),"float");
+#ifdef HAS_LONG_DOUBLE
+  markfloat(f,sizeof(long double),"long double");
+#endif
+
+  fclose(f);
+
+  exit(0);
+}
+-- 
+INTERNET: hpa@nwu.edu             --- Allah'u'abha ---
+IBM MAIL: I0050052 at IBMMAIL     HAM RADIO:   N9ITP or SM4TKN
+FIDONET:  1:115/511 or 1:115/512  STORMNET:    181:294/1 or 181:294/101
+"NT is not a bad thing if I don't have to use it..."  -- xmsb@borland.com
+
+------------------------------
+
+Crossposted-To: comp.os.linux.misc
+From: slouken@cs.ucdavis.edu (Sam Oscar Lantinga)
+Subject: 320x200 X resolution?
+Date: Thu, 8 Sep 1994 22:54:22 GMT
+
+
+        Does such a thing exist?  
+How would I go about finding the dot-clocks, etc for this resolution?
+Does XFree86 3.1 have it?  Where can I get it?
+
+Thanks for any information....
+
+        -Sam Lantinga           (slouken@cs.ucdavis.edu)
+
+
+P.S.  DOOM for X exists, and will hopefully be released soon.
+
+
+------------------------------
+
+From: hwstock@snll-arpagw.ca.sandia.gov (stockman harlan w)
+Crossposted-To: comp.lang.fortran
+Subject: Re: Survey: who wants f77,cc,c++,hpf for linux?
+Date: 8 Sep 94 15:02:23 GMT
+
+In article <Cvt6K0.Dyu@sci.kun.nl>, Michel Anders <michela@sci.kun.nl> wrote:
+>In <34m769$bju@indy.pgroup.com> lfm@pgroup.com (Larry Meadows) writes:
+>>1. Are people interested in a commercial compiler suite for Linux on
+>>   Intel Architecture platforms? The suite would include true compilers
+>>   for extended Fortran 77, ANSI C, Draft-ANSI C++ with extensions, and
+>>   High Performance Fortran. C, f77, and C++ could support shared memory
+[...]
+>GCC/G++ (and f2c) are excellent compilers and free..., and since i'm not
+[...]
+>For non-commercial programmers like me, i fail to see how a commercial
+>compiler could surpass the available GNU software. It would be interesting
+
+In my experience, the executables produced by f2c + C compilers can be 3
+times slower than executables produced by a good FORTRAN compiler.  You
+won't see this big a difference with a 486, where the average floating
+point instruction takes about 14 clock ticks, but it will show up on a
+Pentium or RISC chip.  The problem has to do with the way f2c translates
+FORTRAN multi-dimensional arrays into 1-D arrays with lots of integer
+multiplications.  Most C compilers end up assuming you must really want
+all those integer multiplications for some reason.
+
+------------------------------
+
+From: hwstock@snll-arpagw.ca.sandia.gov (stockman harlan w)
+Crossposted-To: comp.lang.fortran
+Subject: Re: Survey: who wants f77,cc,c++,hpf for linux?
+Date: 8 Sep 94 15:08:19 GMT
+
+In article <34mton$289@charm.magnus.acs.ohio-state.edu>,
+>reasons: 1.)  no native FORTRAN compiler, and 2.)  i[345]86 floating point
+>performance sucks big fuzzy Volkswagens through a straw.  Anybody tried
+
+That's a rather large range.  A 90 MHz Pentium runs linpack 60 times
+faster than a 33 MHz 386/387.
+
+
+
+
+------------------------------
+
+From: tpfarr@cstgmail.gsfc.nasa.gov (Thomas Pfarr)
+Crossposted-To: comp.os.linux.help,comp.windows.x.i386unix
+Subject: Re: ATI Mach64... Does it work...?
+Date: Fri, 9 Sep 1994 12:44:10
+
+>In article <deuelpm.18.2E6FBCED@craft.camp.clarkson.edu>, deuelpm@craft.camp.clarkson.edu (Pete Deuel) says:
+>>
+>>In article <CvtHDw.1vr@encore.com> pwalker@pinocchio.encore.com (Pete Walker) writes:
+>>>From: pwalker@pinocchio.encore.com (Pete Walker)
+>>>Subject: ATI Mach64... Does it work...?
+
+
+Lets try this again......
+I have successfully used the alpha SVGA driver for the mach64 PCI card.
+never the less I have the following observation/questions...
+
+I have a 21" monitor (Nanao f760i) and the current Alpha driver limits the
+dot clock to a maximum of 90MHz if you specify the clocks in Xconfig.  If you
+don't specify clocks and the driver probes the card then the code will set it 
+to the proper 135MHz maximum.
+
+Does anyone know if you can override the setting of the max clock in the code at
+runtime?
+
+If I don't specify clocks in Xconfig then it will allow the 110Mhz clock needed for
+1280x1024 @60HzV.  But I have not found a mode setup which will work at this 
+dot clock. (works fine with the 1152x8xx 90Mhz setting in the Xconfig supplied by
+the Alpha driver example) 
+
+Does anyone have 110, 1280x1024 settings for the Nanao f760i monitor?
+
+Thanks in advance...
+
+
+
+Tom Pfarr
+with the 1152x8xx 90Mhz setting in the Xconfig supplied by
+the Alpha driver example) 
+
+Does anyone have 110, 1280x1024 settings for the Nanao f760i monitor?
+
+Thanks in advance...
+
+
+
+Tom Pfarr
+Computer Sciences Corporation
+tpfarr@cstgmail.gsfc.nasa.gov
+
+------------------------------
+
+From: baba@ph-meter.beckman.uiuc.edu (Baba Buehler)
+Subject: Re: Mach64 XServer 90MHz limitation
+Date: 9 Sep 94 13:29:15 GMT
+Reply-To: baba@beckman.uiuc.edu
+
+wloh@panix.com (Weng Loh) writes:
+
+>I am currently playing with "alpha" driver for the ATI
+>Mach64 chipset XServer posted on sunsite.unc.edu. 
+
+>The configured clocks for that chipset goes up to 135Mhz
+>(or thereabout) but the server does not like seeing any
+>clock set above 90Mhz.
+
+the "alpha" SVGA server for the Mach64 cannot do anything over a 
+90Mhz dot-clock, because it is using the card as a simple svga
+card, not as an accelerator.
+
+-- 
+%>- Baba Z Buehler
+%>- Beckman Institute Systems Services, Urbana Illinois
+%>- WWW: http://www.beckman.uiuc.edu/groups/biss/people/baba/
+%>- PGP Public Key available via WWW & public key servers
+
+------------------------------
+
+From: jfc@ATHENA.MIT.EDU (John F Carr)
+Crossposted-To: alt.filesystems.afs
+Subject: Re: Developing Distributed Filesystems for Linux?
+Date: 10 Sep 1994 08:00:44 GMT
+
+
+There is nearly enough freely available documentation to figure out
+and implement the AFS protocol _given a working RPC layer_.  AFS uses
+an RPC protocol called "RX".  RX has no value except for compatibility
+with other software using it -- you wouldn't choose it for a new
+product.
+
+There is enough freely available documentation to get a general idea
+how RX works; a lot of information has been spread by word of mouth.
+
+I spent some time a while back reverse engineering the AFS and RX
+protocols based on publicly available documentation and a network
+monitor (because even if you make the mostly valid assumption that
+C data structures map directly to network data structures, the
+documentation about the meaning of the fields is incomplete and
+at times incorrect).
+
+I ended up with a proof of concept: it is possible to write a program
+independent of Transarc copyrighted source which will read or write an
+AFS file most of the time.  I don't have anything I would call an AFS
+implementation, though I may turn it into one eventually.  I don't have
+any code I'm willing to release.  Since this is crossposted to a Linux
+group I should also point out that I no longer use Linux (I saw the
+article in an AFS group) and I do not use the GPL for my software.
+
+If a group does form to work on a new implementation of AFS I may be
+able to answer questions from developers about the protocol.
+
+In the near term there is a port of Transarc AFS to Linux in testing
+at MIT.  If it is released you would still need an AFS license to use
+it.  If the RMS "contributory GPL infringement" theory is correct
+then releasing this version would be illegal.
+
+Note that AFS uses encryption so a full-featured version may have
+export restrictions.
+
+
+-- 
+    John Carr (jfc@mit.edu)
+
+------------------------------
+
+From: slash@cyclone.Stanford.EDU (Grungie The Wise)
+Subject: AFS Client Kernel Patch. . .
+Date: 9 Sep 1994 16:48:36 -0700
+
+Ive heard rumors that AFS support is being developed for linux. Please
+tell me they were true? 
+
+If so, what is the state of the project? Is there a beta site for it?
+
+Any info you have on it would be a great help!
+
+Thanks,
+
+Jeff
+-- 
+               __________------== Jeff Townsend ==------___________
+       ____----DCC Consultant - Guitarist - CS Major - Simpsons Fan----____
+    -==slash@cyclone.stanford.edu   jefft@xenon    god@cs    grungie@leland ==-
+       ----_______"Yes sir. Very much so sir. Obviously insane."_______----
+
+------------------------------
+
+From: cdw@cci.com (Craig Woodward)
+Subject: Re: A thought to improve security
+Date: Thu, 8 Sep 1994 21:26:57 GMT
+
+In article <34jvth$ovl@nic.wi.leidenuniv.nl>,
+J.A.vanderMost <jvdmost@hupnos.wi.leidenuniv.nl> wrote:
+>Just a thought :
+>
+>Some programs in a Unix system have to be SUID root to do the things they do.
+>Like /bin/passwd /bin/login /usr/bin/lp /user/bin/at etc.. are all SUID root.
+>
+>But being root is MUCH to powerful for these programs, they don't need all
+
+        Agreed, thats why most run SGID on my system.  I give then GROUP
+access to things.  lp runs as group lpdev, mtools runs as user/group disk.
+The big thing with Unix (and Linux) is that you CAN give things partial
+permissions, or ALL of them if you want.
+
+>Let's say lpr has a security bug in it, it allows a normal user that knows 
+>witch options, etc. to use, to modify a file that this user couldn't normally
+>modify. This is a very harmful bug, because this user can easily become root!
+
+        Same with finger, if someone's stupid enough to run it as root.  It
+should run as nobody, with no privs what so ever (thus requiring ***4
+permissions on .plan files).  Simply put, your contrived system eats user
+ids, and does nothing that you can't do with groups. (Thats why groups exist
+after all...)
+
+>Now my suggestion :
+>Let's modify the kernel a bit,....
+
+        If I had a penny for every time someone wanted to change the kernel...
+Why not compile the shell right into the kernel? Heck, MSDOG did it.
+
+>All comments are appreciated, especially from kernel-hackers.
+
+        Comment: RTFM and realize that just because a program WANTS to be SUID
+something, doesn't mean it NEEDS to be SUID something.
+
+>* America may be unique in being a country  *
+>*   which has leapt from barbarism to       *
+>*   decadence without touching civilization *
+
+        Pahhahaa aha ahahha ha ha ha... oh.. thats funny, all considered.
+
+                                                                -Woody
+-- 
+--- 
+I represent my own ideas.  Yes, I DO think, all on my own, without the
+collective.  Sure, you may think "NT's just putting him up to this", and
+you my be right, but thats only what I say, not why I say it. :)
+
+------------------------------
+
+From: djohnson@seuss.ucsd.edu (Darin Johnson)
+Subject: Re: Future of linux -- the sequel
+Date: 10 Sep 1994 00:32:05 GMT
+
+> My little ISA bus 486 has little trouble besting low-end workstations
+> in anything (Sun 4/110's and Sparcstation 1's).  It will do some integer
+> ops faster than a Sun 2.  The Sun 2's FPU will eat mine alive but for
+> $10000 it should beat it on *ALL* counts.  It doesn't.
+
+A Sun *2*?  The one they stopped supported in the mid-80's?
+It had a 68010 in it!  Maybe you mean a Sparcstation 2?
+
+So then, compare the DMA speed of your ISA system to a Sparcstation
+(or even a lowly VME system like a Sun 3).  There's more to a
+computer's performance than cpu speed.
+--
+Darin Johnson
+djohnson@ucsd.edu
+  - I'm not a well adjusted person, but I play one on the net.
+
+------------------------------
+
+From: a_alonso@iastate.edu (Alberto Alonso; shisho or albund)
+Subject: Re: DOSEMU 0.53p17 & mouse
+Date: 9 Sep 94 16:58:16 GMT
+
+In <34k0q5$eu4@mirage.unipv.it> clint@hal9000.unipv.it (Francesco Defilippo ) writes:
+
+>Hi, when i exit from dosemu selection doesn't work, 
+>I'v linux 1.1.49 & dosemu 053p17
+
+A temporary fix. Kill selection and startit again. Then think about
+getting a diferent mouse driver (I think this is the reason, but I'm not
+sure) like the msc0007 (I don't know the right spelling but is something
+like that.) It is available at OAK.
+
+Alberto
+-- 
+--
+Alberto Alonso                   
+e-mail: a_alonso@iastate.edu    Phone: never heard of it
+WWW: http://www.public.iastate.edu/~a_alonso/homepage.html
+Electrical Engineering.         (At least trying to be one) 
+
+===============================================================================
+===============================================================================
+For PGP signature finger a_alonso@iastate.edu
+
+------------------------------
+
+From: psteindl@il.us.swissbank.com (Philippe Steindl)
+Subject: Re: Future of linux -- the sequel
+Date: 8 Sep 1994 08:46:55 GMT
+Reply-To: ilg@imp.ch
+
+[some stuff deleted]
+> BTW, the entry level Indy used to be the Indy 4400PC, and the 4400's
+> performance without a secondary cache is pretty poor. It's still at
+> least as fast as a DX66.
+
+Hullo,
+
+just to kill some misinformation :-) The entry Indy used to be the R4000PC  
+Indy, now it is the R4600PC Indy. The R4400 isn't an entry CPU and I  
+haven't seen any configuration without second level cache.
+
+Just my 0.000002$
+
+Philippe
+
+--
+====================+===================================================
+Philippe Steindl    |                  Any opinions expressed are my own
+E-mail: ilg@imp.ch  |                  and not necessarily those of the 
+                    |                  Swiss Bank Corporation.
+====================+===================================================
+
+------------------------------
+
+From: yufan@iscm.ulst.ac.uk (Yufan Hu)
+Subject: IP multicast with linux?
+Date: 10 Sep 1994 10:44:02 GMT
+
+
+Hello,
+
+Does Linux support or plan to support IP multicasting?
+
+Tnanks.
+
+Yufan
+
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

@@ -1,0 +1,616 @@
+From:     Digestifier <Linux-Misc-Request@senator-bedfellow.mit.edu>
+To:       Linux-Misc@senator-bedfellow.mit.edu
+Reply-To: Linux-Misc@senator-bedfellow.mit.edu
+Date:     Mon, 10 Oct 94 23:13:09 EDT
+Subject:  Linux-Misc Digest #915
+
+Linux-Misc Digest #915, Volume #2                Mon, 10 Oct 94 23:13:09 EDT
+
+Contents:
+  Re: 320x200 Xconfig line (Harm Hanemaaijer)
+  Re: ez (was Re: Word (Text) processors for Linux?) (davis@pacific.mps.ohio-state.edu)
+  PPP Providers?  Dialup?  ISDN? (Thomas E Zerucha)
+  Re: c and me (Dan Pop)
+  Re: Curious: Why is Linux DOOM so much slower than DOS doom (Harm Hanemaaijer)
+  Re: 320x200 Xconfig line (Peter Mutsaers)
+  Re: Linux Dialback software anywhere? (Rob Janssen)
+  Re: Dialup problem (Rob Janssen)
+  Re: Nailed down to 386bsd or linux, now which one? (J.J. Paijmans)
+  Re: Word (Text) processors for Linux? (J.J. Paijmans)
+  Re: Linus' visit to Perth (Kurt M. Hockenbury)
+  Re: Word (Text) processors for Linux? (davis@pacific.mps.ohio-state.edu)
+  Re: Q: own Bootdisk with Ramdick ? (J.J. Paijmans)
+  [Q] capture echo & error ? (david her)
+  Re: Fidonet s/w for linux? (Thomas Parmelan)
+
+----------------------------------------------------------------------------
+
+From: hhanemaa@cs.ruu.nl (Harm Hanemaaijer)
+Subject: Re: 320x200 Xconfig line
+Date: Mon, 10 Oct 1994 15:21:25 GMT
+
+In <377ecr$ifg@nntp1.u.washington.edu> tlines@u.washington.edu (Tim Lines) writes:
+
+>I know this question has probably been asked a thousand times,
+>so feel free to flame me for asking the thousand and first.
+>Here goes:  How do I set up my Xconfig to support a "320x200"
+>resolution.  It's a standard enough video mode that I suspect
+>the same line added to the Xconfig would work anywhere.  So 
+>flame away guys,  but I will consider you unqualified to
+>flame me if you don't know the answer.  You'll have to
+>excuse me now, I've got to hurry and pick up my asbestos
+>suit from the cleaners...
+
+There is no sane SVGA style 320x200 mode timing that produce the standard
+VGA horizontal and vertical scan rates. The problem is that the standard
+VGA 200-line modes use a certain 'doublescan' bit that XFree86 2.1/2.1.1/
+3.1 do not know about (3.1.1 will). If you attempt to define a 320x200
+mode anyway with a 25 MHz dot clock you are likely causing a horizontal
+sync twice and a vertical sync four times as high as the standard
+VGA 320x200 mode needs. This is way above the spec of most monitors, even
+most high-end ones. If even if such a mode appears to work it may be
+operating at a sync rate 20% or so above spec and could cause damage. 
+
+If your server/chipset driver provides a 12.5 MHz clock, you can define 
+a sane 320x400 mode and work with that.
+
+Here's a little C program that will enable/disable the VGA doublescan
+bit. It should safe, but you never know so try it AT YOUR OWN RISK.
+Run it while in the server with a mode like 320x400. Read the
+description at the start.
+
+===== 
+
+/*
+ * This program enables the VGA scanline doubling bit at
+ * CRTC register 0x09.
+ * It should work on all SVGA chipsets that honour the bit
+ * when in SVGA mode.
+ *
+ * It requires double vertical timings to be programmed, i.e.
+ * set up mode timings for 320x400, and use this program while running
+ * the server in this mode to get an effective 320x200 resolution with
+ * exactly the same monitor timings. This means it should be safe
+ * given that the 320x400 mode is within specs.
+ *
+ * Sample mode: (70 Hz, 31.5 kHz hsync)
+ * Modeline "320x400" 12.588  320 336 384 400  400 409 411 450
+ *
+ * Note that the cursor position mapping will be incorrect after
+ * enabling the doublescan bit.
+ *
+ * If the driver you are using doesn't provide a 12.5 MHz clock
+ * you are out of luck. There are ways to obtain such a clock
+ * but experimenting can be dangerous. The only safe way is to have
+ * the chipset driver provide it in its set of clocks.
+ *
+ * Here are alternative low-res mode with doublescan with a 25 MHz
+ * clock, but they require a high horizontal sync. THESE MODES CAN ONLY
+ * WORK IF YOUR MONITOR IS SPECED FOR 40/48 kHz HORIZONTAL SYNC (which
+ * usually means a monitor than can do 1024x768 non-interlaced at
+ * at least 60 Hz). The first mode results in 480x300, with the same
+ * aspect ratio as 320x200. The second is 400x300, derived from
+ * 800x600 @ 72 Hz.
+ *
+ * # 480x600, 63 Hz, 39.6 kHz hsync
+ * Modeline "480x600" 25  480 496 576 632  600 601 605 628
+ * # 400x600, 72 Hz, 48.0 kHz hsync
+ * Modeline "400x600" 25  400 424 488 520  600 637 643 666
+ *
+ * Here's an alternative mode with a dot clock of 18 MHz that
+ * results in 400x300:
+ *
+ * # 400x600 @ 56 Hz, 35.2 kHz hsync
+ * ModeLine "400x600" 18  400 416 448 512  600 601 603 625
+ *
+ * Integrated doublescan support with a mode timing flag will be
+ * in XFree86 3.1.1.
+ */
+
+#include <stdlib.h>
+#include <unistd.h>
+
+
+static inline void outb( int port, int value )
+{
+        __asm__ volatile ("outb %0,%1"
+        : : "a" ((unsigned char)value), "d" ((unsigned short)port));
+}
+
+static inline int inb( int port )
+{
+        unsigned char value;
+        __asm__ volatile ("inb %1,%0"
+                : "=a" (value)
+                : "d" ((unsigned short)port));
+        return value;
+}
+
+#define ENABLE 1
+#define DISABLE 2
+
+void main( int argc, char *argv[] ) {
+        int crtcport, CR9;
+        int mode;
+
+        if (argc != 2) {
+                printf("Run with a single argument '1' to enable doublescan ");
+                printf("and '0' to disable.\n");
+                exit(0);
+        }
+
+        mode = 0;
+        if (argv[1][0] == '0')
+                mode = DISABLE;
+        if (argv[1][0] == '1')
+                mode = ENABLE;
+        if (mode == 0) {
+                printf("Invalid argument.\n");
+                exit(-1);
+        }
+
+        ioperm(0x3cc, 1, 1);
+
+        crtcport = 0x3d4;
+        if ((inb(0x3CC) & 0x01) == 0)
+                crtcport = 0x3b4;
+
+        ioperm(crtcport, 2, 1);
+
+        outb(crtcport, 0x09);
+        CR9 = inb(crtcport + 1);
+
+        if (mode == ENABLE && (CR9 & 0x80)) {
+                printf("CRTC Scan Double bit already enabled.\n");
+                exit(0);
+        }
+        if (mode == DISABLE && (CR9 & 0x80) == 0) {
+                printf("CRTC Scan Double bit already disabled.\n");
+                exit(0);
+        }
+
+        outb(crtcport, 0x09);
+        if (mode == ENABLE) {
+                outb(crtcport + 1, CR9 | 0x80);
+                printf("CRTC Scan Double bit enabled.\n");
+        }
+        else {
+                outb(crtcport + 1, CR9 & 0x7f);
+                printf("CRTC Scan Double bit disabled.\n");
+        }
+
+        exit(0);
+}
+
+
+------------------------------
+
+From: davis@pacific.mps.ohio-state.edu
+Crossposted-To: comp.unix.questions
+Subject: Re: ez (was Re: Word (Text) processors for Linux?)
+Date: 10 Oct 1994 15:34:29 GMT
+Reply-To: davis@amy.tch.harvard.edu
+
+In article <37bguj$3qv@canopus.cc.umanitoba.ca>, rahardj@cc.umanitoba.ca (Budi Rahardjo) writes:
+ : byron@gemini.cc.gatech.edu (Byron A Jeff) writes:
+ : 
+ : : Linux needs it's own Wordprocessor. Something simple, elegant, and moderately
+ : : powerful. And we need it yesterday.
+ : : The question is how to accomplish this?
+ : 
+ : Who about Andrew's  "ez" ? I think that's what you want. 
+
+It is X only.  I think Linux needs something more general for non-X
+terminals.  I spend 90% of my time using MS-Kermit connected via a dialup
+line.  I imagine that I am not alone.
+
+--
+     _____________
+#___/John E. Davis\_________________________________________________________
+#
+# internet: davis@amy.tch.harvard.edu
+#   bitnet: davis@ohstpy
+#   office: 617-735-6746
+#
+
+
+------------------------------
+
+From: zerucha@shell.portal.com (Thomas E Zerucha)
+Subject: PPP Providers?  Dialup?  ISDN?
+Date: 8 Oct 1994 22:44:23 GMT
+
+Who has the best rates for dialup PPP access.  I am in the Southeastrn
+Michigan (810 or 313 area code).  I am currently using Merit, but my local
+dialins are 2400 baud.  I have a local Compuserve indial and know of some
+services, but they have hourly surcharges (which aren't bad, but I want to
+shop around).  Does anyone know of a good PPP Provider I can dialup
+with a local call at a reasonable speed?
+
+Also, can I get ISDN through a local provider at a reasonable cost?
+---
+zerucha@shell.portal.com - main email address
+
+
+------------------------------
+
+From: danpop@cernapo.cern.ch (Dan Pop)
+Subject: Re: c and me
+Date: Wed, 5 Oct 1994 19:39:12 GMT
+
+In <36uj3bINNh31@mickey.eng.gulfaero.com> bmccarth@gulfaero.com (Bill McCarthy) writes:
+
+>reall basic intro to C for linux users-type book. To give you an 
+>idea of what I've tried: borrowed a book on C from work. Tried the
+>newbie program that supposed to print "hello, world". Typed it in
+>as per instructions in the book. Ran cc hello.c and got a parse
+>error. Duh....huh? Took a look at LJ #5, and wouldn't you know it,
+
+Nobody can help you without seeing what you were doing, based only on
+a vague description of the problem, like yours. So, next time post 
+something like:
+
+    ues4:~/tmp 18> cat hello.c
+    #include <stdio.h>
+
+    main()
+    {
+    printf("hello, world!\n");
+    return 0;
+    }
+    ues4:~/tmp 19> gcc hello.c
+    ues4:~/tmp 20> ./a.out 
+    hello, world!
+
+As you can see, it worked for me :-)
+
+Dan
+--
+Dan Pop 
+CERN, CN Division
+Email: danpop@cernapo.cern.ch
+Mail:  CERN - PPE, Bat. 31 R-004, CH-1211 Geneve 23, Switzerland
+
+------------------------------
+
+From: hhanemaa@cs.ruu.nl (Harm Hanemaaijer)
+Subject: Re: Curious: Why is Linux DOOM so much slower than DOS doom
+Date: Mon, 10 Oct 1994 15:34:06 GMT
+
+In <CxGF16.B9D@hkuxb.hku.hk> kkto@ipc14.csd.hku.hk (To Kar Keung Isaac) writes:
+
+>First, DOOM in DOS have the permission to do anything on the machine, but Linux
+>one can't. The DOS one actually use DMA to transfer data from memory to DMA,
+>while the Linux one call X to display an image. What it means, with shared
+>memory, is to copy the data to an area provided by X, then wait X to find
+>whether any clipping is necessary (e.g. if another window obscure the DOOM
+>window that shouldn't be displayed), and finally the X server will copy that to
+>the video memory after a color mapping. That long process should be the
+>bottleneck of linxdoom.
+
+It is not on most systems. If you run ps -u after running Doom for a while,
+you'll find that time spent in the X server (i.e. shared memory image
+overhead, copy to video memory, X overhead) is very much less than the
+time spent in the Doom process itself (although some of the shared memory
+image overhead could be in the Doom process).
+
+>Second, DOOM in DOS is near to the sole memory user. In Linux, it must compete
+>with all other clients, like the Xserver, the 4 virtual console, the window
+>manager, all system daemons, etc., and must also compete CPU time with them.
+>This is another bottleneck of the linxdoom.
+
+I don't think this is a significant factor. Programs/processes that
+don't need CPU don't use CPU. That's the whole point of Linux.
+
+hhanemaa@cs.ruu.nl
+
+
+------------------------------
+
+From: plm@atcmp.nl (Peter Mutsaers)
+Subject: Re: 320x200 Xconfig line
+Date: Mon, 10 Oct 1994 16:10:26 GMT
+
+>> On Mon, 10 Oct 1994 15:21:25 GMT, hhanemaa@cs.ruu.nl (Harm Hanemaaijer) said:
+
+  HH> There is no sane SVGA style 320x200 mode timing that produce the standard
+  HH> VGA horizontal and vertical scan rates. The problem is that the standard
+  HH> VGA 200-line modes use a certain 'doublescan' bit that XFree86 2.1/2.1.1/
+  HH> 3.1 do not know about (3.1.1 will). If you attempt to define a 320x200
+  HH> mode anyway with a 25 MHz dot clock you are likely causing a horizontal
+  HH> sync twice and a vertical sync four times as high as the standard
+  HH> VGA 320x200 mode needs. This is way above the spec of most monitors, even
+  HH> most high-end ones. If even if such a mode appears to work it may be
+  HH> operating at a sync rate 20% or so above spec and could cause damage. 
+
+  HH> If your server/chipset driver provides a 12.5 MHz clock, you can define 
+  HH> a sane 320x400 mode and work with that.
+
+However, the SVGA server from XFree 3.1 knows 320x200x256 without the
+need for a modeline; choose generic svga and it works. 
+-- 
+Peter Mutsaers                  |  AT Computing bv,  P.O. Box 1428,
+plm@atcmp.nl                    |  6501 BK  Nijmegen, The Netherlands
+tel. work: +31 (0)80 527248     |
+tel. home: +31 (0)3405 71093    |  "... En..., doet ie het al?"
+
+------------------------------
+
+From: rob@pe1chl.ampr.org (Rob Janssen)
+Subject: Re: Linux Dialback software anywhere?
+Reply-To: pe1chl@rabo.nl
+Date: Sat, 8 Oct 1994 18:41:39 GMT
+
+In <36jiai$f6s@kubds1.kub.nl> gevel@kub.nl (Rutger van de GeVEL) writes:
+
+
+>Hi all,
+
+>Well, the subject says is all. I'm looking for dialback software for
+>Linux. Does anyone know where to find is (or that it even exists)?
+
+My ZyXEL program (available on sunsite in /pub/linux/system/Serial)
+can do this.
+It is written for ZyXEL modems, but with some care and by passing the
+-Z flag you can use it on some generic fax+data modems as well...
+
+Rob
+-- 
+=========================================================================
+| Rob Janssen                | AMPRnet:   rob@pe1chl.ampr.org           |
+| e-mail: pe1chl@rabo.nl     | AX.25 BBS: PE1CHL@PI8UTR.#UTR.NLD.EU     |
+=========================================================================
+
+------------------------------
+
+From: rob@pe1chl.ampr.org (Rob Janssen)
+Subject: Re: Dialup problem
+Reply-To: pe1chl@rabo.nl
+Date: Sat, 8 Oct 1994 18:42:56 GMT
+
+In <XBTbkyVrfIGE072yn@romeo.rlmk.no> stinger@romeo.rlmk.no (Stinger) writes:
+
+>I'm having a small problem getting dialup to work 100%. That is; it works
+>most of the times, but every once in a while nothing happens after I
+>get the connect message. This means that I have to hangup and call again
+>to get the "login:" prompt.
+
+>The modem is a Zyxel 1496 Plus and I've got a 16550. The software I'm using
+>is Slackware 2.0 with the 1.1.45 kernel. I'm using the recommended line for
+>dialups in inittab with the exception that I've added RTS/CTS flow control.
+
+>Any suggestions?
+
+Use my special program for the ZyXEL, available from sunsite in directory
+/pub/linux/system/Serial.
+For me it works all the time.  Plus you can use it as a FAX and an answering
+machine as well...
+
+Rob
+-- 
+=========================================================================
+| Rob Janssen                | AMPRnet:   rob@pe1chl.ampr.org           |
+| e-mail: pe1chl@rabo.nl     | AX.25 BBS: PE1CHL@PI8UTR.#UTR.NLD.EU     |
+=========================================================================
+
+------------------------------
+
+From: paai@kub.nl (J.J. Paijmans)
+Crossposted-To: comp.os.386bsd.misc
+Subject: Re: Nailed down to 386bsd or linux, now which one?
+Date: 5 Oct 1994 19:19:04 GMT
+
+In article <Cx7Fwx.qLH@ns1.nodak.edu> tinguely@plains.NoDak.edu (Mark Tinguely) writes:
+...
+
+>
+>3) there is a slight culture difference between all of the groups. IMO, Linux
+>   is more DOS friendly, *BSD are more DOS-phobic. NetBSD is multi-platform,
+            ^^^^^^^^^^^^
+
+Ummm. If I see what the "DOS friendly" linux users here have to say about
+DOS and MS-Windows, it certainly makes me curious how the DOS-phobic
+BSD crowd talk about the Microsoft world... :-)
+
+Paai
+
+
+
+
+
+------------------------------
+
+From: paai@kub.nl (J.J. Paijmans)
+Crossposted-To: comp.unix.questions
+Subject: Re: Word (Text) processors for Linux?
+Date: 5 Oct 1994 19:25:44 GMT
+
+In article <36ugha$2p5@sashimi.wwa.com> blackbob@wwa.com (Terence S. Murphy) writes:
+>In article <36u4r9$bcp@kubds1.kub.nl>, J.J. Paijmans <paai@kub.nl> wrote:
+>
+>>Mind that emacs IS the other thing you are looking for.
+>>The combination of LaTeX and emacs can't be beaten.
+>
+>Does editing with emacs offer additional features for the LaTeX user that
+>aren't present in vi?  I'm curious about what they are, since I really love
+>vi/LaTeX, and don't have problems with it; of course, I haven't done anything
+>very complicated vith LaTeX.  (This is a question, not a flame :)
+>-- 
+
+I think that emacs as a wordprocessor/editor is in a league of its
+own, regardless if you are using it as a programmers editor or as
+"front-end" for LaTeX. That is how I meant this remark. But yes,
+Emacs comes with pre-configured assistance for *.tex and *.bib
+files (e.g. templates for bibtex-entries and stuff like that).
+
+If Matt Welsh continues his Emacs-tutorial in Linux Journal, he
+eventually will get to this subject. (I hope).
+
+Paai.
+
+
+
+
+------------------------------
+
+From: kmh@linux.stevens-tech.edu (Kurt M. Hockenbury)
+Subject: Re: Linus' visit to Perth
+Date: Sat, 8 Oct 1994 22:53:59 GMT
+
+Rob Janssen (rob@pe1chl.ampr.org) wrote:
+: Ok, let's make a start:
+
+:    1.  November 2, 1993.  NLUUG, Ede, the Netherlands
+
+2.  May 12, 1994.  DECUS, New Orleans, USA.
+3.  Summer 1994 (I don't know the date).  USENIX, Boston, USA.
+
+------------------------------
+
+From: davis@pacific.mps.ohio-state.edu
+Crossposted-To: comp.unix.questions
+Subject: Re: Word (Text) processors for Linux?
+Date: 10 Oct 1994 05:13:42 GMT
+Reply-To: davis@amy.tch.harvard.edu
+
+In article <379kpg$3ji@solaria.cc.gatech.edu>, byron@gemini.cc.gatech.edu
+(Byron A Jeff) writes: 
+ : You and I are in agreement on this, Richard. Linux is in desparate need
+ : of it's own wordprocessor, not a typesetter.
+ : 
+ : The problem is what's be best/fastest way to accomlish this. Some observations
+ : 
+ : 1) Must be native. Until we reach a point where emulation is standard and
+ :    stable in Linux distributions we need a unpack and go package.
+ 
+I do not think that portability is much of an issue here.  The actual code
+that is specific to Linux would be small.   If it runs under Linux, it
+should run under SunOS, Ultrix, etc...
+
+ : 2) Simple. Unfortunately that means that Richard's pet peeve - multiligualness
+ 
+ (See below)
+
+ : 
+ : 3) Multi-layered interface. I know GUI's are cool. I know that WYSIWYG is hot.
+ :    But frankly a GUI/WYSIWYG interface isn't much good when I'm sitting
+
+I agree.  In fact, I say that simply make it run on a character based
+terminal first and worry about X later.  I simply would refuse to work on it
+if it is X only.  The main problems are not going to be the display but the
+underlying representation of the data.  If this part is not done correctly,
+it will never ``sell''.
+
+ : The question is how to accomplish this?
+
+A while back a group was formed to write a word processor for Linux.
+However, I knew from the beginning that it would fail.  If another group is
+formed to start this project again, please consider why the project failed
+and do not make the same mistakes again.
+
+The reason for its failure is simple:  The initial goals and expectations
+were too high.  The wordprocessor was to read/write LaTeX files.  It was to
+be extensible like emacs.  It was a pipe dream.
+
+Think about what features you really need and do not expect to compete with
+TeX/LaTeX.  Instead, concentrate on simply getting something like PC-Write
+about 1984 or so.  Do not even worry about reading/writing Word/Wordperfect
+files.  These commercial wordprocessors contain features that the initial
+Linux one will not be able to handle any way.  Just concentrate on the
+Wordprocessor itself and worry about compatablility with other WPs. Once you
+get that level you can start adding more features-- like thinking about an X
+version.
+
+If you set realistic goals I will be more than happy to participate.
+
+--
+     _____________
+#___/John E. Davis\_________________________________________________________
+#
+# internet: davis@amy.tch.harvard.edu
+#   bitnet: davis@ohstpy
+#   office: 617-735-6746
+#
+
+
+------------------------------
+
+From: paai@kub.nl (J.J. Paijmans)
+Subject: Re: Q: own Bootdisk with Ramdick ?
+Date: 10 Oct 1994 16:54:16 GMT
+
+In article <1994Oct10.103745.28589@uklirb.informatik.uni-kl.de> duhl@informatik.uni-kl.de (Stephan Duhl) writes:
+>-- 
+>Hi all,
+>
+>I want to create my own Bootdisk with a Ramdisk, like the Slakeware Boot/Root
+
+...
+
+I don't know about the Ramdisk, but the subjectline of this message
+alarms me greatly...
+
+Paai.
+
+
+
+
+
+
+------------------------------
+
+From: davidher@netcom.com (david her)
+Subject: [Q] capture echo & error ?
+Date: Sat, 8 Oct 1994 17:19:47 GMT
+
+How can I capture both echo & error while a script or program is running ?
+Sometimes I have to send the complete session of a job , but all I know is
+1) redirect echo ex. make > myfile
+2) redirect error ex. make 2> error
+then manually combine myfile+error and arrange error correspond to event
+inside of myfile. Is any easy way just capture all echo as stdout what I
+saw on terminal ?
+
+
+
+------------------------------
+
+From: tom@darshiva.efrei.fr (Thomas Parmelan)
+Subject: Re: Fidonet s/w for linux?
+Date: Fri, 7 Oct 1994 18:23:06 GMT
+
+Ray Blaak écrivait:
+
+>The subject line says it all. I am interested in hooking up to Fidonet. Is the
+>necessary software available for Linux?
+
+You can try ifmail. I'am running my Fidonet point with it.
+Current version is 2.5.
+
+There is also FidoGate (see the recent post in c.o.l.announce for more
+info on this one).
+
+-- 
+Thomas Parmelan - tom@darshiva.efrei.fr
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Misc-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.misc) via:
+
+    Internet: Linux-Misc@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Misc Digest
+******************************

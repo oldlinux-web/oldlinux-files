@@ -1,0 +1,401 @@
+*** linux/fs/isofs/inode.c	Mon Nov 30 00:52:26 1992
+--- ../linux/fs/isofs/inode.c	Thu Dec  3 13:21:51 1992
+***************
+*** 316,321 ****
+--- 316,328 ----
+  	inode->i_gid = 0;
+  	inode->i_size = isonum_733 (raw_inode->size);
+  
++ 	/* There are defective discs out there - we do this to protect
++ 	   ourselves.  A cdrom will never contain more than 700Mb */
++ 	if(inode->i_size < 0 || inode->i_size > 700000000) {
++ 	  printk("Warning: defective cdrom.  Enabling \"cruft\" mount option.\n");
++ 	  inode->i_sb->u.isofs_sb.s_cruft = 'y';
++ 	};
++ 
+  /* Some dipshit decided to store some other bit of information in the high
+     byte of the file length.  Catch this and holler.  WARNING: this will make
+     it impossible for a file to be > 16Mb on the CDROM!!!*/
+*** linux/kernel/blk_drv/ll_rw_blk.c	Mon Nov 30 22:22:10 1992
+--- ../linux/kernel/blk_drv/ll_rw_blk.c	Thu Dec  3 11:08:00 1992
+***************
+*** 29,36 ****
+   */
+  struct wait_queue * wait_for_request = NULL;
+  
+! /* This specifies how many blocks to read ahead on the disk.  We might want
+!    to change this to sectors later, but for now this will work */
+  
+  int read_ahead[NR_BLK_DEV] = {0, };
+  
+--- 29,35 ----
+   */
+  struct wait_queue * wait_for_request = NULL;
+  
+! /* This specifies how many sectors to read ahead on the disk.  */
+  
+  int read_ahead[NR_BLK_DEV] = {0, };
+  
+*** linux/kernel/blk_drv/scsi/Makefile.in	Sat Nov 28 12:00:54 1992
+--- ../linux/kernel/blk_drv/scsi/Makefile.in	Fri Dec  4 14:20:13 1992
+***************
+*** 93,114 ****
+  Makefile: ../../../include/linux/config.h \
+  	../../../include/linux/config.site.h \
+  	../../../include/linux/config.dist.h \
+! 	 Makefile.in have_makefile
+  	cp Makefile.in tmp_make.c
+  	$(CPP) -E tmp_make.c \
+! 		| uniq > tmp_make
+  	rm tmp_make.c
+  	cp tmp_make Makefile
+  	rm -f tmp_make*
+  	$(MAKE) dep
+  
+! scsi.a: $(OBJS)
+  	rm -f scsi.a
+  	$(AR) rcs scsi.a $(OBJS)
+  	sync
+  
+  clean:
+! 	rm -f core *.o *.a tmp_make tmp_max figure max_hosts.h have_makefile
+  
+  seagate.o: seagate.c
+  	$(CC) -Wall -I$(KERNELHDRS) -c seagate.c 
+--- 93,115 ----
+  Makefile: ../../../include/linux/config.h \
+  	../../../include/linux/config.site.h \
+  	../../../include/linux/config.dist.h \
+! 	 Makefile.in have_makefile makefilter
+  	cp Makefile.in tmp_make.c
+  	$(CPP) -E tmp_make.c \
+! 		| ./makefilter | uniq > tmp_make
+  	rm tmp_make.c
+  	cp tmp_make Makefile
+  	rm -f tmp_make*
+  	$(MAKE) dep
+  
+! scsi.a: max_hosts.h $(OBJS)
+  	rm -f scsi.a
+  	$(AR) rcs scsi.a $(OBJS)
+  	sync
+  
+  clean:
+! 	rm -f core *.o *.a tmp_make tmp_max figure max_hosts.h have_makefile \
+! 	makefilter
+  
+  seagate.o: seagate.c
+  	$(CC) -Wall -I$(KERNELHDRS) -c seagate.c 
+*** linux/kernel/blk_drv/scsi/hosts.c	Fri Nov 27 23:20:43 1992
+--- ../linux/kernel/blk_drv/scsi/hosts.c	Thu Dec  3 10:34:50 1992
+***************
+*** 171,184 ****
+  
+  	}
+  
+- #endif
+- #else
+- void main(void) {
+- 	printf("0\n");
+- 	}
+- #endif	
+  
+- 
+  #ifndef CONFIG_BLK_DEV_SD
+  unsigned long sd_init(unsigned long memory_start, unsigned long memory_end){
+    return memory_start;
+--- 171,177 ----
+***************
+*** 219,222 ****
+--- 212,222 ----
+  int NR_ST=-1;
+  int MAX_ST=0;
+  #endif
++ 
++ #endif
++ #else
++ void main(void) {
++ 	printf("0\n");
++ 	}
++ #endif	
+  
+*** linux/kernel/blk_drv/scsi/makefilter.c	Fri Dec  4 12:29:09 1992
+--- ../linux/kernel/blk_drv/scsi/makefilter.c	Fri Dec  4 12:24:08 1992
+***************
+*** 0 ****
+--- 1,25 ----
++ /* This program is a stupid hack that we need because make is very fussy about
++    whitespace in a makefile.  This program takes any line that contains nothing
++    but whitespace, and removes all of the whitespace - it turns out that when
++    we #include <config.h> in Makefile.in, that we sometimes pick up extra
++    space here and there, and this is what we need to deal with. */
++ 
++ #include <stdio.h>
++ 
++ char buffer[16384];
++ 
++ main(){
++   int flag, cnt;
++   while(!feof(stdin)){
++     fgets(buffer, sizeof(buffer), stdin);
++     cnt = flag = 0;
++     while(buffer[cnt]){
++       if(buffer[cnt] != ' ' && buffer[cnt] != '\t' && buffer[cnt] != '\n')
++ 	flag++;
++       cnt++;
++     };
++     if(!flag) {buffer[0] = '\n'; buffer[1] = 0;};
++     if(feof(stdin)) break;
++     fputs(buffer, stdout);
++   };
++ }
+*** linux/kernel/blk_drv/scsi/scsi.c	Sat Nov 28 10:43:57 1992
+--- ../linux/kernel/blk_drv/scsi/scsi.c	Fri Dec  4 19:40:22 1992
+***************
+*** 104,109 ****
+--- 104,110 ----
+         char * revision; /* Latest revision known to be bad.  Not used yet */
+       };
+  
++ #if 0
+  static struct blist blacklist[] = 
+  {{"TANDBERG","TDC 3600","U07"},  /* Locks up if polled for lun != 0 */
+     {"SEAGATE","ST296","921"},   /* Responds to all lun */
+***************
+*** 121,126 ****
+--- 122,128 ----
+      return 1;
+    };	
+  };
++ #endif
+  
+  /*
+   *	As the actual SCSI command runs in the background, we must set up a 
+***************
+*** 313,322 ****
+  			};
+  
+  			++NR_SCSI_DEVICES;
+  			/* Some scsi devices cannot be polled for lun != 0
+  			   due to firmware bugs */
+  			if(blacklisted(scsi_result)) break;
+! 
+  			/* Some scsi-1 peripherals do not handle lun != 0.
+  			   I am assuming that scsi-2 peripherals do better */
+  			if((scsi_result[2] & 0x07) == 1 && 
+--- 315,325 ----
+  			};
+  
+  			++NR_SCSI_DEVICES;
++ #if 0
+  			/* Some scsi devices cannot be polled for lun != 0
+  			   due to firmware bugs */
+  			if(blacklisted(scsi_result)) break;
+! #endif
+  			/* Some scsi-1 peripherals do not handle lun != 0.
+  			   I am assuming that scsi-2 peripherals do better */
+  			if((scsi_result[2] & 0x07) == 1 && 
+*** linux/kernel/blk_drv/scsi/sd.c	Sun Nov 29 17:47:47 1992
+--- ../linux/kernel/blk_drv/scsi/sd.c	Fri Dec  4 19:52:00 1992
+***************
+*** 320,332 ****
+  {
+    Scsi_Cmnd * SCpnt = NULL;
+    struct request * req = NULL;
+    while (1==1){
+      if (CURRENT != NULL && CURRENT->dev == -1) return;
+  
+      INIT_REQUEST;
+  
+!     SCpnt = allocate_device(&CURRENT,
+! 			    rscsi_disks[DEVICE_NR(MINOR(CURRENT->dev))].device->index, 0); 
+  
+  /* This is a performance enhancement.  We dig down into the request list and
+     try and find a queueable request (i.e. device not busy, and host able to
+--- 320,346 ----
+  {
+    Scsi_Cmnd * SCpnt = NULL;
+    struct request * req = NULL;
++   int flag = 0;
+    while (1==1){
+      if (CURRENT != NULL && CURRENT->dev == -1) return;
+  
+      INIT_REQUEST;
+  
+! /* We have to be careful here.  allocate_device will get a free pointer, but
+!    there is no guarantee that it is queueable.  In normal usage, we want to
+!    call this, because other types of devices may have the host all tied up,
+!    and we want to make sure that we have at least one request pending for this
+!    type of device.   We can also come through here while servicing an
+!    interrupt, because of the need to start another command.  If we call
+!    allocate_device more than once, then the system can wedge if the command
+!    is not queueable.  The request_queueable function is safe because it checks
+!    to make sure that the host is able to take another command before it returns
+!    a pointer.  */
+! 
+!     if (flag++ == 0)
+!       SCpnt = allocate_device(&CURRENT,
+! 			      rscsi_disks[DEVICE_NR(MINOR(CURRENT->dev))].device->index, 0); 
+!     else SCpnt = NULL;
+  
+  /* This is a performance enhancement.  We dig down into the request list and
+     try and find a queueable request (i.e. device not busy, and host able to
+*** linux/kernel/blk_drv/scsi/seagate.c	Fri Nov 27 02:38:05 1992
+--- ../linux/kernel/blk_drv/scsi/seagate.c	Fri Dec  4 19:23:46 1992
+***************
+*** 19,25 ****
+  #include "seagate.h"
+  
+  
+! static int internal_command(unsigned char target, const void *cmnd,
+  			 void *buff, int bufflen, int reselect);
+  
+  static int incommand;			/*
+--- 19,26 ----
+  #include "seagate.h"
+  
+  
+! static int internal_command(unsigned char target, unsigned char lun,
+! 			    const void *cmnd,
+  			 void *buff, int bufflen, int reselect);
+  
+  static int incommand;			/*
+***************
+*** 209,215 ****
+   * waiting for a reconnect
+   */
+  
+! static unsigned char current_target;
+  static unsigned char *current_cmnd, *current_data;
+  static int current_bufflen;
+  static void (*done_fn)(Scsi_Cmnd *) = NULL;
+--- 210,216 ----
+   * waiting for a reconnect
+   */
+  
+! static unsigned char current_target, current_lun;
+  static unsigned char *current_cmnd, *current_data;
+  static int current_bufflen;
+  static void (*done_fn)(Scsi_Cmnd *) = NULL;
+***************
+*** 258,264 ****
+  			current_target, current_data, current_bufflen);
+  #endif
+  	
+! 		temp =  internal_command (current_target, 
+  			current_cmnd, current_data, current_bufflen,
+  			RECONNECT_NOW);
+  
+--- 259,265 ----
+  			current_target, current_data, current_bufflen);
+  #endif
+  	
+! 		temp =  internal_command (current_target, current_lun,
+  			current_cmnd, current_data, current_bufflen,
+  			RECONNECT_NOW);
+  
+***************
+*** 292,303 ****
+  
+  	done_fn = done;
+  	current_target = SCpnt->target;
+  	(const void *) current_cmnd = SCpnt->cmnd;
+  	current_data = SCpnt->request_buffer;
+  	current_bufflen = SCpnt->request_bufflen;
+  	SCint = SCpnt;
+  
+! 	result = internal_command (SCpnt->target, SCpnt->cmnd, SCpnt->request_buffer,
+  				   SCpnt->request_bufflen, 
+  				   CAN_RECONNECT);
+  	if (msg_byte(result) == DISCONNECT)
+--- 293,305 ----
+  
+  	done_fn = done;
+  	current_target = SCpnt->target;
++ 	current_lun = SCpnt->lun;
+  	(const void *) current_cmnd = SCpnt->cmnd;
+  	current_data = SCpnt->request_buffer;
+  	current_bufflen = SCpnt->request_bufflen;
+  	SCint = SCpnt;
+  
+! 	result = internal_command (SCpnt->target, SCpnt->lun, SCpnt->cmnd, SCpnt->request_buffer,
+  				   SCpnt->request_bufflen, 
+  				   CAN_RECONNECT);
+  	if (msg_byte(result) == DISCONNECT)
+***************
+*** 312,323 ****
+  
+  int seagate_st0x_command (Scsi_Cmnd * SCpnt)
+  	{
+! 	return internal_command (SCpnt->target, SCpnt->cmnd, SCpnt->request_buffer,
+  				 SCpnt->request_bufflen, 
+  				 (int) NO_RECONNECT);
+  	}
+  	
+! static int internal_command(unsigned char target, const void *cmnd,
+  			 void *buff, int bufflen, int reselect)
+  	{
+  	int len;			
+--- 314,325 ----
+  
+  int seagate_st0x_command (Scsi_Cmnd * SCpnt)
+  	{
+! 	return internal_command (SCpnt->target, SCpnt->lun, SCpnt->cmnd, SCpnt->request_buffer,
+  				 SCpnt->request_bufflen, 
+  				 (int) NO_RECONNECT);
+  	}
+  	
+! static int internal_command(unsigned char target, unsigned char lun, const void *cmnd,
+  			 void *buff, int bufflen, int reselect)
+  	{
+  	int len;			
+***************
+*** 805,811 ****
+   */
+  			if (reselect)
+  				{
+! 				DATA = IDENTIFY(1,0);
+  #if (DEBUG & (PHASE_RESELECT | PHASE_MSGOUT)) 
+  				printk("scsi%d : sent IDENTIFY message.\n", hostno);
+  #endif
+--- 807,813 ----
+   */
+  			if (reselect)
+  				{
+! 				DATA = IDENTIFY(1, lun);
+  #if (DEBUG & (PHASE_RESELECT | PHASE_MSGOUT)) 
+  				printk("scsi%d : sent IDENTIFY message.\n", hostno);
+  #endif
+*** linux/kernel/blk_drv/scsi/sr.c	Wed Nov 25 13:46:49 1992
+--- ../linux/kernel/blk_drv/scsi/sr.c	Fri Dec  4 19:52:18 1992
+***************
+*** 276,281 ****
+--- 276,282 ----
+  {
+    Scsi_Cmnd * SCpnt = NULL;
+    struct request * req = NULL;
++   int flag = 0;
+  
+    while (1==1){
+      if (CURRENT != NULL && CURRENT->dev == -1) return;
+***************
+*** 282,289 ****
+  
+      INIT_REQUEST;
+  
+!     SCpnt = allocate_device(&CURRENT,
+! 			    scsi_CDs[DEVICE_NR(MINOR(CURRENT->dev))].device->index, 0); 
+  
+  
+  /* This is a performance enhancement.  We dig down into the request list and
+--- 283,292 ----
+  
+      INIT_REQUEST;
+  
+!     if (flag++ == 0)
+!       SCpnt = allocate_device(&CURRENT,
+! 			      scsi_CDs[DEVICE_NR(MINOR(CURRENT->dev))].device->index, 0); 
+!     else SCpnt = NULL;
+  
+  
+  /* This is a performance enhancement.  We dig down into the request list and

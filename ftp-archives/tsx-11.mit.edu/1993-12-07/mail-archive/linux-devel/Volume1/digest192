@@ -1,0 +1,724 @@
+From:     Digestifier <Linux-Development-Request@senator-bedfellow.mit.edu>
+To:       Linux-Development@senator-bedfellow.mit.edu
+Reply-To: Linux-Development@senator-bedfellow.mit.edu
+Date:     Tue, 26 Oct 93 13:24:37 EDT
+Subject:  Linux-Development Digest #192
+
+Linux-Development Digest #192, Volume #1         Tue, 26 Oct 93 13:24:37 EDT
+
+Contents:
+  Re: Slowness in scsi disk access (Piercarlo Grandi)
+
+----------------------------------------------------------------------------
+
+From: pcg@aber.ac.uk (Piercarlo Grandi)
+Subject: Re: Slowness in scsi disk access
+Reply-To: pcg@aber.ac.uk (Piercarlo Grandi)
+Date: Tue, 26 Oct 1993 17:02:00 GMT
+
+>>> On Mon, 25 Oct 1993 16:50:24 GMT, eric@tantalus.nrl.navy.mil (Eric
+>>> Youngdale) said:
+
+Eric> This thread started on the scsi channel, because people constantly
+Eric> complain about how slow the scsi disks are under linux are
+Eric> relative to DOS.
+
+The drivers are failry OK; it's the architecture of the buffer cache and
+the filesystem that cannot exploit more than one third of the raw
+bandwidth available, like the original BSD FFS.
+
+Your experiments and observations are another confirmation of this.
+
+Eric> To begin with, I have a benchmark program that bypasses the buffer
+Eric> cache and filesystems completely, which run as user mode programs
+Eric> to measure I/O throughput.  With my scsi disk, I get a peak I/O
+Eric> rate of about 1.8Mb/sec,
+
+Not unexpected...
+
+Eric> [ ... ] While I was playing with the simulated iozone through my
+Eric> model, I noticed that at one point the program really slowed down
+Eric> like it was hitting a brick wall.  The simulated I/O rates dropped
+Eric> from something in excess of 1Mb/sec to something close to
+Eric> 32Kb/sec.  The cause in this particluar instance was quite simple
+Eric> - the first 2/3 of the buffers in the free list were dirty, and
+Eric> each time we call getblk we end up traversing all of these to
+Eric> locate a clean buffer.
+
+Use a free list. I cannot buy the notion that a free list is impossible
+because there are blocks of varying sizes in the buffer cache, for two
+reasons: there shouldn't, and if one really wanted them, a buddy system
+allocator with the busy bit in the buffer header is the way to go.
+
+Eric> [ ... ] It takes something like 50ms to scan 15000 buffer headers
+Eric> like I have on my system, so this overhead can eat you alive.
+
+So don't do it.
+
+Eric>   2) If we discover that all of the buffers in the buffer cache
+Eric> are dirty, we call sync.  The problem with doing this is that the
+Eric> process that is dirtying buffers gets stuck doing the sync, and
+Eric> the user program will not run again until the sync is complete.
+Eric> The request queue can hold at most 4Mb worth of buffers, so the
+Eric> user process can get stalled for a considerable amount of time.  I
+Eric> wonder whether it would be a good idea to wake up the update
+Eric> process once something like 50-75% of the buffers are dirty so
+Eric> that the writing can take place at the same time that the user
+Eric> processes are dirtying more buffers.
+
+Flushing every 30 sec. or was OK on a PDP-11 with 64 buffers if one was
+lucky. With several thousand one should do like SVR[34], and have a
+flushing daemon that sweeps cyclically thru the buffers and cleans them
+incrementally.
+
+Eric> 3) The handling of multiple block sizes is still not quite right.
+
+Multiple block sizes are a stupid idea. They just complicate life and
+reduce random access performance. Given that the SCSI drivers can do
+scatter/gather and mutiple sector read/writes in one go, clustered
+allocation and reading/writing are much better alternatives. To make
+life easier for pseudo scatter gather for those controllers that don't
+have it, clustered buffer block allocation in memory should be done
+too.
+
+There was a recent discussion in comp.arch.storage on this; I have
+appended some quotes. Nobody cared to defend block/frament schems.
+
+  From jbass@igor.tamri.com Wed Oct 13 15:07:11 1993
+  Newsgroups: comp.arch.storage
+  From: jbass@igor.tamri.com (John Bass)
+  Subject: Re: Log Structured filesystems -- think twice
+  Organization: Toshiba America MRI Inc, S. San Francisco, CA.
+  Date: Mon, 11 Oct 93 20:12:48 GMT
+  Status: O
+
+  In article <netappCEEtsz.Fx5@netcom.com>, Dave Hitz <hitz@netapp.com> wrote:
+  >In article <1993Oct4.175817.16505@exu.ericsson.se> exudnw@exu.ericsson.se writes:
+  >John Ousterhout has been making this argument for several years now,
+  >and one good place to get started, if you are interested, is his
+  >paper "Beating the I/O Bottleneck: A Case for Log-Structured File
+  >Systems."  As he defines it, a log structured file system is one that
+  >simply keeps appending data to the end of a "log", which wraps back to
+  >the beginning of the disk when it reaches the end.  This results in very
+  >little seeking for writes, which is what really matters if we assume
+  >that writes dominate reads.
+
+  A lot of people read this paper and apply it's conclusions out of context,
+  which is a significant error. His case of writes outnumbering reads is
+  generally FALSE for systems without the hundreds of megabytes of DRAM
+  which his filesystem work targets ... IE doesn't apply to typical workstations
+  or PC's which are in production today, or even the near future.
+
+  Furthermore, using this type of filesystem blindly distroys file localization
+  resulting in 3-15 times more arm motion to satisfy reads that would otherwise
+  occur.
+
+  The biggest source of gains in Log structured filesystems are clustered writes
+  and (possibly) late binding. Write clustering is available (in more primative
+  forms) in a number of production UNIX filesystems ... SGI and SCO being two
+  systems I use. Anyone shipping a stock 1K (.5K or 2K) filesystem should be
+  painfully aware of how limiting this is in 1990's.
+
+  Late binding is a concept that few if any production UNIX filesystems use,
+  that makes all the difference in the world ... IE don't assign disk block
+  addresses to data until you are ready to write the data from the buffer cache.
+  This allows significantly better placement for read-back, otherwise several
+  files being written concurrently will have highly interleaved data (the normal
+  multiuser disk write case).  This assumes that the freelist has already been
+  replaced with a bitmapped or extent style allocatator ... without access to
+  atleast locally contigous segments, any filesystem is screwed on trying to
+  maintain any form of locality.
+
+  The current block-at-a-time buffer pool and filesystem structure is the
+  primary bottleneck on most systems due to excessively high CPU requirements
+  to maintain this model. A significantly better approach are file-at-a-time 
+  designs (with huge files handled by file-segments).
+
+  RAID has little chance of performing anywhere near it's potential without
+  filesystems which utilize these alternate design primatives.
+
+  My models and prototypes of this design strategy indicate sigificantly better
+  performance for small to medium memory systems over both Log Structured
+  filesystems and current clustered block-at-a-time designs - with the same or
+  slightly better on large memory models as compared with Log Structured designs.
+
+  From pcg@aber.ac.uk Thu Oct 14 20:30:50 1993
+  Newsgroups: comp.arch.storage
+  From: pcg@aber.ac.uk (Piercarlo Grandi)
+  Subject: Re: Log Structured filesystems -- think twice
+  In-Reply-To: jbass@igor.tamri.com's message of Mon, 11 Oct 93 20: 12:48 GMT
+  Nntp-Posting-Host: decb.aber.ac.uk
+  Reply-To: pcg@aber.ac.uk (Piercarlo Grandi)
+  Organization: Prifysgol Cymru, Aberystwyth
+  Date: Wed, 13 Oct 1993 15:00:47 GMT
+  Status: O
+
+  >>> On Mon, 11 Oct 93 20:12:48 GMT, jbass@igor.tamri.com (John Bass) said:
+
+  John> Late binding is a concept that few if any production UNIX
+  John> filesystems use, that makes all the difference in the world ... IE
+  John> don't assign disk block addresses to data until you are ready to
+  John> write the data from the buffer cache.  This allows significantly
+  John> better placement for read-back, otherwise several files being
+  John> written concurrently will have highly interleaved data (the normal
+  John> multiuser disk write case).
+
+  I think another technique would be easier than lazy allocation, and as
+  effective or more so, and that is greedy allocation: when allocating a
+  block reserve 'K' blocks after it, possibly (logically) contiguously.
+
+  When the file is closed one just releases the unwritten blocks between
+  the logical end of file and the physical end of file. Implementing this
+  is trivial, and has been done in the past on a few systems. If one
+  anticipates that files with holes are common (allocations are common
+  also in the middle of files), a slightly, but only slightly, more
+  complicated system is needed, where blocks are in one of three, instead
+  of two states: free, written, unwritten; when a seek follows a write,
+  the seek turns to free the unwritten blocks following the written ones.
+
+  This is just allocation clustering by another name.
+
+  A stupid way to achieve this sort of clustering and read and write
+  clustering too is to raise the blocks size: using 8K blocks is
+  equivalent to doing read, write and allocation clustering with K set to
+  7 always (and fragmentation as in the BSD FFS is just a stupid,
+  complicated, way of trimming the tail).
+
+    A couple of years ago Larry Voy's twin :-) rediscovered clustering
+    and wrote a Usenix paper on it; this paper reaffirms the value
+    of r/w/a clustering, and the pointlessness of large blocks.
+    Unfortunately Larry Voy interprets his twin's paper as asserting the
+    desirability of large blocks sizes, which really befuddles me :-).
+
+  The reason for which using large blocks is stupid is that it is not
+  always true that K should be large, e.g. 7, for all files and all
+  operations.  While K being too large will not really hurt allocations
+  (except for wasted space when creating randomly accessed sparse files
+  with small records), a large K will definitely hurt very badly reads and
+  writes, and, even worse, cache hit rates, on randomly accessed files, or
+  on sequentially accessed files whose size is less than K+1 blocks: it
+  can be easily shown that large block/page sizes waste around 50% of
+  memory because of internal fragmentation in modern workstations for many
+  application areas.
+
+  Also, even for files that are sequentially accessed, K for reads and
+  writes should be variable, and proportional to the IO issue rate of the
+  application. Indeed K for read and writes should not be a property of
+  the file, but a property of the current access combination (it should be
+  stored in what under Unix is the 'struct file', not the 'struct inode'),
+  and perhaps ought to be adaptive, or at least hintable/advisable.
+
+  The problems with the original V7 Unix filesystems, which prompted the
+  development of the BSD FFS, were:
+
+          * K was limited to being 0 or 1 for read or writes.
+
+          * K was limited to being 0 for allocation.
+
+          * allocation eventually was random.
+
+  The BSD FFS, instead of removing these limitations, designed in new
+  rigidities. These looked like wins because the new rigidities were
+  better suited to sequential reads on modern disks, the prevalent case,
+  even if they siginficantly worsened performance on other access modes.
+
+
+  From danh@quantum.qnx.com Fri Oct 15 15:45:08 1993
+  Newsgroups: comp.arch.storage
+  From: danh@quantum.qnx.com (Dan Hildebrand)
+  Subject: Re: Log Structured filesystems -- think twice
+  Date: Thu, 14 Oct 93 12:41:15 GMT
+  Organization: QNX Software Systems
+  Status: O
+
+  In article <PCG.93Oct13160047@decb.aber.ac.uk>,
+  Piercarlo Grandi <pcg@aber.ac.uk> wrote:
+  >>>> On Mon, 11 Oct 93 20:12:48 GMT, jbass@igor.tamri.com (John Bass) said:
+  >
+  >I think another technique would be easier than lazy allocation, and as
+  >effective or more so, and that is greedy allocation: when allocating a
+  >block reserve 'K' blocks after it, possibly (logically) contiguously.
+
+  >When the file is closed one just releases the unwritten blocks between
+  >the logical end of file and the physical end of file. Implementing this
+  >is trivial, and has been done in the past on a few systems.
+
+  Exactly!  This is one of the many techniques QNX uses to get the disk 
+  performance it does.  Also, by using a bitmap for free space allocation, 
+  files can be grown contiguously if free space exists adjacent to the 
+  already allocated disk space.  If not, another extent from elsewhere on the 
+  disk is used.
+
+  >A stupid way to achieve this sort of clustering and read and write
+  >clustering too is to raise the blocks size: using 8K blocks is
+  >equivalent to doing read, write and allocation clustering with K set to
+  >7 always (and fragmentation as in the BSD FFS is just a stupid,
+  >complicated, way of trimming the tail).
+
+  We use a bitmap for free space allocation, 1 bit per 512 byte sector, and
+  each file exists as an array of extents where each extent is as many
+  contiguous blocks as could be allocated at that point on the disk.
+
+  >Also, even for files that are sequentially accessed, K for reads and
+  >writes should be variable, and proportional to the IO issue rate of the
+  >application. Indeed K for read and writes should not be a property of
+  >the file, but a property of the current access combination (it should be
+  >stored in what under Unix is the 'struct file', not the 'struct inode'),
+  >and perhaps ought to be adaptive, or at least hintable/advisable.
+
+  We apply various heuristics within the filesystem to modify the pre-read
+  behavior.
+  -- 
+  Dan Hildebrand                     email: danh@qnx.com
+  QNX Software Systems, Ltd.         QUICS: danh  (613) 591-0934 (data)
+  (613) 591-0931 x204 (voice)        mail:  175 Terence Matthews          
+  (613) 591-3579      (fax)                 Kanata, Ontario, Canada K2M 1W8
+
+  From lamaster@pioneer.arc.nasa.gov Sat Oct 16 15:01:59 1993
+  Newsgroups: comp.arch.storage
+  From: lamaster@pioneer.arc.nasa.gov (Hugh LaMaster)
+  Subject: Re: Log Structured filesystems -- think twice
+  Organization: NASA Ames Research Center, Moffett Field, CA
+  Date: Fri, 15 Oct 1993 18:21:23 GMT
+  Status: O
+
+  pcg@aber.ac.uk (Piercarlo Grandi) writes: 
+
+  > This is just allocation clustering by another name.
+
+  > A stupid way to achieve this sort of clustering and read and write
+  > clustering too is to raise the blocks size: using 8K blocks is
+  > equivalent to doing read, write and allocation clustering with K set to
+  > 7 always (and fragmentation as in the BSD FFS is just a stupid,
+  > complicated, way of trimming the tail).
+
+  Agreed on both counts:
+
+  1)  Allocation clustering was discovered ages and ages ago, and
+      was available on big iron O/S's long ago.  Funny it had to be
+      "rediscovered"...  Some operating systems let user applications
+      tell the O/S what the minimum natural allocation size was.
+      Sometimes the O/S could/would adjust the number on the fly.
+      BTW, this is doing the optimization as close to the application
+      as possible, where there is the maximum information available.
+      (Gee, almost 20 years ago now, *at least*.)
+
+  2)  It was not a brilliant idea to achieve clustering by increasing the
+      block size, and then re-fragmenting the blocks.  Of course, you have
+      to admit that the FFS worked (a lot) better than the old filesystem.
+      So it probably was a *good* idea.  A local optimization if not a 
+      global one.  (Add motherhood statements here. "The good is the
+      enemy of the best."  "TQM vs Re-engineering." etc. etc.)
+
+  On the other hand:
+
+  A) What *is* the optimal filesystem block size, as a function of:
+
+     - Application
+     - Local disk controller vs. network filesystem
+     - Size of system memory
+     - Speed of system
+     - Speed and latency of controllers and disks
+     - Size of disks, and, size of total online storage
+     - Hierarchical storage management/archiving
+     - Block size on media if already fixed (e.g. 512 bytes)
+     - Media track sizes, inter-block gaps and block overheads
+     - Prevalence of usage of memory-mapped I/O (and therefore
+       a possible performance dependence on system page sizes)
+     - Data recovery time (e.g. time to rebuild a consistent
+       filesystem in the face of an isolated hard error in a
+       bad place.
+
+
+  I suspect that when you take a number of the above factors
+  into consideration, the optimal size is probably currently
+  in the 2K-8K range, not in the 512 - 2K range that just
+  looking at filesizes of "typical Unix filesystems" might
+  indicate.  Based on past experience, 4K seems to work
+  pretty well overall.  I recall seeing a presentation from 
+  IBM at Hot Interconnects on multiplexing IBM channels on 
+  Fibre Channel.  The average block size was assumed to be 
+  5K bytes (of course, MVS doesn't have so many small files 
+  as Unix).  Surely media and filesystem blocks should be at 
+  least 1K?  What is the current thinking about this?
+
+  Is it worth it trying to optimize different filesystems for
+  different applications?  Certainly, you have to do this on
+  very high performance RAID systems.  DBMS's tend to do 
+  their own filesystems, and 2K seems to be optimal for many
+  DBMS applications.  How about other applications?
+
+          [ ... portiona omitted by pcg ... ]
+
+  -- 
+    Hugh LaMaster, M/S 233-9,     UUCP:      ames!lamaster
+    NASA Ames Research Center     Internet:  lamaster@ames.arc.nasa.gov
+    Moffett Field, CA 94035-1000  Or:        lamaster@george.arc.nasa.gov 
+    Phone:  415/604-1056                     #include <std_disclaimer.h> 
+
+  From waflowers@quantum.qnx.com Sat Oct 16 15:02:45 1993
+  Newsgroups: comp.arch.storage
+  From: waflowers@quantum.qnx.com (Bill Flowers)
+  Subject: Re: Log Structured filesystems -- think twice
+  Date: Fri, 15 Oct 93 21:27:59 GMT
+  Organization: QNX Software Systems
+  Status: O
+
+  In article <1993Oct11.201248.19845@igor.tamri.com>,
+  John Bass <jbass@igor.tamri.com> wrote:
+  >A lot of people read this paper and apply it's conclusions out of context,
+  >which is a significant error. His case of writes outnumbering reads is
+  >generally FALSE for systems without the hundreds of megabytes of DRAM
+  >which his filesystem work targets ... IE doesn't apply to typical workstations
+  >or PC's which are in production today, or even the near future.
+
+  I'd agree with this.  Our 2 main servers (one holding source, commands,
+  libraries, etc. and the other being our news and mail gateway) always have
+  reads outnumbering writes.  Our primary server (source, etc.) has twice as
+  many reads as writes typically with a 15M cache.  The news gateway has been
+  collecting statistics for the last 2.5 weeks, and has 3 times as many reads
+  as writes (but it also has a smaller cache).
+
+  >The biggest source of gains in Log structured filesystems are clustered writes
+  >and (possibly) late binding. Write clustering is available (in more primative
+  >forms) in a number of production UNIX filesystems ... SGI and SCO being two
+  >systems I use. Anyone shipping a stock 1K (.5K or 2K) filesystem should be
+  >painfully aware of how limiting this is in 1990's.
+  >
+  >Late binding is a concept that few if any production UNIX filesystems use,
+  >that makes all the difference in the world ... IE don't assign disk block
+  >addresses to data until you are ready to write the data from the buffer cache.
+  >This allows significantly better placement for read-back, otherwise several
+  >files being written concurrently will have highly interleaved data (the normal
+  >multiuser disk write case).  This assumes that the freelist has already been
+  >replaced with a bitmapped or extent style allocatator ... without access to
+  >atleast locally contigous segments, any filesystem is screwed on trying to
+  >maintain any form of locality.
+
+  Extent-based preallocation also results in clustered writes and excellent
+  placement for read-back.  I'm using a free bitmap with a look-aside table to
+  quickly find holes.
+
+  >The current block-at-a-time buffer pool and filesystem structure is the
+  >primary bottleneck on most systems due to excessively high CPU requirements
+  >to maintain this model. A significantly better approach are file-at-a-time 
+  >designs (with huge files handled by file-segments).
+
+  Yes.
+  -- 
+  ---
+  W.A. (Bill) Flowers                email: waflowers@qnx.com
+  QNX Software Systems, Ltd.         QUICS: bill     (613) 591-0934 (data)
+  (613) 591-0931 (voice)             mail:  175 Terrence Matthews
+
+  From pcg@aber.ac.uk Mon Oct 18 16:01:11 1993
+  Newsgroups: comp.arch.storage
+  From: pcg@aber.ac.uk (Piercarlo Grandi)
+  Subject: Re: Log Structured filesystems -- think twice
+  In-Reply-To: lamaster@pioneer.arc.nasa.gov's message of Fri, 15 Oct 1993 18: 21:23 GMT
+  Nntp-Posting-Host: decb.aber.ac.uk
+  Reply-To: pcg@aber.ac.uk (Piercarlo Grandi)
+  Organization: Prifysgol Cymru, Aberystwyth
+  Date: Sat, 16 Oct 1993 14:57:33 GMT
+  Status: O
+
+  >>> On Fri, 15 Oct 1993 18:21:23 GMT, lamaster@pioneer.arc.nasa.gov
+  >>> (Hugh LaMaster) said:
+
+  Hugh> pcg@aber.ac.uk (Piercarlo Grandi) writes: 
+
+  pcg> This is just allocation clustering by another name.
+
+  pcg> A stupid way to achieve this sort of clustering and read and write
+  pcg> clustering too is to raise the blocks size: using 8K blocks is
+  pcg> equivalent to doing read, write and allocation clustering with K set to
+  pcg> 7 always (and fragmentation as in the BSD FFS is just a stupid,
+  pcg> complicated, way of trimming the tail).
+
+  Hugh> Agreed on both counts:
+
+  Hugh> 1)  Allocation clustering was discovered ages and ages ago, and
+  Hugh>     was available on big iron O/S's long ago.  Funny it had to be
+  Hugh>     "rediscovered"... [ ... ] (Gee, almost 20 years ago now, *at
+  Hugh>     least*.)
+
+  As an aside to the main discussion: yes, I have always felt that in the
+  past 10 years the desktop revolution has widened rather then deepened
+  the state of the art. It seems as if the successive waves of hw
+  improvement always cause the state of the art in sw to start from
+  nought, and then slowly climb up. The lessons learned with mainframes
+  were only slowly rediscovered in minis, and then slowly rediscovered on
+
+  desktops, which ironically are now far more powerful than any mainframe
+  of old...
+
+  Hugh> [ ... ] On the other hand:
+
+  Hugh> A) What *is* the optimal filesystem block size, as a function of:
+
+  Hugh> [ ... zillion plausible factors ... ]
+
+  Hugh> I suspect that when you take a number of the above factors
+  Hugh> into consideration, the optimal size is probably currently
+  Hugh> in the 2K-8K range, not in the 512 - 2K range that just
+  Hugh> looking at filesizes of "typical Unix filesystems" might
+  Hugh> indicate.  Based on past experience, 4K seems to work
+  Hugh> pretty well overall.
+
+  I would make a distinction between optimal *block* size and optimal
+  *cluster/transfer* size. I can agree that 4k-8k seem to be a good bet
+  for a good cluster/transfer size, given state-of-the-art storage and
+  comms technology; the numbers from the McVoy paper seems to imply that
+  at least in some circumstances even larger allocation/transfer sizes can
+  be profitable (with top-line disks and comms, and sequential access).
+
+  Adaptive, or perhaps manually advised, _variable_ clustering as you
+  mention somewhere seems an attractive option.
+
+  But! This is not to say that the *granule* size, either on disk or main
+  memory, should be that large, and indeed:
+
+  Hugh> I recall seeing a presentation from IBM at Hot Interconnects on
+  Hugh> multiplexing IBM channels on Fibre Channel.  The average block
+  Hugh> size was assumed to be 5K bytes (of course, MVS doesn't have so
+  Hugh> many small files as Unix).
+
+  Hugh> Surely media and filesystem blocks should be at least 1K?  What is
+  Hugh> the current thinking about this?
+
+  Well, I remember seeing stats that show that working set is minimized by
+  a page size of 200-400 bytes, and that average object/record size is of
+  the order of a couple dozen bytes. This seems to indicate that "large"
+  page sizes waste space and bandwidth as unrelated entities get
+  read/written/allocated together pointlessly. Asking the people that deal
+  with Burroughs mainframes would probably result in interesting answers.
+
+  I did once (debating the issue of the 8KB page size with McVoy and
+  others) some on-the-fly measurements on a couple of local largish DEC
+  MIPS and SUN SPARC systems for average open file size, and an 8KB page
+  would waste about 50% of memory for internal fragmentation, given that
+  under Unix many files, especially most files frequently used
+  dynamically, like directories and sources/headers, are (or perhaps used
+  to be) smallish (<= 1KB).
+
+  All these numbers seem to point to a granule size in the 0.5-4KB range;
+  personally I think that the lower the better, so I would settle for
+  0.5-1KB, as long as clustering is done. I must confess that I think the
+  4KB page size in my home 386 is too large, even if it is still within
+  the bounds given above, and I am happy that the Linux ext2 fs has a 1KB
+  clock size.
+
+  The main problem with small granule sizes on very high density sotrage
+  and communications devices is high overhead for interblock delimiters,
+  but I cannot quite believe this can be decisive, when taking into
+  account latency, which must always be balanced against bandwidth.
+
+  Perhaps the choice of the ATM people with their granule size of 48 bytes
+  is rather extreme, as has been alleged recently on these screens, but
+  they insist that latency is of paramount importance to them...
+
+
+  Final remark: I cannot believe that, even the arguments for small
+  granule sizes seem to be strong in a technical sense, we shall soon see
+  a return to small granule sizes with clustering: hardware sells on
+  benchmarks, or at least marketing departments so believe, and a quick
+  and easy fix to get better benchmark numbers is to raise granularity,
+  and not just for storage or communications, and to the hell with a
+  balanced/robust/flexible system architecture.
+
+  Example: in order to achieve a higher SPECmark, the larger the page
+  size, the fewer the TLB reloads...
+
+  From gsteckel@harpoon.East.Sun.COM Mon Oct 18 16:02:50 1993
+  From: gsteckel@harpoon.East.Sun.COM (Geoff Steckel - Sun BOS Hardware CONTRACTOR)
+  Newsgroups: comp.arch.storage
+  Subject: Re: Log Structured filesystems -- think twice
+  Date: 17 Oct 1993 01:14:05 GMT
+  Organization: Omnivore Technology, Newton, Mass. (617)332-9252
+  NNTP-Posting-Host: harpoon.east.sun.com
+  Status: O
+
+  In article <PCG.93Oct16155734@decb.aber.ac.uk> pcg@aber.ac.uk (Piercarlo Grandi) writes:
+  >>>> On Fri, 15 Oct 1993 18:21:23 GMT, lamaster@pioneer.arc.nasa.gov
+  >>>> (Hugh LaMaster) said:
+  >pcg> A stupid way to achieve this sort of clustering and read and write
+  >pcg> clustering too is to raise the blocks size: ...
+  >
+  >Hugh> 1)  Allocation clustering was discovered ages and ages ago, and
+  >Hugh>     was available on big iron O/S's long ago.  Funny it had to be
+  >Hugh>     "rediscovered"... [ ... ] (Gee, almost 20 years ago now, *at
+  >Hugh>     least*.)
+  >
+  >As an aside to the main discussion: yes, I have always felt that in the
+  >past 10 years the desktop revolution has widened rather then deepened
+  >the state of the art. It seems as if the successive waves of hw
+  >improvement always cause the state of the art in sw to start from
+  >nought, and then slowly climb up. The lessons learned with mainframes
+  >were only slowly rediscovered in minis, and then slowly rediscovered on
+
+  This is one way for us gray-haired types to keep permanent employment (:-)
+  We remember the old mistakes and successes!
+  >
+  >Hugh> A) What *is* the optimal filesystem block size, as a function of:
+  >
+  >I would make a distinction between optimal *block* size and optimal
+  >*cluster/transfer* size. I can agree that 4k-8k seem to be a good bet
+  >for a good cluster/transfer size, given state-of-the-art storage and
+  >comms technology; the numbers from the McVoy paper seems to imply that
+  >at least in some circumstances even larger allocation/transfer sizes can
+  >be profitable (with top-line disks and comms, and sequential access).
+  >
+  >Adaptive, or perhaps manually advised, _variable_ clustering as you
+  >mention somewhere seems an attractive option.
+  >
+
+  Adaptive clustering (allocation) is interesting, but I've never seen a real
+  system that has benefited from it.  Does anyone have numbers?
+
+  >Hugh> Surely media and filesystem blocks should be at least 1K?  What is
+  >Hugh> the current thinking about this?
+
+  >Well, I remember seeing stats that show that working set is minimized by
+  >a page size of 200-400 bytes, and that average object/record size is of
+  >the order of a couple dozen bytes. This seems to indicate that "large"
+
+  The papers showing those #s were (at least ones I saw) back in CISC days.
+  Optimal RISC pages are bigger (code size 2X or so?).
+
+  >I did once ... some on-the-fly measurements ...  for average open file size,
+  >and an 8KB page >would waste about 50% of memory for internal fragmentation,
+  >... under Unix many files, especially most files frequently used
+  >dynamically, like directories and sources/headers, are (or perhaps used
+  >to be) smallish (<= 1KB).
+
+  >All these numbers seem to point to a granule size in the 0.5-4KB range;
+  >personally I think that the lower the better, so I would settle for
+  >0.5-1KB, as long as clustering is done.
+
+  While this granule size may well be optimal, the TRANSFER size should be
+  as large as memory, channel, etc., allow, up to a hardware dependent max
+  somewhere around 1-2 tracks, as long as the file access is proceeding
+  linearly.  With a RAID system this may mean that optimal I/Os are 400K
+  or more.  McAvoy's mods are about 25X more complex than needed, but show
+  that disk speed I/O is still compatible with an 'ordinary' file system.
+
+  Secondly, a number of experiments and production systems suggest that
+  on initial program invocation, it saves a good deal of time to read in
+  (say) 64K +- of the executable code & data rather than to take 100+
+  faults in the first thousands of instructions.  Seeks/schedules do cost
+  something.  This makes large extent reads even more useful.
+
+  The goal I pursue is a file system which scales well from the compile a
+  lot of files model to the read/write a video image file & process it,
+  with a couple of data bases in the background.
+
+  Metadata is another problem entirely.  Has anyone compared (recently)
+  a system where metadata lives with the first file extent rather than
+  pessimally placed away from it?  My tentative #s from ancient systems
+  show a 50% or better improvement over the Unix model, using a forced
+  write of metadata rather than a log/defer scheme.  This works best for
+  small files, obviously.
+
+  -- 
+          geoff steckel (gwes%om3@trilobyte.com)
+  Disclaimer: I am not affiliated with Sun Microsystems, despite the From: line.
+  This posting is entirely the author's responsibility.
+
+  From lynn@netcom6.bli.com Mon Oct 18 16:03:11 1993
+  Newsgroups: comp.arch.storage
+  From: lynn@netcom6.bli.com (Lynn Wheeler)
+  Subject: Re: Log Structured filesystems -- think twice
+  In-Reply-To: gsteckel@harpoon.East.Sun.COM's message of 17 Oct 1993 01:14:05 GMT
+  Reply-To: (Lynn Wheeler - Britton Lee, Inc) <lynn@bli.com>
+  Organization: Britton Lee, Los Gatos, Ca
+  Date: Sun, 17 Oct 1993 21:42:02 GMT
+  Status: O
+
+
+  ocmparisons ... different case than earlier one I posted, it was '74
+  (instead of '86) ... base system ran in virtual memory ... filesystem
+  ran thru "real I/O" but "real" actually involved v->r translation and
+  indirection. Base Filesystem had bit-map but didn't take advantage of
+  searching for contiguous (although sometimes it worked out). Logical
+  I/O was (effectively) syncronous ... and could be done direct to/from
+  target application address (unless logical request was <physical block
+  size, in which case intermediate physical buffer was used). Single
+  physical transfers up to 64kbyte from/to application memory were
+  supported (larger requests broken into 64kbyte chunks).
+
+  changes I did allowed mapping filesystem semantics to a variety of
+  virtual memory ops. Single memory-mapping of complete file could be
+  specified. However, traditional "buffering" operations were translated
+  to memory-mapped "windows" (i.e. traditional I/O buffer became virtual
+  "window" that could be "moved" across file).
+
+  One "simple" advantage was reduction of pathlength ... "real I/O"
+  simulation was eliminated ... as was "double I/O" ... i.e. virtual
+  page that was target of read I/O operation had to be "paged" into
+  memory before it "overlayed" with the read op. The application virtual
+  memory page was just remapped to filesystem disk location.
+
+  Since the base filesystem already had direct I/O ... just straight
+  memory-mapping was not a win by itself ... but the pathlength
+  reduction and possible double I/O on reads provided a lot of benefit.
+
+  However, there were lots of dynamic adaptive benefit ... particularly
+  with "large" windows &/or full-file mapping. The underlying system
+  code dynamically decided (based on real storage
+  availability/contention, I/O availability/contention, etc) how to
+  implement the request.  Large multi-track I/O requests could be
+  scheduled when there was lots of "free" real stroage ... or in cases
+  when the request was "larger" than real memory (or lots of contention)
+  it would allow faulting & effectively segment the request.
+
+  In any case, applications ran up to three times faster (depending on
+  degree of I/O boundness ... or I/O bottlenecking) between the
+  unmodified filesystem ... and the same filesystem semantics
+  implemented with the dynamic adaptive memory-mapping.
+
+  Applications could psuedo "tune" for this environment by specifying
+  multiple "large" buffers (large is relative lets say 16k up to several
+  hundred k or larger). Underlying system would translate virtual buffer
+  addresses into multiple virtual file "windows" (all over the same
+  file). Application buffering calls (effectively) provided the "hints"
+  to the underlying system when parts of a file were no longer needed
+  and could be discarded (real pages occurpied by the discarded virtual
+  file pages could be remapped to another part of the same file).
+  Application was paced/blocked automatically by a page fault if it got
+  ahead of the disk I/O transfers (w/o requiring explicit serialization
+  software in the application).
+
+  I had some applications tuned up in this manner (multiple large
+  buffers/windows) that would run 5-10 times faster (on mapped-modified
+  filesystem than same code/application/logic running on the unmodified
+  filesystem).
+
+          [ ... portion omitted by pcg ... ]
+
+  +-+-+-+
+  Lynn Wheeler                | lynn@bli.com, lynn@netcom.com, lhw@well.sf.ca.us
+  Britton Lee                 | voice: 408-370-1400  
+  PO Box 8                    |   fax: 408-370-1598
+  Los Gatos, Ca. 95031        |
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

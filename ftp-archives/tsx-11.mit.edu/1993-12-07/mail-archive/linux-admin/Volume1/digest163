@@ -1,0 +1,1108 @@
+From:     Digestifier <Linux-Admin-Request@senator-bedfellow.mit.edu>
+To:       Linux-Admin@senator-bedfellow.mit.edu
+Reply-To: Linux-Admin@senator-bedfellow.mit.edu
+Date:     Wed, 17 Nov 93 09:16:36 EST
+Subject:  Linux-Admin Digest #163
+
+Linux-Admin Digest #163, Volume #1               Wed, 17 Nov 93 09:16:36 EST
+
+Contents:
+  Linux Ethernet HOWTO (Part 2/2) (Paul Gortmaker)
+
+----------------------------------------------------------------------------
+
+From: Paul Gortmaker <gpg109@rsphysse.anu.edu.au>
+Crossposted-To: comp.os.linux.announce,comp.answers,news.answers
+Subject: Linux Ethernet HOWTO (Part 2/2)
+Date: 17 Nov 1993 04:22:20 GMT
+
+Archive-Name: linux/howto/ethernet/part2
+Last-Modified: November 16, 1993
+
+This is part 2/2 of the Linux Ethernet HOWTO. It is archived on 
+sunsite.unc.edu in pub/Linux/docs/HOWTO.
+
+[Begin part 2/2]
+
+5 Technical information.
+
+        For those who want to play with the present drivers, or try to make
+        up their own driver for a card that is presently unsupported, this
+        information should be useful. If you do not fall into this category,
+        then perhaps you will want to skip this section.
+
+5.01 Probed addresses
+
+        While trying to determine what ethernet card is there, the following
+        addresses are autoprobed, assuming the type and specs of the card
+        have not been set in the kernel. In /usr/src/linux/net/inet/CONFIG,
+        one can set the cards that are compiled in to the kernel. As of
+        0.99pl12, doing a "make config" will ask what cards are to be
+        supported. The file names below are in /usr/src/linux/net/inet/
+        ----------------------------------------------------------------
+        wd.c:           0x300, 0x280, 0x380, 0x240
+        3c503.c:        0x300, 0x310, 0x330, 0x350, 0x250, 0x280, 0x2a0, 0x2e0
+        ne.c:           0x300, 0x280, 0x320, 0x340, 0x360
+        hp.c:           0x300, 0x320, 0x340, 0x280, 0x2C0, 0x200, 0x240
+        lance.c:        0x300, 0x320, 0x340, 0x360
+        smc-ultra.c:    0x300, 0x280
+        3c509.c:        <Special "ID Port" probe>
+        ----------------------------------------------------------------
+        There are some NE2000 clone ethercards out there that are waiting black
+        holes for autoprobe drivers.  While many NE2000 clones are
+        safe until they are enabled, some can't be reset to a safe mode.
+        These dangerous ethercards will hang any I/O access to their
+        "dataports".  The typical dangerous locations are:
+
+        Ethercard jumpered base     Dangerous locations (base + 0x10 - 0x1f)
+                0x300 *                         0x310-0x317
+                0x320                           0x330-0x337
+                0x340                           0x350-0x357
+                0x360                           0x370-0x377
+
+        * The 0x300 location is the traditional place to put an ethercard, but
+        it's also a popular place to put other devices (often SCSI
+        controllers).  The 0x320 location is often the next one chosen, but
+        that's bad for for the AHA1542 driver probe.  The 0x360 location is
+        bad, because it conflicts with the parallel port at 0x378.
+
+        To avoid these lurking ethercard, here are the things you can do:
+
+        o Probe for the device's BIOS in memory space.  This is easy
+          and always safe, but it only works for cards that always have
+          BIOSes, like primary SCSI controllers.
+
+        o Avoid probing any of the above locations until you think
+          you've located your device.  The NE2000 clones have a reset range
+          from <base>+0x18 to <base>+0x1f that will read as 0xff, so probe
+          there first if possible.  It's also safe to probe in the 8390
+          space at <base>+0x00 - <base>+0x0f, but that area will return
+          quasi-random values
+
+        o If you must probe in the dangerous range, for instance if your
+          target device has only a few port locations, first check that
+          there isn't an NE2000 there. You can see how to do this by
+          looking at the probe code in /usr/src/linux/net/inet/ne.c
+
+        In other news, I've written the code for the I/O port registrar.
+        Peter MacDonald and I have been intensely discussing this, and I think
+        our current scheme has the necessary functionality with minimal kernel
+        size impact.  (The implementation involved rewriting the bitmap ops in
+        kernel/ioport.c:ioperm() so that most code could be shared.)
+
+        Here is the current "blurb".  As usual comments are welcome. Please
+        keep them substantial and constructive (we've already talked about
+        changing the name from "reserve=" to "noprobe=").
+
+        ==================
+
+        Boot-Time Parameters: "reserve="
+        
+        In some machines it may be necessary to prevent device drivers from
+        checking for devices (auto-probing) in a specific region.  This may be
+        because of poorly designed hardware that causes the boot to "freeze"
+        (such as some ethercards), hardware that is mistakenly identified,
+        hardware whose state is changed by an earlier probe, or merely
+        hardware you don't want the kernel to initialize.
+
+        The "reserve" boot-time argument addresses this problem by specifying
+        an I/O port region that shouldn't be probed.  That region is reserved
+        in the kernel's port registration table as if a device has already
+        been found in that region.  Note that this mechanism shouldn't be
+        necessary on most machine, only when there is a problem or special
+        case.
+
+        The boot-line syntax is
+
+          lilo-prompt: linux-image reserve=[<port>,<size>,<port>,<size>...]
+
+        As usual with boot-time specifiers there is an 11 parameter limit, thus
+        you can only specify 5 reserved regions per "reserve" keyword.
+        Multiple "reserve" specifiers will work if you have an usually
+        complicated request.
+
+        If you specify a "reserve" region to protect a specific device, you
+        must generally specify an explicit probe for that device.  Most
+        drivers ignore the port registration table if they are given an
+        explicit address.
+
+5.02 Skeleton / prototype driver
+
+        OK. So you have decided that you want to write a driver for the
+        Foobar Ethernet card, as you have the programming information,
+        and it hasn't been done yet. (...these are the two main require-
+        ments ;-) You can use the skeleton network driver that is provided
+        with the Linux kernel source tree. It can be found in the file
+        /usr/src/linux/net/inet/README.DRIVERS as of 0.99pl12, and later.
+
+        It's also very useful to look at the Crynwr (nee Clarkson) driver
+        for your target ethercard, if it's available.  Russ Nelson
+        <nelson@crynwr.com> has been actively updating and writing these,
+        and he has been very helpful with his code reviews of the current 
+        Linux drivers.
+
+5.03 Driver interface to the kernel
+
+        Here are some notes that may help when trying to figure out what
+        the code in the driver segments is doing, or perhaps what it is
+        supposed to be doing.
+
+        =====================================================
+
+        int ethif_init(struct device *dev)
+        {
+            ...
+                dev->send_packet = &ei_send_packet;
+                dev->open = &ei_open;
+                dev->stop = &ei_close;
+                dev->hard_start_xmit = &ei_start_xmit;
+                ...
+        }
+
+        int ethif_init(struct device *dev)
+
+        This function is put into the device structure in Space.c.  It is
+        called only at boot time, and returns '0' iff the ethercard 'dev'
+        exists.
+
+        =====================================================
+
+        static int ei_open(struct device *dev)
+        static int ei_close(struct device *dev)
+
+        This routine opens and initializes the board in response to an
+        socket ioctl() usually called by 'config' or 'ifconfig'.  It is
+        commonly stuffed into the 'struct device' by ethif_init().
+
+        The inverse routine is ei_close(), which should shut down the
+        ethercard, free the IRQs and DMA channels if the hardware permits,
+        and turn off anything that will save power (like the transceiver).
+
+        (Note: As of NET-2, the relevant program is '/etc/ifconfig' - and
+        the device *can* be turned off or on via passing 'up' or 'down'
+        to 'ifconfig' from the command line with the device name.)
+
+        =====================================================
+
+        static int ei_start_xmit(struct sk_buff *skb, struct device *dev)
+                dev->hard_start_xmit = &ei_start_xmit;
+
+        This routine puts packets to be transmitted into the hardware.  It
+        is usually stuffed into the 'struct device' by ethif_init().
+
+        When the hardware can't accept additional packets it should set
+        the dev->tbusy flag.  When additional room is available, usually
+        during a transmit-complete interrupt, dev->tbusy should be cleared
+        and the higher levels informed with mark_bh(INET_BH).
+        [[Note: pre0.99.4 kernels didn't use this interface for all packets.]]
+        
+        =====================================================
+
+        ...
+            if (dev_rint(buffer, length, is_skb ? IN_SKBUFF : 0, dev))
+                   stats->rx_dropped++;
+        ...
+        A received packet is passed to the higher levels using dev_rint().
+        If the unadorned packet data in a memory buffer, dev_rint will copy
+        it into a 'skbuff' for you.  Otherwise a new skbuff should be
+        kmalloc()ed, filled, and passed to dev_rint() with the IN_SKBUFF flag.
+
+        =====================================================
+
+5.04 Interrupts and Linux
+
+        There are two kinds of interrupt handlers in Linux:
+        fast ones and slow ones. You decide what kind you are installing by
+        the flags you pass to irqaction().  The fast ones, such as the serial
+        interrupt handler, run with _all_ interrupts disabled.  The normal
+        interrupt handlers, such as the one for ethercard drivers, runs with
+        other interrupts enabled.
+
+        There is a two-level interrupt structure.  The "fast" part handles the
+        device register, removes the packets, and perhaps sets a flag.   After
+        it is done, and interrupts are re-enabled, the slow part is run if the
+        flag is set.
+
+        The flag between the two parts is set by:
+                mark_bh(INET_BH);
+
+        Usually this flag is set within dev_rint() during a received-packet
+        interrupt, and set directly by the device driver during a
+        transmit-complete interrupt.
+
+        You might wonder why all interrupt handlers cannot run in
+        "normal mode" with other interrupts enabled.  Ross Biro uses this
+        scenario to illustrate the problem:
+                o You get a serial interrupt, and start processing it.
+                  The serial interrupt is now masked.
+                o You get a network interrupt, and you start transferring
+                  a maximum-sized 1500 byte packet from the card.
+                o Another character comes in, but this time the interrupts
+                  are masked!
+
+        The "fast" interrupt structure solves this problem by allowing
+        bounded-time interrupt handlers to run without the risk of leaving
+        their interrupt lines masked by another interrupt request.
+
+        There is an additional distinction between fast and slow interrupt
+        handlers -- the arguments passed to the handler.  A "slow" handler is
+        defined as
+
+                static void
+                handle_interrupt(int reg_ptr)
+                {
+                    int irq = -(((struct pt_regs *)reg_ptr)->orig_eax+2);
+                    struct device *dev = irq2dev_map[irq];
+                ...
+
+        While a fast handler gets the interrupt number directly
+
+                static void
+                handle_fast_interrupt(int irq)
+                {
+                ...
+
+        A final aspect of network performance is latency.  The only board
+        that really addresses this is the 3c509, which allows a predictive
+        interrupt to be posted.  It provides an interrupt response timer so
+        that the driver can fine-tune how early an interrupt is generated.
+
+        Alan Cox has some advice for anyone wanting to write drivers
+        that are to be used with pl14 kernels and newer. He says:
+
+        "Any driver intended for pl14 should use the new alloc_skb() and 
+        kfree_skbmem() functions rather than using kmalloc() to obtain an
+        sk_buff. The new pl14 skeleton does this correctly. For drivers 
+        wishing to remain compatible with both sets the define 
+        'HAVE_ALLOC_SKB' indicates these functions must be used.
+
+        In essence replace
+
+                skb=(struct sk_buff *)kmalloc(size)
+        with
+
+                skb=alloc_skb(size)
+
+        and
+
+                kfree_s(skb,size)
+
+        with
+
+                kfree_skbmem(skb,size)  /* Only sk_buff memory though */
+
+        Any questions should I guess be directed to me since I made the change.
+        This is a change to allow tracking of sk_buff's and sanity checks on 
+        buffers and stack behaviour. If a driver produces the message 
+        'File: ??? Line: ??? passed a non skb!' then it is probable the 
+        driver is not using the new sk_buff allocators."
+
+
+
+
+5.05 Programmed I/O vs. shared mem. vs. slave/master DMA
+
+        Ethernet is 10Mbs.  (Don't be pedantic, 3Mbs and 100Mbs don't count.)
+        If you can already send and receive back-to-back packets, you just
+        can't put more bits over the wire.  Every modern ethercard can receive
+        back-to-back packets.  The Linux DP8390 drivers come pretty close to
+        sending back-to-back packets (depending on the current interrupt
+        latency) and the 3c509 and AT1500 hardware has no problem at all
+        automatically sending back-to-back packets.
+
+        The ISA bus can do 5.3MB/sec (42Mb/sec), which sounds like more than
+        enough.  You can use that bandwidth in several ways:
+
+        Programmed I/O
+        ==============
+          Pro: Doesn't use any constrained system resources,
+               just a few I/O registers, and has no 16M limit.
+          Con: Usually the slowest transfer rate, the CPU is waiting
+               the whole time, and interleaved packet access is usually
+               difficult to impossible.
+
+        Shared memory
+        =============
+          Pro: Simple, faster than programmed I/O, and allows random
+               access to packets.
+          Con: Uses up memory space (a big one for DOS users, only a minor
+               issue under Linux), and it still ties up the CPU.
+
+        Slave (normal) DMA
+        ==================
+          Pro: Frees up the CPU during the actual data transfer.
+          Con: Checking boundary conditions, allocating contiguous buffers,
+               and programming the DMA registers makes it the slowest
+               of all techniques.  It also uses up a scarce DMA
+               channel, and requires aligned low memory buffers.
+
+        Master (bus-master) DMA
+        =======================
+          Pro: Frees up the CPU during the data transfer, can string together
+               buffers, can require little or no CPU time lost on the
+               ISA bus.
+          Con: Requires low-memory buffers and a DMA channel. Any
+               bus-master will have problems with other bus-masters that 
+               are bus-hogs, such as some primitive SCSI adaptors. A few
+               badly-designed motherboard chipsets have problems with
+               bus-masters. And a reason for not using *any* type of 
+               DMA device is using a Cyrix 486 processor designed for
+               plug-in replacement of a 386: these processors must
+               flush their cache with each DMA cycle.
+
+5.06 Programming the Intel chips (i82586 and i82593)
+
+        These chips are used on a number of cards, namely the 3c507 ('86),
+        the Intel EtherExpress 16 ('86), Microdyne's exos205t ('86),
+        the Z-Note ('93), and the Racal-Interlan ni5210 ('86).
+
+        Russ Nelson writes:
+        "Most boards based on the 82586 can reuse quite a bit of their code.
+        More, in fact, than the 8390-based adapters.  There are only three
+        differences between them:
+
+          o The code to get the Ethernet address,
+          o The code to trigger CA on the 82586, and
+          o The code to reset the 82586.
+
+        The Intel EtherExpress 16 is an exception, as it I/O maps the 82586.
+        Yes, I/O maps it.  Fairly clunky, but it works.
+
+        Garrett Wollman did an AT&T driver for BSD that uses the BSD
+        copyright.  The latest version I have (Sep '92) only uses a single
+        transmit buffer.  You can and should do better than this if you've
+        got the memory.  The AT&T and 3c507 adapters do; the ni5210 doesn't.
+
+        The people at Intel gave me a very big clue on how you queue up
+        multiple transmit packets.  You set up a list of
+        NOP->XMIT->NOP->XMIT->NOP->XMIT->(beginning) blocks, then you set the
+        "next" pointer of all the NOP blocks to themselves.  Now you start
+        the command unit on this chain.  It continually processes the first
+        NOP block.  To transmit a packet, you stuff it into the next transmit
+        block, then point the NOP to it.  To transmit the next packet, you
+        stuff the next transmit block and point the previous NOP to *it*.  In
+        this way, you don't have to wait for the previous transmit to finish,
+        you can queue up multiple packets without any ambiguity as to whether
+        it got accepted, and you can avoid the command unit start-up delay."
+
+5.07    Technical information from 3Com
+
+        From: Cameron Spitzer 764-6339 <camerons@nad.3com.com>
+        Subject: getting 3Com Adapter manuals
+        Date: Mon, 27 Sep 1993 21:17:07 +0200
+        
+        Since this is becoming a FAQ, I'm going to tread the thin
+        ice of No Commercial Use and answer it here.
+
+        3Com's Ethernet Adapters are documented for driver writers
+        in our "Technical References" (TRs).  These manuals describe
+        the programmer interfaces to the boards but they don't talk
+        about the diagnostics, installation programs, etc that end
+        users can see.
+        
+        The Network Adapter Division marketing department has the
+        TRs to give away.  To keep this program efficient, we
+        centralized it in a thing called "CardFacts."  CardFacts is
+        an automated phone system.  You call it with a touch-tone
+        phone and it faxes you stuff.  To get a TR, call CardFacts
+        at 408-727-7021.  Ask it for Developer's Order Form,
+        document number 9070.  Have your fax number ready when you
+        call.  Fill out the order form and fax it to 408-764-5004.
+        Manuals are shipped by Federal Express 2nd Day Service.
+        
+        If you don't have a fax and nobody you know has a fax,
+        really and truly, *then* send mail to
+        Terry_Murphy@3Mail.3Com.com and tell her about your problem.
+        PLEASE use the fax thing if you possibly can.
+        
+        After you get a manual, if you still can't figure out how to
+        program the board, try our "CardBoard" BBS at
+        1-800-876-3266, and if you can't do that, write
+        Andy_Chan@3Mail.3com.com and ask him for alternatives.  If
+        you have a real stumper that nobody has figured out yet, the
+        fellow who needs to know about it is
+        Steve_Lebus@3Mail.3com.com.
+        
+        There are people here who think we are too free with the
+        manuals, and they are looking for evidence that the system
+        is too expensive, or takes too much time and effort.  That's
+        why it's important to try to use CardFacts *before* you
+        start calling and mailing the people I named here.
+        
+        There are even people who think we should be like Diamond
+        and Xircom, requiring tight "partnership" with driver
+        writers to prevent poorly performing drivers from getting
+        written.  So far, 3Com customers have been really good about
+        this, and there's no problem with the level of requests
+        we've been getting.  We need your continued cooperation and
+        restraint to keep it that way.
+        
+        Cameron Spitzer,  408-764-6339
+        3Com NAD
+        Santa Clara
+        work: camerons@nad.3com.com
+        home: cls@truffula.sj.ca.us
+
+5.08 Notes on AMD PCnet-ISA / LANCE Based cards (79C960)
+
+        The AMD LANCE (Local Area Network Controller for Ethernet)
+        was the original offering, and has since been replaced by
+        the "PCnet-ISA" chip, otherwise known as the 79C960.
+        A relatively new chip from AMD, the 79C960, is the heart of many
+        new cards being released at present. Note that the name "LANCE"
+        has stuck, and some people will refer to the new chip by the old
+        name. Dave Roberts of the Network Products Division of AMD was kind
+        enough to contribute the following information regarding this chip:
+
+        "As for the architecture itself, AMD developed it originally
+        and reduced it to a single chip -- the PCnet(tm)-ISA -- over a year
+        ago.  It's been selling like hotcakes ever since.
+
+        Functionally, it is equivalent to a NE1500.  The register set
+        is identical to the old LANCE with the 1500/2100 architecture
+        additions.  Older 1500/2100 drivers will work on the PCnet-ISA.
+        The NE1500 and NE2100 architecture is basically the same.
+        Initially Novell called it the 2100, but then tried to distinguish
+        between coax and 10BASE-T cards.  Anything that was 10BASE-T only was
+        to be numbered in the 1500 range.  That's the only difference.
+
+        Many companies offer PCnet-ISA based products, including HP,
+        Racal-Datacom, Allied Telesis, Boca Research, Kingston Technology, etc.
+        The cards are basically the same except that some manufacturers
+        have added "jumperless" features that allow the card to
+        be configured in software.  Most have not.  AMD offers a standard
+        design package for a card that uses the PCnet-ISA and many
+        manufacturers use our design without change.
+        What this means is that anybody who wants to write drivers for
+        most PCnet-ISA based cards can just get the data-sheet from AMD.  Call
+        our literature distribution center at (800)222-9323 and ask for the
+        Am79C960, PCnet-ISA data sheet.  It's free.
+
+        A quick way to understand whether the card is a "stock" card
+        is to just look at it.  If it's stock, it should just have one large
+        chip on it, a crystal, a small IEEE address PROM, possibly a socket
+        for a boot ROM, and a connector (1, 2, or 3, depending on the media
+        options offered).  Note that if it's a coax card, it will have some
+        transceiver stuff built onto it as well, but that should be near the
+        connector and away from the PCnet-ISA.
+
+        The PCnet-ISA is faster than the original LANCE design and
+        makes better use of the available bus bandwidth.  Additionally, some
+        LANCE bugs were corrected and many enhancements were made."
+
+5.09 Multicast and Promiscuous mode
+
+        One of the things I've been working on recently is the
+        major remaining item on the ethercard feature list:
+        implementing multicast and promiscuous mode hooks.
+        
+        At first I was planning to do it while implementing either
+        the /dev/* or DDI interface, but that's not really the
+        correct way to do it.  We should only enable multicast or
+        promiscuous modes when something wants to look at the
+        packets, and shut it down when that application is
+        finished, neither of which is strongly related to when the
+        hardware is opened or released.
+        
+        I'll start by discussing promiscuous mode, which is
+        conceptually easy to implement.  For most hardware you
+        only have to set a register bit, and from then on you get
+        every packet on the wire.  Well, it's almost that easy;
+        for some hardware you have to shut the board (potentially
+        dropping a few packet), reconfigure it, and then re-enable
+        the ethercard.  This is grungy and risky, but the
+        alternative seems to be to have every application register
+        before you open the ethercard at boot-time.
+        
+        OK, so that's easy, so I'll move on something that's not
+        quite so obvious: Multicast.  It can be done two ways:
+        
+        1) Use promiscuous mode, and a packet filter like the
+           Berkeley packet filter (BPF).  The BPF is a pattern matching
+           stack language, where you write a program that picks out the
+           addresses you are interested in.  Its advantage is that it's
+           very general and programmable.  Its disadvantage is that there
+           is no general way for the kernel to avoid turning on promiscuous
+           mode and running every packet on the wire through every registered
+           packet filter. See the next section for more information on BPF.
+        
+        2) Using the built-in multicast filter that most etherchips have.
+        
+        I guess I should list what a few ethercards/chips provide:
+        
+        Chip/card  Promiscuous  Multicast filter
+        ========================================
+        Seeq8001/3c501  Yes     Binary filter (1)
+        3Com/3c509      Yes     Binary filter (1)
+        8390            Yes     Autodin II six bit hash (2) (3)
+        LANCE           Yes     Autodin II six bit hash (2) (3)
+        i82586          Yes     Hidden Autodin II six bit hash (2) (4)
+        
+        
+        (1) These cards claim to have a filter, but it's a simple
+        yes/no 'accept all multicast packets', or 'accept no
+        multicast packets'.
+        
+        (2) AUTODIN II is the standard ethernet CRC (checksum)
+        polynomial.  In this scheme multicast addresses are hashed
+        and looked up in a hash table.  If the cooresponding bit
+        is enabled, this packet is accepted.  Ethernet packets are
+        laid out so that the hardware to do this is trivial -- you
+        just latch six (usually) bits from the CRC circuit (needed
+        anyway for error checking) after the first six octets (the
+        destination address), and use them as an index into the
+        hash table (six bits == a 64-bit table).
+        
+        (3) These chips use the six bit hash, and must have the
+        table computed and loaded by the host.  This means the
+        kernel must include the CRC code.
+        
+        (4) The 82586 uses the six bit hash internally, but it
+        computes the hash table itself from a list of multicast
+        addresses to accept.
+
+        Note that none of these chips do perfect filtering, and we
+        still need a middle-level module to do the final
+        filtering.  Also note that in every case we must keep a
+        complete list of accepted multicast addresses to recompute
+        the hash table when it changes.
+        
+        My first pass at device-level support is detailed in the
+        new outline driver:
+        ftp.super.org:/pub/linux/pl14/skeleton.c
+        
+        Also in that directory you'll find all of my drivers
+        updated to use the proposed promiscuous/multicast mode
+        hook.
+        
+        #ifdef HAVE_MULTICAST
+        static void set_multicast_list(struct device *dev, int num_addrs,
+                                         void *addrs);
+        #endif
+        .
+        .
+        
+        ethercard_open() {
+        ...
+        #ifdef HAVE_MULTICAST
+                dev->set_multicast_list = &set_multicast_list;
+        #endif
+        ...
+        
+        #ifdef HAVE_MULTICAST
+        /* Set or clear the multicast filter for this adaptor.
+           num_addrs == -1      Promiscuous mode, receive all packets
+           num_addrs == 0       Normal mode, clear multicast list
+           num_addrs > 0        Multicast mode, receive normal and
+                                MC packets, and do best-effort filtering.
+         */
+        static void
+        set_multicast_list(struct device *dev, int num_addrs, void *addrs)
+        {
+        ...
+
+        Any comments, criticism, etc. are welcome.
+
+        Alan Cox adds that "...in pl14, user programs can access promiscuous 
+        mode but not multicast mode, even though the drivers support both. 
+        The ifconfig program allows you to mark an interface 'promisc'."
+        
+5.10 The Berkely Packet Filter (BPF)
+
+        I'm not bitterly opposed to it, but I'm coming to the
+        conclusion that the 'bpf' functionality should not be provided
+        by the kernel, but should be in a (hopefully little-used)
+        compatibility library.
+        
+        For those not in the know: 'bpf' (the Berkeley Packet Filter)
+        is an mechanism for specifying to the kernel networking layers
+        what packets you are interested in.  It's implemented as a
+        specialized stack language interpreter built into a low level
+        of the networking code.  An application passes a program
+        written in this language to the kernel, and the kernel runs the
+        program on each incoming packet.  If the kernel has multiple
+        'bpf' applications, each program is run on each packet.
+        
+        The problem is that it's difficult to deduce what kind of
+        packets the application is really interested in from the packet
+        filter program, so the general solution is to always run the
+        filter.  Imagine a program that registers a 'bpf' program to
+        pick up a low data-rate stream sent to a multicast address.
+        Most ethernet cards have a hardware multicast address filter
+        implemented as a 64 entry hash table that ignores most unwanted
+        multicast packets, so the capability exists to make this a very
+        inexpensive operation.  But with the BFP the kernel must switch
+        the interface to promiscuous mode, receive _all_ packets, and
+        run them through this filter.  This is work, BTW, that's very
+        difficult to account back to the process requesting the packets.
+
+5.11 Unresolved questions / concerns
+
+        There may be some benefit from processing packet data as it is
+        transferred to and from the ethercard, especially with very fast
+        processors transferring data to a slow ethercard.  As I see it this
+        question has multiple parts:
+                1) Is there any useful processing power available, perhaps
+                   during the ISA bus recovery period, or while the 8390
+                   remote DMA is preparing for another transfer??
+                2) Is there any useful but simple work that can be done
+                   between/during each word of the copy, such as calculating
+                   a CRC, or discarding obviously unwanted packets??
+                3) would the complexity of an interface to do this make future
+                   ethercard drivers impossible??
+
+        There should be a better structure than Space.c  Drivers should be
+        able to autoprobe for all installed ethercards rather than just
+        quitting after finding the first.  I've written code to do this,
+        but the constant promise (threat?) of DDI has prevented me from
+        making it standard.
+
+        A related topic is the problem of driver probes corrupting
+        unrelated hardware. Even worse is a probe into a dataport that
+        isn't set up to transfer data, which will freeze the machine.  The
+        common suggestion is a boot-time device registry that records
+        already-used I/O ports and shared memory. This has been implemented
+        as of pl13, see section 5.01.
+
+6 Possible problems, and troubleshooting.
+
+        This section tries to answer any unresolved questions, and not so
+        common solutions to common problems. They are sorted on a "per
+        manufacturer basis". You should have also read the relevant info.
+        from section 1 about your specific card. Section 8 contains more
+        general FAQ's.
+
+6.01 Problems with NE2000 (and clones)
+
+        "DMA address mismatch"
+        ======================
+
+        Is the chip a real NatSemi 8390? (DP8390, DP83901, DP83902 or DP83905)?
+        If not, some clone chips don't correctly implement the transfer
+        verification register.  MS-DOS drivers never do error checking,
+        so it doesn't matter to them.
+
+        Are most of the messages off by a factor of 2?
+        If so:  Are you using the NE2000 in a 16 bit slot?
+                Is it jumpered to use only 8 bit transfers?
+
+        The Linux driver expects a NE2000 to be a 16 bit slot.  A NE1000 can
+        be in either size slot.  This problem can also occur with some clones,
+        notably D-Link 16 bit cards, that don't have the correct ID bytes
+        in the station address PROM. [[ This should be fixed in pl12.]]
+
+        Are you running the bus faster than 8Mhz?
+        If you can change the speed (faster or slower), see if that
+        makes a difference.  Most NE2000 clones will run at 16Mhz, but
+        some may not.  Changing speed can also mask a noisy bus.
+
+        What other devices are on the bus?
+        If moving the devices around changes the reliability, then you
+        have a bus noise problem -- just what that error message was
+        designed to detect.  Congratulations, you've probably found the
+        source of other problems as well.
+
+        Machine Hangs during Boot.
+        ==========================
+
+        Problem:  The machine hangs during boot right after the "8390..."  or
+                  "WD...." message.  Removing the NE2000 fixes the problem.
+
+        Solution: Change your NE2000 base address to 0x360 (or 0x340 for
+                  pl12 or later kernels.) Alternatively, you can use the new
+                  device registrar implemented in pl13 (see section 5.1)
+
+        Reason:   Your NE2000 clone isn't a good enough clone.  An active
+                  NE2000 is a bottomless pit that will trap any driver
+                  autoprobing in its space.  The other ethercard drivers take
+                  great pain to reset the NE2000 so that it's safe, but some
+                  clones cannot be reset.  Clone chips to watch out for:
+                  Winbond 83C901.  Changing the NE2000 to a less-popular
+                  address will move it out of the way of other autoprobes,
+                  allowing your machine to boot.
+
+        Problem:  The machine hangs during the SCSI probe at boot.
+
+        Solution: It's the same problem as above, change the
+                  ethercard's address, or use the device registrar.
+
+        Problem:  The machine hangs during the soundcard probe at boot.
+
+        Solution: No, that's really during the silent SCSI probe, and it's
+                  the same problem as above.
+
+        "eth0: DMAing conflict in ne_block_input"
+        =========================================
+
+        This bug came from timer-based packet retransmissions.  If you got a
+        timer tick _during_ a ethercard RX interrupt, and timer tick tried to
+        retransmit a timed-out packet, you could get a conflict.  Because of
+        the design of the NE2000 you would have the machine hang (exactly the
+        same the NE2000-clone boot hangs).
+
+        Early versions of the driver disabled interrupts for a long time,
+        and didn't have this problem.  Later versions are fixed. (ie. kernels
+        after 0.99p9 should be OK.)
+
+        NE2000 not detected at boot.
+        ============================
+
+        A few people have reported a problem with detecting the Accton NE2000.
+        This problem occurs only at boot-time, and the card is later detected
+        at run-time by the identical code my (alpha-test) ne2k diagnostic
+        program. Accton has been very responsive, but I still haven't tracked
+        down what is going on.  I've been unable to reproduce this problem
+        with the Accton cards we purchased.  If you are having this problem,
+        please send me an immediate bug report.  For that matter, if you have
+        an Accton card send me a success report, including the type of the
+        motherboard.  I'm especially interested in finding out if this problem
+        moves with the particular ethercard, or stays with the motherboard.
+
+6.02 Problems with WD80*3 cards
+
+        Detected Non-existent Ethercard
+        ===============================
+
+        Problem:  A WD80*3 is falsely detected.  Removing the sound or
+                  MIDI card eliminates the "detected" message.
+
+        Solution: Update your ethercard driver: new versions include an
+                  additional sanity check.
+
+        Reason:   Some MIDI ports happen to produce the same checksum as a
+                  WD ethercard.
+
+        Error messages from the 80*3
+        ============================
+
+        Problem:  You get messages such as the following with your 80*3:
+                        eth0: bogus packet size, status = ........
+                        kmalloc called with impossibly large argument (65400)
+                        eth0: Couldn't allocate sk_buff of size 65400
+                        eth0: receiver overrun
+
+        Reason:   There is a shared memory problem.
+
+        Solution: If the problem is sparodic, you have hardware problems.
+                  Typical problems that are easy to fix are board conflicts,
+                  having cache or "shadow ROM" enabled for that region, or
+                  running your bus faster than 8Mhz.  There are also a
+                  surprising number of memory failures on ethernet cards,
+                  so run a diagnostic program if you have one for your
+                  ethercard.
+
+                  If the problem is continual, and you have have to reboot
+                  to fix the problem, record the boot-time probe message
+                  and mail it to becker@super.org  Take particular note of
+                  the shared memory location.
+
+6.03 Problems with 3Com cards
+
+        Choosing the Interrupt of the 3c503
+        ===================================
+
+        Problem:  The 3c503 picks IRQ n at boot, but this is needed for some
+                  other device which needs IRQ n. (eg. CD ROM driver, etc.)
+                  Can this be fixed without compiling this into the kernel?
+
+        Solution: The 3c503 driver probes for a free IRQ line in the order
+                  {5, 9/2, 3, 4}, and it should pick a line which isn't being
+                  used.  The pre-pl12 (SLS 1.02) driver picked the IRQ line
+                  at boot-time, and the current driver (pl12) chooses when
+                  the card is open()/'ifconfig'ed. Note the "bug" noted in
+                  the 3c503 section in 1.01
+
+                  Alternately, you can fix the IRQ at boot by passing
+                  parameters via LILO.  The following selects IRQ9, base
+                  location 0x300, <ignored value>, and if_port #1 (the
+                  external transceiver).
+                        lilo: linux ether=9,0x300,0,1,eth0
+
+                  The following selects IRQ3, probes for the base location,
+                  <ignored value>, and the default if_port #0 (the internal
+                  transceiver)
+                        lilo: linux ether=3,0,0,0,eth0
+
+        "3c503: Configured interrupt number XX is out of range."
+        ========================================================
+
+        Problem:  Whoever built your kernel fixed the ethercard IRQ at XX.
+
+        Reason:   The above is truly evil, and worse than that, it is
+                  not necessary. The 3c503 will autoIRQ when it gets
+                  "ifconfig"ed, and pick one of IRQ{5, 2/9, 3, 4}.
+
+        Solution: Use lilo to set the IRQ, or rebuild the kernel, enabling
+                  autoIRQ by not specifying the IRQ line.
+
+        Choosing the output of the 3c503
+        ================================
+
+        Problem:  The supplied 3c503 drivers don't use the AUI (thicknet) port.
+                  How does one choose it over the default thinnet port?
+
+        Solution: The 3c503 AUI port can be selected at boot-time with 0.99pl12
+                  and later.  The selection is overloaded onto the low bit of
+                  the currently-unused dev->rmem_start variable, so a boot-time
+                  parameter of:
+                        lilo: linux ether=0,0,0,1,eth0
+                  should work.  A boot line to force IRQ 5, port base 0x300,
+                  and use an external transceiver is:
+                        lilo: linux ether=5,0x300,0,1,eth0
+
+7 Networking with a laptop computer
+
+        There are currently only a few ways to put your laptop on a network.
+        You can use the NET-2 SLIP code (and run at serial line speeds);
+        you can buy one of the few laptops that come with a NE2000-compatible
+        ethercard or PCMCIA slot built-in; you can get a laptop with a
+        docking station and plug in an ISA ethercard; or you can use a
+        parallel port Ethernet adapter such as the D-Link DE-600.
+
+7.01 Option 1 -- using SLIP
+
+        This is the cheapest solution, but by far the most difficult. Also,
+        you will not get very high transmission rates. Since SLIP is not
+        really related to ethernet cards, it will not be discussed further
+        here. See the NET-2 HOWTO.
+
+7.02 Option 2 -- Built in NE2000 compatible or PCMCIA Ethercard.
+
+        The second solution severely limits your laptop choices and is fairly
+        expensive.  Be sure to read the specifications carefully, you may find
+        that you will have to buy an additional non-standard transceiver to
+        actually put the machine on a network. Anyone who has used a PCMCIA
+        Ethernet card is requested to contact us so that we can add it to
+        this document. Barry Jaspan <bjaspan@security.ov.com> has started
+        some work on controlling the PCMCIA slot.
+
+7.03 Option 3 -- ISA Ethercard in the Docking Station.
+
+        I recommend the third solution.  Docking stations for laptops typically
+        cost about $250 and provide two full-size ISA slots, two serial and one
+        parallel port.  Most (all?) docking stations are powered off of the
+        laptop's batteries, and a few allow adding extra batteries in the
+        docking station if you use short ISA cards.  You can add an inexpensive
+        ethercard and enjoy full-speed ethernet performance.
+
+7.04 Option 4 -- Pocket / parallel port adaptors.
+
+        The "pocket" ethernet adaptors may also fit your need.
+        Until recently they actually costed more than a docking station and
+        cheap ethercard, and most tie you down with a wall-brick power supply.
+        The only pocket adaptor driver right now is for the D-Link.
+        I'm also working on a driver for the AT-LAN-TEC/RealTek pocket adaptor.
+        Most other companies, especially Xircom, treat the programming
+        information as a trade secret, so support will likely be slow in
+        coming.
+
+        You can sometimes avoid the wall-brick with the adaptors by buying
+        or making a cable that draws power from the laptop's keyboard
+        port.
+
+8 Frequently asked questions
+
+        Here are some of the more frequently asked questions about using
+        Linux with an Ethernet connection. Some of the more specific
+        questions are sorted on a "per manufacturer basis" and are listed
+        in the "Troubleshooting" section. (section 6). However, since this
+        document is basically "old" by the time you get it, any "new" problems
+        will not appear here instantly. For these, I suggest that you make
+        efficient use of your newsreader. For example, nn users would type
+                nn -xX -s'3c'
+        to get all the news articles in your subscribed list that have
+        "3c" in the subject. (ie. 3com, 3c509, 3c503, etc.)
+        The moral: Read the man page for your newsreader.
+        
+8.01 Just the FAQ's ma'am -- just the FAQ's.
+
+        Q: I heard that there is an alpha driver available for my card.
+           Where can I get it?
+
+        A: Assuming that it is a djb driver, it will be on ftp.super.org
+           in the /pub/linux/ area. Things change here quite frequently,
+           so just look around for it. There is usually only about 3
+           subdirs, so you should be able to find it. Now, if it really
+           is an alpha, or pre-alpha driver, then please treat it as
+           such. In other words, don't complain because you can't figure
+           out what to do with it. If you can't figure out how to install
+           it, then you probably shouldn't be testing it. Also, if it brings
+           your machine down, don't complain. Instead, send us a well
+           documented bug report, or even better, a patch!
+
+        Q: Is there token ring support for Linux?
+
+        A: No, there is no token ring support in Linux. To support token ring
+           requires more than only a writing a device driver, it also requires
+           writing the source routing routines for token ring.  Given that
+           token ring is expensive, not fast, and will probably be swept away
+           by 100baseVG in a few months, it doesn't seem worth it to write
+           a driver. In case anyone wants to, I looked at writing a token ring
+           device driver, and concluded that the hardware interface
+           wasn't too difficult to do, but writing the support for source
+           routing would take significantly longer than I was willing to spend
+           on an expensive and dying technology.
+
+           Alan Cox adds: "It will require [...] changes to the bottom socket
+           layer to support 802.2 and 802.2 based TCP/IP. Don't expect
+           anything soon."
+
+        Q: Is there IPX or Novell support available for Linux?
+
+        A: Alan Cox writes: "The novell protocols are available from novell
+           for various amounts. IPX is freely documented. SPX is about $1000
+           but I'm told Xerox SPP is identical. _PLEASE_ has anyone got any
+           freely distributable Xerox SPP code/documentation?  The novell
+           server spec costs you $15000 + royalties providing you only
+           want to write a client, or $30000 + royalties otherwise. Needless
+           to say the final output has to be binary only and subject to a
+           novell license. Reading their license rules by my interpretation
+           its also impossible for us to do because you would seem to have
+           to bar disassembly of your final result, which is not allowed
+           in the EEC.
+
+           Bits of NCP are known, and I hope eventually enough will be known
+           to write limited NCP support into Linux, for the moment I'm poking
+           around at IPX, tho this will have to wait until the new network
+           code is finished.
+
+           An Alpha test IPX protocol layer is available from me (Alan)
+           for pl14 or higher. People are also exploring the issue of NCP and 
+           the new Dr Dobbs journal article on the innards of netware has 
+           provided a core of good information."
+
+           As an alternative, Miquel van Smoorenburg suggests the following:
+           "It _is_ possible to set up a dedicated PC running both novell and
+           the PD SOSS server and let it gateway from NFS to novell. This way
+           it is possible to mount the Novell drives on the Unix client.
+
+           SOSS is a PD (perhaps with some restrictions, but freely available)
+           NFS server for DOS. It includes the PC/IP TCP/IP implementation
+           and runs on a packet driver. I have run both a Novell client
+           (with PDIPX, a Packet Driver IPX) and this SOSS server together
+           successfully."
+
+        Q: What needs to be done so that Linux can run two ethernet cards?
+
+        A: The easiest solution is to get 0.99pl13, which already includes
+           the changes described below.  You can enable additional ethercards
+           with LILO parameters such as
+                lilo: linux ether=5,0x300,0,1,eth0 ether=15,0x280,eth1
+
+           For pre-pl13 you can enable additional ethercards by
+           adding another entry to Space.c, naming it "eth1" instead
+           of "eth0".  If you want routing to work well you should
+           use a recent kernel, say 0.99pl11 or later.  You may also
+           want to verify that your driver writer kept all of the
+           per-card variables in 'dev->priv'.  Most do, but the pl12
+           AT1500/LANCE driver has a single static low-memory buffer.
+
+        Q: I have /dev/eth0 as a link to /dev/xxx. Is this right?
+
+        A: Contrary to the Net-2 HowTo, the files in /dev/* are not used.
+           I originally thought that they might be an OK idea. I've since 
+           concluded that they won't work, at least in the documented form.
+
+9 Miscellaneous.
+
+        Any other associated stuff that didn't fit in anywhere else gets
+        dumped here. It may not be relevant, and it may not be of general
+        interest but it is here anyway.
+
+9.01 The Cabletron story. (...as related by Donald J. Becker)
+
+                I contacted Cabletron in early December 1992 for
+        programming information (I had called and sent several
+        earlier messages).  I was referred through several
+        different people, and each one took several days to
+        respond before they forwarded me to the next.  Eventually
+        I was told I should deal with their (outside?) developer
+        Mr. Dev.Null.  I persisted, and around March it seemed
+        that I had finally succeed: Cabletron offered to send me
+        an evaluation board (unrequested) and everything I needed
+        to use it (what I wanted).  The hardware showed up right
+        away, and I waited, expecting the the programming
+        information information as well.  About a month later I
+        contacted them, and they told me that "all I needed to use
+        it" was the standard MS-DOS NDIS drivers, a binary on
+        standard driver disk.  The disk envelope was covered in
+        legalese, including no-disassembly, no-reverse-engineering
+        clauses.  It was May (and a few email exchanges later)
+        before I figured out that I had been "slow rolled", and
+        had wasted about 20 hours on this particular windmill.
+
+        The story isn't over yet.  People have written to me say
+        they have vetoed several medium-sized purchases from
+        Cabletron based on the lack of Linux drivers.  Cabletron
+        must have noticed this because yesterday I got a call
+        _from_ Cabletron (the first!) stating that they will be
+        independently writing a Linux driver.  Of course, their
+        lawyers probably haven't read the GPL yet...
+        
+9.02 The Xircom story. (...as related by Russ Nelson)
+
+        From: "Russell Nelson" <nelson@crynwr.com>
+        Subject:   Xircom support (horses mouth)
+        Date: Mon, 30 Aug 1993 17:01:04 +0300
+
+        Okay, here's the word on Xircom support.  I spoke to Dirk
+        Gates, President of Xircom, about the packet driver
+        situation.  Yes, the packet driver uses the Crynwr packet
+        driver skeleton, and yes, it's in violation of the GPL.
+        However, it was not Xircom's intention to violate the GPL.
+        They paid Persoft to write a proprietary driver for them,
+        and Persoft used the Clarkson skeleton, alleging that the
+        code was in the public domain.  Xircom is unsuable because
+        they were an innocent infringer.  I will shortly be sending
+        them a demand letter.  If they continue to distribute the
+        driver after they get the letter, they will be in
+        infringement and I can *then* sue them.  Xircom has
+        basically the same philosophy as Diamond.  The actual
+        hardware interface is reverse-engineerable in the space of a
+        day or so.  However, Xircom prefers to write all their own
+        drivers, because badly-written drivers reflect badly on
+        their product.  They also perceive a monetary interest in
+        keeping their product proprietary.  Xircom would *probably*
+        release the specs at this point if they were approached by
+        an ad-hoc consortium of potential purchasers who required
+        the specs as a condition of purchase.  However, I don't
+        think this is the right thing to do.  At this point they
+        have already gotten all the proprietary advantage they are
+        going to.  Purchasing their product now will only reward
+        their "bad attitude" toward open systems.  Much better to
+        purchase from a vendor who appreciates and encourages open
+        systems, such as D-Link.
+
+9.03    Closing
+
+        If you have found any glaring typos, or outdated info in this
+        document, please let one of us know.
+
+        Paul Gortmaker          <gpg109@rsphysse.anu.edu.au>
+        Donald J. Becker        <becker@super.org>
+
+                =========== end of Ethernet HOWTO ============
+
+
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Admin-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.admin) via:
+
+    Internet: Linux-Admin@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Admin Digest
+******************************

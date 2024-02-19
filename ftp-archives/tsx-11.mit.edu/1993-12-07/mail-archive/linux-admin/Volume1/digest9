@@ -1,0 +1,705 @@
+From:     Digestifier <Linux-Admin-Request@senator-bedfellow.mit.edu>
+To:       Linux-Admin@senator-bedfellow.mit.edu
+Reply-To: Linux-Admin@senator-bedfellow.mit.edu
+Date:     Fri, 20 Aug 93 11:31:09 EDT
+Subject:  Linux-Admin Digest #9
+
+Linux-Admin Digest #9, Volume #1                 Fri, 20 Aug 93 11:31:09 EDT
+
+Contents:
+  simple backups to spare hard disk (Paul Fox)
+  [Q] /etc/shutdown by non-root (C M Brough)
+  Re: Updating to pl12 (from pl8) broke all my net stuff.  Help. (Philippe Steindl)
+  Re: Why use shadow? (C. G. Albone)
+  Re: Linux trusted by SPARC (Staal WJ)
+  Status of Ash? (Gary Moyer)
+  Re: aha1542C interrupt received, but no mail (Alan Crosswell)
+  Status of Ash: almost ready for first release (Arjan de Vet)
+  Re: 2.88 Mb FD support? (burd@vax.sonoma.edu)
+  Re: NFS mount fails with authentication error (Tom Lane)
+  Re: Why use shadow? (Peter Mutsaers)
+  Re: Why use shadow? (Peter Mutsaers)
+  Re: Help 1)Booting SCO from LILO 2)common fs for both (Wieland Pusch)
+  Re: resetting a virtual console (Hymie!)
+  Re: Help 1)Booting SCO from LILO 2)common fs for both  (Salvador Pinto Abreu)
+  Portuguese keymap contribution
+
+----------------------------------------------------------------------------
+
+From: pgf@cayman.com (Paul Fox)
+Subject: simple backups to spare hard disk
+Date: 19 Aug 1993 13:35:18 GMT
+
+hi -- thought i'd share this little script -- it's saved my butt once now,
+i hope it will again someday.  i have a two drive system -- a 120 and a 40
+(i know they're small, but hey, they're mine.).  i do backups of the
+interesting stuff on the 120 (no, it's not full) onto the 40.  depending
+on how heavily i use the system, i can easily fit a full and a weeks worth
+of incrementals on the 40meg disk.
+
+'nuff said -- script follows.
+
+--
+       paul fox    home: pgf@foxharp.boston.ma.us (Arlington, MA)
+                   work: pgf@cayman.com (Cayman Systems, Inc., Cambridge, MA)
+       "A day without laughter is a day wasted"  -- Charlie Chaplin
+
+#!/bin/sh
+
+# dosystembackup  --- do simple full and daily incremental backups
+#  to a filesystem on a spare hard disk, using GNU tar and gzip.
+#  i do full backups by hand, once a week or so, after making room
+#  by deleting the last full backup (if i had two spare disks, i would
+#  of course alternate between them instead).  then i run (as root)
+#  "dosystembackup full".  i have a root cron job that runs the incrementals
+#  in the middle of the night, with "dosystembackup inc".  the incrementals
+#  are relative to the last full backup, not to each other.  they are named
+#  after the day of the week, so only 7 will be stored before they are
+#  overwritten.
+#
+#  the filesystem containing the backups doesn't have to be on a separate
+#  disk, but probably should be for safety.  you should also keep a
+#  statically linked copy of tar and gzip there as well, so you can recover.
+#  
+#  paul fox, pgf@cayman.com
+
+# modify the following variables per local requirements
+SEND_REPORT_TO=pgf
+FILESYSTEM_LIST="/ /usr /usr2"
+BACKUP_FILESYS=/bck
+BACKUPLOG=/usr/adm/backuplog
+
+(
+
+if [ $# != 1 ]
+then
+        echo "usage: $0 {full|inc}" >&2
+        exit 1
+fi
+
+if [ `whoami` != root ]
+then
+        echo "$0: root privs required" >&2
+        exit 1
+fi
+
+case $1 in
+    full)
+        incremental=no
+        ;;
+    inc)
+        incremental=yes
+        ;;
+    *)
+        echo "usage: $0 {full|inc}" >&2
+        exit 1
+        ;;
+esac
+
+now=`date`
+nowlabel=`date +%a`
+
+echo space in $BACKUP_FILESYS before backup
+df $BACKUP_FILESYS
+
+for filesys in $FILESYSTEM_LIST
+do
+
+        filesysname=`basename $filesys`
+        test "$filesysname" || filesysname=root
+
+        fullarchive=$BACKUP_FILESYS/$filesysname.fullback.$nowlabel
+        incarchive=$BACKUP_FILESYS/$filesysname.incback.$nowlabel
+        fulldatefile=$BACKUP_FILESYS/$filesysname.fullback.date
+
+        if [ "$incremental" = yes ]
+        then # (incremental)
+
+            then=`cat $fulldatefile`
+            echo Incremental backup of $filesysname since $then
+            tar -c -v -z -l -N "$then" \
+                -f $incarchive -V "Incr dump ($then to $now)" $filesys 
+
+        else # (full)
+
+            echo Full backup of $filesysname
+            echo "$now" >$fulldatefile
+
+            # create, verbose, compress, stay in local filesys
+            tar -c -v -z -l \
+                -f $fullarchive -V "Full dump ($now)" $filesys
+
+        fi
+done
+
+echo space in $BACKUP_FILESYS after backup
+df $BACKUP_FILESYS
+
+) 2>&1 | tee $BACKUPLOG | mail $SEND_REPORT_TO
+
+
+------------------------------
+
+Crossposted-To: comp.unix.admin
+From: cmb@epcc.ed.ac.uk (C M Brough)
+Subject: [Q] /etc/shutdown by non-root
+Date: Thu, 19 Aug 1993 15:12:25 GMT
+
+I have a standalone Unix workstation (Linux, as it happens) at home.
+This is used by me, and by my generally computer-illiterate flatmate.
+While I can cope with becoming root and invoking /etc/shutdown to
+bring the system down properly, I don't want to give my flatmate the
+root password! (Nor the hassle of a complicated procedure, which he'll
+screw up...)
+
+Is there anyway of setting things up so that a non-root user can bring
+the system down cleanly? Run /etc/shutdown setuid? Have a setuid
+"wrapper" program that calls /etc/shutdown only with the halt option?
+Other solutions?  What are the issues and dangers?
+
+Responses by e-mail preferred, though I'll try and follow any
+discussion that takes place here. If there is sufficient interest I'll
+summarise and post.
+
+(Cross posted to c.o.l.admin, and follow-ups set to comp.unix.admin)
+
+__________________________________________________________________________
+Colin Brough    cmb@epcc.ed.ac.uk      Edinburgh Parallel Computing Centre
+
+------------------------------
+
+From: ilg@imp.ch (Philippe Steindl)
+Subject: Re: Updating to pl12 (from pl8) broke all my net stuff.  Help.
+Date: 19 Aug 1993 18:52:20 +0200
+
+Hello,
+
+well :-) that's logical. Since pl10, the whole netpackage has been replaced by
+Net-2. You will have to get the net-2 packages from an ftp server and install
+it .. that should solve your problem. Btw: Get the NET-2 FAQ first .. it
+(nearly) perfectly explains, how to get a proper setup. Easy to understand and
+step-by-step.
+
+cu
+
+Philippe
+
+PS: make copies of files that eventually get replaced in /etc
+
+
+------------------------------
+
+From: chrisa@extro.ucc.su.OZ.AU (C. G. Albone)
+Subject: Re: Why use shadow?
+Date: Thu, 19 Aug 1993 13:13:30 GMT
+
+In article <24r426$t4m@news.u.washington.edu> kenney@stein.u.washington.edu (Michael Kenney) writes:
+>Despite the paranoid hysteria, the chances of your system being broken into
+>aren't very high.  Just use intelligent passwords (ie *not words from the
+>dictionary*), run COPS (or something similar) every now and then, and don't
+>give out your password to anyone.  IMHO shadow passwords are overkill for
+>a Linux workstation (unless you allow access to a bunch of bored cs
+>undergrads :-).
+>
+>Think about it ... if someone really wants to gain access to your Linux
+>system, all they need is a bootable-root floppy.
+
+And if you have your /usr and whatever other partitions DES encrypted ;-)....
+
+Of course, for a computer to be truely secure, it is best being left
+switched off, encased in 20ft of concrete and dropped to the bottom of
+the deepest mineshaft you can find. Of course, this isn't quite 
+convienient :-)
+>
+>----
+>Mike Kenney
+>UW Applied Physics Lab
+>mikek@apl.washington.edu
+>
+>
+
+chris..
+
+------------------------------
+
+From: wjstaal@cs.vu.nl (Staal WJ)
+Subject: Re: Linux trusted by SPARC
+Date: Thu, 19 Aug 1993 18:01:23 GMT
+
+wayne@rose.cs.odu.edu (C Wayne Huling) writes:
+
+>I have been working on setting up a small network of linux machines for my
+>company.  Part of the reasoning is, many people here have to share a single
+>SPARC station, and I suggested using the Linux machines X capability to 
+>expand the amount of people capable of working on the SPARC.  Well any how, 
+>I have all the Linux hosts trusting each other and I am capable of using xon
+>(when specifing a full path?) but I cannot rsh to the SPARC and hence cannot
+>xon to the SPARC.  Has anyone succefully accomplished this?  
+
+Do the users on the linux machine and the Sparc have the same login?
+Is the hostname of the linux machine in the .rhosts file on the Sparc?
+Did you set the DISPLAY variable on the linux machine?
+
+xon <machine> /usr/X11/xterm 
+works okay here.
+
+>               Wayne
+        Wilco 
+
+------------------------------
+
+From: moyerg@cs.pdx.edu (Gary Moyer)
+Subject: Status of Ash?
+Date: 19 Aug 93 18:37:26 GMT
+
+There was some talk a couple of days ago concerning ash.  Is it stable
+yet (with Linux, that is) and are there sources available?
+
+  Thanks!
+
+  Gary Moyer
+  moyerg@cs.pdx.edu
+
+------------------------------
+
+From: alan@curta.cc.columbia.edu (Alan Crosswell)
+Subject: Re: aha1542C interrupt received, but no mail
+Date: 19 Aug 1993 19:34:00 GMT
+
+I would like to thank all those who replied to my posting yesterday.  The
+fix is to disable BIOS scan, which for my system, also made me have to
+renumber disk from SCSI id 6 to 0.
+/a
+
+------------------------------
+
+From: devet@adv.win.tue.nl (Arjan de Vet)
+Crossposted-To: comp.os.linux.development
+Subject: Status of Ash: almost ready for first release
+Date: 19 Aug 1993 22:38:30 +0200
+
+In article <250h96$98n@walt.ee.pdx.edu>, Gary Moyer <moyerg@cs.pdx.edu> wrote:
+
+>There was some talk a couple of days ago concerning ash.  Is it stable
+>yet (with Linux, that is) and are there sources available?
+
+I am making a `ash for linux' release which works with INN 1.4. I'm
+currently busy with some UUCP problems so I haven't had the time to make a
+release yet. It looks *very* promising but I think there are still some
+bugs.
+
+One is a *VERY* strange one: the following code is from rc.inet2:
+
+=============================================================================
+#!/bin/sh
+# rc.inet2
+
+PATH=/usr/etc:/etc:$PATH; export PATH
+echo -n "/etc/rc.d/rc.inet2: "
+
+HOSTS=/etc/hosts
+CONFIG=/etc/config
+INETD=/usr/etc/inetd
+NAMED=/usr/etc/named
+PORTMAP=/usr/etc/rpc.portmap
+NFSD=/usr/etc/rpc.nfsd
+MOUNTD=/usr/etc/rpc.mountd
+
+#if [ -x $PORTMAP ]; then
+#       echo -n ", `basename $PORTMAP`"
+#       `basename $PORTMAP`
+#fi
+
+if [ -x $INETD ]; then
+        echo -n "`basename $INETD`"
+        `basename inetd`
+fi
+=============================================================================
+
+My /usr/etc/inetd was first owned by bin.bin and had r-x------ as
+permissions.  The result was that it wasn't executed by ash (inetd:
+permission denied). But after I changed the owner to root.root it worked!
+Can anyone explain this?  Under bash 1.13cwru beta it works OK with owner
+bin.bin.
+
+The second one is a possible problem with trn's Pnews script which thinks
+all groups are moderated when using ash as /bin/sh.
+
+I hope to have an ash release ready tomorrow, unless UUCP keeps giving
+troubles.
+
+(followups redirected to c.o.l.development)
+
+Arjan
+
+--
+Arjan de Vet                             <Arjan.de.Vet@adv.win.tue.nl> (home)
+Eindhoven University of Technology, the Netherlands <devet@win.tue.nl> (work)
+
+------------------------------
+
+Subject: Re: 2.88 Mb FD support?
+From: burd@vax.sonoma.edu
+Date: 19 Aug 93 14:03:59 -0800
+
+In article <141894@netnews.upenn.edu>, seth@gradient.cis.upenn.edu (Zippy) writes:
+> Has anyone written a driver for a 2.88 Mb (ED) floppy drive?  If so,
+> I'd appreciate getting a copy.
+> 
+> Please reply via e-mail to sab@phantom.com
+> 
+> Thanks,  
+> 
+> Seth Bromberger
+> 
+
+I would be interested in this as well.
+
+Thanks in advance,
+Erik
+
+
+------------------------------
+
+From: tgl@netcom.com (Tom Lane)
+Subject: Re: NFS mount fails with authentication error
+Date: Fri, 20 Aug 1993 03:04:41 GMT
+
+jrs@mviae.att.com (Rick Sladkey) writes:
+> On Tue, 17 Aug 1993 17:33:14 GMT, tgl@netcom.com (Tom Lane) said:
+> Tom> It appears to me this is a genuine bug in the Linux NFS
+> Tom> implementation: if it can't cope with more than one group, why
+> Tom> doesn't it just use the current GID and be done with it?
+
+> In fact, the bug falls squarely between Sun Microsystems for changing
+> the RPC standard in mid-flight and HP for using literally ancient RPC
+> software.
+> In any case, I have no intention of crippling our Linux RPC library
+> just becuase HP is five years behind the times.  If you don't believe
+> me, just put root in ten groups on a Sun and then try to NFS mount
+> from an HP.  Good luck.  :-)
+
+[and similar buck-passing from mbeattie in another message]
+
+Sorry guys, my two HP machines are perfectly capable of NFS-mounting each
+other with root as a member of a dozen groups.  I know HP is frequently
+behind the times on networking, so I checked very carefully before blaming
+the Linux code.  Whatever the problem is, it's not that HP software can't
+cope with multiple groups.
+
+If there are indeed two flavors of RPC out there, methinks it would
+behoove Linux to be compatible with both of them.  Or at least document
+how to work around the problem.
+
+                        regards, tom lane
+
+------------------------------
+
+From: muts@compi.hobby.nl (Peter Mutsaers)
+Subject: Re: Why use shadow?
+Date: 18 Aug 93 06:06:53 GMT
+
+>> On Tue, 17 Aug 1993 09:45:02 GMT, Jason Haar
+>> <j.haar@csc.canterbury.ac.nz> said:
+
+  JH> In article <MUTS.93Aug15235253@compi.hobby.nl> Peter Mutsaers (muts@compi.hobby.nl) wrote:
+  > EK> Using shadow also prevents me from just editing the passwd file
+  > EK> to add new users.  Does anyone know why shadow is better than
+  > EK> passwd?
+
+  > Because someone with lots of CPU time on a CRAY can read the encrypted
+  > passwords and do a brute force guessing of passwords through this. If
+
+  JH> ... Or even more time on a Linux box - you don't need a Cray to break
+  JH> passwords.
+
+  JH> We run CRACK on our Un*x systems every so often to catch users with bad
+  JH> passwords - it's unsettling how many it gets...
+
+I assumed that the user has a good password so that brute force
+checking of all printable-character-combinations is necessary, not
+just from the dictionary. For that you (still) need a supercomputer,
+if that even helps.
+-- 
+_______________________________________________________________
+Peter Mutsaers, Bunnik (Ut), the Netherlands.
+Disclaimer: This reflects the official opinions of my employer.
+
+------------------------------
+
+From: muts@compi.hobby.nl (Peter Mutsaers)
+Subject: Re: Why use shadow?
+Date: 18 Aug 93 06:10:06 GMT
+
+>> On Tue, 17 Aug 1993 08:59:54 GMT, iiitac@swan.pyr (Alan Cox) said:
+
+  AC> This is a popular and very dangerous myth. A bog standard 386 PC
+  AC> is more than enough to do effective password cracking by running
+  AC> a dictionary over a password file. Crack takes a day to run on a
+  AC> 4Mb 386 here (also doing other work) and the first time I ran it
+  AC> to tighten up our password file it got 1/3rd of the passwords.
+
+  AC>   YOU DONT NEED A CRAY :: YOU _DO_ NEED SHADOW PASSWORDS
+
+Crack only checks words (and variations on these) from the dictionary.
+If you have good passwords you STILL NEED A CRAY :: YOU _DON'T_ NEED
+SHADOW PASSWORDS. And many of todays /bin/passwd programs enforce the
+use of a 'good' password.
+
+In the future however normal computers might be fast enough to do a
+brute force check of passwords, but at that time I guess we use some
+completely different authentification mechanism, like Kerberos.
+-- 
+_______________________________________________________________
+Peter Mutsaers, Bunnik (Ut), the Netherlands.
+Disclaimer: This reflects the official opinions of my employer.
+
+------------------------------
+
+From: wp@cs.tu-berlin.de (Wieland Pusch)
+Subject: Re: Help 1)Booting SCO from LILO 2)common fs for both
+Date: 20 Aug 1993 09:21:55 GMT
+
+In article <1993Aug17.070357.23047@cse.iitb.ernet.in> vinod@cse.iitb.ernet.in (Vinod G Kulkarni) writes:
+
+   I am having SCO and linux both on same disk on different partitions.
+   Has anyone configured LILO to boot SCO? 
+
+You have to set the active partition to where you are booting SCO from,
+because the SCO-boot-program looks for the active partition to read further
+blocks (see man boot on SCO).
+Then I configured SCO just like the DOS example which came with lilo. 
+Mail me again if you still need the config-file, since I don't have it here.
+
+   Wieland
+
+
+------------------------------
+
+From: hymowitz@circle.cs.jhu.edu (Hymie!)
+Subject: Re: resetting a virtual console
+Date: Fri, 20 Aug 1993 12:23:42 GMT
+
+and lo, there was much rejoicing among the people, as
+  hymowitz@cs.jhu.edu (Hymie!) writes:
+>i finally got dosemu running (yay!).  but sometimes, when dosemu dies a
+>poor death, it messes up the tty.  charactger input is very sluggish.
+
+juding by the numerous (4) responses i got (2 mee-toos, 2 suggestions),
+i realized that (1) the mee-toos knew what i meant, and (2) the
+suggestions misunderstood the problem.  thanx anyway.  let me try again.
+
+when i said ''messes up the tty'', i didn't mean that i get all of the
+control codes and characters and such that you can fix with ^v^o,
+
+what i mean is,  when you hit a key, it doesn't get all the way to the
+screen.  i have to hold down on a key, wait for one of the now-repeating
+keys to register, notice it, and let go real quick.
+
+this only happens when dosemu crashes and burns.  the exitemu exits
+fine.  but when i have to kill -9 it, the session is logged off, and
+i get this problem.
+
+so, here is another plea for help.  and to all the mee-toos, save yourself
+the trouble - if i get a fix, i'll summarize it here.
+
+thanx in advance.
+
+--hymie                                                     hymowitz@cs.jhu.edu
+===============================================================================
+I am godlike... except that he's perfect, and I fuck up all the time.
+That would be the only real difference between us.              --Andy Breckman
+===============================================================================
+
+------------------------------
+
+From: spa@fct.unl.pt (Salvador Pinto Abreu)
+Subject: Re: Help 1)Booting SCO from LILO 2)common fs for both 
+Date: Wed, 18 Aug 1993 23:05:33 GMT
+
+
+> >I am having SCO and linux both on same disk on different partitions.
+> >Has anyone configured LILO to boot SCO? 
+> >Please  mail me the config file.
+>
+> Not sure it's possible.  SCO may require that you use its masterboot.  It
+> would probably be easier to boot Linux from SCO's masterboot.
+
+It works (LILO as the MBR). I installed Linux (SLS 1.01, if I remember
+right) on a friend's PC which already had SCO loaded. I set up LILO
+like usual and it still boots SCO happily. Don't remember the details,
+but it was pretty straightforward. If you have a hard time I can get
+them.
+
+./salvador
+
+------------------------------
+
+From: mvalente@draco.lnec.pt ()
+Subject: Portuguese keymap contribution
+Date: Fri, 20 Aug 1993 14:29:00 GMT
+
+
+
+  Hi all:
+ 
+  I installed Linux successfuly and configured X also,
+ although I had to spend 6 or 7 hours to set Xconfig right.
+  Its a great system and I'm now adjusting it to my needs.
+ 
+  Anyway, one of the setups I had to make was to build a
+ portuguese keymap since Linux doesnt have one. I'm posting
+ this keymap file so that people out there who need it can 
+ use it. I didnt know where to put my contribution so I 
+ posted it here. To the powers that be :-) I hereby declare
+ this PD and you can include it in a new release of Linux.
+ 
+  Put this file in /etc/keymaps as pt.map and load it in
+ the /etc/rc script with /etc/loadkeys.
+ 
+ 
+  C U!
+  
+  By(e)
+ 
+    Mario Valente
+ 
+ 
+PS - File follows
+ 
+======================pt.map==============================
+
+keycode   0 = 
+keycode   1 = Escape           Escape
+keycode   2 = one              exclam
+keycode   3 = two              quotedbl         at
+keycode   4 = three            numbersign       
+keycode   5 = four             dollar          
+keycode   6 = five             percent
+keycode   7 = six              ampersand
+keycode   8 = seven            slash            braceleft
+keycode   9 = eight            parenleft        bracketleft
+keycode  10 = nine             parenright       bracketright
+keycode  11 = zero             equal            braceright
+keycode  12 = apostrophe       question         backslash
+keycode  13 = 
+keycode  14 = Delete           Delete
+keycode  15 = Tab              Tab
+keycode  16 = q                Q
+keycode  17 = w                W
+keycode  18 = e                E
+keycode  19 = r                R
+keycode  20 = t                T
+keycode  21 = y                Y
+keycode  22 = u                U
+keycode  23 = i                I
+keycode  24 = o                O
+keycode  25 = p                P
+keycode  26 = plus             asterisk
+keycode  27 = apostrophe       grave
+keycode  28 = Return           Return           Return
+keycode  29 = Control_L        Control_L        Control_L
+keycode  30 = a                A
+keycode  31 = s                S
+keycode  32 = d                D
+keycode  33 = f                F
+keycode  34 = g                G
+keycode  35 = h                H
+keycode  36 = j                J
+keycode  37 = k                K
+keycode  38 = l                L
+keycode  39 = ccedilla         Ccedilla
+keycode  40 = eth              ETH
+keycode  41 = backslash        bar
+keycode  42 = Shift_L          Shift_L         Shift_L
+keycode  43 = asciitilde       asciicircum
+keycode  44 = z                Z
+keycode  45 = x                X
+keycode  46 = c                C
+keycode  47 = v                V
+keycode  48 = b                B
+keycode  49 = n                N
+keycode  50 = m                M
+keycode  51 = comma            semicolon
+keycode  52 = period           colon
+keycode  53 = minus            underscore
+keycode  54 = Shift_L          Shift_L          Shift_L
+keycode  55 = KP_Multiply      KP_Multiply      KP_Multiply
+keycode  56 = Control_R        Control_R        Control_R
+keycode  57 = space            space
+keycode  58 = Caps_Lock        Caps_Lock        Caps_Lock
+keycode  59 = F1               F11              Console_13
+keycode  60 = F2               F12              Console_14
+keycode  61 = F3               F13              Console_15
+keycode  62 = F4               F14              Console_16
+keycode  63 = F5               F15              Console_17
+keycode  64 = F6               F16              Console_18
+keycode  65 = F7               F17              Console_19
+keycode  66 = F8               F18              Console_20
+keycode  67 = F9               F19              Console_21
+keycode  68 = F10              F20              Console_22
+keycode  69 = Num_Lock         Num_Lock         Num_Lock
+keycode  70 = Scroll_Lock      Show_Memory      Show_Registers
+keycode  71 = KP_7             KP_7             KP_7
+keycode  72 = KP_8             KP_8             KP_8
+keycode  73 = KP_9             KP_9             KP_9
+keycode  74 = KP_Subtract      KP_Subtract      KP_Subtract
+keycode  75 = KP_4             KP_4             KP_4
+keycode  76 = KP_5             KP_5             KP_5
+keycode  77 = KP_6             KP_6             KP_6
+keycode  78 = KP_Add           KP_Add           KP_Add
+keycode  79 = KP_1             KP_1             KP_1
+keycode  80 = KP_2             KP_2             KP_2
+keycode  81 = KP_3             KP_3             KP_3
+keycode  82 = KP_0             KP_0             KP_0
+keycode  83 = KP_Period        KP_Period        KP_Period
+keycode  84 = Last_Console     Last_Console     Last_Console
+keycode  85 = 
+keycode  86 = less             greater
+keycode  87 = F11              F11              Console_23
+keycode  88 = F12              F12              Console_24
+keycode  89 = 
+keycode  90 = 
+keycode  91 = 
+keycode  92 = 
+keycode  93 = 
+keycode  94 = 
+keycode  95 = 
+keycode  96 = KP_Enter         KP_Enter         KP_Enter
+keycode  97 = Control_L        Control_L        Control_L
+keycode  98 = KP_Divide        KP_Divide        KP_Divide
+keycode  99 = 0x001c
+keycode 100 = Shift_R          Shift_R          Shift_R
+keycode 101 = Break            Break            Break
+keycode 102 = Find             Find             Find
+keycode 103 = Up               Up               Up
+keycode 104 = Prior            0x020b           Prior
+keycode 105 = Left             Left             Left
+keycode 106 = Right            Right            Right
+keycode 107 = Select           Select           Select
+keycode 108 = Down             Down             Down
+keycode 109 = Next             0x020a           Next
+keycode 110 = Insert           Insert           Insert
+keycode 111 = Remove           Remove           Remove
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Admin-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.admin) via:
+
+    Internet: Linux-Admin@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Admin Digest
+******************************

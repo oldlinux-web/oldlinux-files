@@ -1,0 +1,1700 @@
+From:     Digestifier <Linux-Development-Request@senator-bedfellow.mit.edu>
+To:       Linux-Development@senator-bedfellow.mit.edu
+Reply-To: Linux-Development@senator-bedfellow.mit.edu
+Date:     Tue, 2 Nov 93 06:13:12 EST
+Subject:  Linux-Development Digest #205
+
+Linux-Development Digest #205, Volume #1          Tue, 2 Nov 93 06:13:12 EST
+
+Contents:
+  Configuration changes (Drew Eckhardt)
+
+----------------------------------------------------------------------------
+
+From: drew@kinglear.cs.colorado.edu (Drew Eckhardt)
+Subject: Configuration changes
+Date: Tue, 2 Nov 1993 07:34:14 GMT
+
+I've been whining about the configuration problem for some time, and 
+finally have a practical, fast solution 
+
+- only .o files affected by a configuration change are recompiled, rather
+        than everything including <linux/kernel.h> which included
+         <linux/config.h> which included <linux/autoconf.h> (ie,
+        everything)
+
+- .a files are no longer unconditionally rm'd and remade, even if the .o
+        member files have changed.  Instead, archive.a(member.o) rules 
+        are used and make checks the __.SYMDEF entry, replacing member.o
+        if member.o is newer.
+
+- the configuration program supports some new, useful options allowing 
+        us to move some of the things in the Makefile and config.h into
+        the config.in file.
+
+        config.in is a superset of the old config.in format : 
+
+        - an automatic option is supported, which will automagically
+          generate .config from config.in (note - this needs some work
+          since .changed is not generated)
+
+        - I added a str type 
+
+        - Better syntax checking is possible on user supplied options,
+                with the permissible values specifiable on a per
+                config option basis.
+
+        - options can be set for the Makefile, CPP, both, or neither
+                (ie, OPT is a Makefile only variable)
+
+        Examples : 
+
+str(type=make) 'Root device' ROOT_DEV CURRENT
+str(type=cpp,regex=NORMAL_VGA|\d+) 'SVGA mode' SVGA_MODE 3
+str(type=make,allowundef) 'Options' OPTS 
+
+Of course, the new features are optional and the config.in file is 
+backwards compatable with the old version.
+
+- the configuration program runs in 1/10th the time on my system (
+        3 seconds instead of 30)
+
+- make depend is forced if the configuration changes
+
+Of course, make config; make dep is slightly faster than it used 
+to be - the config rewrite let me run make config in 10% of the time
+as before (3 seconds vs. 30), although the changes to the make depend 
+code cost 15 seconds (6:30 vs. 6:15).
+
+Implementation : 
+
+I rewrote the configuration program in perl, since the Bourne shell
+config script was a slow and bletcherous hack due to the limitations 
+inherent in /bin/sh.
+
+The configuration program processes the config.in file and 
+creates a new config.in file and a .config file as the 
+old Configure script did.  The differences are that 
+
+- Rather than outputing #define lines to autoconf.h, CPP symbols
+        are pushed onto the @defines list.  On termination,
+        @defines is sorted and pretty printed to the .config file 
+        like 
+
+DEFINES =  -DSVGA_MODE=3 -DCONFIG_MATH_EMULATION=1 -DCONFIG_BLK_DEV_HD=1        
+        -DCONFIG_MAX_16M=1 -DCONFIG_SYSVIPC=1 -DCONFIG_SCSI=1   \
+        -DCONFIG_BLK_DEV_SD=1 -DCONFIG_CHR_DEV_SG=1     \
+        -DCONFIG_SCSI_T128=1 -DCONFIG_MINIX_FS=1 -DCONFIG_EXT2_FS=1     \
+        -DCONFIG_MSDOS_FS=1 -DCONFIG_PROC_FS=1 -DCONFIG_KBD_META=1      \
+        -DCONFIG_KBD_NUML=1 -DCONFIG_PRINTER=1
+
+- When a configuration option is changed from the default value to 
+        the new value, the name of the changed symbol is pushed 
+        onto the @changed stack.  On termination, if @changed is 
+        defined, a sorted list of changed symbols is output to
+        the .changed file in the form
+
+CHANGED = CONFIG_OPTION_1 CONFIG_OPTION_2
+
+The toplevel Makefile reads in .changed if it exists, and if it 
+does, a depend is forced.  I replaced the GCC -M depend code with
+another perlscript, invoked with the $(DEP) makefile macro. 
+
+
+The mkdep.pl script invokes cpp with the -M or -MM flag 
+to get the dependancies, and the undocuemted -pcp flag if a -symbols
+switch was provided.
+
+The -pcp filename flag tells GNU cpp to output the prerequisites to
+filename (filename can be - for standard out, although I choose a 
+temporary file since that was cheaper than parsing the output
+for what was dependancies and what wasn't), where the prerequisites
+are defined as any macro referenced in an 
+
+#ifdef 
+#ifndef
+
+or 
+
+#if
+
+CPP directive.  The output takes the form of 
+
+#define macro1
+#undef macro2
+
+etc.
+
+mkdep.pl constructs a regex from the list of symbols at startup, 
+and applies this to the temp file containing the output on a line-by
+line basis using an early out scheme.
+
+What still needs doing : 
+
+config.pl -automatic needs some cleaning up.  While config.in and 
+        .config are generated correctly, .changed is not generated.  To
+        generate .changed, I need to make a pass through the old and
+        new config files (need to keep a copy of the old ones arround
+        to do this)  
+
+expressions evaluate to perl variables, creating a potential namespace
+        collision.  Not a serious problem, but I should replace the 
+        use of perl variables with an associative array dedicated to 
+        config.in variable storage.
+
+There should be a way to evaluate expressions in the perl environment
+        outside of what's in the if [ ] brackets.  This would let us 
+        assign regex components to variables and keep things like 
+        the HD_TYPE regex simple.
+
+        $n='\s*\d+\s*'
+        $d= "\\{$n,$n,$n,$n,$n,$n\\}"
+        etc.
+
+Some things are hardcoded that shouldn't be - ie, /usr/local/bin/perl,
+        the CPP defines passed in, etc.  These should be automagically
+        determined.
+        
+What you need to run the patches : 
+
+I have perl 4.0pl35 installed on my system, earlier versions should work.
+
+        If you don't like perl, tough.  It benchmarks 10X as fast as 
+        Bourne shell, results in fewer proccesses being run since there
+        are more builtins, is more readable, is easier to debug...
+
+I have make 3.48 installed on my system - 3.46 should deal with the archive
+rules correctly, 3.42 will not work due to bugs in handling archive targets 
+of the form foo.a(bar.o).
+
+The patches are against .99.13o since that's what's on my system - 
+anythign prior to the source tree reorganization is right out, hopefully
+the patches will go into .99.13p cleanly.
+
+
+# This is a shell archive.  Save it in a file, remove anything before
+# this line, and then unpack it by entering "sh file".  Note, it may
+# create directories; files and directories will be owned by you and
+# have default permissions.
+#
+# This archive contains:
+#
+#       diffs
+#       tools/mkdep.pl
+#       tools/config.pl
+#
+echo x - diffs
+sed 's/^X//' >diffs << 'END-of-diffs'
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./Makefile 1993/11/02 05:38:50
+X@@ -6,10 +6,6 @@
+X 
+X .EXPORT_ALL_VARIABLES:
+X 
+X-CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
+X-        else if [ -x /bin/bash ]; then echo /bin/bash; \
+X-        else echo sh; fi ; fi)
+X-
+X #
+X # Make "config" the default target if there is no configuration file or
+X # "depend" the target if there is no top-level dependency information.
+X@@ -16,6 +12,10 @@
+X #
+X ifeq (.config,$(wildcard .config))
+X include .config
+X+ifeq (.changed,$(wildcard .changed))
+X+include .changed
+X+CONFIGURATION = depend
+X+endif
+X ifeq (.depend,$(wildcard .depend))
+X include .depend
+X else
+X@@ -29,6 +29,11 @@
+X CONFIGURE = dummy
+X endif
+X 
+X+CPPDEFINES = -D__GNUC__=2 -Dunix -Di386 -Dlinux -D__unix__ -D__i386__ \
+X+    -D__linux__ -D__unix -D__i386 -D__linux -D__i486__ -D__KERNEL__
+X+DEP = /usr/src/linux/tools/mkdep.pl -cppargs="-D__KERNEL__ $(CPPDEFINES)" \
+X+     -symbols="$(CHANGED)"
+X+
+X #
+X # ROOT_DEV specifies the default root-device when making the image.
+X # This can be either FLOPPY, CURRENT, /dev/xxxx or empty, in which case
+X@@ -35,7 +40,7 @@
+X # the default of FLOPPY is used by 'build'.
+X #
+X 
+X-ROOT_DEV = CURRENT
+X+# ROOT_DEV is now defined by config.pl
+X 
+X #
+X # If you want to preset the SVGA mode, uncomment the next line and
+X@@ -44,16 +49,17 @@
+X # The number is the same as you would ordinarily press at bootup.
+X #
+X 
+X-SVGA_MODE=    -DSVGA_MODE=3
+X+# SVGA_MODE is now defined by config.pl
+X 
+X # Special options.
+X-#OPTS = -pro
+X+# OPTS is now defined by config.pl
+X 
+X #
+X # standard CFLAGS
+X #
+X 
+X-CFLAGS = -Wall -Wstrict-prototypes -O6 -fomit-frame-pointer -pipe # -x c++
+X+CFLAGS = -Wall -Wstrict-prototypes -O6 -fomit-frame-pointer $(DEFINES) -pipe \
+X+      # -x c++
+X 
+X ifdef CONFIG_M486
+X CFLAGS := $(CFLAGS) -m486
+X@@ -112,8 +118,7 @@
+X       rm -f tools/version.h
+X 
+X config:
+X-      $(CONFIG_SHELL) Configure $(OPTS) < config.in
+X-      mv .config~ .config
+X+      perl tools/config.pl
+X       $(MAKE) soundconf
+X 
+X soundconf:
+X@@ -160,10 +165,10 @@
+X       $(LD86) -s -o boot/setup boot/setup.o
+X 
+X boot/setup.s: $(CONFIGURE) boot/setup.S include/linux/config.h Makefile
+X-      $(CPP) -traditional $(SVGA_MODE) $(RAMDISK) boot/setup.S -o boot/setup.s
+X+      $(CPP) -traditional $(DEFINES) boot/setup.S -o boot/setup.s
+X 
+X boot/bootsect.s: $(CONFIGURE) boot/bootsect.S include/linux/config.h Makefile
+X-      $(CPP) -traditional $(SVGA_MODE) $(RAMDISK) boot/bootsect.S -o boot/bootsect.s
+X+      $(CPP) -traditional $(DEFINES) boot/bootsect.S -o boot/bootsect.s
+X 
+X boot/bootsect:        boot/bootsect.s
+X       $(AS86) -o boot/bootsect.o boot/bootsect.s
+X@@ -232,10 +237,11 @@
+X 
+X depend dep:
+X       touch tools/version.h
+X-      for i in init/*.c;do echo -n "init/";$(CPP) -M $$i;done > .depend~
+X-      for i in tools/*.c;do echo -n "tools/";$(CPP) -M $$i;done >> .depend~
+X+      for i in init/*.c;do echo -n "init/";$(DEP) -M $$i;done > .depend~
+X+      for i in tools/*.c;do echo -n "tools/";$(DEP) -M -cppargs+"-U__KERNEL__" $$i;done >> .depend~
+X       for i in $(SUBDIRS); do (cd $$i && $(MAKE) dep) || exit; done
+X       rm -f tools/version.h
+X+      rm -f .changed
+X       mv .depend~ .depend
+X 
+X ifdef CONFIGURATION
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./fs/Makefile      1993/11/02 05:20:44
+X@@ -8,30 +8,39 @@
+X # Note 2! The CFLAGS definitions are now in the main makefile...
+X 
+X SUBDIRS = minix ext ext2 msdos proc isofs nfs xiafs
+X+LIBOBJS = 
+X 
+X ifdef CONFIG_MINIX_FS
+X FS_SUBDIRS := $(FS_SUBDIRS) minix
+X+LIBOBJS := $(LIBOBJS) filesystems.a(minix/minix.o)
+X endif
+X ifdef CONFIG_EXT_FS
+X FS_SUBDIRS := $(FS_SUBDIRS) ext
+X+LIBOBJS := $(LIBOBJS) filesystems.a(ext/ext.o)
+X endif
+X ifdef CONFIG_EXT2_FS
+X FS_SUBDIRS := $(FS_SUBDIRS) ext2
+X+LIBOBJS := $(LIBOBJS) filesystems.a(ext2/ext2.o)
+X endif
+X ifdef CONFIG_MSDOS_FS
+X FS_SUBDIRS := $(FS_SUBDIRS) msdos
+X+LIBOBJS := $(LIBOBJS) filesystems.a(msdos/msdos.o)
+X endif
+X ifdef CONFIG_PROC_FS
+X FS_SUBDIRS := $(FS_SUBDIRS) proc
+X+LIBOBJS := $(LIBOBJS) filesystems.a(proc/proc.o)
+X endif
+X ifdef CONFIG_ISO9660_FS
+X FS_SUBDIRS := $(FS_SUBDIRS) isofs
+X+LIBOBJS := $(LIBOBJS) filesystems.a(isofs/isofs.o)
+X endif
+X ifdef CONFIG_NFS_FS
+X FS_SUBDIRS := $(FS_SUBDIRS) nfs
+X+LIBOBJS := $(LIBOBJS) filesystems.a(nfs/nfs.o)
+X endif
+X ifdef CONFIG_XIA_FS
+X FS_SUBDIRS := $(FS_SUBDIRS) xiafs
+X+LIBOBJS := $(LIBOBJS) filesystems.a(xiafs/xiafs.o)
+X endif
+X 
+X ifdef CONFIG_BINFMT_ELF
+X@@ -45,28 +54,27 @@
+X .s.o:
+X       $(AS) -o $*.o $<
+X 
+X+
+X OBJS= open.o read_write.o inode.o devices.o file_table.o buffer.o super.o \
+X       block_dev.o stat.o exec.o pipe.o namei.o fcntl.o ioctl.o \
+X       select.o fifo.o locks.o filesystems.o $(BINFMTS)
+X 
+X-all: fs.o filesystems.a
+X+all: fs.o subdirs $(LIBOBJS) 
+X 
+X fs.o: $(OBJS)
+X       $(LD) -r -o fs.o $(OBJS)
+X 
+X-filesystems.a: dummy
+X-      rm -f filesystems.a
+X-      @for i in $(FS_SUBDIRS); do [ ! -d $$i ] || \
+X-      (cd $$i && echo $$i && $(MAKE) && $(AR) rcs ../filesystems.a $$i.o) \
+X-      || exit; done
+X-
+X clean:
+X       rm -f core *.s *.o *.a
+X       for i in $(SUBDIRS); do ([ -d $$i ] && cd $$i && $(MAKE) clean); done
+X 
+X+subdirs: 
+X+      for i in $(FS_SUBDIRS); do ([ -d $$i ] && cd $$i && $(MAKE)); done
+X+
+X+
+X depend dep:
+X-      $(CPP) -M *.c > .depend
+X-      for i in $(SUBDIRS); do [ ! -d $$i ] || (cd $$i && $(MAKE) dep) || exit; done
+X+      $(DEP) -M *.c > .depend
+X+      for i in $(FS_SUBDIRS); do [ ! -d $$i ] || (cd $$i && $(MAKE) dep) || exit; done
+X 
+X dummy:
+X 
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./fs/ext/Makefile  1993/11/02 05:21:04
+X@@ -24,7 +24,7 @@
+X       rm -f core *.s *.o *.a
+X 
+X dep:
+X-      $(CPP) -M *.c > .depend
+X+      $(DEP) -M *.c > .depend
+X 
+X #
+X # include a dependency file if one exists
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./fs/msdos/Makefile        1993/11/01 04:27:53
+X@@ -23,7 +23,7 @@
+X       rm -f core *.o *.a *.s
+X 
+X dep:
+X-      $(CPP) -M *.c > .depend
+X+      $(DEP) -M *.c > .depend
+X 
+X #
+X # include a dependency file if one exists
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./fs/proc/Makefile 1993/11/01 04:28:01
+X@@ -23,7 +23,7 @@
+X       rm -f core *.o *.a *.s
+X 
+X dep:
+X-      $(CPP) -M *.c > .depend
+X+      $(DEP) -M *.c > .depend
+X 
+X #
+X # include a dependency file if one exists
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./fs/minix/Makefile        1993/11/01 04:28:07
+X@@ -24,7 +24,7 @@
+X       rm -f core *.o *.a *.s
+X 
+X dep:
+X-      $(CPP) -M *.c > .depend
+X+      $(DEP) -M *.c > .depend
+X 
+X #
+X # include a dependency file if one exists
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./fs/isofs/Makefile        1993/11/01 04:28:12
+X@@ -23,7 +23,7 @@
+X       rm -f core *.o *.a *.s
+X 
+X dep:
+X-      $(CPP) -M *.c > .depend
+X+      $(DEP) -M *.c > .depend
+X 
+X #
+X # include a dependency file if one exists
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./fs/nfs/Makefile  1993/11/01 04:28:26
+X@@ -24,7 +24,7 @@
+X       rm -f core *.o *.a *.s
+X 
+X dep:
+X-      $(CPP) -M *.c > .depend
+X+      $(DEP) -M *.c > .depend
+X 
+X #
+X # include a dependency file if one exists
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./fs/ext2/Makefile 1993/11/02 05:21:11
+X@@ -24,7 +24,7 @@
+X       rm -f core *.s *.o *.a
+X 
+X dep:
+X-      $(CPP) -M *.c > .depend
+X+      $(DEP) -M *.c > .depend
+X 
+X #
+X # include a dependency file if one exists
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./fs/xiafs/Makefile        1993/11/01 04:28:40
+X@@ -27,7 +27,7 @@
+X       rm -f core *.o *.a *.s *~ .depend tags
+X 
+X dep:
+X-      $(CPP) -M *.c > .depend
+X+      $(DEP) -M *.c > .depend
+X 
+X #
+X # include a dependency file if one exists
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./kernel/Makefile  1993/11/02 02:14:37
+X@@ -7,15 +7,6 @@
+X #
+X # Note 2! The CFLAGS definitions are now in the main makefile...
+X 
+X-.S.s:
+X-      $(CPP) -traditional $< -o $*.s
+X-.c.s:
+X-      $(CC) $(CFLAGS) -S $<
+X-.s.o:
+X-      $(AS) -c -o $*.o $<
+X-.c.o:
+X-      $(CC) $(CFLAGS) -c $<
+X-
+X OBJS  = sched.o sys_call.o traps.o irq.o dma.o fork.o \
+X       panic.o printk.o vsprintf.o sys.o exit.o \
+X       signal.o mktime.o ptrace.o ioport.o itimer.o \
+X@@ -38,7 +29,7 @@
+X       rm -f core *.o *.a *.s
+X 
+X dep:
+X-      $(CPP) -M *.c > .depend
+X+      $(DEP) -M *.c > .depend
+X 
+X dummy:
+X 
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./lib/Makefile     1993/11/02 02:16:04
+X@@ -6,25 +6,17 @@
+X # unless it's something special (ie not a .c file).
+X #
+X 
+X-.c.s:
+X-      $(CC) $(CFLAGS) -S $<
+X-.s.o:
+X-      $(AS) -c -o $*.o $<
+X-.c.o:
+X-      $(CC) $(CFLAGS) -c $<
+X 
+X-OBJS  = ctype.o _exit.o open.o close.o errno.o write.o dup.o setsid.o \
+X-      execve.o wait.o string.o malloc.o
+X+all : lib.a(ctype.o) lib.a(_exit.o) lib.a(open.o) lib.a(close.o) \
+X+      lib.a(errno.o) lib.a(write.o) lib.a(dup.o) lib.a(setsid.o) \
+X+      lib.a(execve.o) lib.a(wait.o) lib.a(string.o)  lib.a(malloc.o)
+X 
+X-lib.a: $(OBJS)
+X-      $(AR) rcs lib.a $(OBJS)
+X-      sync
+X 
+X clean:
+X       rm -f core *.o *.a *.s
+X 
+X dep:
+X-      $(CPP) -M *.c > .depend
+X+      $(DEP) -M *.c > .depend
+X 
+X #
+X # include a dependency file if one exists
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./mm/Makefile      1993/11/02 02:16:48
+X@@ -7,13 +7,6 @@
+X #
+X # Note 2! The CFLAGS definition is now in the main makefile...
+X 
+X-.c.o:
+X-      $(CC) $(CFLAGS) -c $<
+X-.s.o:
+X-      $(AS) -o $*.o $<
+X-.c.s:
+X-      $(CC) $(CFLAGS) -S $<
+X-
+X OBJS  = memory.o swap.o mmap.o vmalloc.o
+X 
+X mm.o: $(OBJS)
+X@@ -23,7 +16,7 @@
+X       rm -f core *.o *.a *.s
+X 
+X dep:
+X-      $(CPP) -M *.c > .depend
+X+      $(DEP) -M *.c > .depend
+X 
+X #
+X # include a dependency file if one exists
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./net/Makefile     1993/11/02 05:12:19
+X@@ -10,35 +10,29 @@
+X # only these two lines should need to be changed to remove inet sockets.
+X # (and the inet/tcpip.o in net.o)
+X 
+X-DRIVERS     =
+X-SUBDIRS     := unix inet
+X+OBJS  = Space.o ddi.o socket.o 
+X+LIBOBJS = network.a(unix/unix.o)
+X+SUBDIRS = unix
+X+ALL_SUBDIRS = unix inet
+X 
+X-.c.o:
+X-      $(CC) $(CFLAGS) -c $<
+X-.s.o:
+X-      $(AS) -o $*.o $<
+X-.c.s:
+X-      $(CC) $(CFLAGS) -S $<
+X 
+X-OBJS  =  Space.o ddi.o socket.o
+X+ifdef CONFIG_INET
+X+SUBDIRS := $(SUBDIRS) inet
+X+LIBOBJS := $(LIBOBJS) network.a(inet/inet.o) 
+X+endif
+X 
+X-all:          net.o
+X-
+X-net.o:                $(OBJS) subdirs
+X+net.o:                subdirs $(LIBOBJS) $(OBJS) 
+X               $(LD) -r -o net.o $(OBJS) network.a
+X 
+X-subdirs:      dummy
+X-              @rm -f network.a
+X-              @for i in $(SUBDIRS); do (cd $$i && echo $$i && $(MAKE) && ar rcs ../network.a $$i.o) || exit; done
+X-              @ranlib network.a
+X-
+X clean:
+X               rm -f core *.o *.a *.s
+X-              @for i in $(DRIVERS) $(SUBDIRS); do (cd $$i && echo $$i && $(MAKE) clean) || exit; done
+X+              @for i in $(ALLSUBDIRS); do (cd $$i && echo $$i && $(MAKE) clean) || exit; done
+X 
+X+subdirs:
+X+              @for i in $($SUBDIRS); do (cd $$i && echo $$i && $(MAKE)) || exit; done
+X dep:
+X-              $(CPP) -M *.c > .depend
+X-              @for i in $(DRIVERS) $(SUBDIRS); do (cd $$i && echo $$i && $(MAKE) dep) || exit; done
+X+              $(DEP) -M *.c > .depend
+X+              @for i in $(SUBDIRS); do (cd $$i && echo $$i && $(MAKE) dep) || exit; done
+X 
+X dummy:
+X 
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./net/inet/Makefile        1993/11/02 02:21:33
+X@@ -7,39 +7,27 @@
+X #
+X # Note 2! The CFLAGS definition is now in the main makefile...
+X 
+X-.c.o:
+X-      $(CC) $(CFLAGS) -c -o $*.o $<
+X-.s.o:
+X-      $(AS) -o $*.o $<
+X-.c.s:
+X-      $(CC) $(CFLAGS) -S -o $*.s $<
+X 
+X-
+X+ifdef CONFIG_INET
+X OBJS  = sock.o utils.o route.o proc.o timer.o protocol.o loopback.o \
+X         eth.o packet.o arp.o dev.o ip.o raw.o icmp.o tcp.o udp.o \
+X         datagram.o skbuff.o
+X 
+X-ifdef CONFIG_INET
+X-
+X inet.o:               $(OBJS)
+X               $(LD) -r -o inet.o $(OBJS)
+X 
+X else
+X 
+X-inet.o:
+X-              echo | $(AS) -o inet.o
+X+all:
+X+              @echo CONFIG_INET not defined.
+X 
+X endif
+X 
+X-subdirs:      dummy
+X-              for i in $(SUBDIRS); do (cd $$i; $(MAKE)); done
+X-
+X-
+X clean:
+X               rm -f core *.o *.a *.s
+X 
+X dep:
+X-              $(CPP) -M *.c > .depend
+X+              $(DEP) -M *.c > .depend
+X 
+X tar:
+X               tar -cvf /dev/f1 .
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./net/unix/Makefile        1993/11/02 02:21:52
+X@@ -7,29 +7,16 @@
+X #
+X # Note 2! The CFLAGS definition is now in the main makefile...
+X 
+X-.c.o:
+X-      $(CC) $(CFLAGS) \
+X-      -c -o $*.o $<
+X-.s.o:
+X-      $(AS) -o $*.o $<
+X-.c.s:
+X-      $(CC) $(CFLAGS) \
+X-      -S -o $*.s $<
+X-
+X OBJS  = sock.o proc.o
+X 
+X unix.o: $(OBJS)
+X       $(LD) -r -o unix.o $(OBJS)
+X 
+X-subdirs: dummy
+X-      for i in $(SUBDIRS); do (cd $$i; $(MAKE)); done
+X-
+X-
+X clean:
+X       rm -f core *.o *.a *.s
+X 
+X dep:
+X-      $(CPP) -M *.c > .depend
+X+      $(DEP) -M *.c > .depend
+X 
+X tar:
+X       tar -cvf /dev/f1 .
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./ipc/Makefile     1993/11/01 04:29:27
+X@@ -29,7 +29,7 @@
+X       rm -f core *.o *.a *.s
+X 
+X dep:
+X-      $(CPP) -M $(SRCS) > .depend
+X+      $(DEP) -M $(SRCS) > .depend
+X 
+X dummy:
+X 
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./ibcs/Makefile    1993/11/02 02:13:56
+X@@ -7,17 +7,7 @@
+X #
+X # Note 2! The CFLAGS definitions are now in the main makefile...
+X 
+X-.S.s:
+X-      $(CPP) -traditional $< -o $*.s
+X-.c.s:
+X-      $(CC) $(CFLAGS) -S $<
+X-.s.o:
+X-      $(AS) -c -o $*.o $<
+X-.c.o:
+X-      $(CC) $(CFLAGS) -c $<
+X 
+X-SUBDIRS       = 
+X-
+X OBJS  = emulate.o
+X 
+X ibcs.o: $(OBJS)
+X@@ -26,11 +16,9 @@
+X 
+X clean:
+X       rm -f core *.o *.a *.s
+X-      for i in $(SUBDIRS); do (cd $$i && $(MAKE) clean); done
+X 
+X dep:
+X-      $(CPP) -M *.c > .depend
+X-      for i in $(SUBDIRS); do (cd $$i && $(MAKE) dep) || exit; done
+X+      $(DEP) -M *.c > .depend
+X 
+X dummy:
+X 
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./drivers/net/Makefile     1993/11/02 02:11:06
+X@@ -10,25 +10,18 @@
+X 
+X include CONFIG
+X 
+X-.c.s:
+X-      $(CC) $(CFLAGS) -S -o $*.s $<
+X-.s.o:
+X-      $(AS) -o $*.o $<
+X-.c.o:
+X-      $(CC) $(CFLAGS) -c -o $*.o $<
+X-
+X-NETDRV_OBJS := Space.o auto_irq.o
+X+NETDRV_OBJS := net.a(Space.o) net.a(auto_irq.o)
+X CFLAGS := $(CFLAGS) -I../../net/inet
+X CPP := $(CPP) -I../../net/inet
+X 
+X # The point of the makefile...
+X-all: net.a
+X+all: $(NETDRV_OBJS)
+X 
+X Space.o: Space.c /usr/include/linux/autoconf.h
+X       $(CC) $(CFLAGS) $(OPTS) $(DL_OPTS) -c $< -o $@
+X 
+X ifdef CONFIG_WD80x3
+X-NETDRV_OBJS := $(NETDRV_OBJS) wd.o
+X+NETDRV_OBJS := $(NETDRV_OBJS) net.a(wd.o)
+X CONFIG_8390 = CONFIG_8390
+X wd.o: wd.c CONFIG
+X       $(CC) $(CPPFLAGS) $(CFLAGS) $(WD_OPTS) -c wd.c
+X@@ -35,7 +28,7 @@
+X endif
+X 
+X ifdef CONFIG_EL2
+X-NETDRV_OBJS := $(NETDRV_OBJS) 3c503.o
+X+NETDRV_OBJS := $(NETDRV_OBJS) net.a(3c503.o)
+X CONFIG_8390 = CONFIG_8390
+X 3c503.o:      3c503.c CONFIG
+X       $(CC) $(CPPFLAGS) $(CFLAGS) $(EL2_OPTS) -c 3c503.c
+X@@ -42,7 +35,7 @@
+X endif
+X 
+X ifdef CONFIG_NE2000
+X-NETDRV_OBJS := $(NETDRV_OBJS) ne.o
+X+NETDRV_OBJS := $(NETDRV_OBJS) net.a(ne.o)
+X CONFIG_8390 = CONFIG_8390
+X ne.o: ne.c CONFIG
+X       $(CC) $(CPPFLAGS) $(CFLAGS) $(NE_OPTS) -c ne.c
+X@@ -49,7 +42,7 @@
+X endif
+X 
+X ifdef CONFIG_HPLAN
+X-NETDRV_OBJS := $(NETDRV_OBJS) hp.o
+X+NETDRV_OBJS := $(NETDRV_OBJS) net.a(hp.o)
+X CONFIG_8390 = CONFIG_8390
+X hp.o: hp.c CONFIG
+X       $(CC) $(CPPFLAGS) $(CFLAGS) $(HP_OPTS) -c hp.c
+X@@ -56,67 +49,67 @@
+X endif
+X 
+X ifdef CONFIG_ULTRA
+X-NETDRV_OBJS := $(NETDRV_OBJS) smc-ultra.o
+X+NETDRV_OBJS := $(NETDRV_OBJS) net.a(smc-ultra.o)
+X CONFIG_8390 = CONFIG_8390
+X endif
+X 
+X ifdef CONFIG_8390
+X-NETDRV_OBJS := $(NETDRV_OBJS) 8390.o
+X+NETDRV_OBJS := $(NETDRV_OBJS) net.a(8390.o)
+X endif
+X 
+X ifdef CONFIG_PLIP
+X-NETDRV_OBJS := $(NETDRV_OBJS) plip.o
+X+NETDRV_OBJS := $(NETDRV_OBJS) net.a(plip.o)
+X plip.o:       plip.c CONFIG
+X       $(CC) $(CPPFLAGS) $(CFLAGS) $(PLIP_OPTS) -c plip.c
+X endif
+X 
+X ifdef CONFIG_SLIP
+X-NETDRV_OBJS := $(NETDRV_OBJS) slip.o slhc.o
+X+NETDRV_OBJS := $(NETDRV_OBJS) net.a(slip.o) net.a(slhc.o)
+X slip.o:       slip.c CONFIG
+X       $(CC) $(CPPFLAGS) $(CFLAGS) $(SLIP_OPTS) -c slip.c
+X endif
+X 
+X ifdef CONFIG_DE600
+X-NETDRV_OBJS := $(NETDRV_OBJS) d_link.o
+X+NETDRV_OBJS := $(NETDRV_OBJS) net.a(d_link.o)
+X d_link.o: d_link.c CONFIG
+X       $(CC) $(CPPFLAGS) $(CFLAGS) $(DL_OPTS) -c d_link.c
+X endif
+X 
+X ifdef CONFIG_AT1500
+X-NETDRV_OBJS := $(NETDRV_OBJS) lance.o
+X+NETDRV_OBJS := $(NETDRV_OBJS) net.a(lance.o)
+X endif
+X 
+X ifdef CONFIG_EL3
+X-NETDRV_OBJS := $(NETDRV_OBJS) 3c509.o
+X+NETDRV_OBJS := $(NETDRV_OBJS) net.a(3c509.o)
+X endif
+X 
+X ifdef CONFIG_ZNET
+X-NETDRV_OBJS := $(NETDRV_OBJS) znet.o
+X+NETDRV_OBJS := $(NETDRV_OBJS) net.a(znet.o)
+X endif
+X ifdef CONFIG_EEXPRESS
+X-NETDRV_OBJS := $(NETDRV_OBJS) eexpress.o
+X+NETDRV_OBJS := $(NETDRV_OBJS) net.a(eexpress.o)
+X endif
+X ifdef CONFIG_EL1
+X-NETDRV_OBJS := $(NETDRV_OBJS) 3c501.o
+X+NETDRV_OBJS := $(NETDRV_OBJS) net.a(3c501.o)
+X endif
+X ifdef CONFIG_EL16
+X-NETDRV_OBJS := $(NETDRV_OBJS) 3c507.o
+X+NETDRV_OBJS := $(NETDRV_OBJS) net.a(3c507.o)
+X endif
+X ifdef CONFIG_DEPCA
+X-NETDRV_OBJS := $(NETDRV_OBJS) depca.o
+X+NETDRV_OBJS := $(NETDRV_OBJS) net.a(depca.o)
+X endif
+X ifdef CONFIG_ATP
+X-NETDRV_OBJS := $(NETDRV_OBJS) atlantec.o
+X+NETDRV_OBJS := $(NETDRV_OBJS) net.a(atlantec.o)
+X endif
+X ifdef CONFIG_NI52
+X-NETDRV_OBJS := $(NETDRV_OBJS) ni52.o
+X+NETDRV_OBJS := $(NETDRV_OBJS) net.a(ni52.o)
+X endif
+X ifdef CONFIG_NI65
+X-NETDRV_OBJS := $(NETDRV_OBJS) ni65.o
+X+NETDRV_OBJS := $(NETDRV_OBJS) net.a(ni65.o)
+X endif
+X 
+X ifdef CONFIG_IP_DEFRAG
+X-NETDRV_OBJS := $(NETDRV_OBJS) ip-frag.o
+X+NETDRV_OBJS := $(NETDRV_OBJS) net.a(ip-frag.o)
+X endif
+X 
+X net.a: $(NETDRV_OBJS)
+X@@ -127,7 +120,7 @@
+X       rm -f core *.o *.a *.s
+X 
+X dep:
+X-      $(CPP) -M *.c > .depend
+X+      $(DEP) -cppargs+"-I../../net/inet" -M *.c > .depend
+X 
+X tar:
+X       tar -cvf /dev/f1 .
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./drivers/block/Makefile   1993/11/02 03:55:52
+X@@ -9,54 +9,42 @@
+X # parent makefile.
+X #
+X 
+X-.c.s:
+X-      $(CC) $(CFLAGS) -S $<
+X-.s.o:
+X-      $(AS) -c -o $*.o $<
+X-.c.o:
+X-      $(CC) $(CFLAGS) -c $<
+X-
+X #
+X # Note : at this point, these files are compiled on all systems. 
+X # In the future, some of these should be built conditionally.
+X #
+X 
+X-OBJS := ll_rw_blk.o floppy.o ramdisk.o genhd.o 
+X-SRCS := ll_rw_blk.c floppy.c ramdisk.c genhd.c 
+X+OBJS = block.a(ll_rw_blk.o) block.a(floppy.o) block.a(ramdisk.o) \
+X+      block.a(genhd.o)
+X+SRCS = ll_rw_blk.c floppy.c ramdisk.c genhd.c 
+X 
+X ifdef CONFIG_CDU31A
+X-OBJS := $(OBJS) cdu31a.o
+X+OBJS := $(OBJS) block.a(cdu31a.o)
+X SRCS := $(SRCS) cdu31a.c
+X endif
+X 
+X ifdef CONFIG_MCD
+X-OBJS := $(OBJS) mcd.o
+X+OBJS := $(OBJS) block.a(mcd.o)
+X SRCS := $(SRCS) mcd.c
+X endif
+X 
+X ifdef CONFIG_BLK_DEV_HD
+X-OBJS := $(OBJS) hd.o
+X+OBJS := $(OBJS) block.a(hd.o)
+X SRCS := $(SRCS) hd.c
+X endif
+X 
+X ifdef CONFIG_BLK_DEV_XD
+X-OBJS := $(OBJS) xd.o
+X+OBJS := $(OBJS) block.a(xd.o)
+X SRCS := $(SRCS) xd.c
+X endif
+X 
+X-all: block.a
+X-
+X-block.a: $(OBJS)
+X-      rm -f block.a
+X-      $(AR) rcs block.a $(OBJS)
+X-      sync
+X+all: $(OBJS)
+X 
+X clean: 
+X       rm -f core *.o *.a *.s
+X-      for i in $(ALL_SUBDIRS); do (cd $$i && $(MAKE) clean); done
+X 
+X dep:
+X-      $(CPP) -M $(SRCS) > .depend
+X+      $(DEP) -M $(SRCS) > .depend
+X 
+X dummy:
+X 
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./drivers/char/Makefile    1993/11/02 03:49:47
+X@@ -9,16 +9,9 @@
+X # parent makes..
+X #
+X 
+X-.c.s:
+X-      $(CC) $(CFLAGS) -S $<
+X-.s.o:
+X-      $(AS) -c -o $*.o $<
+X-.c.o:
+X-      $(CC) $(CFLAGS) -c $<
+X-
+X-OBJS  = tty_io.o console.o keyboard.o serial.o \
+X-      tty_ioctl.o pty.o vt.o mem.o \
+X-      defkeymap.o
+X+OBJS  = char.a(tty_io.o) char.a(console.o) char.a(keyboard.o) \
+X+        char.a(serial.o) char.a(tty_ioctl.o) char.a(pty.o) char.a(vt.o) \
+X+      char.a(mem.o) char.a(defkeymap.o)
+X 
+X SRCS  = tty_io.c console.c keyboard.c serial.c \
+X       tty_ioctl.c pty.c vt.c mem.c \
+X@@ -27,24 +20,24 @@
+X 
+X ifdef CONFIG_ATIXL_BUSMOUSE
+X M = y
+X-OBJS := $(OBJS) atixlmouse.o
+X+OBJS := $(OBJS) char.a(atixlmouse.o)
+X SRCS := $(SRCS) atixlmouse.c
+X endif
+X 
+X ifdef CONFIG_BUSMOUSE
+X M = y
+X-OBJS := $(OBJS) busmouse.o
+X+OBJS := $(OBJS) char.a(busmouse.o)
+X SRCS := $(SRCS) busmouse.c
+X endif
+X 
+X ifdef CONFIG_PRINTER
+X-OBJS := $(OBJS) lp.o
+X+OBJS := $(OBJS) char.a(lp.o)
+X SRCS := $(SRCS) lp.c
+X endif
+X 
+X ifdef CONFIG_MS_BUSMOUSE
+X M = y
+X-OBJS := $(OBJS) msbusmouse.o
+X+OBJS := $(OBJS) char.a(msbusmouse.o)
+X SRCS := $(SRCS) msbusmouse.c
+X endif
+X 
+X@@ -54,31 +47,27 @@
+X 
+X ifdef CONFIG_PSMOUSE
+X M = y
+X-OBJS := $(OBJS) psaux.o
+X+OBJS := $(OBJS) char.a(psaux.o)
+X SRCS := $(SRCS) psaux.c
+X endif
+X 
+X ifdef CONFIG_TAPE_QIC02
+X-OBJS := $(OBJS) tpqic02.o 
+X+OBJS := $(OBJS) char.a(tpqic02.o)
+X SRCS := $(SRCS) tpqic02.c
+X endif
+X 
+X ifdef M
+X-OBJS := $(OBJS) mouse.o
+X+OBJS := $(OBJS) char.a(mouse.o)
+X SRCS := $(SRCS) mouse.c
+X endif
+X 
+X-all: char.a
+X+all: $(OBJS)
+X 
+X-char.a: $(OBJS)
+X-      $(AR) rcs char.a $(OBJS)
+X-      sync    
+X-
+X clean: 
+X       rm -f core *.o *.a *.s
+X 
+X dep:
+X-      $(CPP) -M $(SRCS) > .depend
+X+      $(DEP) -M $(SRCS) > .depend
+X 
+X dummy:
+X 
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./drivers/scsi/Makefile    1993/11/02 01:54:35
+X@@ -16,95 +16,93 @@
+X 
+X ifdef CONFIG_SCSI
+X 
+X-SCSI_OBJS := hosts.o scsi.o scsi_ioctl.o constants.o
+X+SCSI_OBJS := scsi.a(hosts.o) scsi.a(scsi.o) scsi.a(scsi_ioctl.o) \
+X+      scsi.a(constants.o)
+X SCSI_SRCS := hosts.c scsi.c scsi_ioctl.c constants.c
+X 
+X ifdef CONFIG_CHR_DEV_ST
+X-SCSI_OBJS := $(SCSI_OBJS) st.o
+X+SCSI_OBJS := $(SCSI_OBJS) scsi.a(st.o)
+X SCSI_SRCS := $(SCSI_SRCS) st.c
+X endif
+X 
+X ifdef CONFIG_BLK_DEV_SD
+X-SCSI_OBJS := $(SCSI_OBJS) sd.o sd_ioctl.o
+X+SCSI_OBJS := $(SCSI_OBJS) scsi.a(sd.o) scsi.a(sd_ioctl.o)
+X SCSI_SRCS := $(SCSI_SRCS) sd.c sd_ioctl.c
+X endif
+X 
+X ifdef CONFIG_BLK_DEV_SR
+X-SCSI_OBJS := $(SCSI_OBJS) sr.o sr_ioctl.o
+X+SCSI_OBJS := $(SCSI_OBJS) scsi.a(sr.o) scsi.a(sr_ioctl.o)
+X SCSI_SRCS := $(SCSI_SRCS) sr.c sr_ioctl.c
+X endif
+X 
+X ifdef CONFIG_CHR_DEV_SG
+X-SCSI_OBJS := $(SCSI_OBJS) sg.o
+X+SCSI_OBJS := $(SCSI_OBJS) scsi.a(sg.o)
+X SCSI_SRCS := $(SCSI_SRCS) sg.c
+X endif
+X 
+X ifdef CONFIG_SCSI_AHA152X
+X-SCSI_OBJS := $(SCSI_OBJS) aha152x.o
+X+SCSI_OBJS := $(SCSI_OBJS) scsi.a(aha152x.o)
+X SCSI_SRCS := $(SCSI_SRCS) aha152x.c
+X endif
+X 
+X ifdef CONFIG_SCSI_AHA1542
+X-SCSI_OBJS := $(SCSI_OBJS) aha1542.o
+X+SCSI_OBJS := $(SCSI_OBJS) scsi.a(aha1542.o)
+X SCSI_SRCS := $(SCSI_SRCS) aha1542.c
+X endif
+X 
+X ifdef CONFIG_SCSI_AHA1740
+X-SCSI_OBJS := $(SCSI_OBJS) aha1740.o
+X+SCSI_OBJS := $(SCSI_OBJS) scsi.a(aha1740.o)
+X SCSI_SRCS := $(SCSI_SRCS) aha1740.c
+X endif
+X 
+X ifdef CONFIG_SCSI_DEBUG
+X-SCSI_OBJS := $(SCSI_OBJS) scsi_debug.o
+X+SCSI_OBJS := $(SCSI_OBJS) scsi.a(scsi_debug.o)
+X SCSI_SRCS := $(SCSI_SRCS) scsi_debug.c
+X endif
+X 
+X ifdef CONFIG_SCSI_FUTURE_DOMAIN
+X-SCSI_OBJS := $(SCSI_OBJS) fdomain.o
+X+SCSI_OBJS := $(SCSI_OBJS) scsi.a(fdomain.o)
+X SCSI_SRCS := $(SCSI_SRCS) fdomain.c
+X endif
+X 
+X ifdef CONFIG_SCSI_GENERIC_NCR5380
+X-SCSI_OBJS := $(SCSI_OBJS) g_NCR5380.o
+X+SCSI_OBJS := $(SCSI_OBJS) scsi.a(g_NCR5380.o)
+X SCSI_SRCS := $(SCSI_SRCS) g_NCR5380.c
+X endif
+X 
+X ifdef CONFIG_SCSI_PAS16
+X-SCSI_OBJS := $(SCSI_OBJS) pas16.o
+X+SCSI_OBJS := $(SCSI_OBJS) scsi.a(pas16.o)
+X SCSI_SRCS := $(SCSI_SRCS) pas16.c
+X endif
+X 
+X ifdef CONFIG_SCSI_SEAGATE
+X-SCSI_OBJS := $(SCSI_OBJS) seagate.o
+X+SCSI_OBJS := $(SCSI_OBJS) scsi.a(seagate.o)
+X SCSI_SRCS := $(SCSI_SRCS) seagate.c
+X else
+X ifdef CONFIG_SCSI_FD_8xx
+X-SCSI_OBJS := $(SCSI_OBJS) seagate.o
+X+SCSI_OBJS := $(SCSI_OBJS) scsi.a(seagate.o)
+X SCSI_SRCS := $(SCSI_SRCS) seagate.c
+X endif
+X endif
+X 
+X ifdef CONFIG_SCSI_7000FASST
+X-SCSI_OBJS := $(SCSI_OBJS) wd7000.o
+X+SCSI_OBJS := $(SCSI_OBJS) scsi.a(wd7000.o)
+X SCSI_SRCS := $(SCSI_SRCS) wd7000.c
+X endif
+X 
+X ifdef CONFIG_SCSI_T128
+X-SCSI_OBJS := $(SCSI_OBJS) t128.o
+X+SCSI_OBJS := $(SCSI_OBJS) scsi.a(t128.o)
+X SCSI_SRCS := $(SCSI_SRCS) t128.c
+X endif
+X 
+X ifdef CONFIG_SCSI_ULTRASTOR
+X-SCSI_OBJS := $(SCSI_OBJS) ultrastor.o
+X+SCSI_OBJS := $(SCSI_OBJS) scsi.a(ultrastor.o)
+X SCSI_SRCS := $(SCSI_SRCS) ultrastor.c
+X endif
+X 
+X 
+X 
+X-scsi.a: $(SCSI_OBJS)
+X-      rm -f scsi.a
+X-      $(AR) rcs scsi.a $(SCSI_OBJS)
+X-      sync
+X+all: $(SCSI_OBJS)
+X 
+X aha152x.o: aha152x.c
+X       $(CC) $(CFLAGS) $(AHA152X) -c aha152x.c 
+X@@ -114,14 +112,12 @@
+X       $(CC) $(CFLAGS) -DARBITRATE -DSLOW_HANDSHAKE -DFAST32 -c seagate.c 
+X 
+X dep:
+X-      $(CPP) -M $(AHA152X) $(SCSI_SRCS) > .depend
+X+      $(DEP) -M -cppargs+"$(AHA152X)" $(SCSI_SRCS) > .depend
+X 
+X else
+X 
+X-scsi.a:
+X-      rm -f scsi.a
+X+all:
+X       @echo No SCSI drivers configured
+X-      $(AR) rcs scsi.a
+X 
+X dep:
+X 
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./drivers/Makefile 1993/11/02 02:12:03
+X@@ -7,15 +7,7 @@
+X #
+X # Note 2! The CFLAGS definitions are now in the main makefile...
+X 
+X-.S.s:
+X-      $(CPP) -traditional $< -o $*.s
+X-.c.s:
+X-      $(CC) $(CFLAGS) -S $<
+X-.s.o:
+X-      $(AS) -c -o $*.o $<
+X-.c.o:
+X-      $(CC) $(CFLAGS) -c $<
+X-
+X+ALLSUBDIRS = FPU-emu block char net scsi 
+X SUBDIRS       = block char net
+X 
+X ifdef CONFIG_MATH_EMULATION
+X@@ -30,14 +22,13 @@
+X SUBDIRS := $(SUBDIRS) sound
+X endif
+X 
+X-all: driversubdirs
+X 
+X-driversubdirs: dummy
+X+all: dummy
+X       @for i in $(SUBDIRS); do (cd $$i && echo $$i && $(MAKE)) || exit; done
+X 
+X clean:
+X       rm -f core *.o *.a *.s
+X-      for i in $(SUBDIRS); do (cd $$i && $(MAKE) clean); done
+X+      for i in $(ALLSUBDIRS); do (cd $$i && $(MAKE) clean); done
+X 
+X dep:
+X       for i in $(SUBDIRS); do (cd $$i && $(MAKE) dep) || exit; done
+X@@ -50,4 +41,3 @@
+X ifeq (.depend,$(wildcard .depend))
+X include .depend
+X endif
+X-
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./drivers/sound/Makefile   1993/11/02 02:11:19
+X@@ -9,18 +9,7 @@
+X #
+X #
+X 
+X-.c.s:
+X-      $(CC) $(CFLAGS) -S $<
+X-.s.o:
+X-      $(AS) -c -o $*.o $<
+X-.c.o:
+X-      $(CC) $(CFLAGS) -c $<
+X-
+X-OBJS  = sound_stub.o
+X-
+X-sound.a: $(OBJS) 
+X-      $(AR) rcs sound.a $(OBJS)
+X-      sync
+X+all: sound.a(sound_stub.o)
+X 
+X clean:
+X       rm -f core *.o *.a
+X--- 1.1        1993/11/01 04:14:33
+X+++ ./drivers/FPU-emu/Makefile 1993/11/02 02:08:29
+X@@ -5,6 +5,7 @@
+X #DEBUG        = -DDEBUGGING
+X DEBUG =
+X CFLAGS        := $(CFLAGS) -DPARANOID $(DEBUG) -fno-builtin
+X+DEP := $(DEP) -cppargs+"-DPARANOID $(DEBUG)"
+X 
+X .c.o:
+X       $(CC) $(CFLAGS) $(MATH_EMULATION) -c $<
+X@@ -15,28 +16,26 @@
+X .s.o:
+X       $(CC) -c $<
+X 
+X-OBJS =        fpu_entry.o div_small.o errors.o \
+X-      fpu_arith.o fpu_aux.o fpu_etc.o fpu_trig.o \
+X-      load_store.o get_address.o \
+X-      poly_atan.o poly_l2.o poly_2xm1.o poly_sin.o poly_tan.o \
+X-      poly_div.o poly_mul64.o polynomial.o \
+X-      reg_add_sub.o reg_compare.o reg_constant.o reg_ld_str.o \
+X-      reg_div.o reg_mul.o reg_norm.o \
+X-      reg_u_add.o reg_u_div.o reg_u_mul.o reg_u_sub.o \
+X-      reg_round.o \
+X-      wm_shrx.o wm_sqrt.o
+X-
+X-math.a: $(OBJS)
+X-      rm -f math.a
+X-      $(AR) rcs math.a $(OBJS)
+X-      sync
+X+OBJS =        math.a(fpu_entry.o) math.a(div_small.o) math.a(errors.o) \
+X+      math.a(fpu_arith.o) math.a(fpu_aux.o) math.a(fpu_etc.o) \
+X+        math.a(fpu_trig.o) math.a(load_store.o) math.a(get_address.o) \
+X+      math.a(poly_atan.o) math.a(poly_l2.o) math.a(poly_2xm1.o) \
+X+      math.a(poly_sin.o) math.a(poly_tan.o) math.a(poly_div.o) \
+X+        math.a(poly_mul64.o) math.a(polynomial.o) math.a(reg_add_sub.o) \
+X+        math.a(reg_compare.o) math.a(reg_constant.o) math.a(reg_ld_str.o) \
+X+      math.a(reg_div.o) math.a(reg_mul.o) math.a(reg_norm.o) \
+X+      math.a(reg_u_add.o) math.a(reg_u_div.o) math.a(reg_u_mul.o) \
+X+        math.a(reg_u_sub.o) math.a(reg_round.o) math.a(wm_shrx.o) \
+X+      math.a(wm_sqrt.o)
+X 
+X+all: $(OBJS)
+X+
+X clean:
+X       rm -f core *.o *.a *.s
+X 
+X dep:
+X-      $(CPP) -M *.c > .depend
+X-      $(CPP) -D__ASSEMBLER__ -M *.S >> .depend
+X+      $(DEP) -M *.c > .depend
+X+      $(DEP) -D__ASSEMBLER__ -M *.S >> .depend
+X 
+X proto:
+X       cproto -e -DMAKING_PROTO *.c >fpu_proto.h
+X--- include/linux/config.h-    Mon Nov  1 23:27:50 1993
+X+++ include/linux/config.h     Mon Nov  1 17:02:10 1993
+X@@ -1,8 +1,6 @@
+X #ifndef _LINUX_CONFIG_H
+X #define _LINUX_CONFIG_H
+X 
+X-#include <linux/autoconf.h>
+X-
+X /*
+X  * Defines for what uname() should return 
+X  */
+X--- 1.1        1993/11/01 23:34:18
+X+++ config.in  1993/11/02 03:48:06
+X@@ -5,6 +5,9 @@
+X *
+X * General setup
+X *
+X+str(type=make) 'Root device' ROOT_DEV CURRENT
+X+str(type=cpp,regex=NORMAL_VGA|\d+) 'SVGA mode' SVGA_MODE 3
+X+str(type=make,allowundef) 'Options' OPTS 
+X bool 'Kernel math emulation' CONFIG_MATH_EMULATION y
+X bool 'Normal harddisk support' CONFIG_BLK_DEV_HD y
+X bool 'XT harddisk support' CONFIG_BLK_DEV_XD n
+X@@ -11,7 +14,7 @@
+X bool 'TCP/IP networking' CONFIG_INET n
+X bool 'Limit memory to low 16MB' CONFIG_MAX_16M y
+X bool 'System V IPC' CONFIG_SYSVIPC y
+X-bool 'Use -m486 flag for 486-specific optimizations' CONFIG_M486 n
+X+bool(type=make) 'Use -m486 flag for 486-specific optimizations' CONFIG_M486 n
+X *
+X * Program binary formats
+X *
+END-of-diffs
+echo x - tools/mkdep.pl
+sed 's/^X//' >tools/mkdep.pl << 'END-of-tools/mkdep.pl'
+X#! /usr/local/bin/perl
+X
+X# mkdep.pl - run CPP -M or -MM passing the dependancies to standard out 
+X#      and touch any source files with a CPP dependancy on a changed 
+X#      symbol.
+X#
+X# options : 
+X# -cpp=text : command to get GNU cpp, GCC doesn't work since 
+X#      it won't pass -pcp to cpp.
+X# -symbols=text : changed symbols to look for 
+X# -cppargs={+|=}text : additional arguments to CPP
+X# -M : use -M
+X# -MM : use -MM (default)
+X
+X# Copyright 1993 Drew Eckhardt
+X
+X#$debug = 1;
+X# Control variables initialized to defaults
+X$cppexe = "cpp";       # What to call GNU cpp
+X$tmp = "/tmp/mkdep.pl.$$";     # Temporary file name
+X$M = "-M";             # Search system directories? -M means yes, -MM no
+X
+X$grepfor = "";         # regex of symbols to strip out of prereq output - 
+X                       # no options means we only run 
+X
+X$cppuserargs = "";     # User supplied addition arguments to CPP - ie 
+X                       # #defines for magic things.
+X
+X# Command to run to get dependancies on standard out
+X$cppcomm = "$cppexe $M";
+X
+X# &search_file ($file, $grepfor) - searches file using regular expression
+X# grepfor, adding it to the touch_these list if something was found.
+X
+Xsub search_file {
+X    local ($file, $grepfor) = @_;
+X    open (FILE, "<$file") ||  
+X       die "$0 : search_file() can't open $file for reading : $!\n";
+X    while (<FILE>) {
+X       if (/$grepfor/) {
+X           push (@touch_these, $arg);
+X           last;
+X       }
+X    }
+X    close (FILE);
+X}
+X
+X# Process each argument in order.  Arguments starting with "-" are 
+X# considered command line switches and affect the processing of all 
+X# subsequent files.  All other arguments are treated as files.
+X
+Xforeach $arg (@ARGV) {
+X    if ($arg =~ /^-(.*)/) {
+X       $option = $1;
+X       if ($option =~ /symbols=(.*)/) {
+X           $grepfor = join('\\b|', split (/[\t\n ]+/,$1));
+X           $grepfor = $grepfor.'\\b' if ($grepfor ne "");
+X       } elsif ($option =~ /cppargs(\+|=)(.*)/) {
+X           if ($1 eq '=') {
+X               $cppuserargs = $2;
+X           } else {
+X               $cppuserargs = "$cppuserargs $2";
+X           }
+X       } elsif ($option eq "M") {
+X           $M = "-M";
+X       } elsif ($option eq "MM") {
+X           $M = "-MM";
+X       } elsif ($option =~ /cpp=(.*)/) {
+X           $cppexe = $1;
+X       } else {
+X           die "$0 : unknown option -$option\n";
+X       }                       
+X       $cppcomm = "$cppexe $cppuserargs $M";
+X    } elsif ($arg =~ /Makefile|makefile/) {
+X       &search_file ($arg, $grepfor) if ("$grepfor" ne "");
+X    } else {
+X
+X       # Only generate prerequisites output file $tmp if 
+X       # we need to grep it for symbols.
+X
+X       if ($grepfor ne "") {
+X           $cpp = "$cppcomm -pcp $tmp $arg";
+X       } else {
+X           $cpp = "$cppcomm $arg";
+X       }
+X
+X       print STDERR "running $cpp\n" if ($debug);
+X
+X       system($cpp) &&
+X           die "$0 : can't run $cpp : $!\n";
+X
+X       &search_file ($tmp, $grepfor) if ($grepfor ne "");
+X    }
+X}
+X
+X
+X# Touch all files in the list @touch_these by setting mtime and 
+X# access time to the current time.
+X
+Xif (@touch_these) {
+X    $now = time;
+X    utime ($now, $now, @touch_these) ||
+X       die "$0 : can't touch one of @touch_these : $!\n";
+X}
+X
+Xunlink ("$tmp");
+END-of-tools/mkdep.pl
+echo x - tools/config.pl
+sed 's/^X//' >tools/config.pl << 'END-of-tools/config.pl'
+X#!/usr/local/bin/perl
+X
+X#config.pl - generate .config, .changed and config.in from config.in
+X#
+X#options :
+X# -automatic : automatically generate files without user interaction.
+X# -config=file : overide default .config 
+X# -configin=file : override default config.in  
+X# -changed=file : override default .changed
+X# -test : create *.new files but don't move to real files for testing 
+X#      purposes
+X
+X# Copyright 1993 Drew Eckhardt
+X
+X# defaults 
+X$configin = "config.in";       
+X$config = ".config";
+X$changed = ".changed";
+X$interactive = 1;      # 0 indicates automatic creation using defaults
+X$testing = 0;          # non-zero indicates don't move .new to real files
+X
+Xforeach $arg (@ARGV) {
+X
+X# XXX - -automatic isn't fully supported.  While it will generate
+X# the config.in and .config files correctly, it won't generate the 
+X# changed file.  I'm undecided as to the cleanest approach to take 
+X# with this.
+X
+X    if ($arg eq "-automatic") {
+X       $interactive = 0;
+X    } elsif ($arg =~ /-(config|configin|changed)=(.*)/) {
+X       eval "\$$1 = \"$2\"";
+X    } elsif ($arg = '-test') {
+X       $testing = 1;
+X    } else {
+X       die "$0 : unknown option $arg\n";
+X    }
+X}
+X
+X# We only create a .changed file if there have been configuration changes
+Xopen (CONFIGIN, "<$configin") ||
+X    die "$0 : can't open $configin for reading : $!\n";
+Xopen (CONFIGOUT, ">$configin.new") ||
+X    die "$0 : can't open $configin.new for writing : $!\n";
+Xopen (CONFIG, ">$config.new") ||
+X    die "$0 : can't open $config.new for writing : $!\n";
+X
+X@stack = ();
+X$branch = 't';
+X$line = 0;
+X
+Xwhile (<CONFIGIN>) {
+X    $line = $line + 1;
+X    if (/\s*#/) {
+X       print STDERR "$0 : ignoring comment $_\n" if ($debug);
+X       print CONFIGOUT;
+X       # ignore it
+X    } elsif (/^:/) {
+X       print if ($branch eq 't');
+X       print CONFIGOUT;
+X    } elsif (/\s*\*(.*)/) {
+X#      print STDERR "$0 : printing comment $_\n" if ($debug);
+X       print;
+X       print CONFIGOUT;
+X       print CONFIG "# $1\n" if ($branch eq 't');
+X    } elsif (/^\s*if\s+\[(.*)\]/) {
+X       print CONFIGOUT;
+X       if ($branch eq 't') {
+X           print STDERR "$0 : before munging expression is \"$1\"\n" if ($debug);
+X           $expr = $1;
+X           $expr =~ s/-(eq|ne|lt|gt|le|ge)/$1/ge;
+X           $expr =~ s/=/eq/g;
+X           $expr =~ s/\!=/ne/g;
+X
+X           print STDERR "$0 : evaluating expression \"$expr\"\n" if ($debug);
+X       } 
+X
+X       unshift (@stack, $branch);
+X
+X       $exprval = eval "$expr";
+X       print STDERR "$0 : expression $expr evaluated to $exprval\n" if ($debug);
+X       $branch = 'f' if (($branch eq 't') && !$exprval); 
+X       print STDERR "$0 : branch = $branch stack = @stack\n" if ($debug);
+X    } elsif (/^\s*else/) {
+X       print CONFIGOUT;
+X       if (($branch eq 'f') && ($stack[0] eq 't')) {
+X           $branch = 't';
+X       } else {
+X           $branch = 'f';
+X       }
+X       print STDERR "$0 : $_ branch set to $branch\n" if ($debug);
+X    } elsif (/^\s*fi/) {
+X       print CONFIGOUT;
+X       if ($stack[0]) {
+X           $branch = shift (@stack);
+X           print STDERR "$0 : $_ branch = $branch stack = @stack\n" 
+X               if ($debug);
+X       } else {
+X           die "$0 : stack overflow in $configin line $line : $_\n";
+X       }
+X    } elsif (/^\s*(bool|int|str)(\(.*\)|)\s+\'(.*)\'\s+(\S+)\s+(.*)/) {
+X       print STDERR "$0 : $_\n" if ($debug);
+X       ($type, $flags, $prompt, $var, $default) = ($1, $2, $3, $4, $5);
+X       # defaults 
+X       $output_define = 1;     # make CPP entry in DEFINES macro
+X       $output_make = 1;       # define MAKE macro
+X       $allowundef = 0;        # don't allow undef as entry
+X
+X       if (($interactive ne 0) && ($branch eq 't')) {
+X           # Set default for allowed input based on type
+X           if ($type =~ /bool/) {
+X               $permissible = 'y|n';   
+X           } elsif ($type =~ /int/) {
+X               $permissible = '\\d+';          
+X           } else {
+X               $permissible = '.*';
+X           }
+X
+X           if ($flags ne "") {
+X               $flags =~ s/\((.*)\)/$1/;
+X               @flags = split (/,/, $flags);
+X               print STDERR "$0 : type flags set to @flags\n" if ($debug);
+X               
+X               foreach $flag (@flags) {
+X                   print STDERR "$0 : evaluating type flag $flag\n" if ($debug);
+X                   if ($flag =~ /type=(.*)/) {
+X                       if ($1 eq 'all') {
+X                           $output_define = 1;
+X                           $output_make = 1;
+X                       } elsif ($1 eq 'make') {
+X                           $output_define = 0;
+X                           $output_make = 1;
+X                       } elsif ($1 eq 'cpp') {
+X                           $output_define = 1;
+X                           $output_make = 0;
+X                       } elsif ($1 eq 'none') {
+X                           $output_define = 0;
+X                           $output_make = 0;
+X                       } else { 
+X                           die "$0 : syntax error in line $lineno $_ : unknown type=$1\n";
+X                       }
+X                   } elsif ($flag =~ /regex=(.*)/) {
+X                       $permissible = $1;
+X                   } elsif ($flag eq allowundef) {
+X                       $allowundef = 1;
+X                   }
+X               }
+X               $flags="($flags)";
+X           }
+X
+X           print STDERR "$0 : type $type allows input of $permissible\n" 
+X               if ($debug);
+X
+X           $newval = undef;
+X
+X           while (1) {
+X               print "$prompt ($var) [$default] ";
+X               if ($_ = <STDIN>) {
+X                   chop;
+X                   if ($_ eq "") {
+X                       print STDERR "$0 : default : $default\n" if ($debug);
+X                       $newval = $default;
+X                       last;
+X                   } elsif ($allowundef && /undef/) {
+X                       $newval = undef;
+X                       last;
+X                   } elsif (/$permissible/) {
+X                       print STDERR "$0 : match : $_\n" if ($debug);
+X                       $newval = $_;
+X                       last;
+X                   } else {
+X                       print "Your response of $_ is not in the set $permissible.  Please try again\n";
+X                   }
+X               }
+X           }
+X          
+X           push (@changed, $var) if ($newval ne $default);
+X       } else {
+X           $newval = $default;
+X       }
+X
+X       print CONFIGOUT "$type$flags '$prompt' $var $newval\n";
+X
+X       if ($branch eq 't') {
+X           if ($type eq 'bool') {
+X               if ($newval eq 'n') {
+X                   print CONFIG "# $var is not set\n";
+X               } else {
+X                   print CONFIG "$var = $var\n" if ($output_make);
+X                   push (@defines, "-D$var=1") if ($output_define);
+X               }
+X           } else {
+X               print CONFIG "$var = $newval\n" if ($output_make);
+X               push (@defines, "-D$var=$newval") if ($output_define);
+X           }
+X
+X           print STDERR "$0 : setting variable $var to $newval\n" if ($debug);
+X           eval "\$$var = \'$newval\'";
+X       }
+X    } else {
+X       die "$0 : syntax error in $configin line $line : $_\n";
+X    }
+X}
+X
+Xif ($stack[0]) {
+X    die "$0 : stack not empty, contents @stack\n";
+X}
+X
+X# like mv -f
+X# &mv (old, new);
+Xsub mv {
+X    local ($old, $new) = @_;
+X    unlink ($new);
+X    link ($old, $new) || 
+X       die "$0 : mv() can't link $old to $new : $!\n";
+X    unlink ($old) || 
+X       die "$0 : mv() can't unlink $old : $!\n";
+X}
+X
+X# &print80 (FILE, @LIST);
+Xsub print80 {
+X    local ($file, @list) = @_;
+X    local ($linelen, $line) = (0, "");
+X
+X    foreach $word (@list) {
+X       if ($linelen + length ($word) + 1 < 72) {
+X           $linelen = $linelen + length ($word);
+X           print $file "$word ";
+X       } else {
+X           $linelen = 8 + length ($word) + 1;
+X           print $file "\t\\\n\t$word ";
+X       }
+X    }
+X    print $file "\n";
+X}
+X
+Xif (@defines) {
+X    sort (@defines);
+X    print STDERR "defines @defines\n" if ($debug);
+X    &print80 (CONFIG, "DEFINES = ", @defines);
+X}
+X
+Xclose (CONFIG);
+Xclose (CONFIGIN);
+Xclose (CONFIGOUT);
+X
+Xif (@changed) {
+X    sort (@changed);
+X    print STDERR "changed symbols : @changed\n" if ($debug);
+X    open (CHANGED, ">$changed.new") ||
+X       die "$0 : can't open $changed.new for writing : $!\n";
+X    &print80 (CHANGED, 'CHANGED =', @changed);
+X    close (CHANGED);
+X}
+X
+Xif (!$testing) {
+X    &mv ("$configin.new", $configin);
+X    &mv ("$config.new", $config);
+X    &mv ("$changed.new", $changed) if (-f "$changed.new");
+X}
+END-of-tools/config.pl
+exit
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

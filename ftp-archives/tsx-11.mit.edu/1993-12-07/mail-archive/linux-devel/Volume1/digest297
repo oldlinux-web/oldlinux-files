@@ -1,0 +1,511 @@
+From:     Digestifier <Linux-Development-Request@senator-bedfellow.mit.edu>
+To:       Linux-Development@senator-bedfellow.mit.edu
+Reply-To: Linux-Development@senator-bedfellow.mit.edu
+Date:     Tue, 7 Dec 93 10:13:14 EST
+Subject:  Linux-Development Digest #297
+
+Linux-Development Digest #297, Volume #1          Tue, 7 Dec 93 10:13:14 EST
+
+Contents:
+  Re: PAS16:scsi timed out (Dave Platt)
+  Re: Merry $*!@ing Christmas! (Amancio Hasty Jr)
+  Re: Merry $*!@ing Christmas! (Marc Andreessen)
+  Re: Merry $*!@ing Christmas! (David Dawes)
+  Re: Lots more stats in /proc aka /proc/loadavg (Kai Kretschmann)
+  Re: [Announce] Callback for Linux (Kai Petzke)
+  Re: Merry $*!@ing Christmas! (Marcus Roberts)
+  Re: Merry $*!@ing Christmas! (Oliver Boehmer)
+  Re: A Linux Users Manual (Matt Welsh)
+
+----------------------------------------------------------------------------
+
+From: dplatt@ntg.com (Dave Platt)
+Subject: Re: PAS16:scsi timed out
+Date: Tue, 7 Dec 1993 07:03:42 GMT
+
+>Then, I turned off the option PEUDO_DMA in file linux/drivers/scsi/pas16.c
+>and recomiled it. This time, linux successfully reboot the system.
+
+>...
+
+>Now the wierd thing happened: 
+>after almost an hour, mke2fs finally finished and gave me following messages:
+
+>scsi host 0 timed out - aborting command. 
+
+>I think the problem is that the PAS-16 scsi disk driver does not give
+>enough time to let PAS-16 card to do its task, because I can make a 
+>"short"  partition but not a long one. 
+
+Very close.  The time limits are set by the higher-level code (sd.c),
+not the PAS-16 driver; the driver is honoring a limit which is too low
+for the operation being performed.
+
+When you commented out the PSEUDO_DMA flag, you forced the NCR5380.c
+driver core to use PIO (programmed I/O) for all of the data transfers to
+and from the disk.  PIO is relatively slow... I was getting only 50-80
+kbytes/second transfer rate on a 386SX with an NCR5380 in PIO mode.
+
+If the upper layers of the file and I/O system attempt to write a large
+group of buffers to disk, the block-driver code in sd.c will often
+try to do this as one big SCSI write using scatter/gather.  If you try
+to flush, say, 500k bytes of new filesystem datastructures out to
+consecutive blocks on disk using a single scatter/gather write, the
+operation will take several seconds to complete.  If the write takes
+more than 5 seconds (the 300-tick timeout specified in sd.c) then the
+PAS16 driver will time out and abort the request.  Due to the nature of
+the handshaking code in NCR5380.c, this will probably hang your system.
+
+>I wonder 
+>      1) if anyone can tell me how to correct the problem.  
+
+Possibility 1 - increase the TIMEOUT value in sd.c to a larger number.
+Increasing it from 300 to 3600 will increase the write timeout from 5
+seconds to 1 minute, which should be plenty.
+
+Possibility 2 - change the code in sd.c so that the timeout value is set
+to a base minimum (300 is fine) plus an increment for each sector being
+transferred (2 or 3 seems to work well).
+
+Possibility 3 - the PAS-16.h file (or whatever it is properly named) has
+an entry in it which is #included into a table in hosts.c.  One entry in
+this table is the scatter/gather control value.  It's probably set to
+SG_ALL (255) which enables some pretty big scatter/gather operations.
+Setting it to SG_NONE will completely disable scatter/gather;  this
+should fix your problem but is more severe than necessary.  Try setting
+it to a value of 10 or 20 or 30;  this will enable scatter/gather
+operations but will limit their size to a range which will complete
+within the 5-second timeout limit.
+
+Possibility 4 - figure out why pseudo-DMA isn't working correctly, so
+you can re-enable it and get your transfer rate up out of the basement.
+
+>      2} if this is a  new problem, does any one can tell me how to change
+>        the time out algorithm for PAS-16 scsi disk driver.
+
+The timeouts are specified by the upper-level code (in this case, sd.c)
+and it'd probably be best to tweak them there.
+
+>      3) what are the files related to the scsi disk driver for PAS-16?
+>        If the problem related to low-level part of the driver, or 
+>         medium part, or ???  
+
+It's a combination of high-level (block-buffer flushing), mid-level
+(sd.c timeout setting), low-level (scatter/gather limit) and hardware
+(the fact that pseudo-DMA isn't working).
+
+The failure of pseudo-DMA operations to work properly _might_ indicate
+an IRQ conflict, or that the PAS-16 isn't jumpered to support SCSI IRQs
+but the driver thinks that it is.  If the driver believes that IRQs are
+enabled, it will tell the drive that disconnect/reselect is supported.
+If the drive choses to disconnect during a SCSI operation (e.g. during a
+read), and if the card doesn't support IRQ properly and thus fails to
+"hear" the reselection interrupt, then operations will tend to hang.
+
+The files you're looking for are scsi/sd.c, scsi/NCR5380.[ch],
+and scsi/pas16.[ch]
+-- 
+Dave Platt    dplatt@ntg.com ..or.. ...netcomsv!ntg!dplatt
+      USNAIL: The 3DO Company, NTG division 
+              2470 Embarcardero Way
+              Palo Alto CA 94303
+
+------------------------------
+
+Crossposted-To: comp.infosystems.www,comp.windows.x,comp.windows.x.i386unix,comp.windows.x.motif,gnu.misc.discuss,comp.sources.d
+From: hasty@netcom.com (Amancio Hasty Jr)
+Subject: Re: Merry $*!@ing Christmas!
+Date: Tue, 7 Dec 1993 07:04:55 GMT
+
+In article <2e01ct$ddl@vixen.cso.uiuc.edu> ebina@ncsa.uiuc.edu (Eric Bina) writes:
+>In article <CHMB0z.ALE@murdoch.acc.Virginia.EDU>, jeg7e@Hopper.ITC.Virginia.EDU (Jon Gefaell) writes:
+>
+>|> 
+>|> NCSA is not some private corporation, you do realize this don't you? It is
+>|> paid for by the taxpayers money and should be responsive to the needs of the
+>|> community it is intended for. If those people (your underwriters and audience)
+>|> are complaining, you need to hear that and respond. If you want to do your
+>|> own thing then start your own company with your own capital. In the meantime
+>|> you work for us. 
+>|> 
+>
+>Wrongo!  Nice try though.  I'm funded by research grants from commercial
+>companies not your tax money.  So no, I don't work for you.
+>
+
+I am curious is your Motif license also funded by grants from
+commercial companies or are you using the University's tax payer
+paid Motif license?
+
+        Amancio
+
+
+-- 
+This message brought to you by the letters X and S and the number 3
+Amancio Hasty           |  
+Home: (415) 495-3046    |  ftp-site depository of all my work:
+e-mail hasty@netcom.com |  sunvis.rtpnc.epa.gov:/pub/386bsd/X
+
+------------------------------
+
+From: marca@ncsa.uiuc.edu (Marc Andreessen)
+Crossposted-To: comp.infosystems.www,comp.windows.x,comp.windows.x.i386unix,comp.windows.x.motif,gnu.misc.discuss,comp.sources.d
+Subject: Re: Merry $*!@ing Christmas!
+Date: 7 Dec 93 02:43:28
+
+   >> NCSA is not some private corporation, you do realize this don't
+   >> you? It is paid for by the taxpayers money and should be
+   >> responsive to the needs of the community it is intended for. If
+   >> those people (your underwriters and audience) are complaining,
+   >> you need to hear that and respond. If you want to do your own
+   >> thing then start your own company with your own capital. In the
+   >> meantime you work for us.
+
+   I am curious is your Motif license also funded by grants from
+   commercial companies or are you using the University's tax payer
+   paid Motif license?
+
+These are the silliest arguments I've heard yet.  Even ignoring NCSA's
+actual funding situation, you are completely off base.
+
+First, as I've explained previously, the decision to use Motif was
+deliberate and made on the basis of our intention to create stable,
+high-function application code on top of common, vendor-supported
+system-level software.  Motif is OBVIOUSLY, OVERWHELMINGLY the GUI of
+choice on high-performance Unix/X workstations, and every major vendor
+is now supporting it.  In fact, if we had NOT gone with Motif, I'd say
+you would be able to make the argument that we were squandering
+hypothetical said taxpayers' money by not basing our hypothetically
+taxpayer-funded tools on stable, high-function, common,
+vendor-supported libraries and spending resources dealing with the
+effects of such a choice rather than on new and useful results.
+
+Second, the community we were aiming for with the X version of Mosaic
+-- people using common high-performance workstations with standard
+system-level software, particularly to do scientific computing -- is
+virtually entirely satisfied with our choice of GUI *and* with our
+software (as, btw, is the National Science Foundation itself; c.f. the
+head of NSF's Supercomputing 93 keynote address).  We have clearly and
+overwhelmingly fulfilled our obligation to said hypothetical taxpayer:
+100,000 satisfied target users served, and climbing.
+
+Third, given the above, it's just your lucky day as someone either
+outside or just on the edge of said target user community that we both
+(a) make the source code for the X version freely available for you to
+either port to the GUI of your choice OR to freely compile and use as
+you are able, AND (b) supply a Microsoft Windows version of Mosaic
+that AGAIN hits its target audience -- the vast majority of
+386/486/Pentium users -- dead on.  We are pleased to be able to offer
+you such a wide array of possible ways to benefit from the results of
+our work, and we hope that we are thereby able to improve your life.
+
+Fourth, if the above still doesn't make you happy, tough luck.  It is
+not possible for you to draw the blanket conclusion that "we work for
+you" and therefore must do everything you say, just because we may be
+funded with public money.  The DMV, though funded with public money,
+is not obligated to grant you a driver's license; a police officer,
+though funded with public money, is not obligated to let you off the
+hook when you're going 95 MPH; the Supreme Court, though funded with
+public money, is not obligated to find in your favor in a given case.
+
+Summary: we are doing our jobs; we are responding to the needs of our
+target audience; you do not get to tell us what to do simply because
+you are a citizen and we are (partially) publicly funded.
+
+Marc
+
+--
+Marc Andreessen
+Software Development Group
+National Center for Supercomputing Applications
+marca@ncsa.uiuc.edu (MIME welcomed here)
+
+------------------------------
+
+Crossposted-To: comp.infosystems.www,comp.windows.x,comp.windows.x.i386unix,comp.windows.x.motif,gnu.misc.discuss,comp.sources.d
+From: dawes@physics.su.OZ.AU (David Dawes)
+Subject: Re: Merry $*!@ing Christmas!
+Date: Tue, 7 Dec 1993 11:02:50 GMT
+
+In article <1993Dec6.153330.29733@ornl.gov> de5@de5.ctd.ornl.gov (Dave Sill) writes:
+>In article <CHMB3H.EKu@cunews.carleton.ca>, nholtz@superior.carleton.ca (Neal Holtz) writes:
+>>In article <2dv0af$kai@vixen.cso.uiuc.edu>, Eric Bina <ebina@ncsa.uiuc.edu> wrote:
+>>>
+>>>     Eric (I feel much better now) Bina
+>>
+>>I think this was badly needed.
+
+Agreed.
+
+>I disagree.  I think was rude and served only to vent his spleen at the
+>expense of others.
+>
+>>I have wondered how you
+>>folks at NCSA had kept your composure (in public) up to now.
+>
+>It's called "self control", and it seems to be in short supply at NCSA.
+>
+>>For years I have been using software provided freely by NCSA,
+>>and have been very grateful for all of it.  I'm continually amazed
+>>that you can keep providing it.  Thank you for that, as well.
+>
+>I agree.
+>
+>>Recipients of free software have no right to expect anything, except
+>>perhaps, absence of malice.
+>
+>Hogwash.  The producers are free to ignore their customers desires at their
+>own peril, but users are free to ask for or expect whatever they want.  (If
+>they don't get what they expect, they're also free to stop using the
+>product, find one that does meet their needs, hack the code, etc.)  It's
+>called "feedback", and most implementors appreciate it even if they 
+>can't make everyone happy.
+
+Freeware developers appreciate constructive feedback, but they don't
+appreciate demands from those who choose to use their software.  From
+my experience, expectations of users are too often presented to the
+developers in the form of demands, and often rudely.
+
+I think your use of "customer" to describe the users of free software
+is inappropriate.  What exactly is the "peril" producers face?  That fewer
+people use their software?  So what?
+
+Are you speaking as a user of free software or a developer?
+
+David
+--
+==============================================================================
+ David Dawes <dawes@physics.su.oz.au>    DoD#210      | Phone: +61 2 692 2639
+ School of Physics, University of Sydney, Australia   | Fax:   +61 2 660 2903
+==============================================================================
+  You run and you run to catch up with the sun, but it's sinking
+  and racing around to come up behind you again.  -- Pink Floyd, "Time"
+
+------------------------------
+
+From: kai@fix.kmk.rhein-main.de (Kai Kretschmann)
+Subject: Re: Lots more stats in /proc aka /proc/loadavg
+Date: Mon, 6 Dec 1993 20:22:32 GMT
+
+Will Smith (wos@dcs.warwick.ac.uk) wrote:
+: Does this sound useful to other people, and would a plethora of other
+: similar statistics soon appear?  Should I make a separate /proc/stats
+: directory and put the statistics there, add some more stats (what would
+: be good?) then post the diffs?  
+I think it is usefull, better would be your idea with the seperate
+subdir /proc/stats. The namespace of /proc won't be blown up.
+
+Some more statistics will come for shure like average logged in
+user count, network packet flow, and so on. Just take the first
+step and get it included in the next kernel.
+-- 
+Kai Kretschmann,
+  >>>   FidoNet:  2:248/312, 21:100/5729, 16:100/6006    <<<
+  >>>   Internet: kai@fix.kmk.rhein-main.de              <<<
+  >>>   FAX/BBS:  +49-6172-305379                        <<<
+
+------------------------------
+
+From: wpp@lise.physik.tu-berlin.de (Kai Petzke)
+Crossposted-To: comp.os.linux.misc
+Subject: Re: [Announce] Callback for Linux
+Date: 7 Dec 1993 11:58:57 GMT
+
+In <13199@obelix.icce.rug.nl> karel@icce.rug.nl (Karel Kubat) writes:
+
+>Heia:
+
+>This message is crossposted to c.o.l.misc and c.o.l.development, to reach a 
+>wide audience..
+
+There is an extra newsgroup to reach a wide audience:
+
+        comp.os.linux.announce
+
+Use that, not all the others.
+--
+Kai
+wpp@marie.physik.tu-berlin.de
+Advertisement by Microsoft in a well-known German magazine:
+        If you don't like our programmes, than make your own ones.
+However, they expect you to use Microsoft products for this -:)
+
+------------------------------
+
+Crossposted-To: comp.infosystems.www,comp.windows.x,comp.windows.x.i386unix,comp.windows.x.motif,gnu.misc.discuss,comp.sources.d
+From: mjr@trellis.cs.nott.ac.uk (Marcus Roberts)
+Subject: Re: Merry $*!@ing Christmas!
+Reply-To: mjr@cs.nott.ac.uk
+Date: Tue, 7 Dec 93 13:26:36 GMT
+
+In article <hastyCHnL07.7v1@netcom.com>, hasty@netcom.com (Amancio Hasty Jr) writes:
+> In article <2e01ct$ddl@vixen.cso.uiuc.edu> ebina@ncsa.uiuc.edu (Eric Bina) writes:
+> >In article <CHMB0z.ALE@murdoch.acc.Virginia.EDU>, jeg7e@Hopper.ITC.Virginia.EDU (Jon Gefaell) writes:
+> >
+> >> 
+> >> NCSA is not some private corporation, you do realize this don't you? It is
+> >> paid for by the taxpayers money and should be responsive to the needs of the
+> >> community it is intended for. If those people (your underwriters and audience)
+> >> are complaining, you need to hear that and respond. If you want to do your
+> >> own thing then start your own company with your own capital. In the meantime
+> >> you work for us. 
+> >> 
+> >
+> >Wrongo!  Nice try though.  I'm funded by research grants from commercial
+> >companies not your tax money.  So no, I don't work for you.
+> >
+> 
+> I am curious is your Motif license also funded by grants from
+> commercial companies or are you using the University's tax payer
+> paid Motif license?
+> 
+>       Amancio
+
+I can't believe I'm getting dragged into this, but isn't it time that some
+people grew up around here.  The above is nothing more than a childish
+taunt IMO.  
+
+Perhaps we need some positive feedback to Marc, Rob and Eric to balance the
+negative crap they've been getting recently.  Thanks to all of them for
+providing some excellent software, and for dragging the HTTP and HTML
+protocol suite into a damn fine system.  I make no contribution to their
+financing whatsoever, being a UK person, and still they let me use the fruits
+of their time and effort at no cost, and provide a friendly and useful 
+support function whenever things do go wrong.
+
+I love Mosiac, and the NCSA httpd, and I hope all this crap doesn't put them
+off futher development.  If you don't like the way Mosaic is developing,
+bugger off and find another browser.  
+
+Thanks NCSA people!
+
+Marcus
+
+----
+m.roberts@cs.nott.ac.uk                    Communications Research Group  
+                                           Dept. of Computer Science
+                                           Nottingham University, UK         
+   
+
+
+
+------------------------------
+
+Crossposted-To: comp.infosystems.www,comp.windows.x,comp.windows.x.i386unix,comp.windows.x.motif,gnu.misc.discuss,comp.sources.d
+From: oli@odb.rhein-main.de (Oliver Boehmer)
+Subject: Re: Merry $*!@ing Christmas!
+Date: Tue, 7 Dec 1993 14:34:41 GMT
+
+hasty@netcom.com (Amancio Hasty Jr) writes:
+
+>>Wrongo!  Nice try though.  I'm funded by research grants from commercial
+>>companies not your tax money.  So no, I don't work for you.
+>>
+
+>I am curious is your Motif license also funded by grants from
+>commercial companies or are you using the University's tax payer
+>paid Motif license?
+
+Oh man, cut it out....
+
+
+-- 
+Oliver Boehmer, Frankfurt - Germany                     oli@odb.rhein-main.de
+ Individual Network - Rhein-Main-Area
+   Q: How many Zen buddhists does it take to change a light bulb?
+   A: Two. One to change it and one to not change it.
+
+------------------------------
+
+Crossposted-To: comp.os.linux.misc
+From: mdw@cs.cornell.edu (Matt Welsh)
+Subject: Re: A Linux Users Manual
+Date: Tue, 7 Dec 1993 05:34:19 GMT
+
+In article <2e0tb7INN37s@umbc8.umbc.edu> ian@gl.umbc.edu (Ian Soboroff) writes:
+>In article <1993Dec6.232917.3496@cs.cornell.edu>,
+>Matt Welsh <mdw@cs.cornell.edu> wrote:
+>>Just about everything that you mentioned in this posting has been
+>>covered (or is being covered) by the Linux Doc Project manuals, on
+>>[...]
+>>Started''. In addition, there is a Network Administration Guide,
+>>Kernel Hacker's Guide, and System Administrator's Guide. A Linux
+>>User's Guide is in the works.
+>
+>which of these manuals is in "alpha" stage, and which are "completed"?
+>also, do you know what, if any, timetables there are on new releases
+>of the manuals?
+
+It's about time that I updated the old ``LDP Manifesto'' to get this
+information out. The I&GS is ``complete'', in that everything is
+there, but as with anything is going through a constant revision
+process. The SAG, NAG, and KHG are available in various stages of
+development. The User's Guide is the only one lagging behind (nudge
+nudge, wink wink) but I would hope to see something within a couple of months.
+
+Writing books is a very slow process, because it's such a large task.
+When writing the I&GS (around 150 pages now) I spent 25% of my time
+writing new material and 75% of the time rewriting old. In fact, the
+last couple of chapters are extremely terse because they didn't go
+through that extensive rewrite process (yet)--- I wrote them both in a
+weekend.
+
+I'm in the process of `rewriting' the I&GS, and the next release (real
+soon now) will include information on getting and installing "any"
+release of Linux---that is, it won't be SLS-specific. However, the
+more general you get, the less specific you get. Therefore, the next
+version of the book will rely on the various distributors
+having a set of complete instructions for installing just that
+release. I know that not all Linux distributions have this, for
+instance, SLS's "installation instructions" are limited to a set of
+cursory README files that expect the reader to know what's going on.
+What I may attempt to do is produce an "Installation HOWTO" for each
+major Linux distribution (at least, the ones available via
+FTP---CD-ROM and mail-order distribution usually come with fairly
+complete instructions) and provide that as a supplement for the I&GS.
+So, in order to install Slackware, you'd grab the I&GS and the
+"Slackware Installation Supplement" that provided Slackware-specific
+stuff and expected that you'd read it along with the I&GS. 
+
+The problem is, I don't have the resources or time to download and
+install each of these Linux distributions to see first-hand what it's
+like. What I would like to do is gather a small group of
+volunteers---say, one or two for each distribution---to help me write
+these documents. The docs will be short and simple, more or less
+step-by-step instructions on how to install the software, with the
+background ideas being relegated to a document like the I&GS.
+
+If you've installed a release of Linux (recently, and other than
+SLS), and would like to help me write an "Installation HOWTO" for that
+particular release, please mail me. Essentially each document will be
+a modification of the current Installation-HOWTO for that release, and
+shouldn't be very hard to put together. Maintaining such a document is
+a different matter. I'm hoping that the individual distribution
+coordinators would be able to maintain these documents after they're
+written.
+
+mdw
+-- 
+"Do you want to be Finnish? Sure, we all do!"
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

@@ -1,0 +1,543 @@
+From:     Digestifier <Linux-Misc-Request@senator-bedfellow.mit.edu>
+To:       Linux-Misc@senator-bedfellow.mit.edu
+Reply-To: Linux-Misc@senator-bedfellow.mit.edu
+Date:     Tue, 16 Nov 93 22:14:33 EST
+Subject:  Linux-Misc Digest #306
+
+Linux-Misc Digest #306, Volume #1                Tue, 16 Nov 93 22:14:33 EST
+
+Contents:
+  apsfilter-1.3 - postscript filter with file type auto recognition (Andreas Klemm)
+  Re: PPP (Mark A. Davis)
+  Which Linux CD-Rom? (cmp@netrix.com)
+  Re: BusLogic SCSI under Linux...compatible with AHA 1740 or not? (Mike Horwath)
+  Re: BusLogic SCSI under Linux...compatible with AHA 1740 or not? (Eric Youngdale)
+  Linux Mirror in UK/Europe (Steve Wilkinson)
+  Why Pascal is not... (was: WANTED: COBOL compiler) (Thomas Koenig)
+  Japanese TeX/LaTeX (Peter Hofmann)
+
+----------------------------------------------------------------------------
+
+From: andreas@knobel.knirsch.de (Andreas Klemm)
+Subject: apsfilter-1.3 - postscript filter with file type auto recognition
+Date: 16 Nov 1993 13:11:10 -0000
+
+Hello !
+
+Here is apsfilter V 1.3 - an lp output filter for different file types.
+
+Since there are possibly different versions around - many sent directly
+via e-mail - I deceided to post it again to the related groups 
+(of my interest) so everybody has the chance to get the newest version.
+
+And I decided to give it a uniq name "apsfilter", so it's more easily
+to grab the newest version from a source group....
+
+Perhaps some of you have to add some lines to the file /etc/magic, 
+so that the file(1) command is able to recognize dvi and postscript files.
+
+#----- /etc/magic: ----- 
+
+# magic.postscript: Magic for postscript files
+#
+0       string          %!              PostScript document
+>2      string  PS-Adobe-               conforming
+>11     string  1.0                     at level %s
+>11     string  2.0                     at level %s
+
+# magic.tex: 
+#
+0       short   0173402 DVI File
+>16     string  >\0     (%s)
+0       short   0173531 Packed TeX Font
+>4      string  >\0     (%s)
+2       string  \000\022        Metafont Font Metric
+>34     string  >\0     (%s)
+
+
+#--BEGIN-------- apsfilter-1.3 --------------------------------------
+#
+#!/bin/sh
+
+# apsfilter-1.3 - HP Deskjet 500 - output filter - V 1.3
+#
+# copyright 1993 by Andreas Klemm <andreas@knobel.knirsch.de>
+#
+# Mon Nov 15 12:35:26 GMT 1993
+#
+# additional contributors:
+#
+#       Steven A. Reisman <unido!beehive.mn.org!sar>
+#               - added dvi filter
+#
+#       Jeff Stern <jstern@eclectic.ss.uci.edu>
+#               - use lpfilter as an input filter
+#                 so it's possible to print header pages
+#                 without confusing the filter.
+#               --> see modification section
+#
+
+####################################################################
+# A running /etc/printcap
+####################################################################
+#
+# My /etc/printcap entry for parallel printer port lpt1:
+# on a 486/33 using Linux Slackware using this filter as
+# an output filter, since I don't need header pages. (andreas)
+#
+# HP Deskjet
+# lp|deskjet|HP Deskjet 500:\
+#       :lp=/dev/lp1:\
+#       :sd=/usr/spool/lp1:\
+#       :sh:\
+#       :mx#0:\
+#       :of=/usr/lib/lpfilter:
+#
+####################################################################
+
+####################################################################
+# MODIFICATION SECTION
+#               suggestions from other creative people
+#               which use another configuration than I
+####################################################################
+#
+# A) WANT HEADER PAGES
+#                       Jeff Stern <jstern@eclectic.ss.uci.edu>
+#                       Mon Nov  1 21:21:45 GMT 1993
+#
+# "... I changed to using it as an input filter instead of an output 
+#  filter. This way I can still print header pages without confusing 
+#  the filter. This necessarily required adding a command to tell 
+#  printcap to send a formfeed at the beginning of opening the device 
+#  and also specifying that that formfeed really also includes the 
+#  LF-> CR+LF translation: this is so that the translation also will 
+#  work for the header page, too."
+#  Necessary Printcap entry instead of the default:
+#       lp:lp=/dev/lp1:sd=/usr/spool/lp1:if=/usr/lib/lpfilter:mx#0:\
+#       :lf=/usr/adm/lpd-errs:ff=\033E\033&k2G\033&a10L:fo
+#
+####################################################################
+# END OF MODIFICATION SECTION
+####################################################################
+
+PATH=/usr/bin:/bin:/usr/local/bin:/usr/TeX/bin:/home/bin
+export PATH
+
+# where do you have diskspace
+#
+TmpDir=/usr/tmp
+
+# Temp. filename
+TmpFile=$TmpDir/deskjetof.$$
+
+# Who should be notified by e-mail in case of print problems ?
+NOTIFY=root
+
+# write print data from stdin to temp file
+cat - > $TmpFile
+
+#
+# reset printer to power on values before print job
+#
+echo -ne '\033E'
+
+# determine file type
+# set output of the ``file'' command to new script arguments $1, $2, ..., $n
+#
+set -- `file $TmpFile`
+
+# throw away $1 since that is the *file name*
+#
+shift
+
+# the rest is a "string" which consist of one or multiple words 
+# describing the file type. For example: "Korn Shell Script"
+#
+FileType=$*
+
+case $FileType in
+
+    PostScript*)        #
+                        # pipe ps data through ghostscript
+                        #       
+                        cat $TmpFile                    \
+                        | gs -q                         \
+                                -sDEVICE=djet500        \
+                                -r300x300               \
+                                -sPAPERSIZE=a4          \
+                                -dNOPAUSE               \
+                                -dSAFER                 \
+                                -sOutputFile=-          \
+                                        -               \
+                        /usr/local/lib/ghostscript/quit.ps \
+                        || echo -ne '\033&l0H'
+                        # ^  if an error occurs, then
+                        # |  eject already loaded paper
+                        ;;
+
+                        
+    *DVI*)              #
+                        # TeX dvi file -> dvips -> gs
+                        #       
+                        dvips 2>/dev/null $TmpFile -f   \
+                        | gs -q                         \
+                                -sDEVICE=djet500        \
+                                -r300x300               \
+                                -sPAPERSIZE=a4          \
+                                -dNOPAUSE               \
+                                -dSAFER                 \
+                                -sOutputFile=-          \
+                                        -               \
+                        /usr/local/lib/ghostscript/quit.ps \
+                        || echo -ne '\033&l0H'
+                        # ^  if an error occurs, then
+                        # |  eject already loaded paper
+                        ;;
+
+    *text*|*script*)    #
+                        # print normal text with
+                        #       - cr/nl conversion
+                        #       - letter quality
+                        #       - 66 lines/page
+                        #       - left margin
+                        #       - 12 cpi pitch
+                        #
+
+                        # LINE TERMINATION      \E & k # G
+                        #       0 = CR=CR   ; LF=LF   ; FF=FF (default)
+                        #       1 = CR=CR+LF; LF=LF   ; FF=FF
+                        # **    2 = CR=CR   ; LF=CR+LF; FF=CR+FF
+                        #       3 = CR=CR+LF; LF=CR+LF; FF=CR+FF
+                        echo -ne '\033&k2G'
+
+                        # QUALITY               \E ( s # Q
+                        #       1 = draft       = 240cps
+                        # **    2 = letter      = 120cps (default)
+                        echo -ne '\033(s2Q'
+
+                        # Text Scale Mode               \E & k # W
+                        #       5 = off (default)
+                        #       6 = on
+                        #       ignored in landscape mode
+                        # echo -ne '\033&k5W'
+
+                        # Perforation Skip Mode         \E & l # L
+                        #       0 = off = 0.0 in Top Margin
+                        #       1 = on  = 1/2 in Top Margin (default)
+                        echo -ne '\033&l0L'
+
+                        # Left Margin                   \E & a # L
+                        #       # Valu^ = column number
+                        #       default = 0 = 1/8 in left margin
+                        #       used = 7 for 1" left margin
+                        echo -ne '\033&a7L'
+
+                        # Pitch                         \E ( s # H
+                        #       # = cpi
+                        #       default = 10 characters per inch
+                        # **    12 cpi
+                        echo -ne '\033(s12H'
+
+                        # print tmp file
+                        cat $TmpFile
+                        ;;
+
+        *data*)         #
+                        # print binary files
+                        #
+
+                        # LINE TERMINATION      \E & k # G
+                        # **    0 = CR=CR   ; LF=LF   ; FF=FF (default)
+                        #       1 = CR=CR+LF; LF=LF   ; FF=FF
+                        #       2 = CR=CR   ; LF=CR+LF; FF=CR+FF
+                        #       3 = CR=CR+LF; LF=CR+LF; FF=CR+FF
+                        echo -ne '\033&k0G'
+
+                        # print tmp file
+                        cat $TmpFile
+                        ;;
+                        
+
+        *)              #
+                        # Rest is an unknown file type ...... sorry ;-)
+                        #
+
+                        echo "deskjetof: unknown filetype $FileType" > /dev/console
+                        echo "deskjetof: $TmpFile: unknown filetype $FileType" \
+                        | mail $NOTIFY
+                        NotOk=1
+                        ;;
+esac
+
+#
+# keep print job, that couldn't be printed because of errors....
+#
+if [ ! "$NotOk" = "1" ]
+then 
+        rm -f $TmpFile
+fi
+
+
+#
+# reset printer to power on values after print job
+#
+echo -ne '\033E'
+#
+#--END-------- apsfilter-1.3 --------------------------------------
+
+Have fun.
+
+Sorry for posting so late, I had problems crossposting this article
+using rtin, hope I get it out now using nnpost... (that's real life...)
+
+If someone has further interesting suggestions, please let me know !
+
+
+        Andreas ///
+
+--
+Andreas Klemm                 /\/\____ Wiechers & Partner Datentechnik GmbH 
+andreas@knobel.knirsch.de ___/\/\/     andreas@sunny.wup.de (Unix Support)
+-- 
+Andreas Klemm                 /\/\____ Wiechers & Partner Datentechnik GmbH 
+andreas@knobel.knirsch.de ___/\/\/     andreas@sunny.wup.de (Unix Support)
+
+------------------------------
+
+From: mark@taylor.wyvern.com (Mark A. Davis)
+Subject: Re: PPP
+Date: Tue, 16 Nov 1993 13:20:02 GMT
+
+bsa@kf8nh.wariat.org (Brandon S. Allbery) writes:
+
+>Fix your mailer.  "scosysv" is not a valid system name for Internet mail, or
+>for much of anything else, either (since it looks suspiciously like a default
+>name probably shared by umpteen hundred other systems --- so who gets your
+>mail?).
+
+>In article <1993Nov15.145857.14694@di.fc.ul.pt> oproque@scosysv (Pedro Miguel M R Marques) writes:
+>>1- is there ppp for linux ??
+
+>There exists at present only one PPP implementation, and it's guaranteed to
+>NOT do what you want --- I am mentioning it only in case someone else brings
+>it up (which has happened before). 
+
+Consider me bringing it up!  Term does not work on SCO (won't compile, asked
+for help twice and was ignored).  And PPP comes with ODT.  Besides, PPP
+is fairly standard, and unlike term or slip it can be set up to be completely
+automagic and uucp compatible.  
+
+> My port of JNOS 1.09 to Linux supports PPP
+>mainly because the code needed no porting from the DOS version, but it also
+>*behaves* like the DOS version:  you have to do everything from inside JNOS,
+>it's not integrated with Linux TCP/IP.  And for this purpose it's not worth
+>changing, since I keep hearing rumors of kernel PPP in development (almost
+>certainly not even in alpha-test state yet).
+
+Thant would be neat.  It seems that PPP is probably the only tool which can
+be set up transparently, has high performance, and can share modems with
+everything else.
+-- 
+  /--------------------------------------------------------------------------\
+  | Mark A. Davis    | Lake Taylor Hospital | Norfolk, VA (804)-461-5001x431 |
+  | Sys.Administrator|  Computer Services   | mark@taylor.wyvern.com   .uucp |
+  \--------------------------------------------------------------------------/
+
+------------------------------
+
+From: cmp@netrix.com
+Subject: Which Linux CD-Rom?
+Date: Tue, 16 Nov 1993 15:33:23 GMT
+
+There are several versions of Linux out
+on CD-Rom.  Could anyone reccommend one?
+What has been your experience? Are they 
+worth considering? Any advice would be 
+greatly appreciated.
+
+------------------------------
+
+From: root@jacobs.mn.org (Mike Horwath)
+Crossposted-To: comp.os.linux.development
+Subject: Re: BusLogic SCSI under Linux...compatible with AHA 1740 or not?
+Date: 16 Nov 1993 14:04:41 GMT
+
+Bruce (chengb@logic.camp.clarkson.edu) wrote:
+:       Hi, I just received my BusLogic BT-747S.  So far, I have only
+: gotten it to work under the AHA-1542 driver in the kernel, and it
+: doesn't seem to work when I have only AHA-1740 support compiled in.  As
+: far as I know, the driver for 1542 probably isn't taking full advantage
+: of the EISA speed (10-33 Mbits/sec!!!), so is there a possibility to
+: hack the existing driver for one that takes full advantage of BusLogic
+: card?
+
+: thanks,
+: Bruce
+: chengb@craft.camp.clarkson.edu
+
+YOu aren't going to believe this, but I tested one of those babies out for
+a week and a half for one of the bosses so he could determine if it was a
+good card for a unix like system.
+
+All I ever got it working in was 1542 mode, so I called them, asked them
+about 174x mode, they said no, it only has a 1542 mode.  I asked if there
+were native drivers, they said no, it just emulates the 1542.
+
+Now about performance, it was alot faster on my system than a 1542.  Don't
+really know why, except for it maybe emulates the 1542 command and register
+set, but operates in an EISA like way dmaing around the world at high speed.
+
+--
+Mike Horwath    IRC: Drechsau   BBS: Drechsau   LIFE: lover
+root@jacobs.mn.org  drechsau@jacobs.mn.org
+Jacob's Ladder  612-588-0201  UUCP, UseNet, Linux files, BBS
+
+------------------------------
+
+Crossposted-To: comp.os.linux.development
+From: eric@tantalus.nrl.navy.mil (Eric Youngdale)
+Subject: Re: BusLogic SCSI under Linux...compatible with AHA 1740 or not?
+Date: Tue, 16 Nov 1993 16:45:46 GMT
+
+In article <2camlp$93@jacobs.jacobs.mn.org> root@jacobs.mn.org (Mike Horwath) writes:
+>Bruce (chengb@logic.camp.clarkson.edu) wrote:
+>:      Hi, I just received my BusLogic BT-747S.  So far, I have only
+>: gotten it to work under the AHA-1542 driver in the kernel, and it
+>: doesn't seem to work when I have only AHA-1740 support compiled in.  As
+>: far as I know, the driver for 1542 probably isn't taking full advantage
+>: of the EISA speed (10-33 Mbits/sec!!!), so is there a possibility to
+>: hack the existing driver for one that takes full advantage of BusLogic
+>: card?
+>
+>YOu aren't going to believe this, but I tested one of those babies out for
+>a week and a half for one of the bosses so he could determine if it was a
+>good card for a unix like system.
+>
+>All I ever got it working in was 1542 mode, so I called them, asked them
+>about 174x mode, they said no, it only has a 1542 mode.  I asked if there
+>were native drivers, they said no, it just emulates the 1542.
+>
+>Now about performance, it was alot faster on my system than a 1542.  Don't
+>really know why, except for it maybe emulates the 1542 command and register
+>set, but operates in an EISA like way dmaing around the world at high speed.
+
+        This is basically the result that I would have expected.  The 1542
+driver does not really know what kind of bus the card is attached to.  It could
+be ISA, EISA, VLB or S100 for all it cares.  All that it wants is a register
+compatible card that uses a compatible mailbox message system.  The 1542
+basically uses DMA, so the driver is merely telling the card where to dump the
+data.  The card obviously knows the details of the bus that it is connected to,
+and it handles the details of getting the data across.  Therefore a 1542 clone
+card that is EISA should get EISA performance, not ISA performance.
+
+-Eric
+-- 
+"The woods are lovely, dark and deep.  But I have promises to keep,
+And lines to code before I sleep, And lines to code before I sleep."
+
+------------------------------
+
+From: swilkins@west.uki.reuters.com (Steve Wilkinson)
+Subject: Linux Mirror in UK/Europe
+Date: Tue, 16 Nov 1993 16:40:33 +0000
+
+
+Can anyone please tell me the best place to find a mirror of the
+Linux stuff (for 386) that is reasonably close to London.  Also,
+I would appreciate recommendations as to the best version to use -
+I need something for daily Internet access, but it doesn't need
+to be rock solid (conversely, it doesn't need to fall over every day!).
+
+Thanks for any input in advance.
+
+Steve Wilkinson
+(swilkinson@west.uki.reuters.com)
+
+------------------------------
+
+From: ig25@fg70.rz.uni-karlsruhe.de (Thomas Koenig)
+Crossposted-To: comp.os.linux.development,comp.os.linux.help,comp.lang.misc
+Subject: Why Pascal is not... (was: WANTED: COBOL compiler)
+Date: 16 Nov 1993 17:33:08 GMT
+
+nick@quay.ie (Nick Hilliard) writes:
+
+[Followup to comp.lang.misc]
+
+>If you can get your hands on it, have a look at "Why Pascal is not my
+>Favourite Programming language", written by Brian Kernighan (or was it
+>Ritchie?)  It's a devastating (and justified, IMHO) attack on the
+>deficiencies of Pascal, and why it should not be used.
+
+You're quite right there.  It also would seem that Nikolaus Wirth
+agreed, as well; the deficiencies pointed out by Kernighan are all fixed
+in Modula-2, especially the "There is no escape" clause.  Using the
+SYSTEM.ADDRESS type, you can convert from and to pointers as freely as
+in C; it just takes more verbiage, and effort.
+
+Which reminds me...  has anybody checked out the Mocka Modula-2 for
+Linux?  How good is it?
+-- 
+Thomas Koenig, ig25@rz.uni-karlsruhe.de, ig25@dkauni2.bitnet
+The joy of engineering is to find a straight line on a double
+logarithmic diagram.
+
+------------------------------
+
+From: peterh@prz.tu-berlin.de (Peter Hofmann)
+Subject: Japanese TeX/LaTeX
+Date: Tue, 16 Nov 1993 16:33:00 GMT
+
+Konnichi wa,
+
+I'm planning to install a Japanese TeX/LaTeX package on my Linux PC. Before
+I invest lots of time to compile and install or get megabytes of software
+from the JE package I would like know
+
+1. Which of the two packages (NTT-jtex or ASCII-jtex) is better?
+
+2. Does any of the two packages support top to bottom/right to left
+   writing?
+
+3. Which of the two packages is included in JE?
+
+4. What experience did you have using jtex?
+
+I'm thankful for every hint,
+
+ Peter
+-- 
+Peter Hofmann                     e-mail: peterh@prz.tu-berlin.de
+Technical University Berlin
+Str. des 17. Juni 135             Tel. ++49-(0)30-314-21701
+D-10623 Berlin, Germany
+
+
+
+-- 
+Peter Hofmann                     e-mail: peterh@prz.tu-berlin.de
+Technical University Berlin
+Str. des 17. Juni 135             Tel. ++49-(0)30-314-21701
+D-10623 Berlin, Germany
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Misc-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.misc) via:
+
+    Internet: Linux-Misc@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Misc Digest
+******************************

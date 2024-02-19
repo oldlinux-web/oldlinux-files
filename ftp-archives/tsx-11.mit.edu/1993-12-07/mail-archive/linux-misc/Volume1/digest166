@@ -1,0 +1,556 @@
+From:     Digestifier <Linux-Misc-Request@senator-bedfellow.mit.edu>
+To:       Linux-Misc@senator-bedfellow.mit.edu
+Reply-To: Linux-Misc@senator-bedfellow.mit.edu
+Date:     Tue, 28 Sep 93 23:13:21 EDT
+Subject:  Linux-Misc Digest #166
+
+Linux-Misc Digest #166, Volume #1                Tue, 28 Sep 93 23:13:21 EDT
+
+Contents:
+  What's with these Magazine ad's??? (rich@mulvey.com)
+  Re: What's with these Magazine ad's??? (Dan Wilder)
+  PATCHES: Re: Need help: 'loadkeys' crashes my Linux SLS 1.03 (Eric Messick)
+  How to use gdb to get processo register values? (Gautam H. Thaker)
+  Re: [Q] Does SIGBUS have a Linux counterpart? (Matthias Urlichs)
+  Re: Bogomip (Tim Miller)
+  [Q] Linux machine as a file server. (ChienAn Chen)
+  What's with these Magazine ad's??? (Joe Klemmer)
+  Want to Buy Linux on 3.5 disks (SLS version)? (Rakesh Narasimhan)
+  Re: Bootdisk made by SLS install hangs during boot (robert balkenhol)
+
+----------------------------------------------------------------------------
+
+From: rich@mulvey.com
+Subject: What's with these Magazine ad's???
+Date: Tue, 28 Sep 1993 21:20:15 GMT
+
+
+   Well, there *is* a simple solution.
+
+   If anybody knows a node name for Byte, or how we can get mail there,
+write them a note and complain about the false advertising.  I can assure
+you that there are very few magazines that will tolerate this sort of
+thing once they know about it - their reputations depend on it.
+
+  Take the time to write a clear statement about *why* the ad is
+misleading, and you can help save some poor sucker a few bucks, before
+he shells out the money so that he can run WP/Win on his Unix system.
+
+
+  I believe that BIX ( Byte Information Exchange ) is on the net - any
+idea what the address is?
+
+- Rich
+
+
+   
+-- 
+Rich Mulvey                 Amateur Radio: N2VDS              Rochester, NY
+rich@mulvey.com         "Ignorance should be painful."
+
+------------------------------
+
+From: danw@hebron.connected.com (Dan Wilder)
+Subject: Re: What's with these Magazine ad's???
+Date: 28 Sep 1993 14:45:20 -0700
+
+>>   -------------------------------------------------------------------------
+
+>>                                SOFTLANDING
+>>                               LINUX SYSTEM
+
+>>                      SLS: POSIX UNIX clone for the 386
+>>                      As reviewed in March "UNIX WORLD"
+
+>>               Includes: * full kernel source * X11R5 Openlook * TeX
+>>                  * emacs * TC/PIP, NFS&SLIP * complete C & C++
+>>            development environment * 600+ utilities * SVR4 ELF binary
+>>               compatibility * Windows 3.1 API & ABI * DOS Emulator
+
+>>   -------------------------------------------------------------------------
+
+I wonder if calls to Unix Review (one place this @#$! runs) objecting to
+the misleading ad would do any good?  Their customer service number is
+800-829-5475.  Can't seem to locate any e-mail addresses for them, maybe
+somebody else could post.
+---
+Dan Wilder      <danw@hebron.connected.com>
+
+
+------------------------------
+
+From: eric@synopsys.com (Eric Messick)
+Subject: PATCHES: Re: Need help: 'loadkeys' crashes my Linux SLS 1.03
+Date: Tue, 28 Sep 1993 22:07:38 GMT
+
+The SLS 1.03 loadkeys program doesn't match the kernel keyboard
+driver.  Additionally, the keyboard driver allows non-existant shift
+key functions tables to be called through.  Below are patches for both
+problems.
+
+-eric messick (eric@synopsys.com)
+
+
+NR_SHIFT is 16, but the shift value is 1<<(whichshiftkey), so if
+(whichshiftkey) was 5 (for example), shift_state would be set to 32,
+but there are only 16 shift tables, so the lookup of the next key
+would be through a non-existant table.  This is non a problem with the
+default keymap, because it has no shift values greater than 3.  Nor is
+it a problem with the patched loadkeys below, but it is a problem with
+the original loadkeys, which generates shift keys greater than 3.
+
+*** keyboard.c.orig     Tue Sep 28 14:45:59 1993
+--- keyboard.c  Tue Sep 28 14:44:19 1993
+***************
+*** 96,102 ****
+  
+  /* maximum values each key_handler can handle */
+  const int max_vals[] = {
+!       255, NR_FUNC - 1, 13, 16, 4, 255, 3, NR_SHIFT,
+        255, 9
+  };
+  
+--- 96,102 ----
+  
+  /* maximum values each key_handler can handle */
+  const int max_vals[] = {
+!       255, NR_FUNC - 1, 13, 16, 4, 255, 3, 3,
+        255, 9
+  };
+
+
+
+
+
+I'm less sure of the modifications below, because I don't know which
+way the keyboard code is evolving (is it loadkeys that's out of date,
+or the driver?  I'm betting loadkeys).  In addition to fixing the
+incompatabilities mentioned above, I also make loadkeys create entries
+for all of the multiple modifier keytables.  This lets me do
+Ctrl-Shift-Underscore for undo in emacs, and Meta-Shift->, etc...
+What I'm not sure about is what to do for Shift-AltGr combinations.
+Currently, I ignore the Shift.  Anyone know if this is correct?
+  
+
+*** loadkeys.y.orig     Tue Sep 28 14:48:52 1993
+--- loadkeys.y  Tue Sep 28 14:44:19 1993
+***************
+*** 7,14 ****
+  #include <linux/kd.h>
+  #include "analyze.c"
+  
+! static void defkey(int, int, int);
+! int voidkey;
+  %}
+  
+  %%
+--- 7,28 ----
+  #include <linux/kd.h>
+  #include "analyze.c"
+  
+! /* from <linux/keyboard.h>  should it be included here? */
+! #define KT_LATIN      0       /* we depend on this being zero */
+! #define KT_FN         1
+! #define KT_SPEC               2
+! #define KT_PAD                3
+! #define KT_DEAD               4
+! #define KT_CONS               5
+! #define KT_CUR                6
+! #define KT_SHIFT      7
+! #define KT_META               8
+! #define KT_ASCII      9
+! #define K(t,v)                (((t)<<8)|(v))
+! #define KTYP(x)               ((x) >> 8)
+! #define KVAL(x)               ((x) & 0xff)
+! 
+! static void defkey(int, int, int, int);
+  %}
+  
+  %%
+***************
+*** 18,44 ****
+  line          : EOL
+                | KEYCODE NUMBER EQUALS EOL
+                        {
+!                       defkey($2,K_NORMTAB,voidkey);
+!                       defkey($2,K_SHIFTTAB,voidkey);
+!                       defkey($2,K_ALTTAB,voidkey);
+                        }
+                | KEYCODE NUMBER EQUALS rvalue EOL
+                        {
+!                       defkey($2,K_NORMTAB,$4);
+!                       defkey($2,K_SHIFTTAB,voidkey);
+!                       defkey($2,K_ALTTAB,voidkey);
+                        }
+                | KEYCODE NUMBER EQUALS rvalue rvalue EOL
+                        {
+!                       defkey($2,K_NORMTAB,$4);
+!                       defkey($2,K_SHIFTTAB,$5);
+!                       defkey($2,K_ALTTAB,voidkey);
+                        }
+                | KEYCODE NUMBER EQUALS rvalue rvalue rvalue EOL
+                        {
+!                       defkey($2,K_NORMTAB,$4);
+!                       defkey($2,K_SHIFTTAB,$5);
+!                       defkey($2,K_ALTTAB,$6);
+                        }
+                ;
+  rvalue                : NUMBER
+--- 32,50 ----
+  line          : EOL
+                | KEYCODE NUMBER EQUALS EOL
+                        {
+!                       defkey($2,-1,-1,-1);
+                        }
+                | KEYCODE NUMBER EQUALS rvalue EOL
+                        {
+!                       defkey($2,$4,-1,-1);
+                        }
+                | KEYCODE NUMBER EQUALS rvalue rvalue EOL
+                        {
+!                       defkey($2,$4,$5,-1);
+                        }
+                | KEYCODE NUMBER EQUALS rvalue rvalue rvalue EOL
+                        {
+!                       defkey($2,$4,$5,$6);
+                        }
+                ;
+  rvalue                : NUMBER
+***************
+*** 55,61 ****
+  char            **argv;
+  {
+  
+-       voidkey = ksymtocode("VoidSymbol");
+        if (argc>2) {
+                fprintf(stderr,"usage: %s [layout_file]\n", argv[0]);
+                exit(1);
+--- 61,66 ----
+***************
+*** 82,99 ****
+        fprintf(stderr, "line %d: %s\n", line_nr, s);
+  }
+  
+! static void defkey(int index, int table, int keycode)
+  {
+        struct kbentry ke;
+  
+!       if (keycode == -1)
+                return;
+  
+        ke.kb_index = index;
+!       ke.kb_table = table;
+!       ke.kb_value = keycode;
+  
+!       if (ioctl(fd, KDSKBENT, (unsigned long)&ke))
+!               fprintf(stderr, "failed to bind key %d to value %d\n",
+!                       index, keycode);
+  }
+--- 87,156 ----
+        fprintf(stderr, "line %d: %s\n", line_nr, s);
+  }
+  
+! static void defkey(int index, int norm_keycode, int shift_keycode, int altgr_keycode)
+  {
++       int table;
++       int keycode;
+        struct kbentry ke;
+  
+!       if (norm_keycode == -1)
+                return;
++       if (shift_keycode == -1) {
++               shift_keycode = norm_keycode ;
++               if ((shift_keycode >= 'a' && shift_keycode <= 'z')
++                   || (shift_keycode >= 224 && shift_keycode <= 254)) {
++                       shift_keycode -= 32;
++                       }
++               }
++       if (altgr_keycode == -1) {
++               altgr_keycode = norm_keycode ;
++               if (KTYP(altgr_keycode) == KT_LATIN)
++                       altgr_keycode = K(KT_META, KVAL(altgr_keycode)) ;
++               }
+  
+        ke.kb_index = index;
+!       for (table=0; table<16; table++) {
+!               keycode = norm_keycode ;
+!               if (table & 1) /* shift */
+!                       keycode = shift_keycode ;
+!               if (table & 2) /* altgr */
+!                       keycode = altgr_keycode ; /* what about shift altgr? */
+!               if ((table & 4) && KTYP(keycode) == KT_LATIN) { /* control */
+!                       if ((table & 8) && KVAL(keycode) == 0x7f)
+!                               keycode = K(KT_SPEC, 12) ; /* C-Alt-Del */
+!                       else    keycode &= 0xff9f ;
+!                       }
+!               if (table & 8) { /* alt */
+!                       if (KTYP(keycode) == KT_LATIN)
+!                               keycode = K(KT_META, KVAL(keycode)) ;
+!                       else if (KTYP(keycode) == KT_FN)
+!                               keycode = K(KT_CONS, KVAL(keycode)) ;
+!                       }
+!               if (KTYP(keycode) == KT_SHIFT) { /* kludge */
+!                       switch (KVAL(keycode)) {
+!                       default:
+!                       case 0: /* Shift_L */
+!                       case 1: /* Shift_R */
+!                               keycode = K(KT_SHIFT, 0); /* shift */
+!                               break;
+!                       case 2: /* Control_L */
+!                       case 3: /* Control_R */
+!                               keycode = K(KT_SHIFT, 2); /* control */
+!                               break;
+!                       case 4: /* Alt */
+!                       case 5: /* Alt_R */
+!                               keycode = K(KT_SHIFT, 3); /* meta */
+!                               break;
+!                       case 6: /* AltGr_L */
+!                       case 7: /* AltGr */
+!                               keycode = K(KT_SHIFT, 1); /* altgr */
+!                               break;
+!                               }
+!                       }
+!               ke.kb_table = table;
+!               ke.kb_value = keycode;
+  
+!               if (ioctl(fd, KDSKBENT, (unsigned long)&ke))
+!                       fprintf(stderr, "failed to bind key %d to value %d\n", index, keycode);
+!               }
+  }
+
+------------------------------
+
+From: gthaker@atl.ge.com (Gautam H. Thaker)
+Subject: How to use gdb to get processo register values?
+Date: 28 Sep 1993 22:09:31 GMT
+
+
+I wish to debug a program using GDB 4.8 (on Linux SLS 1.03) that
+is mostly in C, but parts are in i486 Assembly lang. I die in
+these assembly routines. I can get the location of where I died,
+and can look at instructions, but I can't find out the values
+of processor registers. Thus if I see that I died in
+
+
+        movl    (%edx), %eax
+
+I can tell that I must have gotten a bogus value in edx, but I
+don't know how to see it.
+
+Can gdb show cpu registers? I have used other debuggers before
+than do, such as MIPS RISC OS debugger for R[234]000 family processor.
+
+Any help and hints welcome.
+
+
+--
+Gautam H. Thaker (gthaker@atl.ge.com) 609-866-6412 (fax x6397. Dialcom 8-777)
+Martin Adv. Tech. Lab., MS 145-2; Route 38; Moorestown, NJ 08057. 767-4396 (H)
+
+------------------------------
+
+From: urlichs@smurf.sub.org (Matthias Urlichs)
+Subject: Re: [Q] Does SIGBUS have a Linux counterpart?
+Date: 28 Sep 1993 17:02:14 +0100
+
+In comp.os.linux.misc, article <CDtyqs.LI7@news.iastate.edu>,
+  jdh@iastate.edu (Jon Hamilton) writes:
+> In article <27t4lcINNptf@charnel.ecst.csuchico.edu> rbauer@ecst.csuchico.edu (Robert Bauer) writes:
+> >While compiling the newest version of Pari on my system
+> >(slackware .99p12) I ran into an error stemming from the
+> >fact that linux does not define SIGBUS.  I was able to
+> >work around the problem by commenting out the relevant
+> >code, but was wondering why this signal is not defined.
+> >Also, is there an alternate signal which accomplishes
+> >the same thing as SIGBUS?
+> 
+Slap "#ifdef SIGBUS" / "#endif" around the offending code.
+That shouldn't break anything.
+
+> POSIX doesn't say anything about SIGBUS, and Linux will never
+> generate it.  The solution you used should be safe.  I thought Linus
+... except when mmap support gets finished ...
+
+> said a while back that he was going to #define SIGBUS SIGUNUSED to keep
+> this from coming up on a regular basis?  <tries it> Yes, in my pl13alpha
+> headers that's in fact the case.  I had been doing the #define thang
+> for quite some time to make porting easier.
+
+I hate that. It's very easy to do the #ifdef trick, the error message shows 
+me that the author of the offending software screwed up on their portability, 
+and the program gets a bit shorter if what's unused is never compiled in.
+
+On the other hand, if SIGBUS is ever changed to do something real, then all 
+the programs which used the old definition should be recompiled if there's 
+any chance they can get SIGBUS, which -- given that they probably also trap 
+SIGSEGV and that libraries are mapped in via mmap() -- might not be 
+impossible. Ugh.
+
+So it seems that the SIGUNUSED alias in fact gives us the worst of both 
+sides..
+
+-- 
+Cookie - Another insanely great product from the oddballs in the
+         basement.
+-- 
+Matthias Urlichs        \ XLink-POP Nürnberg   | EMail: urlichs@smurf.sub.org
+Schleiermacherstraße 12  \  Unix+Linux+Mac     | Phone: ...please use email.
+90491 Nürnberg (Germany)  \   Consulting+Networking+Programming+etc'ing      42
+
+------------------------------
+
+From: tem1@Isis.MsState.Edu (Tim Miller)
+Subject: Re: Bogomip
+Date: 29 Sep 93 00:12:15 GMT
+
+I am interested in this Bogomip deal as well. 
+
+
+
+==============================================================================
+Tim Miller                   |  "The only thing we have to fear, is fear     |
+   tem1@Ra.MsState.Edu       |    itself"                                    |
+                             | "Within each of us lies the power of our      |
+Mississippi State University |  consent to health and to sickness, to riches |
+Major:  Chemistry/Physics    |  and to poverty, to freedom and to slavery.   |
+Minor:  Mathematics          |  It is we who control these, and not another" |
+                             |      ---Illusions, by Richard Bach            |
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+------------------------------
+
+From: giant@merle.acns.nwu.edu (ChienAn Chen)
+Subject: [Q] Linux machine as a file server.
+Date: 29 Sep 1993 01:32:03 GMT
+
+I am planing to have a 486 PC runing Linux as a file server.  Could someone 
+tell me how much RAM it will need to do so?  Does it take a lot of CPU time
+to do the NFS things?  If not, is it still able to run X-window?
+
+Thank you in advance for any information.
+
+
+-- 
+       ------------------===--===--===-------------------
+              Chien-An Chen (giant@eecs.nwu.edu)
+               EECS of Northwestern University
+
+------------------------------
+
+From: Joe.Klemmer@f370.n109.z1.fidonet.org (Joe Klemmer)
+Subject: What's with these Magazine ad's???
+Date: Tue, 28 Sep 1993 16:35:56 -0500
+
+Dennis Gray Jr. wrote in a message to All:
+
+ZH>     What really bothered me though was when I was thumbing
+ZH> through my new    issue of 'Byte' that I just got in the
+ZH> mail today.
+[...]
+ZH>      What bother's me is what I would think if I was new to
+ZH> Linux, and not     someone that has used it since January
+ZH> '92.  Here's what I would tend to    think if I was
+ZH> unfamiliar with Linux.
+
+DGJ> I hate to break the news to you, but most of Byte's readers
+DGJ> are DOS sell-outs.  How many of them have heard of linux???
+
+Yes, but if Linux ever wants to break out of it's "plaything" image then it's
+got to address the "DOS sell-out" crowd.  Linux's biggest drawback right now is
+that it's mainly a product of the Net and not out in the "real world".
+
+This is the perseption that it needs to break away from.
+
+Later,
+Joe
+
+
+------------------------------
+
+From: rakesh@sun490.fdu.edu (Rakesh Narasimhan)
+Crossposted-To: comp.os.linux.admin,comp.os.linux.help
+Subject: Want to Buy Linux on 3.5 disks (SLS version)?
+Date: 29 Sep 93 02:01:54 GMT
+
+Hi nettors,
+
+I am interested in installing Linux on a 386/486 machine with 4-8 MB ram
+and about 340 MB HD.  I used to follow this newsgroup and it has been
+quite a while since I have read any items in these groups.
+
+I understand that the SLS version is available on 3.5 disks.  If so
+could one of you send me an email about procuring it.  I need all the
+utils including X, gcc, all tools, sources etc etc. 
+
+There was some DOCUMENTATION effort goiong on in Linux.  Has that group
+produced the results of that effort i.e. The "LINUX BIBLE".
+
+Answers to the abopve questions are appreciated.  Thanks in advance.
+
+-rakesh@sun490.fdu.edu
+ 
+
+------------------------------
+
+From: rbalkenh@sookit (robert balkenhol)
+Crossposted-To: comp.os.linux,comp.os.linux.help,comp.os.linux.admin
+Subject: Re: Bootdisk made by SLS install hangs during boot
+Date: 29 Sep 1993 03:00:58 GMT
+Reply-To: rbalkenh@sookit.jpl.nasa.gov
+
+Laurent Duperval (duperval@IRO.UMontreal.CA) wrote:
+: Wolfgang.Roth@graphics.ap.mchp.sni.de wrote:
+
+: -> In article <cornell.747335005@texas> cornell@syl.dl.nec.com writes:
+: -> >SLS version: 1.03
+: -> >Machine1: NEC Powermate 386
+: -> >Machine2: Amax PC/386
+: -> >
+: -> >I've installed the SLS v.1.03 release on three machines.  The two
+: -> >listed above had the same trouble after installing, making a
+: -> >bootdisk, and trying to boot from that bootdisk. 
+
+: -> I have the same problems on 3 machines (2*486 and 1*386) when I 
+: -> tried to boot from the original 3,5" bootdisk in driva A. The 
+: -> loading stops after the message "Detecting soundcard: AdLib 
+: -> (type 3)". I have no soundcards installed.
+
+: I had the same problem.  I circumvented (sp?) it by booting at low speed.  It
+: worked fine then, but I can't explain it.  After I installed everything and
+: had my own boot floppy, I was again able to boot at high speed.  Go figure.
+
+I too had a problem on two machines dying at the adlib sound card message.
+One was an AST 486 with all of the standard I/O on the mother board plus a
+novell ne2000 card. The other was a no-name black box 40 mhz 386 with an
+adaptec scsi card and a _novell_ne200_card_. NONE of the adresses or irq's
+appeared to conflict. I solved my problem by changeing the novell card to
+use 300h and irq5, (supposedly a non-standard setting, but it works).
+The troubleshooting was vexing..different kernels..6 mchines...differnent
+versions...screw with the hardware jumpers...sleep at last!
+--
+*************************** 
+Robert Balkenhol 
+Jet Propulsion Laboratory
+Disclaimer:ispeakforonlyme!
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Misc-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.misc) via:
+
+    Internet: Linux-Misc@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Misc Digest
+******************************

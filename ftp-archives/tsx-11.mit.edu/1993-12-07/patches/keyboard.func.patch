@@ -1,0 +1,80 @@
+From: dingbat@diku.dk (Niels Skov Olsen)
+
+Here is the real fix to the trouble I and others have had
+with keyboard lockups and LED malfunction. I think this
+should be included in the next release, but I don't know 
+the proper procedure for doing so. I post it here because
+others have reported the same or similar problem.
+
+The problem was that the keyboard would lock up when pressing
+either of CAPS, NUMLOCK, SCROLL LOCK. The 'bug' shows up only
+on some hardware. The fix as suggested by Bruce Evans was to
+add a routine called kb_ack that waits until 0xfa shows up on
+port 0x64, and call after outputting data to port 0x60. I am not
+sure what the exact meaning of these ports are, but the patch
+that follows fixes the lockups and makes the LED's work!
+
+Thank you Bruce Evans.
+
+Niels
+
+Apply this patch in kernel/chr_drv/ :
+
+*** /tmp/linux/kernel/chr_drv/keyboard.S        Thu Apr  9 22:15:22 1992
+--- keyboard.S  Tue Apr 21 19:49:33 1992
+***************
+*** 182,194 ****
+--- 182,196 ----
+        je 1f
+        movb %al,old_leds
+        call kb_wait
+        movb $0xed,%al          /* set leds command */
+        outb %al,$0x60
++       call kb_ack             /* [NSO]: Suggested by Bruce Evans */
+        call kb_wait
+        movb _kleds,%al
+        outb %al,$0x60
++       call kb_ack             /* [NSO]: Suggested by Bruce Evans */
+  1:    ret
+  uncaps:       andb $0x7f,_kmode
+        ret
+  scroll:
+        testb $0x03,_kmode
+***************
+*** 782,791 ****
+--- 784,817 ----
+        pushl %eax
+        pushl %ebx
+        movl $10000,%ebx
+  1:    inb $0x64,%al
+        testb $0x02,%al
++       je 2f
++       decl %ebx
++       jne 1b
++ 2:    popl %ebx
++       popl %eax
++       ret
++ 
++ /*
++  * kb_ack waits for 0xfa to appear in port 0x60
++  *
++  * Suggested by Bruce Evans
++  * Added by Niels Skou Olsen [NSO]
++  * April 21, 1992
++  *
++  * Heavily inspired by kb_wait :-)
++  * I dont know how much waiting actually is required, 
++  * but this seems to work.
++  */
++ kb_ack:
++       pushl %eax
++       pushl %ebx
++       movl $10000,%ebx
++ 1:    inb $0x60,%al
++       testb $0xfa,%al
+        je 2f
+        decl %ebx
+        jne 1b
+  2:    popl %ebx
+        popl %eax
+

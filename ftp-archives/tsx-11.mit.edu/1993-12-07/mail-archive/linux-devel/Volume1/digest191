@@ -1,0 +1,407 @@
+From:     Digestifier <Linux-Development-Request@senator-bedfellow.mit.edu>
+To:       Linux-Development@senator-bedfellow.mit.edu
+Reply-To: Linux-Development@senator-bedfellow.mit.edu
+Date:     Tue, 26 Oct 93 13:24:37 EDT
+Subject:  Linux-Development Digest #191
+
+Linux-Development Digest #191, Volume #1         Tue, 26 Oct 93 13:24:37 EDT
+
+Contents:
+  Re: Andrew File System (Benjamin Z. Goldsteen)
+  Re: Slowness in scsi disk access (Eric Youngdale)
+  Re: Slowness in scsi disk access (Bill Broadley)
+  Buslogic 445s &! AMI (Stewart)
+  Re: Does Linux support PCI-Boards ? (Markus Kuhn)
+  Re: A free Plan-9, anyone? ("Eric Jeschke")
+  Re: Slowness in scsi disk access (Eric Youngdale)
+  Re: Slowness in scsi disk access (Brandon S. Allbery)
+  Re: Slowness in scsi disk access (Piercarlo Grandi)
+
+----------------------------------------------------------------------------
+
+From: ben@rex.uokhsc.edu (Benjamin Z. Goldsteen)
+Subject: Re: Andrew File System
+Date: Mon, 25 Oct 1993 22:08:23 GMT
+Reply-To: benjamin-goldsteen@uokhsc.edu
+
+zzassgl@gl.mcc.ac.uk () writes:
+
+>Gary Keim (gk5g+@andrew.cmu.edu) wrote:
+>: Excerpts from netnews.comp.os.linux.development: 22-Oct-93 Re: Andrew
+>: File System Heikki Suonsivu@cs.hut.f (645) 
+
+>: > AFS would be better than NFS, but I don't see what is the point of trying 
+>: > to be compatible with AFS which isn't used anywhere (a major example of how 
+>: > making something propretiary looses :-). 
+
+>: % ls /afs 
+>: alw.nih.gov              dsg.stanford.edu         nersc.gov 
+>    ..........
+>: dmsv.med.umich.edu       nd.edu                   wam.umd.edu 
+
+>: That's quite a few nowhere's. 
+
+>: -Gary Keim 
+>: Andrew Consortium 
+
+
+>And how many people at each site are locked out of the facilities because
+>they are only available via AFS?  It's sad that educational sites decide to
+>go with propretiary servers.
+
+     And why are they locked out?  AFS is available for a variety of 
+platforms.  People at those sites are more limited in the platforms
+they can run on, but they must feel the trade-off is worth it.
+-- 
+Benjamin Z. Goldsteen
+
+------------------------------
+
+From: eric@tantalus.nrl.navy.mil (Eric Youngdale)
+Subject: Re: Slowness in scsi disk access
+Date: Tue, 26 Oct 1993 13:33:50 GMT
+
+In article <2ai9t7$7rm@uniwa.uwa.edu.au> oreillym@tartarus.uwa.edu.au (Michael O'Reilly) writes:
+>Eric Youngdale (eric@tantalus.nrl.navy.mil) wrote:
+>
+>[ much impressive prose deleted. ]
+>
+>:      2) If we discover that all of the buffers in the buffer cache are
+>: dirty, we call sync.  The problem with doing this is that the process that is
+>: dirtying buffers gets stuck doing the sync, and the user program will not run
+>
+>Possibly better would be to tell the init task. This will always be
+>around, it will always be alive, and it will always be in a known
+>location.
+>       cons
+>               required support from init
+>       pro
+>               not fatal if the support isn't there.
+
+        I guess that I was thinking a better solution would be for the
+update task to have a quick and easy mechanism to find out the dirty
+buffer statistics.  It could query the kernel about once a second or so,
+and if there are too many dirty buffers we start a sync().  We would
+always do the sync if 30 seconds have elapsed.  This would be quick and
+clean, and we could leave the old sync() call in getblk to be used if
+the update task were not flushing the buffers soon enough.  My only
+concern is that once a second is not enough.
+
+        Someone else suggested a builtin task in the kernel that does
+this job.  This would be relatively easy and doable, I suppose.  I would
+be curious how other people feel about builtin tasks in the kernel,
+however.
+
+>1) will you release the code for this emulator? sounds like something
+>fun to play with while avoiding study....
+
+        Sure, why not.  It is on tsx-11 in pub/linux/ALPHA/scsi and
+called bench.tar.z.
+
+>2) little nitpick. Could you keep your line lengths under 72 columns?
+>so that quoting doesn't stuff things.
+
+        OK.
+
+>3) curiosity: How well does the hashing work in searching for buffers?
+>Got any stats on hit/miss ratios ?? search lengths?
+
+        I am not sure, but I think that this works well.  The hash table
+contains close to 1000 entries, so this means that each hash chain is
+only something like 15 entries deep with a 15Mb buffer cache.  Long ago
+I experimented with the alogorithm to verify that the hash function did
+in fact store the entries more or less evenly across the hash table, and
+this was in fact the case.
+
+-Eric
+
+
+
+-- 
+"The woods are lovely, dark and deep.  But I have promises to keep,
+And lines to code before I sleep, And lines to code before I sleep."
+
+------------------------------
+
+From: broadley@neurocog.lrdc.pitt.edu (Bill Broadley)
+Subject: Re: Slowness in scsi disk access
+Date: 26 Oct 93 03:30:14 GMT
+
+Here's my theory:
+
+1: c program asks for 2 sectors 
+2: the kernel does a read ahead of 10 sectors (2+8 readahead).
+3: control returns to the c program
+4: next 4 (2 sector) requests come from the buffer cache
+5: the first cache miss causes a disk read but the needed sector already went
+        under the head.
+6: Must wait 1/60th second for a next 10 sectors
+
+By the time the 11th sector is read and cache miss occurs the sector
+has already gone under the head.
+
+Thus you get something like 10 sectors every rotation or 10*60 or 300k/second.
+
+Bigger sectors, and therefore bigger readaheads.  Improve this number, up
+to pretty close to the maximum rate, but they also increase memory
+use and command latency.
+
+I believe dos does so well because it DOESN'T have a readahead buffer,
+it just manages to ask for a sector before it's passed under the head.
+
+The readahead buffer manages to keep the program making the requests busy
+until the sector goes under the head and you incur a 1 rotation penalty.
+
+I think the best solution would be 2 small readahead buffers, if the first
+one is used up before the 2nd one is done reading, place another request
+for the next 8 sectors of so into the first buffer.
+
+This way a program thats disk bandwidth bound will queue a series of 
+requests to the scsi controller and never incur the rotational penalty.
+
+The other option is just read a track at a time in.
+
+BTW IDE seems a fair amount faster then SCSI.  Our Western Digital 340 Mb
+drive gets:
+
+              -------Sequential Output-------- ---Sequential Input-- --Random--
+              -Per Char- --Block--- -Rewrite-- -Per Char- --Block--- --Seeks---
+Machine    MB K/sec %CPU K/sec %CPU K/sec %CPU K/sec %CPU K/sec %CPU  /sec %CPU
+           32   796 58.6  1104 18.8   484 23.8   493 65.2  1300 42.1  62.2 13.5
+
+1.1 Mb read block and 1.3 MB write block seems MUCH better then any
+adaptec 1542+fast disk I've seen.
+
+
+--
+Bill                                    1st>    Broadley@neurocog.lrdc.pitt.edu
+Broadley@schneider3.lrdc.pitt.edu <2nd  3rd>                 Broadley+@pitt.edu
+Linux is great.         Bike to live, live to bike.                      PGP-ok
+
+
+------------------------------
+
+From: stewart@vitek.com (Stewart)
+Subject: Buslogic 445s &! AMI
+Date: Tue, 26 Oct 1993 14:28:07 GMT
+
+
+  I have moved this discussion to the development group since there is
+  simply too much traffic in the help group.
+
+  A few weeks ago, I bought a Buslogic 445s and a MAXTOR 7345S on which
+  I was going to put linux.  After installing linux, I immediately noticed
+  a problem accessing the floppy drives.  The system would sometimes hang
+  when a large file was accessed on the floppy (I installed the system from
+  another hard disk, so I did not use the floppy to install the system).
+
+  I then switched back and forth between using the floppy controller on my
+  original IDE controller and the new 445s.  I was always able the 
+  hang the system by accessing large files on the floppy drive.
+
+  I then recompiled 'tar' with -g, and started debugging.  The problem is 
+  in the 'read' function, in libc.  Sometimes, it never comes back...
+
+  All this time, I was posting updates to the net on what was happening.
+  I started receiving feedback from people with the same problem, and all
+  kinds of configurations.  But the one consistent factor is all those who
+  responded were using the AMI BIOS system with the Buslogic 445s.
+
+  So my question is, is there anyone out there successfully using the
+  Buslogic 445s SCSI controller and the AMI BIOS system?  Your response
+  will be of great help in trying to solve this problem...
+
+  Stewart   -   stewart@vitek.com
+
+------------------------------
+
+From: unrza3@cd4680fs.rrze.uni-erlangen.de (Markus Kuhn)
+Crossposted-To: comp.os.linux.help
+Subject: Re: Does Linux support PCI-Boards ?
+Date: Tue, 26 Oct 1993 16:09:55 +0100
+Reply-To: mskuhn@cip.informatik.uni-erlangen.de
+
+stefan@sts.lahn.de (Stefan Spahr) writes:
+
+>Does Linux support the SCSI controller from NCR which is mostly
+>used on the new PCI (local Bus from Intel) Boards - and the other 
+>stuff on these boards ?
+
+You mean the NCR 53C810 (single chip high performance SCSI-2 controler
+with integrated RISC processor, DMA controller and PCI interface)?
+
+I don't know of an existing Linux driver, but if you need the docs to write
+one yourself, you might get it from
+
+   NCR OEM Europe GmbH
+   Westendstr. 193
+   D-80686 Muenchen
+   Germany
+
+   phone +49 89 57931-199
+   fax   +49 89 57931-183
+
+An excelent guide to writing your own Linux SCSI device driver is part of
+the Linux Kernel Hackers Guide V0.5 on most Linux ftp servers. (I don't
+have a PCI board yet, otherwise I would already have tried ...)
+It should not be too difficult, because the Linux SCSI system is very
+modular and well documented and the NCR chip is said to be quite
+intelligent.
+
+BTW: There is also the NCR 53C820 chip which supports Wide-SCSI (16bit)
+and Differential-SCSI in addition.
+
+Markus
+
+-- 
+Markus Kuhn, Computer Science student «°o°» University of Erlangen, Germany
+Internet: mskuhn@cip.informatik.uni-erlangen.de   |   X.500 entry available
+
+------------------------------
+
+From: "Eric Jeschke" <jeschke@cs.indiana.edu>
+Subject: Re: A free Plan-9, anyone?
+Date: Tue, 26 Oct 1993 10:23:23 -0500
+
+johnsonm@calypso.oit.unc.edu (Michael K. Johnson) writes:
+:users want, and it is *certainly* not what Linus wants, if he still
+:feels as he did during his famous "discussion" with Andrew S.
+:Tannenbaum, who told Linus that he would have flunked him in an
+:Operating Systems class...
+
+Interesting.  I'd like to see a transcript of that discussion
+if it was online.  I bet others would too...
+
+-- 
+Eric Jeschke                      |          Indiana University
+jeschke@cs.indiana.edu            |     Computer Science Department
+eric%marmot@moose.cs.indiana.edu  |
+
+------------------------------
+
+From: eric@tantalus.nrl.navy.mil (Eric Youngdale)
+Subject: Re: Slowness in scsi disk access
+Date: Tue, 26 Oct 1993 16:00:46 GMT
+
+In article <5144@blue.cis.pitt.edu> broadley@neurocog.lrdc.pitt.edu (Bill Broadley) writes:
+>Here's my theory:
+>
+>1: c program asks for 2 sectors 
+>2: the kernel does a read ahead of 10 sectors (2+8 readahead).
+>3: control returns to the c program
+>4: next 4 (2 sector) requests come from the buffer cache
+>5: the first cache miss causes a disk read but the needed sector already went
+>       under the head.
+>6: Must wait 1/60th second for a next 10 sectors
+
+        It is quite possible that there are a number of effects that can all
+add up and give you poor performance, but the thing that I have yet to be able
+to explain is why writes from the buffer cache are so darn slow.  When we sync,
+the data comes from the buffer cache, and it should be quite easy for the
+system to keep the request queue filled and ready to go.
+
+        It looks like I will have to hack the kernel to add a hook for throwing
+in fake buffer headers into the request queue with ll_rw_block so that I can
+test performance this way.  It is also possible of course, that I am not waking
+up processes in the correct way in sd.c  Note that the scsi rawread program
+that gets such good numbers basically bypasses sd.c, so theoretically there
+could be a scsi-specific problem with processes not being woken up soon enough.
+
+>Bigger sectors, and therefore bigger readaheads.  Improve this number, up
+>to pretty close to the maximum rate, but they also increase memory
+>use and command latency.
+
+        First of all, the filesystems are now all capable of asking for up to
+32 buffers at one time (even though some of the low level scsi drivers can only
+handle 16, and end up splitting the larger requests).  The read_ahead for scsi
+disks is set to 32 sectors, or 16Kb for intelligent controllers.
+
+-Eric
+-- 
+"The woods are lovely, dark and deep.  But I have promises to keep,
+And lines to code before I sleep, And lines to code before I sleep."
+
+------------------------------
+
+From: bsa@kf8nh.wariat.org (Brandon S. Allbery)
+Subject: Re: Slowness in scsi disk access
+Date: Tue, 26 Oct 1993 16:07:12 GMT
+
+In article <CFIB0F.DL1@ra.nrl.navy.mil> eric@tantalus.nrl.navy.mil (Eric Youngdale) writes:
+>       Someone else suggested a builtin task in the kernel that does
+>this job.  This would be relatively easy and doable, I suppose.  I would
+>be curious how other people feel about builtin tasks in the kernel,
+>however.
+
+One of the points of the bdflush task is that it can do an LRU write-behind
+flush:  instead of just writing *every* dirty buffer, it can select old dirty
+buffers and flush them to disk, marking them as clean/available.  A user
+process can't do this; all it can do is sync(), which flushes the entire
+cache.  bdflush() is therefore more efficient, especially if it's tuned to the
+"sweet spot" where it can keep ahead of demand for available buffers (not
+always possible, but the correct %dirty/LRU-time/scan-time values should make
+it work in the majority of cases).  A user process just can't get this kind of
+information.
+
+And no, you don't want to change sync() to do this; it's necessary to keep a
+"flush everything" call, because there are cases when you *must* flush
+everything to ensure consistency.  sync() is expected to do this.
+
+++Brandon
+-- 
+Brandon S. Allbery         kf8nh@kf8nh.ampr.org          bsa@kf8nh.wariat.org
+"MSDOS didn't get as bad as it is overnight -- it took over ten years
+of careful development."  ---dmeggins@aix1.uottawa.ca
+
+------------------------------
+
+From: pcg@aber.ac.uk (Piercarlo Grandi)
+Subject: Re: Slowness in scsi disk access
+Reply-To: pcg@aber.ac.uk (Piercarlo Grandi)
+Date: Tue, 26 Oct 1993 16:35:12 GMT
+
+>>> On Tue, 26 Oct 1993 04:28:54 GMT, eric@tantalus.nrl.navy.mil (Eric
+>>> Youngdale) said:
+
+Eric>   All well and good, you say.  Why can't we just take the first
+Eric> buffer from the free list??? The problem cones up because the free
+Eric> list contains both clean and dirty buffers (i.e. buffers that
+Eric> correspond to a file that has been written.  If we were to try and
+Eric> reuse a dirty buffer, we would have to write the contents to disk
+Eric> first before we could reuse it, so we obviously prefer to snag a
+Eric> clean buffer instead.
+
+I remember E.W. Dijkstra writing that preferring clean buffers for
+victimizzation is a terrible mistake that has dire consequences. The
+reason should be obvious: you want to victimize the buffer that is
+holding a block likely to be used the least in the future. Whether it be
+clean or dirty is totally irrelevant; and choosing a buffer that holds a
+block likely to be reaccessed is very nasty, as well as being left with
+lots of dirty buffers to clean in one go.
+
+This has been recognized under SVR[34] that have a daemon whose only
+purpose is to continuously, instead of periodically, clean dirty
+buffers.
+
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

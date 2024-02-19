@@ -1,0 +1,554 @@
+diff -rc orig/linux-0.99.2//fs/nfs/dir.c linux/fs/nfs/dir.c
+*** orig/linux-0.99.2//fs/nfs/dir.c	Sun Nov 15 22:46:41 1992
+--- linux/fs/nfs/dir.c	Sun Jan 10 02:38:07 1993
+***************
+*** 132,140 ****
+  			filp->f_pos, NFS_READDIR_CACHE_SIZE, c_entry);
+  		if (result < 0) {
+  			c_dev = 0;
+- #if 0
+- 			printk("nfs_readdir: readdir error = %d\n", result);
+- #endif
+  			return result;
+  		}
+  		if (result > 0) {
+--- 132,137 ----
+***************
+*** 171,178 ****
+   * though most of them will fail.
+   */
+  
+- #define NFS_LOOKUP_CACHE_SIZE	16
+- 
+  static struct nfs_lookup_cache_entry {
+  	int dev;
+  	int inode;
+--- 168,173 ----
+***************
+*** 191,197 ****
+  	for (i = 0; i < NFS_LOOKUP_CACHE_SIZE; i++) {
+  		entry = nfs_lookup_cache + i;
+  		if (entry->dev == dir->i_dev && entry->inode == dir->i_ino
+! 		    && !strcmp(filename, entry->filename))
+  			return entry;
+  	}
+  	return NULL;
+--- 186,192 ----
+  	for (i = 0; i < NFS_LOOKUP_CACHE_SIZE; i++) {
+  		entry = nfs_lookup_cache + i;
+  		if (entry->dev == dir->i_dev && entry->inode == dir->i_ino
+! 		    && !strncmp(filename, entry->filename, NFS_MAXNAMLEN))
+  			return entry;
+  	}
+  	return NULL;
+***************
+*** 226,232 ****
+  				 struct nfs_fattr *fattr)
+  {
+  	static int nfs_lookup_cache_pos = 0;
+- 
+  	struct nfs_lookup_cache_entry *entry;
+  
+  	/* compensate for bug in SGI NFS server */
+--- 221,226 ----
+***************
+*** 243,257 ****
+  	strcpy(entry->filename, filename);
+  	entry->fhandle = *fhandle;
+  	entry->fattr = *fattr;
+! 	entry->expiration_date = jiffies + NFS_SERVER(dir)->acregmax;
+  }
+  
+! static void nfs_lookup_cache_remove(struct inode *dir, char *filename)
+  {
+  	struct nfs_lookup_cache_entry *entry;
+  
+! 	if ((entry = nfs_lookup_cache_index(dir, filename)))
+! 		entry->dev = 0;
+  }
+  
+  static void nfs_lookup_cache_refresh(struct inode *file,
+--- 237,269 ----
+  	strcpy(entry->filename, filename);
+  	entry->fhandle = *fhandle;
+  	entry->fattr = *fattr;
+! 	entry->expiration_date = jiffies + (S_ISDIR(fattr->mode)
+! 		? NFS_SERVER(dir)->acdirmax : NFS_SERVER(dir)->acregmax);
+  }
+  
+! static void nfs_lookup_cache_remove(struct inode *dir, struct inode *inode,
+! 				    char *filename)
+  {
+  	struct nfs_lookup_cache_entry *entry;
++ 	int dev;
++ 	int fileid;
++ 	int i;
+  
+! 	if (inode) {
+! 		dev = inode->i_dev;
+! 		fileid = inode->i_ino;
+! 	}
+! 	else if ((entry = nfs_lookup_cache_index(dir, filename))) {
+! 		dev = entry->dev;
+! 		fileid = entry->fattr.fileid;
+! 	}
+! 	else
+! 		return;
+! 	for (i = 0; i < NFS_LOOKUP_CACHE_SIZE; i++) {
+! 		entry = nfs_lookup_cache + i;
+! 		if (entry->dev == dev && entry->fattr.fileid == fileid)
+! 			entry->dev = 0;
+! 	}
+  }
+  
+  static void nfs_lookup_cache_refresh(struct inode *file,
+***************
+*** 258,272 ****
+  				     struct nfs_fattr *fattr)
+  {
+  	struct nfs_lookup_cache_entry *entry;
+  	int i;
+  
+  	for (i = 0; i < NFS_LOOKUP_CACHE_SIZE; i++) {
+  		entry = nfs_lookup_cache + i;
+! 		if (entry->dev == file->i_dev
+! 		    && entry->fattr.fileid == file->i_ino) {
+  			entry->fattr = *fattr;
+- 			break;
+- 		}
+  	}
+  }
+  
+--- 270,283 ----
+  				     struct nfs_fattr *fattr)
+  {
+  	struct nfs_lookup_cache_entry *entry;
++ 	int dev = file->i_dev;
++ 	int fileid = file->i_ino;
+  	int i;
+  
+  	for (i = 0; i < NFS_LOOKUP_CACHE_SIZE; i++) {
+  		entry = nfs_lookup_cache + i;
+! 		if (entry->dev == dev && entry->fattr.fileid == fileid)
+  			entry->fattr = *fattr;
+  	}
+  }
+  
+***************
+*** 332,342 ****
+  	}
+  	memcpy_fromfs(filename, (char *) name, len);
+  	filename[len] = '\0';
+- #if 0
+- 	sattr.mode = mode & 0777;
+- #else
+  	sattr.mode = mode;
+- #endif
+  	sattr.uid = sattr.gid = sattr.size = -1;
+  	sattr.atime.seconds = sattr.mtime.seconds = -1;
+  	if ((error = nfs_proc_create(NFS_SERVER(dir), NFS_FH(dir),
+--- 343,349 ----
+***************
+*** 407,417 ****
+  	}
+  	memcpy_fromfs(filename, (char *) name, len);
+  	filename[len] = '\0';
+- #if 0
+- 	sattr.mode = mode & 0777;
+- #else
+  	sattr.mode = mode;
+- #endif
+  	sattr.uid = sattr.gid = sattr.size = -1;
+  	sattr.atime.seconds = sattr.mtime.seconds = -1;
+  	error = nfs_proc_mkdir(NFS_SERVER(dir), NFS_FH(dir),
+--- 414,420 ----
+***************
+*** 440,446 ****
+  	filename[len] = '\0';
+  	error = nfs_proc_rmdir(NFS_SERVER(dir), NFS_FH(dir), filename);
+  	if (!error)
+! 		nfs_lookup_cache_remove(dir, filename);
+  	iput(dir);
+  	return error;
+  }
+--- 443,449 ----
+  	filename[len] = '\0';
+  	error = nfs_proc_rmdir(NFS_SERVER(dir), NFS_FH(dir), filename);
+  	if (!error)
+! 		nfs_lookup_cache_remove(dir, NULL, filename);
+  	iput(dir);
+  	return error;
+  }
+***************
+*** 463,469 ****
+  	filename[len] = '\0';
+  	error = nfs_proc_remove(NFS_SERVER(dir), NFS_FH(dir), filename);
+  	if (!error)
+! 		nfs_lookup_cache_remove(dir, filename);
+  	iput(dir);
+  	return error;
+  }
+--- 466,472 ----
+  	filename[len] = '\0';
+  	error = nfs_proc_remove(NFS_SERVER(dir), NFS_FH(dir), filename);
+  	if (!error)
+! 		nfs_lookup_cache_remove(dir, NULL, filename);
+  	iput(dir);
+  	return error;
+  }
+***************
+*** 535,540 ****
+--- 538,545 ----
+  	filename[len] = '\0';
+  	error = nfs_proc_link(NFS_SERVER(oldinode), NFS_FH(oldinode),
+  		NFS_FH(dir), filename);
++ 	if (!error)
++ 		nfs_lookup_cache_remove(dir, oldinode, NULL);
+  	iput(oldinode);
+  	iput(dir);
+  	return error;
+***************
+*** 572,578 ****
+  		NFS_FH(old_dir), old_filename,
+  		NFS_FH(new_dir), new_filename);
+  	if (!error)
+! 		nfs_lookup_cache_remove(old_dir, old_filename);
+  	iput(old_dir);
+  	iput(new_dir);
+  	return error;
+--- 577,583 ----
+  		NFS_FH(old_dir), old_filename,
+  		NFS_FH(new_dir), new_filename);
+  	if (!error)
+! 		nfs_lookup_cache_remove(old_dir, NULL, old_filename);
+  	iput(old_dir);
+  	iput(new_dir);
+  	return error;
+***************
+*** 597,606 ****
+  		return;
+  	}
+  	was_empty = inode->i_mode == 0;
+- #if 0
+- 	if (!was_empty && inode->i_atime > fattr->atime.seconds)
+- 		return;
+- #endif
+  	inode->i_mode = fattr->mode;
+  	inode->i_nlink = fattr->nlink;
+  	inode->i_uid = fattr->uid;
+--- 602,607 ----
+diff -rc orig/linux-0.99.2//fs/nfs/inode.c linux/fs/nfs/inode.c
+*** orig/linux-0.99.2//fs/nfs/inode.c	Wed Dec  9 21:49:49 1992
+--- linux/fs/nfs/inode.c	Sun Jan 10 01:47:43 1993
+***************
+*** 133,145 ****
+  	put_fs_long(res.blocks, &buf->f_blocks);
+  	put_fs_long(res.bfree, &buf->f_bfree);
+  	put_fs_long(res.bavail, &buf->f_bavail);
+- #if 0
+- 	put_fs_long(-1, &buf->f_files);
+- 	put_fs_long(-1, &buf->f_ffree);
+- #else
+  	put_fs_long(0, &buf->f_files);
+  	put_fs_long(0, &buf->f_ffree);
+- #endif
+  }
+  
+  /*
+--- 133,140 ----
+diff -rc orig/linux-0.99.2//fs/nfs/proc.c linux/fs/nfs/proc.c
+*** orig/linux-0.99.2//fs/nfs/proc.c	Wed Dec  9 21:38:31 1992
+--- linux/fs/nfs/proc.c	Sun Jan 10 01:51:40 1993
+***************
+*** 12,18 ****
+--- 12,20 ----
+   * filesystem and type 'ls xyzzy' to turn on debugging.
+   */
+  
++ #if 0
+  #define NFS_PROC_DEBUG
++ #endif
+  
+  #include <linux/param.h>
+  #include <linux/sched.h>
+***************
+*** 24,34 ****
+  
+  #include <netinet/in.h>
+  
+- #ifdef NFS_PROC_DEBUG
+  static int proc_debug = 0;
+  #define PRINTK if (proc_debug) printk
+  #else
+! #define PRINTK (void)
+  #endif
+  
+  static int *nfs_rpc_header(int *p, int procedure);
+--- 26,37 ----
+  
+  #include <netinet/in.h>
+  
+  static int proc_debug = 0;
++ 
++ #ifdef NFS_PROC_DEBUG
+  #define PRINTK if (proc_debug) printk
+  #else
+! #define PRINTK if (0) printk
+  #endif
+  
+  static int *nfs_rpc_header(int *p, int procedure);
+***************
+*** 595,616 ****
+  	int n;
+  
+  	p++;
+! 	if (ntohl(*p++) != RPC_REPLY) {
+! 		printk("not an RPC reply\n");
+  		return 0;
+  	}
+! 	if (ntohl(*p++) != RPC_MSG_ACCEPTED) {
+! 		printk("RPC call rejected\n");
+  		return 0;
+  	}
+  	if ((n = ntohl(*p++)) != RPC_AUTH_NULL && n != RPC_AUTH_UNIX) {
+! 		printk("reply with unknown RPC authentication type\n");
+  		return 0;
+  	}
+  	n = ntohl(*p++);
+  	p += (n + 3) >> 2;
+! 	if (ntohl(*p++) != RPC_SUCCESS) {
+! 		printk("RPC call failed\n");
+  		return 0;
+  	}
+  	return p;
+--- 598,620 ----
+  	int n;
+  
+  	p++;
+! 	if ((n = ntohl(*p++)) != RPC_REPLY) {
+! 		printk("nfs_rpc_verify: not an RPC reply: %d\n", n);
+  		return 0;
+  	}
+! 	if ((n = ntohl(*p++)) != RPC_MSG_ACCEPTED) {
+! 		printk("nfs_rpc_verify: RPC call rejected: %d\n", n);
+  		return 0;
+  	}
+  	if ((n = ntohl(*p++)) != RPC_AUTH_NULL && n != RPC_AUTH_UNIX) {
+! 		printk("nfs_rpc_verify: bad RPC authentication type: %d\n",
+! 			n);
+  		return 0;
+  	}
+  	n = ntohl(*p++);
+  	p += (n + 3) >> 2;
+! 	if ((n = ntohl(*p++)) != RPC_SUCCESS) {
+! 		printk("nfs_rpc_verify: RPC call failed: %d\n", n);
+  		return 0;
+  	}
+  	return p;
+***************
+*** 629,667 ****
+  	enum nfs_stat stat;
+  	int errno;
+  } nfs_errtbl[] = {
+! 	{ NFS_OK,		0 },
+! 	{ NFSERR_PERM,		EPERM },
+! 	{ NFSERR_NOENT,		ENOENT },
+! 	{ NFSERR_IO,		EIO },
+! 	{ NFSERR_NXIO,		ENXIO },
+! 	{ NFSERR_ACCES,		EACCES },
+! 	{ NFSERR_EXIST,		EEXIST },
+! 	{ NFSERR_NODEV,		ENODEV },
+! 	{ NFSERR_NOTDIR,	ENOTDIR },
+! 	{ NFSERR_ISDIR,		EISDIR },
+! 	{ NFSERR_FBIG,		EFBIG },
+! 	{ NFSERR_NOSPC,		ENOSPC },
+! 	{ NFSERR_ROFS,		EROFS },
+! 	{ NFSERR_NAMETOOLONG,	ENAMETOOLONG },
+! 	{ NFSERR_NOTEMPTY,	ENOTEMPTY },
+! 	{ NFSERR_DQUOT,		EDQUOT },
+! 	{ NFSERR_STALE,		ESTALE },
+! 	{ NFSERR_WFLUSH,	EIO },
+! 	{ -1,			EIO }
+  };
+  
+  static int nfs_stat_to_errno(int stat)
+  {
+- 	int errno;
+  	int i;
+  
+- 	errno = EIO;
+  	for (i = 0; nfs_errtbl[i].stat != -1; i++) {
+! 		if (nfs_errtbl[i].stat == stat) {
+! 			errno = nfs_errtbl[i].errno;
+! 			break;
+! 		}
+  	}
+! 	return errno;
+  }
+  
+--- 633,670 ----
+  	enum nfs_stat stat;
+  	int errno;
+  } nfs_errtbl[] = {
+! 	{ NFS_OK,		0		},
+! 	{ NFSERR_PERM,		EPERM		},
+! 	{ NFSERR_NOENT,		ENOENT		},
+! 	{ NFSERR_IO,		EIO		},
+! 	{ NFSERR_NXIO,		ENXIO		},
+! 	{ NFSERR_ACCES,		EACCES		},
+! 	{ NFSERR_EXIST,		EEXIST		},
+! 	{ NFSERR_NODEV,		ENODEV		},
+! 	{ NFSERR_NOTDIR,	ENOTDIR		},
+! 	{ NFSERR_ISDIR,		EISDIR		},
+! 	{ NFSERR_FBIG,		EFBIG		},
+! 	{ NFSERR_NOSPC,		ENOSPC		},
+! 	{ NFSERR_ROFS,		EROFS		},
+! 	{ NFSERR_NAMETOOLONG,	ENAMETOOLONG	},
+! 	{ NFSERR_NOTEMPTY,	ENOTEMPTY	},
+! 	{ NFSERR_DQUOT,		EDQUOT		},
+! 	{ NFSERR_STALE,		ESTALE		},
+! #ifdef EWFLUSH
+! 	{ NFSERR_WFLUSH,	EWFLUSH		},
+! #endif
+! 	{ -1,			EIO		}
+  };
+  
+  static int nfs_stat_to_errno(int stat)
+  {
+  	int i;
+  
+  	for (i = 0; nfs_errtbl[i].stat != -1; i++) {
+! 		if (nfs_errtbl[i].stat == stat)
+! 			return nfs_errtbl[i].errno;
+  	}
+! 	printk("nfs_stat_to_errno: bad nfs status return value: %d\n", stat);
+! 	return nfs_errtbl[i].errno;
+  }
+  
+diff -rc orig/linux-0.99.2//fs/nfs/sock.c linux/fs/nfs/sock.c
+*** orig/linux-0.99.2//fs/nfs/sock.c	Mon Nov  9 19:36:25 1992
+--- linux/fs/nfs/sock.c	Sun Dec 27 01:08:27 1992
+***************
+*** 46,51 ****
+--- 46,52 ----
+  	int major_timeout_seen;
+  	char *server_name;
+  	int n;
++ 	int addrlen;
+  
+  	xid = start[0];
+  	len = ((char *) end) - ((char *) start);
+***************
+*** 117,123 ****
+  		else if (wait_table.nr)
+  			remove_wait_queue(entry.wait_address, &entry.wait);
+  		current->state = TASK_RUNNING;
+! 		result = sock->ops->recv(sock, (void *) start, 4096, 1, 0);
+  		if (result < 0) {
+  			if (result == -EAGAIN) {
+  				printk("nfs_rpc_call: bad select ready\n");
+--- 118,126 ----
+  		else if (wait_table.nr)
+  			remove_wait_queue(entry.wait_address, &entry.wait);
+  		current->state = TASK_RUNNING;
+! 		addrlen = 0;
+! 		result = sock->ops->recvfrom(sock, (void *) start, 4096, 1, 0,
+! 			NULL, &addrlen);
+  		if (result < 0) {
+  			if (result == -EAGAIN) {
+  				printk("nfs_rpc_call: bad select ready\n");
+diff -rc orig/linux-0.99.2//include/linux/nfs.h linux/include/linux/nfs.h
+*** orig/linux-0.99.2//include/linux/nfs.h	Sat Oct 17 22:53:38 1992
+--- linux/include/linux/nfs.h	Tue Jan 12 00:10:51 1993
+***************
+*** 1,8 ****
+  #ifndef _LINUX_NFS_H
+  #define _LINUX_NFS_H
+  
+- #define RPC_VERSION 2
+- 
+  #define NFS_PORT 2049
+  #define NFS_MAXDATA 8192
+  #define NFS_MAXPATHLEN 1024
+--- 1,6 ----
+***************
+*** 20,25 ****
+--- 18,27 ----
+  #define NFSMODE_SOCK 0140000
+  #define NFSMODE_FIFO 0010000
+  
++ #ifdef KERNEL	/* user programs should get these from the rpc header files */
++ 
++ #define RPC_VERSION 2
++ 
+  enum rpc_auth_flavor {
+  	RPC_AUTH_NULL = 0,
+  	RPC_AUTH_UNIX = 1,
+***************
+*** 33,39 ****
+  
+  enum rpc_reply_stat {
+  	RPC_MSG_ACCEPTED = 0,
+! 	RPC_MSG_DENIED,
+  };
+  
+  enum rpc_accept_stat {
+--- 35,41 ----
+  
+  enum rpc_reply_stat {
+  	RPC_MSG_ACCEPTED = 0,
+! 	RPC_MSG_DENIED = 1,
+  };
+  
+  enum rpc_accept_stat {
+***************
+*** 56,61 ****
+--- 58,65 ----
+  	RPC_AUTH_REJECTEDVERF = 4,
+  	RPC_AUTH_TOOWEAK = 5,
+  };
++ 
++ #endif /* KERNEL */
+  	
+  enum nfs_stat {
+  	NFS_OK = 0,
+diff -rc orig/linux-0.99.2//include/linux/nfs_fs.h linux/include/linux/nfs_fs.h
+*** orig/linux-0.99.2//include/linux/nfs_fs.h	Sat Oct 31 11:40:55 1992
+--- linux/include/linux/nfs_fs.h	Sun Jan 10 00:33:13 1993
+***************
+*** 40,45 ****
+--- 40,53 ----
+  
+  #define NFS_MAX_RPC_TIMEOUT		600
+  
++ /*
++  * Size of the lookup cache in units of number of entries cached.
++  * It is better not to make this too large although the optimimum
++  * depends on a usage and environment.
++  */
++ 
++ #define NFS_LOOKUP_CACHE_SIZE		64
++ 
+  #define NFS_SUPER_MAGIC			0x6969
+  
+  #define NFS_SERVER(inode)		(&(inode)->i_sb->u.nfs_sb.s_server)
+diff -rc orig/linux-0.99.2//include/linux/nfs_mount.h linux/include/linux/nfs_mount.h
+*** orig/linux-0.99.2//include/linux/nfs_mount.h	Tue Oct 20 22:52:18 1992
+--- linux/include/linux/nfs_mount.h	Tue Jan 12 00:11:43 1993
+***************
+*** 13,19 ****
+   * WARNING!  Do not delete or change the order of these fields.  If
+   * a new field is required then add it to the end.  The version field
+   * tracks which fields are present.  This will ensure some measure of
+!  * mount-to-kernel version compatibilty.  Most of these are used yet
+   * but here they are anyway.
+   */
+  
+--- 13,19 ----
+   * WARNING!  Do not delete or change the order of these fields.  If
+   * a new field is required then add it to the end.  The version field
+   * tracks which fields are present.  This will ensure some measure of
+!  * mount-to-kernel version compatibilty.  Some of these aren't used yet
+   * but here they are anyway.
+   */
+  

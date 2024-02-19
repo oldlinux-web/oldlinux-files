@@ -1,0 +1,476 @@
+From:     Digestifier <Linux-Admin-Request@senator-bedfellow.mit.edu>
+To:       Linux-Admin@senator-bedfellow.mit.edu
+Reply-To: Linux-Admin@senator-bedfellow.mit.edu
+Date:     Tue, 24 Aug 93 16:22:07 EDT
+Subject:  Linux-Admin Digest #18
+
+Linux-Admin Digest #18, Volume #1                Tue, 24 Aug 93 16:22:07 EDT
+
+Contents:
+  swap "weirdness," kernel page directories, and other puzzles. (Don &)
+  Re: Why use shadow? (Warner Losh)
+  Re: Why use shadow? (Warner Losh)
+  MAKEDEV for SCSI TAPE (Bill Heiser)
+  Re: How to add a new partition. (jcburt@gats486.larc.nasa.gov)
+  Bizzare nfs suid problem (Jason Austin)
+  lpr (C Wayne Huling)
+  Re: lpr (Dave Brookshire)
+  Re: Why use shadow? (Frank Lofaro)
+  Re: Why use shadow? (Brandon S. Allbery)
+  Re: ATI GU +, mouse is hiding (Kurt Brunton)
+  Re: ATI GU +, mouse is hiding...Followup (Jay Freeman)
+
+----------------------------------------------------------------------------
+
+From: bashford@scripps.edu (Don &)
+Subject: swap "weirdness," kernel page directories, and other puzzles.
+Date: Mon, 23 Aug 1993 19:58:04 GMT
+
+My system has gone unusable with a very wierd set of symptoms.  I've
+studed the FAQ, the Welsh et al. Linux Guide, and Frish's book on Unix
+system management.  I've tried everything I can think of short of
+reformatting and reinstalling from scratch.  But my system is still
+broken.
+
+SET-UP:
+
+I'm running linux 0.99.11 by way of the full SLS-1.03 distribution
+on a generic 486 box with two non-scsi 220Mb hard disks.  The disks
+are partitioned like so:
+
+ /dev/hda1  cyl 2 + 120Mb     linux ext2 for root  (it seems cyl 1 is reserved)
+ /dev/hda2  cyl 497 + 32Mb    swap
+ /dev/hda3  cyl 630-967       DOS
+
+ /dev/hdb1  whole disk        linux ext2 for /home
+
+I have LILO installed in the master boot record, /dev/hda, where it is
+set up to give a boot prompt by from which I can start either dos or
+linux.
+
+Just after the SLS install procedure, I found that the line "swapon -a"
+in /etc/rc was not causing swapping to be actived even with a
+seemingly correct swap entry in fstab, so I changed the command in
+/etc/rc to "swapon /dev/hda2" which worked.  Also, from the very first
+I've always got warnings at boot time about "mounting unchecked
+filesystem" apparently because the SLS etc/rc has the line to run
+e2fsck commented out (for good reasons?).  For powerdowns, which I do
+when we're not using the system, it has been my practice to log out,
+type "sync" to the login prompt, and shut off the power.  With this
+set up, I've had about three weeks of relatively trouble free
+operation.
+
+PROBLEM:
+
+The trouble started when I was logged in as a regular user with my
+home directory under /home, running Xfree86, doing a large file
+transfer via kermit in an xterm window and playing xmahjong while
+waiting for the transfer.  After the transfer, the ls and df commands
+stopped working (produced no output).  Exiting X-windows and poking
+around ended in a system crash.  The rest of the chronology is too
+complicated, so I'll give the main symptoms:
+
+If I try to boot to multi user mode from the hard disk, I sometimes
+get messages like:
+
+   swap_free wierdness
+   Trying to free kernil page-directory: not good
+
+This is followed by a number what I suppose are program crash register
+dumps of the form:
+
+   general protection: 0000
+   EIP: 0010:001211B0
+   EFLAGS: 00010206
+     [various hex numbers for eax: ... gs:]
+   Pid: 1, process nr: 1       <-- [numbers here vary, this is last one]
+   39 78 18 74 a7 8b 40 10 85 c0
+
+and then it's dead; or sometimes there are no crash register dumps but:
+
+   () Bad page table: [006fca8]=80000000
+   Bad page table: [006fca8]=80000000
+   , , , Aug 21 23:32:36 named[38]: restarted
+   Aug 21 23:32:36 init[1]: Entering runlevel 6
+
+and then it offers a login prompt.  However, things are usually screwy
+(see below) if I do log in.
+
+I can usually reboot to single user mode from the hard disk, although
+on one occasion, this failed with "Loading Linux, Uncompressing linux,
+crc error."  In single user mode, things are usually OK at first, but
+then it goes into what I shall call the "output inhibited state."  In
+this state, some commands, such as ls and df produce no output to the
+screen, while others, such as cat, man and vi work normally.  It's not
+that ls can't see files though.  If I do "ls > foo" and "cat foo" I
+get a file listing.  "echo *" works too.
+
+Error messages occur from time to time.  In order from most frequent
+to least:
+    swap_free wierdness
+    Trying to free nonexistent swap-page
+    Trying to duplicate nonexistent swap-page
+    [crash with register dumps as descibed above.]
+
+One of these messages is almost always followed by entry into the
+output inhibited state, if it is not already in that state.
+These errors occur even if swapping is off (as it seems to be
+in single user mode).
+
+Entry into output inhibited state can also occur without error
+messages.  This often follows attempts do use df, mount, umount,
+mkswap, swapon, or e2fsck (see below).
+
+Naturally, I thought of corrupted swap space and/or file partitions,
+so I've made many attempts to run "mkswap /dev/hda2 32984" (sometimes
+with the -c option) and e2fsck on both /dev/hda1 (root partition) and
+/dev/hdb1 (/home).  Mkswap or e2fsck sometimes crash (mkswap crashes
+more often with the -c option).  If they do not crash, they generally
+leave the system in the output inhibited state, so I cannot really be
+sure they have "worked."  Sometimes e2fsck reports problems with the
+disks and then crashes, sometimes it reports problems and does not
+crash, and sometimes it issues no (visible) problem reports and does
+not crash.  Neither e2fsck nor mkswap has helped solve my problem, as
+far as I can tell.
+
+I can also boot from the SLS a1 disk.  I can run e2fsck or mkswap from
+there, but the results seem no better that those described above.  I
+can also mount /dev/hda1 on the /root mount point provided on a1.
+Entry into the output inhibited state occurs here too, but always
+after some sort of interaction with the hard disk ext2 or swap
+partitions.  On one occasion, "ls -l /root" listed "usr" as a
+directory with size a 2147484672 bytes!  But after doing a "mkswap"
+this returned to a sane value.
+
+Linux has eaten my weekend, and I'm still stumped.  Have I lost everthing
+on my disks?  Must I do a do a complete reformat and reinstall of SLS?
+Must I kiss all data in /home goodbye?  Oh wizards, please help me!
+
+Don Bashford
+bashford@scripps.edu
+
+------------------------------
+
+From: imp@boulder.parcplace.com (Warner Losh)
+Subject: Re: Why use shadow?
+Date: Sun, 22 Aug 1993 17:41:08 GMT
+
+In article <1993Aug22.065612.4132@leland.Stanford.EDU>
+yseeley@leland.Stanford.EDU (Yonik Christopher Seeley) writes: 
+>In Linux using shadow passwords, it would take an extreme amount
+>of time, because you would have to go through the login interface
+>and would run up against the mechanisms you describe.
+
+Assuming that you don't have a broken rshd or rlogind installed on
+your system that wasn't compiled to use shadow passwords and assumes
+that no password in /etc/passwd means no password...
+
+Warner
+
+-- 
+Warner Losh             imp@boulder.parcplace.COM       ParcPlace Boulder
+I've almost finished my brute force solution to subtlety.
+
+------------------------------
+
+From: imp@boulder.parcplace.com (Warner Losh)
+Subject: Re: Why use shadow?
+Date: Sun, 22 Aug 1993 06:38:12 GMT
+
+In article <1993Aug22.032038.21655@taylor.uucp> mark@taylor.uucp (Mark
+A. Davis) writes: 
+>I guess I don't understand how a system can be broken into with those rules 
+>in effect except maybe through telnet or rlogin- but I think those have
+>time-outs and lock-outs and # of chances too...
+
+The problem is that if you get the encrypted password, you can then
+use the fast machine to guess what the plaintext password is.  Then,
+once you know that, you can log into that system with just one
+attempt.
+
+Warner
+-- 
+Warner Losh             imp@boulder.parcplace.COM       ParcPlace Boulder
+I've almost finished my brute force solution to subtlety.
+
+------------------------------
+
+From: heiser@bumetb.bu.edu (Bill Heiser)
+Subject: MAKEDEV for SCSI TAPE
+Date: 23 Aug 1993 20:56:26 GMT
+
+I just installed .99P12, and so far so good.  But I need to use
+my SCSI tape (Archive 2150S on an Adaptec 1542b).  The MAKEDEV
+doesn't (yet) support SCSI tape.
+
+What should I do to create the necessary devices, including
+non-rewind devices, etc.
+
+Thanks
+Bill
+
+------------------------------
+
+From: jcburt@gats486.larc.nasa.gov
+Subject: Re: How to add a new partition.
+Date: 23 Aug 1993 11:27:32 GMT
+
+In article <256oo0$lv5@panix.com> danw@panix.com (Dan Wold) writes:
+
+   I needed to make more HD space for my Linux (SLS 1.03). I found
+   fips01alpha.tar.z on sunsite.unc.edu in pub/Linux/system/Install. This
+   DOS program splits off a new partition from your free space on a dos
+   partition. It's necessary to run a disk de-fragger first.
+
+   This program worked fine. I booted Linux and ran fdisk to add the new
+   partition and change the system id. I tried to make the system id #5 (e2fs)
+   but that didn't work: fdisk says "you cannot change to extended filesystem".
+
+Ummmm...I think you made a mistake here...system id #5 refers to an "Extended"
+partition, as in the DOS idea of an extended partition (i.e. you can have 4
+primary partitions or 3 primary and one extended partitions under DOS. THe extended
+partition can contain several "logical" partitions (or as DOS likes to think of them
+as logical drives...)). I think what you *really* want to do is change it to 
+system id #83 (Linux extfs).
+
+John
+
+---
+John Burton                      G & A Technical Software, Inc.
+jcburt@gatsibm.larc.nasa.gov     28 Research Dr. Hampton, Va. 23666
+jcburt@gast486.larc.nasa.gov     (804) 865-7491
+--
+John Burton                      G & A Technical Software, Inc.
+jcburt@gatsibm.larc.nasa.gov     28 Research Dr. Hampton, Va. 23666
+jcburt@gast486.larc.nasa.gov     (804) 865-7491
+
+------------------------------
+
+From: jason@ab20.larc.nasa.gov (Jason Austin)
+Subject: Bizzare nfs suid problem
+Date: 23 Aug 1993 13:44:09 GMT
+Reply-To: C Wayne Huling <wayne@cs.odu.edu>
+
+
+(Please send replies to wayne@cs.odu.edu)
+
+Ok, this is really getting weird!  I have four Linux machines now:
+kimpeck, locutus, lore and hugh.  Of these machines kimpeck is the server,
+is supplies /usr to the other three machines.  I mount /usr ro,suid.  Now,
+this is where it gets bizzare.  I try rsh from kimpeck to anywhere, it
+works fine...  I try rsh from locutus and I get permission denied.  Now I 
+alt F2 and login as root, execute rsh with no parameters, I get the usage 
+blurb from rsh...  Alt F1 back to the login as me, and rsh works fine...
+Now, to make things even more intresting, I have to do this for each suid
+file, and then after a few minutes, it goes back to not being suid....
+and when /usr loses its suid, the machine is no longer trusted.....
+
+kimpeck:~$ uname -a
+Linux kimpeck.vb.comptek.com 0.99.pl9-1 04/27/93 i486
+
+does anyone have any suggestions?  I have heard that there is a newer mount,
+but I would think that this problem is more than just mount.
+
+
+------------------------------
+
+From: wayne@rose.cs.odu.edu (C Wayne Huling)
+Subject: lpr
+Date: 24 Aug 93 00:13:44 GMT
+
+has anyone gotten lpr and lpd to work with remote host?  I keep getting 
+kimpeck.vb.comptek.com :your host does  not have line printer access.  While
+I am more than capable of printing from kimpeck?  It is having trouble with 
+the daemons?  has anyone else had such bad expirences?
+
+
+                Wayne
+
+------------------------------
+
+From: david@irc.umbc.edu (Dave Brookshire)
+Subject: Re: lpr
+Date: 24 Aug 1993 04:56:05 GMT
+
+>has anyone gotten lpr and lpd to work with remote host?  I keep getting 
+>kimpeck.vb.comptek.com :your host does  not have line printer access.  While
+>I am more than capable of printing from kimpeck?  It is having trouble with 
+>the daemons?  has anyone else had such bad expirences?
+
+Ummm..check out the /etc/hosts.lpd file of the remote machine.  Your machine
+hostname MUST appear here in order to allow it to submit jobs remotely.
+It also wouldn't hurt if your hostname also appears in the /etc/hosts file.
+
+
+Dave
+--david@umbc.edu
+
+**-----------------------------------------------------------------**
+UMBC Imaging Research Center                    voice   (410)455-3373
+University of Maryland Baltimore County         fax     (410)455-1035
+ECS Building, Room 012J
+**-----------------------------------------------------------------**
+
+------------------------------
+
+From: ftlofaro@unlv.edu (Frank Lofaro)
+Subject: Re: Why use shadow?
+Date: Tue, 24 Aug 93 07:44:07 GMT
+
+In article <1993Aug23.162757.1305@kf8nh.wariat.org> bsa@kf8nh.wariat.org (Brandon S. Allbery) writes:
+>In article <1993Aug23.015538.20275@leland.Stanford.EDU> yseeley@leland.Stanford.EDU (Yonik Christopher Seeley) writes:
+>>Could this be done for Linux?  Would it be worth it?  A user
+>>could sit down at a Linux box and hit CTRL-ALT-DEL after
+>>a banner, to get the login prompt.  They could then be sure
+>>that if Linux was indeed running, that this was not a trojan
+>>horse.
+>
+>It's already there; look up the "Secure Attention Key".  When enabled, it kill
+>-9's all processes on the current terminal/VT; getty takes over from there if
+>it's still enabled, so you can log in from a known secure state.  (Assuming
+>nobody replaced /etc/init or /etc/getty with a Trojan horse....)
+>
+        Wouldn't having the kernel use vhnagup on the tty instead of kill -9 
+be a better option? As for current support, I only think Secure Attention Key 
+exits for the serial lines, but it is easy enough to hack into the keyboard, 
+etc drivers (I have, but I'm still stuck at 0.99pl9, gotta look at new kbd 
+code....)
+
+        Vhangup on the tty would prevent killing of processes, when all 
+that is needed is revoking tty access. The kill -9 solution could knock off
+processes innocently still attached to the tty, instead of detaching them.
+
+
+
+
+------------------------------
+
+From: bsa@kf8nh.wariat.org (Brandon S. Allbery)
+Subject: Re: Why use shadow?
+Date: Tue, 24 Aug 1993 11:58:18 GMT
+
+In article <1993Aug24.074407.8703@unlv.edu> ftlofaro@unlv.edu (Frank Lofaro) writes:
+>In article <1993Aug23.162757.1305@kf8nh.wariat.org> bsa@kf8nh.wariat.org (Brandon S. Allbery) writes:
+>>In article <1993Aug23.015538.20275@leland.Stanford.EDU> yseeley@leland.Stanford.EDU (Yonik Christopher Seeley) writes:
+>>It's already there; look up the "Secure Attention Key".  When enabled, it kill
+>>-9's all processes on the current terminal/VT; getty takes over from there if
+>>it's still enabled, so you can log in from a known secure state.  (Assuming
+>>nobody replaced /etc/init or /etc/getty with a Trojan horse....)
+>>
+>       Wouldn't having the kernel use vhnagup on the tty instead of kill -9 
+>be a better option? As for current support, I only think Secure Attention Key 
+
+Not for me to say.  The specs for the Secure Attention Key came from the
+Orange Book, I believe --- what I am certain of is that the specs say "kill",
+not "vhangup".  In any case, the vhangup() otpion already exists, as the
+default.  The SAK is just an extra bit of security for those who insist on it.
+
+++Brandon
+-- 
+Brandon S. Allbery         kf8nh@kf8nh.ampr.org          bsa@kf8nh.wariat.org
+"MSDOS didn't get as bad as it is overnight -- it took over ten years
+of careful development."  ---dmeggins@aix1.uottawa.ca
+
+------------------------------
+
+From: kmb@ccd.harris.com (Kurt Brunton)
+Subject: Re: ATI GU +, mouse is hiding
+Date: Tue, 24 Aug 1993 12:31:18 GMT
+
+Jay Freeman (freeman@eagle.sangamon.edu) wrote:
+: Hello. I have *almost* got X running, but have to overcome one final
+: snag. When I run startx (or openwin), I get the opening screen, if I
+: click the left button, it places the xclock then another click places
+: the bash window. As soon as I move the mouse however, the pointer
+: hides down in the lower right corner of my screen, and won't come out.
+: Pressing the left button shows the pop-up menu. The mouse just will
+: not move. I would be greatly interested i hearing from anyone who has
+: X working with their Graphics Ultra + using the ATI mouse. Mine is setup
+: on the primary address, IRQ 5. I've checked and doublechecked and  found
+: no IRQ conflicts. I've tried setting different scan rates in Xconfig,
+: and I've also tried different baud rates, though I don't think they
+: really appertain to a bus mouse.  BTW, /dev/mouse is symbolic linked to
+: the logitech bus device. It's the only one that seems to work, and during
+: bootup it says it detects a logitech bus mouse.  I'll be happy to mail
+: Xconfig to anyone who can help.
+
+: Thanks a bunch,
+: Jay
+
+: --
+: ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+: + Jay Freeman, WT9S           Packet: wt9s@w9yci.il.usa.noam       +
+: +                             internet: freeman@eagle.sangamon.edu +
+: ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+I have also found this problem using an ATI VGA Wonder V4 with busmouse.
+Before I upgraded to SLS 1.03, I had this working (SLS 1.01) in mono chrome
+(640x480 and 800x600) and color (640x480). After installing SLS 1.03 the
+mono chrome is not working and the mouse will not budge from the lower
+right corner. I've defined the mouse as "Busmouse   /dev/mouse". I've
+also tried othe configurations such as "Logitech   /dev/mouse" which
+plants the cursor in the upper left corner. Moving the mouse will get
+the cursor to move about a third of the way to the right or bottom, but
+the cursor jumps back to upper left immediatly. Kind of irritating.
+
+Kurt
+kbrunton@ccd.harris.com
+
+------------------------------
+
+From: freeman@eagle.sangamon.edu (Jay Freeman)
+Subject: Re: ATI GU +, mouse is hiding...Followup
+Date: Tue, 24 Aug 1993 18:15:23 GMT
+
+Kurt Brunton (kmb@ccd.harris.com) wrote:
+> Jay Freeman (freeman@eagle.sangamon.edu) wrote:
+> : Hello. I have *almost* got X running, but have to overcome one final
+> : snag. When I run startx (or openwin), I get the opening screen, if I
+
+> I have also found this problem using an ATI VGA Wonder V4 with busmouse.
+> Before I upgraded to SLS 1.03, I had this working (SLS 1.01) in mono chrome
+> (640x480 and 800x600) and color (640x480). After installing SLS 1.03 the
+> mono chrome is not working and the mouse will not budge from the lower
+> right corner. I've defined the mouse as "Busmouse   /dev/mouse". I've
+> also tried othe configurations such as "Logitech   /dev/mouse" which
+> plants the cursor in the upper left corner. Moving the mouse will get
+> the cursor to move about a third of the way to the right or bottom, but
+> the cursor jumps back to upper left immediatly. Kind of irritating.
+> 
+> Kurt
+> kbrunton@ccd.harris.com
+
+I have it working now.  I had to obtain the pl12 kernal and comppiled it
+with logitech bus mouse support. Apparently the SLS kernal's support   
+is broken. (I think it must be in there, since it detects the mouse?).
+Anyone who has a GU+ and wants to see my Xconfig, drop me some e-mail and
+I'll send it out.
+
+Jay
+--
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
++ Jay Freeman, WT9S           Packet: wt9s@w9yci.il.usa.noam       +
++                             internet: freeman@eagle.sangamon.edu +
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Admin-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.admin) via:
+
+    Internet: Linux-Admin@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Admin Digest
+******************************

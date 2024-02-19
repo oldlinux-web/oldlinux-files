@@ -1,0 +1,253 @@
+#!/bin/csh -f
+#
+# Installs Modula-2* tree
+#
+# Syntax:  ipdm2s-install <VERSION> [<DIRECTORY> [<ARCH>]]
+#
+# Parameters: 	1) Version number
+#		2) Target directory for Modula-2*	(default: './')
+#		3) required architecture		(default: determined)
+#
+# Stefan Haenssgen & Thomas Gauweiler  7-Apr-94
+#
+# Changes:
+#
+# 15-jan-93	Created					[SH&TG]
+# 28-jan-93	.mspath file added			[TG]
+# 16-jun-93	/tmp_mnt eliminated			[TG]
+# 15-nov-93	architecture and others			[TG]
+# 11-jan-94	version stamp				[TG]
+# 01-apr-94	changed to ipd-version			[TG]
+# 02-may-94	uses ipdm2s.$VERSION.$ARCH.gz file, too	[TG]
+#
+
+set MM_SED='sed -e s|/amd/|/|g -e s|/export/|/|g -e s|/tmp_mnt/|/|g'
+
+#
+# determine machine architecture (what type of machine we're on!)
+# by examining return values of "uname", "arch", or "machine"
+#
+
+if (-x /bin/uname || -x /usr/bin/uname) then
+    set SRC_ARCH=`uname -m`
+else if (-x /bin/arch || -x /usr/bin/arch) then
+    set SRC_ARCH=`arch`
+else if (-x /bin/machine || -x /usr/bin/machine) then
+    set SRC_ARCH=`machine`
+endif
+
+if (! $?SRC_ARCH) then			# could architecture not be determined ?
+    echo 'Error: could not determine source architecture'
+#    exit 2
+else if ("$SRC_ARCH" =~ sun4*) then	# SparcStation
+    set SRC_ARCH="SUN4"
+else if ("$SRC_ARCH" =~ sun3*) then	# Sun-3 with 680x0 CPU
+    set SRC_ARCH="SUN3"
+else if ("$SRC_ARCH" =~ i?86*) then	# 386/486/Pentium PC
+    set SRC_ARCH="I386"
+    if (-x /bin/uname || -x /usr/bin/uname) then
+        if ("`uname -s`" =~ *Linux*) then
+            set SRC_ARCH="LINX"         # Linux
+        endif
+    endif
+else if ("$SRC_ARCH" =~ ksr?*) then	# KSR-1 or KSR-2
+    set SRC_ARCH="KSRP"
+else if ("$SRC_ARCH" =~ RISC* || "$SRC_ARCH" =~ mips*) then
+    if ("`uname -v`" =~ *MP*) then	# MasPar frontend if ..
+        set SRC_ARCH="MASP"   		# DECStation and version *MP*
+    else
+        set SRC_ARCH="MIPS"		# else plain DECStation
+    endif
+else
+    echo 'Error: unknown source architecture "'$SRC_ARCH'"'
+    exit 9
+endif
+
+#
+# check for parameters
+#
+if ($1 == "") then
+    echo 'usage:    ipdm2s-install <VERSION> [<DIRECTORY> [<ARCH>]]'
+    echo ''
+    echo '          default <DIRECTORY> is ./'
+    echo '          default <ARCH> is automagically determined'
+    echo ''
+    echo 'example:  ipdm2s-install 9401 ./ SUN4'
+    exit 1
+else
+    set VERSION=$1
+endif
+if ($2 == "") then
+    set MSDIR="./"
+    set ARCH=$SRC_ARCH
+else
+    set MSDIR=$2
+endif
+if ($3 == "") then
+    set ARCH=$SRC_ARCH
+else
+    set ARCH=$3
+endif
+
+#
+# check if source & target exist and are accessible
+#
+if ( ! -r ipdm2s.$VERSION.$ARCH.tgz ) then
+    if ( -r ipdm2s.$VERSION.$ARCH.gz ) then
+        mv ipdm2s.$VERSION.$ARCH.gz ipdm2s.$VERSION.$ARCH.tgz
+    else if ( -r ipdm2s.$VERSION.$ARCH.tar.gz ) then
+        mv ipdm2s.$VERSION.$ARCH.tar.gz ipdm2s.$VERSION.$ARCH.tgz
+    else
+        echo 'Error: cannot access file "ipdm2s.'$VERSION.$ARCH'.tgz"'
+        exit 2
+    endif
+endif
+if ( ! -d $MSDIR) then
+    echo 'Error: target directory must already exist.'
+    exit 3
+endif
+if ( ! -w $MSDIR) then
+    echo 'Error: cannot write to target directory.'
+    exit 4
+endif
+
+#
+# determine the paths
+#
+
+set PWD_DIR=`pwd`
+cd $MSDIR
+set MSDIR=`pwd | $MM_SED`
+
+#
+# extract it
+#
+
+echo ''
+echo '*****'
+echo '*****  IPD Modula-2* Installation Script'
+echo '*****'
+echo ''
+echo 'Extracting from "'ipdm2s.$VERSION.$ARCH.tgz'" to "'$MSDIR'"'
+echo ''
+gunzip < $PWD_DIR/ipdm2s.$VERSION.$ARCH.tgz | tar xvf -
+echo ''
+
+echo 'Installation directory = "'$MSDIR'"'
+echo $MSDIR/lib >.mspath
+echo ''
+
+echo "Configuring the Modula-2* driver scripts ..."
+sed  -e "s|_MSC_HOME_|$MSDIR|"			\
+     <gen/driver.gen >bin/mm
+
+#
+# make scripts and binaries executable
+#
+
+chmod ugo+x bin/$ARCH/*.$ARCH
+chmod ugo+x bin/mm
+chmod ugo+x bin/liball
+chmod ugo+x bin/msproj
+chmod ugo+x bin/newarch
+
+echo "Creating several symbolic links ..."
+cd bin
+if (-e mmclean) then
+  rm -f mmclean
+  rm -f msdel
+  rm -f msmake
+  rm -f msrun
+  rm -f msrm
+  rm -f xmsp
+endif
+ln -s mm mmclean
+ln -s mm msdel
+ln -s mm msmake
+ln -s mm msrun
+ln -s mm msrm
+ln -s mm xmsp
+cd ..
+
+#
+# create example project directory
+#
+
+echo 'Creating example project directory ...'
+cd examples
+../bin/msproj $ARCH
+cd ..
+echo ''
+
+#
+# create the documentation
+#
+
+if ( ! -r $PWD_DIR/ipdm2s.doc.tar ) then
+  echo 'Information: no documentation archive found ...'
+else
+  echo 'Extracting compressed documents from documentation archive ...'
+  echo ''
+  tar xvf $PWD_DIR/ipdm2s.doc.tar
+  cd doc
+  echo ''
+  echo 'Uncompressing the IPD Modula-2* manual ...'
+  gunzip ipdm2s.manual.gz
+  cd ..
+endif
+
+#
+# change write permissions of extracted & generated files
+#
+
+echo 'Changing write permissions of extracted files and directories ...'
+chmod    go-w .mspath Xmsp architectures
+chmod -R go-w bin/ doc/ emacs/ examples/ gen/ lib/
+echo ''
+
+#
+# registration
+#
+
+echo 'Do you want to register your installation now (y/n) ?'
+set answer=$<
+if ( "$answer" =~ y* || "$answer" =~ Y* ) then
+  if ( ! -d doc) then
+    mkdir doc
+  endif
+
+  echo 'Please enter your complete email address: '
+  set email=$<
+  set date=`date`
+  sed  -e "s|_USER_|$USER|" -e "s|_EMAIL_|$email|"	\
+       -e "s|_VER_|$VERSION|" -e "s|_ARCH_|$ARCH|"	\
+       -e "s|_DATE_|$date|" -e "s|_ARCH_|$ARCH|"	\
+     <gen/registration.gen >doc/registration
+  chmod go-w doc/registration
+
+  echo ''
+  cat doc/registration
+  echo 'Do you really want to send this message (y/n) ?'
+  set sendanswer=$<
+  if ( "$sendanswer" =~ y* || "$sendanswer" =~ Y* ) then
+    echo ''
+    if (-x /usr/lib/sendmail) then
+      /usr/lib/sendmail -t <doc/registration
+      echo 'Okay, registration mail sent.'
+    else if (-x `which mail`) then
+      mail ipdm2s@ira.uka.de <doc/registration
+      echo 'Okay, registration mail sent.'
+    else
+      echo 'Sorry, could not find "sendmail" or "mail" programs.'
+    endif
+  endif
+endif
+echo ''
+
+#
+# return
+#
+
+echo 'Please add "'$MSDIR/bin'" to your PATH variable.'
+cd $PWD_DIR
+echo ''

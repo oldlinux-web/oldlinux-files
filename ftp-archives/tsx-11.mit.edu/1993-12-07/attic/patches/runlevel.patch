@@ -1,0 +1,291 @@
+From: qpliu@phoenix.princeton.edu
+
+These minor hacks make init of poe-igl-1.2 support a rudimentary form
+of runlevels.
+
+Doing vi /etc/inittab, kill -1 1, vi /etc/inittab, ... is bothersome.
+
+The old inittab entries are assumed to be for runlevel 1.
+The first entry is used for all runlevels.  In order to specify the
+runlevels for an entry, start the entry with a colon, followed by
+characters specifying the runlevels, followed by a colon and the
+rest of the entry.
+
+init starts at runlevel 0 if the exit status for /etc/rc is nonzero,
+otherwise it reads the runlevel from /etc/rl, if it exists, otherwise
+it starts at runlevel 1.
+
+runlevel is a simple-minded script to change the runlevel.
+
+qpliu@princeton.edu
+
+*** pathnames.h.orig    Thu Apr 16 21:02:32 1992
+--- pathnames.h Thu Apr 16 20:24:36 1992
+***************
+*** 37,39 ****
+--- 37,40 ----
+  #define _PATH_LOGIN   "/bin/login"
+  #define _PATH_INITTAB "/etc/inittab"
+  #define _PATH_RC      "/etc/rc"
++ #define       _PATH_RL        "/etc/rl"
+*** simpleinit.c.orig   Thu Apr 16 20:54:09 1992
+--- simpleinit.c        Thu Apr 16 22:56:03 1992
+***************
+*** 17,22 ****
+--- 17,23 ----
+  #define CMDSIZ 150
+  #define NUMCMD 30
+  #define NUMTOK 20
++ #define MAX_LEVS 31
+  
+  #define RUN_RC
+  
+***************
+*** 28,41 ****
+        char    termcap[30];
+        char    *toks[NUMTOK];
+        char    line[CMDSIZ];
+  };
+  
+  struct initline inittab[NUMCMD];
+  int numcmd;
+  int stopped = 0;      /* are we stopped */
+  
+  void do_rc(), spawn(), hup_handler(), read_inittab();
+! void tstp_handler();
+  
+  void err(char *s)
+  {
+--- 29,44 ----
+        char    termcap[30];
+        char    *toks[NUMTOK];
+        char    line[CMDSIZ];
++       char    levels[MAX_LEVS + 1];
+  };
+  
+  struct initline inittab[NUMCMD];
+  int numcmd;
+  int stopped = 0;      /* are we stopped */
++ char level = '0';
+  
+  void do_rc(), spawn(), hup_handler(), read_inittab();
+! void tstp_handler(), int_handler (), get_level ();
+  
+  void err(char *s)
+  {
+***************
+*** 53,58 ****
+--- 56,62 ----
+        int vec,i;
+        pid_t   pid;
+        
++       signal(SIGINT, SIG_IGN);
+  #ifdef RUN_RC
+        do_rc();
+  #endif
+***************
+*** 68,77 ****
+--- 72,83 ----
+                printf("toks= %s %s %s %s\n",p[0], p[1], p[2], p[3]);
+                printf("tty= %s\n", inittab[i].tty);
+                printf("termcap= %s\n", inittab[i].termcap);
++               printf("level=%c, levels=\"%s\"\n", level, inittab[i].levels);
+        }
+        exit(0);
+  #endif
+        signal(SIGHUP, hup_handler);
++       signal(SIGINT, int_handler);
+        signal(SIGTSTP, tstp_handler);
+        
+        for(i = 0; i < numcmd; i++)
+***************
+*** 84,90 ****
+                        if(pid == inittab[i].pid || inittab[i].pid < 0) {
+                                if(stopped) inittab[i].pid = -1;
+                                else spawn(i);
+-                               break;
+                        }
+                }
+        }
+--- 90,95 ----
+***************
+*** 113,118 ****
+--- 118,124 ----
+        } else if(pid > 0) {
+                /* parent, wait till rc process dies before spawning */
+                while(wait(&stat) != pid) /* nothing */;
++               if (!stat&0xff) get_level ();
+        }
+  }
+  
+***************
+*** 120,126 ****
+  {
+        pid_t pid;
+        int j;
+!       
+        if((pid = fork()) < 0) {
+                inittab[i].pid = -1;
+                err("fork failed\n");
+--- 126,137 ----
+  {
+        pid_t pid;
+        int j;
+! 
+!       if (i && !strchr(inittab[i].levels, level)) {
+!               inittab[i].pid = -1;
+!               return;
+!       }
+! 
+        if((pid = fork()) < 0) {
+                inittab[i].pid = -1;
+                err("fork failed\n");
+***************
+*** 173,179 ****
+                if(fgets(buf, CMDSIZ - 1, f) == 0) break;
+                if(buf[0] == '#' || buf[0] == '\n') continue;
+  
+!               (void) strcpy(inittab[i].line, buf);
+  
+                (void) strtok(inittab[i].line, ":");
+                (void) strncpy(inittab[i].tty, inittab[i].line, 9);
+--- 184,202 ----
+                if(fgets(buf, CMDSIZ - 1, f) == 0) break;
+                if(buf[0] == '#' || buf[0] == '\n') continue;
+  
+!               if (buf[0] == ':') {
+!                       char *e = strchr (buf + 1, ':');
+!                       int l = MAX_LEVS;
+!                       if (e) {
+!                               l = e - buf - 1;
+!                               if (l > MAX_LEVS) l = MAX_LEVS;
+!                       }
+!                       strncpy (inittab[i].levels, buf + 1, l);
+!                       (void) strcpy(inittab[i].line, e + 1);
+!               } else {
+!                       strcpy (inittab[i].levels, "1");
+!                       (void) strcpy(inittab[i].line, buf);
+!               }
+  
+                (void) strtok(inittab[i].line, ":");
+                (void) strncpy(inittab[i].tty, inittab[i].line, 9);
+***************
+*** 227,232 ****
+--- 250,256 ----
+                }
+                if(!had_already) spawn(i);
+        }
++       stopped = 0;
+        
+        (void) signal(SIGHUP, hup_handler);
+  }
+***************
+*** 237,240 ****
+--- 261,292 ----
+        if(!stopped) hup_handler();
+  
+        signal(SIGTSTP, tstp_handler);
++ }
++ 
++ void
++ int_handler ()
++ {
++       int i;
++ 
++       signal (SIGINT, SIG_IGN);
++       get_level ();
++ 
++       for (i = 0; i < numcmd; i++)
++               if (inittab[i].pid < 0) spawn (i);
++ 
++       stopped = 0;
++       signal (SIGINT, int_handler);
++ }
++ 
++ void
++ get_level ()
++ {
++       FILE *rl;
++       char b[2];
++ 
++       level = '1';
++       if ((rl = fopen (_PATH_RL, "r")) && fgets (b, 1, rl))
++               level = b[0];
++       fclose (rl);
++       return;
+  }
+*** /dev/null   Thu Apr 16 23:02:42 1992
+--- runlevel    Thu Apr 16 22:02:12 1992
+***************
+*** 0 ****
+--- 1,10 ----
++ #!/bin/sh
++ USAGE="Usage: $0 level"
++ _PATH_RL=/etc/rl
++ 
++ if [ $# = 0 ]; then echo $USAGE; exit 1; fi
++ 
++ umask 022
++ echo $1 > $_PATH_RL
++ 
++ kill -2 1
+*** inittab.orig        Thu Apr 16 22:31:45 1992
+--- inittab     Thu Apr 16 22:47:03 1992
+***************
+*** 1,10 ****
+  # inittab for linux, poeigl 1.2
+  # Format:
+  # ttyline:termcap-entry:getty-command
+  tty1:con80x60:/bin/agetty 9600 tty1
+! tty2:con80x60:/bin/agetty 9600 tty2
+! tty3:con80x60:/bin/agetty 9600 tty3
+! tty4:con80x60:/bin/agetty 9600 tty4
+  # tty5:con80x60:/bin/agetty 9600 tty5
+! tty64:dumb:/bin/agetty 9600 tty64
+! # tty65:dumb:/bin/agetty -m -t60 2400 tty65
+--- 1,15 ----
+  # inittab for linux, poeigl 1.2
+  # Format:
+  # ttyline:termcap-entry:getty-command
++ # or
++ # :levels:ttyline:termcap-entry:getty-command
+  tty1:con80x60:/bin/agetty 9600 tty1
+! :1ldn:tty2:con80x60:/bin/agetty 9600 tty2
+! :1ldn:tty3:con80x60:/bin/agetty 9600 tty3
+! :1ldn:tty4:con80x60:/bin/agetty 9600 tty4
+  # tty5:con80x60:/bin/agetty 9600 tty5
+! :ldn:tty64:dumb:/bin/agetty 9600 tty64
+! :d:tty65:dumb:/bin/agetty -m -t60 2400 tty65
+! :n:ttyp0:dumb:/bin/agetty 9600 ttyp0
+! :n:ttyp1:dumb:/bin/agetty 9600 ttyp1
+! :n:ttyp2:dumb:/bin/agetty 9600 ttyp2
+*** Makefile.orig       Thu Apr 16 21:31:08 1992
+--- Makefile    Thu Apr 16 21:34:55 1992
+***************
+*** 17,28 ****
+        ${CC} ${CFLAGS} -c $*.c
+  
+  all:  libufc.a login who encrypt last agetty hostname init getlogin.o \
+!       write
+  
+  install:      all
+        strip login who encrypt last agetty hostname init write
+!       cp login init agetty /bin
+!       chmod 744 /bin/init /bin/agetty
+        chmod u+s /bin/login
+        cp who encrypt hostname last write users mesg /usr/bin
+        ln -s /usr/bin/write /usr/bin/wall
+--- 17,28 ----
+        ${CC} ${CFLAGS} -c $*.c
+  
+  all:  libufc.a login who encrypt last agetty hostname init getlogin.o \
+!       write runlevel
+  
+  install:      all
+        strip login who encrypt last agetty hostname init write
+!       cp login init agetty runlevel /bin
+!       chmod 744 /bin/init /bin/agetty /bin/telinit
+        chmod u+s /bin/login
+        cp who encrypt hostname last write users mesg /usr/bin
+        ln -s /usr/bin/write /usr/bin/wall
+

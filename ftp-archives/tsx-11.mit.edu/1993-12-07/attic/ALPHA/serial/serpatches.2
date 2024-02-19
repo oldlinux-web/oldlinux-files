@@ -1,0 +1,1514 @@
+===================================================================
+RCS file: include/linux/RCS/tty.h,v
+retrieving revision 1.1
+diff -c -r1.1 include/linux/tty.h
+*** 1.1	1993/06/17 11:55:17
+--- include/linux/tty.h	1993/06/27 03:12:51
+***************
+*** 80,86 ****
+  	int	baud_base;
+  	char	close_delay;
+  	char	reserved_char[3];
+! 	int	reserved[6];
+  };
+  
+  /*
+--- 80,87 ----
+  	int	baud_base;
+  	char	close_delay;
+  	char	reserved_char[3];
+! 	int	hub6;
+! 	int	reserved[5];
+  };
+  
+  /*
+***************
+*** 99,104 ****
+--- 100,106 ----
+  #define ASYNC_HUP_NOTIFY 0x0001 /* Notify blocked open on hangups */
+  #define ASYNC_FOURPORT  0x0002	/* Set OU1, OUT2 per AST Fourport settings */
+  #define ASYNC_SAK	0x0004	/* Secure Attention Key (Orange book) */
++ #define ASYNC_TERMIOS_RESTORE 0x0008 /* Restore termios when dialin unblocks */
+  
+  #define ASYNC_SPD_MASK	0x0030
+  #define ASYNC_SPD_HI	0x0010	/* Use 56000 instead of 38400 bps */
+***************
+*** 107,114 ****
+  
+  #define ASYNC_SKIP_TEST	0x0040 /* Skip UART test during autoconfiguration */
+  #define ASYNC_AUTO_IRQ  0x0080 /* Do automatic IRQ during autoconfiguration */
+  
+! #define ASYNC_FLAGS	0x00F7	/* Possible legal async flags */
+  
+  /* Internal flags used only by kernel/chr_drv/serial.c */
+  #define ASYNC_INITIALIZED	0x80000000 /* Serial port was initialized */
+--- 109,118 ----
+  
+  #define ASYNC_SKIP_TEST	0x0040 /* Skip UART test during autoconfiguration */
+  #define ASYNC_AUTO_IRQ  0x0080 /* Do automatic IRQ during autoconfiguration */
++ #define ASYNC_SESSION_LOCKOUT 0x0100 /* Lock out cua opens based on session */
++ #define ASYNC_PGRP_LOCKOUT    0x0200 /* Lock out cua opens based on pgrp */
+  
+! #define ASYNC_FLAGS	0x07FF	/* Possible legal async flags */
+  
+  /* Internal flags used only by kernel/chr_drv/serial.c */
+  #define ASYNC_INITIALIZED	0x80000000 /* Serial port was initialized */
+***************
+*** 223,228 ****
+--- 227,234 ----
+  		    unsigned int cmd, unsigned long arg);
+  	void (*throttle)(struct tty_struct * tty, int status);
+  	void (*set_termios)(struct tty_struct *tty, struct termios * old);
++ 	void (*stop)(struct tty_struct *tty);
++ 	void (*start)(struct tty_struct *tty);
+  	struct tty_struct *link;
+  	unsigned char *write_data_ptr;
+  	int write_data_cnt;
+***************
+*** 318,323 ****
+--- 324,331 ----
+  extern void tty_read_flush(struct tty_struct *);
+  
+  extern struct tty_struct *tty_table[];
++ extern struct termios *tty_termios[];
++ extern struct termios *termios_locked[];
+  extern int tty_check_write[];
+  extern struct tty_struct * redirect;
+  extern struct tty_ldisc ldiscs[];
+===================================================================
+RCS file: include/linux/RCS/serial.h,v
+retrieving revision 1.1
+diff -c -r1.1 include/linux/serial.h
+*** 1.1	1993/06/16 16:13:53
+--- include/linux/serial.h	1993/06/27 03:12:52
+***************
+*** 21,26 ****
+--- 21,27 ----
+  	int			port;
+  	int			irq;
+  	int			flags; 		/* defined in tty.h */
++ 	int			hub6;		/* HUB6 plus one */
+  	int			type; 		/* UART type */
+  	struct tty_struct 	*tty;
+  	int			read_status_mask;
+***************
+*** 29,39 ****
+  	int			custom_divisor;
+  	int			x_char;	/* xon/xoff characater */
+  	int			close_delay;
+  	int			event;
+  	int			line;
+  	int			count;	    /* # of fd on device */
+  	int			blocked_open; /* # of blocked opens */
+! 	struct wait_queue *open_wait;
+  	struct async_struct	*next_port; /* For the linked list */
+  	struct async_struct	*prev_port;
+  };
+--- 30,43 ----
+  	int			custom_divisor;
+  	int			x_char;	/* xon/xoff characater */
+  	int			close_delay;
++ 	int			IER; 	/* Interrupt Enable Register */
+  	int			event;
+  	int			line;
+  	int			count;	    /* # of fd on device */
+  	int			blocked_open; /* # of blocked opens */
+! 	long			session; /* Session of opening process */
+! 	long			pgrp; /* pgrp of opening process */
+! 	struct wait_queue	*open_wait;
+  	struct async_struct	*next_port; /* For the linked list */
+  	struct async_struct	*prev_port;
+  };
+===================================================================
+RCS file: include/linux/RCS/termios.h,v
+retrieving revision 1.1
+diff -c -r1.1 include/linux/termios.h
+*** 1.1	1993/06/27 03:14:36
+--- include/linux/termios.h	1993/06/27 03:12:52
+***************
+*** 47,52 ****
+--- 47,54 ----
+  #define TIOCSERCONFIG	0x5453
+  #define TIOCSERGWILD	0x5454
+  #define TIOCSERSWILD	0x5455
++ #define TIOCGLCKTRMIOS	0x5456
++ #define TIOCSLCKTRMIOS	0x5457
+  
+  /* Used for packet mode */
+  #define TIOCPKT_FLUSHREAD	 1
+===================================================================
+RCS file: kernel/chr_drv/RCS/serial.c,v
+retrieving revision 1.1
+diff -c -r1.1 kernel/chr_drv/serial.c
+*** 1.1	1993/06/16 16:14:14
+--- kernel/chr_drv/serial.c	1993/06/27 17:09:23
+***************
+*** 49,57 ****
+   * CONFIG_ACCENT_ASYNC
+   *		Enables support for the Accent Async 4 port serial
+   * 		port.
+!  * 
+   */
+  
+  #define WAKEUP_CHARS (3*TTY_BUF_SIZE/4)
+  
+  /*
+--- 49,62 ----
+   * CONFIG_ACCENT_ASYNC
+   *		Enables support for the Accent Async 4 port serial
+   * 		port.
+!  *
+!  * CONFIG_HUB6
+!  *		Enables support for the venerable Bell Technologies
+!  *		HUB6 card.
+   */
+  
++ #define ISR_HACK
++ 
+  #define WAKEUP_CHARS (3*TTY_BUF_SIZE/4)
+  
+  /*
+***************
+*** 109,121 ****
+  #else
+  #define BOCA_FLAGS AUTO_IRQ_FLAG
+  #endif
+  	
+  struct async_struct rs_table[] = {
+  	/* UART CLK   PORT IRQ     FLAGS        */
+! 	{ BASE_BAUD, 0x3F8, 4, STD_COM_FLAGS, },	/* ttyS0 */
+! 	{ BASE_BAUD, 0x2F8, 3, STD_COM_FLAGS, },	/* ttyS1 */
+! 	{ BASE_BAUD, 0x3E8, 4, STD_COM_FLAGS, },	/* ttyS2 */
+! 	{ BASE_BAUD, 0x2E8, 3, STD_COM4_FLAGS, },	/* ttyS3 */
+  
+  	{ BASE_BAUD, 0x1A0, 9, FOURPORT_FLAGS }, 	/* ttyS4 */
+  	{ BASE_BAUD, 0x1A8, 9, FOURPORT_FLAGS },	/* ttyS5 */
+--- 114,148 ----
+  #else
+  #define BOCA_FLAGS AUTO_IRQ_FLAG
+  #endif
++ 
++ #ifdef CONFIG_HUB6
++ #define HUB6_FLAGS (ASYNC_BOOT_AUTOCONF)
++ #else
++ #define HUB6_FLAGS 0
++ #endif
+  	
++ /*
++  * The following define the access methods for the HUB6 card. All
++  * access is through two ports for all 24 possible chips. The card is
++  * selected through the high 2 bits, the port on that card with the
++  * "middle" 3 bits, and the register on that port with the bottom
++  * 3 bits.
++  *
++  * While the access port and interrupt is configurable, the default
++  * port locations are 0x302 for the port control register, and 0x303
++  * for the data read/write register. Normally, the interrupt is at irq3
++  * but can be anything from 3 to 7 inclusive. Note tht using 3 will
++  * require disabling com2.
++  */
++ 
++ #define C_P(card,port) (((card)<<6|(port)<<3) + 1)
++ 
+  struct async_struct rs_table[] = {
+  	/* UART CLK   PORT IRQ     FLAGS        */
+! 	{ BASE_BAUD, 0x3F8, 4, STD_COM_FLAGS },		/* ttyS0 */
+! 	{ BASE_BAUD, 0x2F8, 3, STD_COM_FLAGS },		/* ttyS1 */
+! 	{ BASE_BAUD, 0x3E8, 4, STD_COM_FLAGS },		/* ttyS2 */
+! 	{ BASE_BAUD, 0x2E8, 3, STD_COM4_FLAGS },	/* ttyS3 */
+  
+  	{ BASE_BAUD, 0x1A0, 9, FOURPORT_FLAGS }, 	/* ttyS4 */
+  	{ BASE_BAUD, 0x1A8, 9, FOURPORT_FLAGS },	/* ttyS5 */
+***************
+*** 127,136 ****
+  	{ BASE_BAUD, 0x2B0, 5, FOURPORT_FLAGS },	/* ttyS10 */
+  	{ BASE_BAUD, 0x2B8, 5, FOURPORT_FLAGS },	/* ttyS11 */
+  	
+! 	{ BASE_BAUD, 0x330, 4, ACCENT_FLAGS },	/* ttyS12 */
+! 	{ BASE_BAUD, 0x338, 4, ACCENT_FLAGS },	/* ttyS13 */
+! 	{ BASE_BAUD, 0x000, 0 },	/* ttyS14 (spare; user configurable) */
+! 	{ BASE_BAUD, 0x000, 0 },	/* ttyS15 (spare; user configurable) */
+  
+  	{ BASE_BAUD, 0x100, 12, BOCA_FLAGS },	/* ttyS16 */
+  	{ BASE_BAUD, 0x108, 12, BOCA_FLAGS },	/* ttyS17 */
+--- 154,163 ----
+  	{ BASE_BAUD, 0x2B0, 5, FOURPORT_FLAGS },	/* ttyS10 */
+  	{ BASE_BAUD, 0x2B8, 5, FOURPORT_FLAGS },	/* ttyS11 */
+  	
+! 	{ BASE_BAUD, 0x330, 4, ACCENT_FLAGS },		/* ttyS12 */
+! 	{ BASE_BAUD, 0x338, 4, ACCENT_FLAGS },		/* ttyS13 */
+! 	{ BASE_BAUD, 0x000, 0, 0 },	/* ttyS14 (spare; user configurable) */
+! 	{ BASE_BAUD, 0x000, 0, 0 },	/* ttyS15 (spare; user configurable) */
+  
+  	{ BASE_BAUD, 0x100, 12, BOCA_FLAGS },	/* ttyS16 */
+  	{ BASE_BAUD, 0x108, 12, BOCA_FLAGS },	/* ttyS17 */
+***************
+*** 148,153 ****
+--- 175,196 ----
+  	{ BASE_BAUD, 0x168, 12, BOCA_FLAGS },	/* ttyS29 */
+  	{ BASE_BAUD, 0x170, 12, BOCA_FLAGS },	/* ttyS30 */
+  	{ BASE_BAUD, 0x178, 12, BOCA_FLAGS },	/* ttyS31 */
++ 
++ /* You can have up to four HUB6's in the system, but I've only
++  * included two cards here for a total of twelve ports.
++  */
++ 	{ BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(0,0) },	/* ttyS32 */
++ 	{ BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(0,1) },	/* ttyS33 */
++ 	{ BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(0,2) },	/* ttyS34 */
++ 	{ BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(0,3) },	/* ttyS35 */
++ 	{ BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(0,4) },	/* ttyS36 */
++ 	{ BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(0,5) },	/* ttyS37 */
++ 	{ BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(1,0) },	/* ttyS32 */
++ 	{ BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(1,1) },	/* ttyS33 */
++ 	{ BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(1,2) },	/* ttyS34 */
++ 	{ BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(1,3) },	/* ttyS35 */
++ 	{ BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(1,4) },	/* ttyS36 */
++ 	{ BASE_BAUD, 0x302, 3, HUB6_FLAGS, C_P(1,5) },	/* ttyS37 */
+  };
+  
+  #define NR_PORTS	(sizeof(rs_table)/sizeof(struct async_struct))
+***************
+*** 163,178 ****
+--- 206,233 ----
+  
+  static inline unsigned int serial_in(struct async_struct *info, int offset)
+  {
++     if (info->hub6) {
++ 	outb(info->hub6 - 1 + offset, info->port);
++ 	return inb(info->port+1);
++     } else
+  	return inb(info->port + offset);
+  }
+  
+  static inline unsigned int serial_inp(struct async_struct *info, int offset)
+  {
++     if (info->hub6) {
++ 	outb(info->hub6 - 1 + offset, info->port);
++ 	return inb_p(info->port+1);
++     } else
+  	return inb_p(info->port + offset);
+  }
+  
+  static inline void serial_out(struct async_struct *info, int offset, int value)
+  {
++     if (info->hub6) {
++ 	outb(info->hub6 - 1 + offset, info->port);
++ 	outb(value, info->port+1);
++     } else
+  	outb(value, info->port+offset);
+  }
+  
+***************
+*** 179,188 ****
+--- 234,276 ----
+  static inline void serial_outp(struct async_struct *info, int offset,
+  			       int value)
+  {
++     if (info->hub6) {
++ 	outb(info->hub6 - 1 + offset, info->port);
++ 	outb(value, info->port+1);
++     } else
+  	outb_p(value, info->port+offset);
+  }
+  
+  /*
++  * ------------------------------------------------------------
++  * rs_stop() and rs_start()
++  *
++  * This routines are called before setting or resetting tty->stopped.
++  * They enable or disable transmitter interrupts, as necessary.
++  * ------------------------------------------------------------
++  */
++ static void rs_stop(struct tty_struct *tty)
++ {
++ 	struct async_struct *info;
++ 	
++ 	info = rs_table + DEV_TO_SL(tty->line);
++ 	
++ 	info->IER = UART_IER_MSI | UART_IER_RLSI | UART_IER_RDI;
++ 	serial_out(info, UART_IER, info->IER);
++ }
++ 
++ static void rs_start(struct tty_struct *tty)
++ {
++ 	struct async_struct *info;
++ 	
++ 	info = rs_table + DEV_TO_SL(tty->line);
++ 	
++ 	info->IER = UART_IER_MSI | UART_IER_RLSI | UART_IER_THRI |
++ 		UART_IER_RDI;
++ 	serial_out(info, UART_IER, info->IER);
++ }
++ 
++ /*
+   * ----------------------------------------------------------------------
+   *
+   * Here starts the interrupt handling routines.  All of the following
+***************
+*** 268,273 ****
+--- 356,364 ----
+  						  &info->tty->flags)) 
+  		rs_throttle(info->tty, TTY_THROTTLE_RQ_FULL);
+  	rs_sched_event(info, RS_EVENT_READ_PROCESS);
++ #ifdef SERIAL_DEBUG_INTR
++ 	printk("DR...");
++ #endif
+  }
+  
+  static inline void transmit_chars(struct async_struct *info, int *done_work)
+***************
+*** 278,285 ****
+  	queue = &info->tty->write_q;
+  	head = queue->head;
+  	tail = queue->tail;
+! 	if (head==tail && !info->x_char)
+  		return;
+  	count = info->xmit_fifo_size;
+  	if (info->x_char) {
+  		serial_outp(info, UART_TX, info->x_char);
+--- 369,379 ----
+  	queue = &info->tty->write_q;
+  	head = queue->head;
+  	tail = queue->tail;
+! 	if (head==tail && !info->x_char) {
+! 		info->IER = UART_IER_MSI | UART_IER_RLSI | UART_IER_RDI;
+! 		serial_out(info, UART_IER, info->IER);
+  		return;
++ 	}
+  	count = info->xmit_fifo_size;
+  	if (info->x_char) {
+  		serial_outp(info, UART_TX, info->x_char);
+***************
+*** 298,304 ****
+  			mark_bh(TTY_BH);
+  		}
+  	}
+! #ifdef SERIAL_INT_DEBUG
+  	printk("THRE...");
+  #endif
+  	(*done_work)++;
+--- 392,398 ----
+  			mark_bh(TTY_BH);
+  		}
+  	}
+! #ifdef SERIAL_DEBUG_INTR
+  	printk("THRE...");
+  #endif
+  	(*done_work)++;
+***************
+*** 311,316 ****
+--- 405,413 ----
+  	status = serial_in(info, UART_MSR);
+  		
+  	if ((status & UART_MSR_DDCD) && !C_LOCAL(info->tty)) {
++ #ifdef SERIAL_DEBUG_INTR
++ 		printk("DDCD...");
++ #endif
+  		if (status & UART_MSR_DCD)
+  			rs_sched_event(info, RS_EVENT_OPEN_WAKEUP);
+  		else
+***************
+*** 319,329 ****
+  	if (C_RTSCTS(info->tty)) {
+  		if (info->tty->stopped) {
+  			if (status & UART_MSR_CTS) {
+  				info->tty->stopped = 0;
+  				return 1;
+  			}
+! 		} else 
+! 			info->tty->stopped = !(status & UART_MSR_CTS);
+  	}
+  	return 0;
+  }
+--- 416,437 ----
+  	if (C_RTSCTS(info->tty)) {
+  		if (info->tty->stopped) {
+  			if (status & UART_MSR_CTS) {
++ #ifdef SERIAL_DEBUG_INTR
++ 				printk("CTS tx start...");
++ #endif
+  				info->tty->stopped = 0;
++ 				rs_start(info->tty);
+  				return 1;
+  			}
+! 		} else {
+! 			if (!(status & UART_MSR_CTS)) {
+! #ifdef SERIAL_DEBUG_INTR
+! 				printk("CTS tx stop...");
+! #endif
+! 				info->tty->stopped = 1;
+! 				rs_stop(info->tty);
+! 			}
+! 		}
+  	}
+  	return 0;
+  }
+***************
+*** 363,368 ****
+--- 471,480 ----
+  	done_work = 0;
+  	pass_number = 0;
+  	while (info) {
++ #ifdef ISR_HACK
++ 		if (!pass_number && irq)
++ 			serial_out(info, UART_IER, 0);
++ #endif
+  		if (info->tty &&
+  		    (!pass_number ||
+  		     !(serial_inp(info, UART_IIR) & UART_IIR_NO_INT))) {
+***************
+*** 377,383 ****
+  			    !info->tty->stopped) {
+  				transmit_chars(info, &done_work);
+  			}
+! 			if (check_modem_status(info))
+  				goto recheck_write;
+  		}
+  		
+--- 489,496 ----
+  			    !info->tty->stopped) {
+  				transmit_chars(info, &done_work);
+  			}
+! 			if (check_modem_status(info) &&
+! 			    (pass_number++ <= 64))
+  				goto recheck_write;
+  		}
+  		
+***************
+*** 396,401 ****
+--- 509,523 ----
+  			IRQ_timer[irq] = jiffies + IRQ_timeout[irq];
+  		IRQ_active |= 1 << irq;
+  	}
++ #ifdef ISR_HACK
++ 	if (!irq) {
++ 		info = IRQ_ports[irq];
++ 		while (info) {
++ 			serial_out(info, UART_IER, info->IER);
++ 			info = info->next_port;
++ 		}
++ 	}
++ #endif
+  	figure_RS_timer();
+  }
+  
+***************
+*** 476,487 ****
+  	for (i = 0, mask = 1; mask <= IRQ_active; i++, mask <<= 1) {
+  		if ((mask & IRQ_active) && (IRQ_timer[i] <= jiffies)) {
+  			IRQ_active &= ~mask;
+! 			if (i) {
+! 				cli();
+! 				rs_interrupt(i);
+! 				sti();
+! 			} else
+! 				rs_interrupt(i);
+  		}
+  		if (mask & IRQ_active) {
+  			if (!timeout || (IRQ_timer[i] < timeout))
+--- 598,606 ----
+  	for (i = 0, mask = 1; mask <= IRQ_active; i++, mask <<= 1) {
+  		if ((mask & IRQ_active) && (IRQ_timer[i] <= jiffies)) {
+  			IRQ_active &= ~mask;
+! 			cli();
+! 			rs_interrupt(i);
+! 			sti();
+  		}
+  		if (mask & IRQ_active) {
+  			if (!timeout || (IRQ_timer[i] < timeout))
+***************
+*** 553,559 ****
+  
+  	info = IRQ_ports[irq];
+  	if (!info) {
+! 		IRQ_timeout[irq] = 0;
+  		return;
+  	}
+  	while (info) {
+--- 672,678 ----
+  
+  	info = IRQ_ports[irq];
+  	if (!info) {
+! 		IRQ_timeout[irq] = 6000;
+  		return;
+  	}
+  	while (info) {
+***************
+*** 563,569 ****
+  	}
+  	if (!irq)
+  		timeout = timeout / 2;
+! 	IRQ_timeout[irq] = timeout;
+  }
+  
+  static inline void unlink_port(struct async_struct *info)
+--- 682,688 ----
+  	}
+  	if (!irq)
+  		timeout = timeout / 2;
+! 	IRQ_timeout[irq] = timeout ? timeout : 1;
+  }
+  
+  static inline void unlink_port(struct async_struct *info)
+***************
+*** 631,637 ****
+  	/*
+  	 * Finally, enable interrupts
+  	 */
+! 	serial_outp(info, UART_IER, 0x0f);	/* enable all intrs */
+  	if (info->flags & ASYNC_FOURPORT) {
+  		/* Enable interrupts on the AST Fourport board */
+  		ICP = (info->port & 0xFE0) | 0x01F;
+--- 750,757 ----
+  	/*
+  	 * Finally, enable interrupts
+  	 */
+! 	info->IER = UART_IER_MSI | UART_IER_RLSI | UART_IER_RDI;
+! 	serial_outp(info, UART_IER, info->IER);	/* enable all intrs */
+  	if (info->flags & ASYNC_FOURPORT) {
+  		/* Enable interrupts on the AST Fourport board */
+  		ICP = (info->port & 0xFE0) | 0x01F;
+***************
+*** 670,675 ****
+--- 790,796 ----
+  	unsigned long flags;
+  
+  	save_flags(flags); cli();
++ 	info->IER = 0;
+  	serial_outp(info, UART_IER, 0x00);	/* disable all intrs */
+  	if (info->tty && !(info->tty->termios->c_cflag & HUPCL))
+  		serial_outp(info, UART_MCR, UART_MCR_DTR);
+***************
+*** 726,738 ****
+--- 847,862 ----
+  		quot = 0;
+  		info->timeout = 0;
+  	}
++ 	cli();
+  	mcr = serial_in(info, UART_MCR);
+  	if (quot) 
+  		serial_out(info, UART_MCR, mcr | UART_MCR_DTR);
+  	else {
+  		serial_out(info, UART_MCR, mcr & ~UART_MCR_DTR);
++ 		sti();
+  		return;
+  	}
++ 	sti();
+  	/* byte size and parity */
+  	cval = cflag & (CSIZE | CSTOPB);
+  	cval >>= 4;
+***************
+*** 761,767 ****
+   * 
+   * Note: this subroutine must be called with the interrupts *off*
+   */
+! static void restart_port(struct async_struct *info)
+  {
+  	struct tty_queue * queue;
+  	int head, tail, count;
+--- 885,891 ----
+   * 
+   * Note: this subroutine must be called with the interrupts *off*
+   */
+! static inline void restart_port(struct async_struct *info)
+  {
+  	struct tty_queue * queue;
+  	int head, tail, count;
+***************
+*** 768,773 ****
+--- 892,898 ----
+  	
+  	if (!info)
+  		return;
++ 
+  	if (serial_inp(info, UART_LSR) & UART_LSR_THRE) {
+  		if (info->x_char) {
+  			serial_outp(info, UART_TX, info->x_char);
+***************
+*** 799,806 ****
+--- 924,938 ----
+  	if (!tty || tty->stopped)
+  		return;
+  	info = rs_table + DEV_TO_SL(tty->line);
++ 	if (!info)
++ 		return;
+  	cli();
+  	restart_port(info);
++ #ifdef ISR_HACK
++ 	info->IER = UART_IER_MSI | UART_IER_RLSI | UART_IER_THRI |
++ 		UART_IER_RDI;
++ 	serial_out(info, UART_IER, info->IER);
++ #endif
+  	sti();
+  }
+  
+***************
+*** 809,815 ****
+   * rs_throttle()
+   * 
+   * This routine is called by the upper-layer tty layer to signal that
+!  * incoming characters should be throttled (and that the throttled
+   * should be released).
+   * ------------------------------------------------------------
+   */
+--- 941,947 ----
+   * rs_throttle()
+   * 
+   * This routine is called by the upper-layer tty layer to signal that
+!  * incoming characters should be throttled (and that the throttle
+   * should be released).
+   * ------------------------------------------------------------
+   */
+***************
+*** 817,824 ****
+  {
+  	struct async_struct *info;
+  	unsigned char mcr;
+  
+! #if 0
+  	printk("throttle tty%d: %d (%d, %d)....\n", DEV_TO_SL(tty->line),
+  	       status, LEFT(&tty->read_q), LEFT(&tty->secondary));
+  #endif
+--- 949,958 ----
+  {
+  	struct async_struct *info;
+  	unsigned char mcr;
++ 	unsigned long flags;
+  
+! 	save_flags(flags); cli();
+! #if SERIAL_DEBUG_THROTTLE
+  	printk("throttle tty%d: %d (%d, %d)....\n", DEV_TO_SL(tty->line),
+  	       status, LEFT(&tty->read_q), LEFT(&tty->secondary));
+  #endif
+***************
+*** 836,847 ****
+  	case TTY_THROTTLE_RQ_AVAIL:
+  		info = rs_table + DEV_TO_SL(tty->line);
+  		if (tty->termios->c_iflag & IXOFF) {
+- 			cli();
+  			if (info->x_char)
+  				info->x_char = 0;
+  			else
+  				info->x_char = START_CHAR(tty);
+- 			sti();
+  		} else {
+  			mcr = serial_in(info, UART_MCR);
+  			mcr |= UART_MCR_RTS;
+--- 970,979 ----
+***************
+*** 849,854 ****
+--- 981,987 ----
+  		}
+  		break;
+  	}
++ 	restore_flags(flags);
+  }
+  
+  /*
+***************
+*** 873,878 ****
+--- 1006,1012 ----
+  	tmp.baud_base = info->baud_base;
+  	tmp.close_delay = info->close_delay;
+  	tmp.custom_divisor = info->custom_divisor;
++ 	tmp.hub6 = info->hub6;
+  	memcpy_tofs(retinfo,&tmp,sizeof(*retinfo));
+  	return 0;
+  }
+***************
+*** 892,898 ****
+  	old_info = *info;
+  
+  	change_irq = new.irq != info->irq;
+! 	change_port = new.port != info->port;
+  
+  	if (!suser()) {
+  		if (change_irq || change_port ||
+--- 1026,1032 ----
+  	old_info = *info;
+  
+  	change_irq = new.irq != info->irq;
+! 	change_port = (new.port != info->port) || (new.hub6 != info->hub6);
+  
+  	if (!suser()) {
+  		if (change_irq || change_port ||
+***************
+*** 899,906 ****
+  		    (new.baud_base != info->baud_base) ||
+  		    (new.type != info->type) ||
+  		    (new.close_delay != info->close_delay) ||
+! 		    ((new.flags & ~ASYNC_FLAGS) !=
+! 		     (info->flags & ~ASYNC_FLAGS)))
+  			return -EPERM;
+  		info->flags = ((info->flags & ~ASYNC_SPD_MASK) |
+  			       (new.flags & ASYNC_SPD_MASK));
+--- 1033,1040 ----
+  		    (new.baud_base != info->baud_base) ||
+  		    (new.type != info->type) ||
+  		    (new.close_delay != info->close_delay) ||
+! 		    ((new.flags & ASYNC_FLAGS & ~ASYNC_SPD_MASK) !=
+! 		     (info->flags & ASYNC_FLAGS & ~ASYNC_SPD_MASK)))
+  			return -EPERM;
+  		info->flags = ((info->flags & ~ASYNC_SPD_MASK) |
+  			       (new.flags & ASYNC_SPD_MASK));
+***************
+*** 969,974 ****
+--- 1103,1109 ----
+  		}
+  		info->irq = new.irq;
+  		info->port = new.port;
++ 		info->hub6 = new.hub6;
+  	}
+  	
+  check_and_exit:
+***************
+*** 993,1000 ****
+--- 1128,1137 ----
+  	unsigned char control, status;
+  	unsigned int result;
+  
++ 	cli();
+  	control = serial_in(info, UART_MCR);
+  	status = serial_in(info, UART_MSR);
++ 	sti();
+  	result =  ((control & UART_MCR_RTS) ? TIOCM_RTS : 0)
+  		| ((control & UART_MCR_DTR) ? TIOCM_DTR : 0)
+  		| ((status  & UART_MSR_DCD) ? TIOCM_CAR : 0)
+***************
+*** 1011,1017 ****
+--- 1148,1156 ----
+  	unsigned char control;
+  	unsigned int arg = get_fs_long((unsigned long *) value);
+  	
++ 	cli();
+  	control = serial_in(info, UART_MCR);
++ 	sti();
+  
+  	switch (cmd) {
+  		case TIOCMBIS:
+***************
+*** 1034,1040 ****
+--- 1173,1181 ----
+  		default:
+  			return -EINVAL;
+  	}
++ 	cli();
+  	serial_out(info, UART_MCR, control);
++ 	sti();
+  	return 0;
+  }
+  
+***************
+*** 1087,1095 ****
+--- 1228,1238 ----
+  		return;
+  	current->state = TASK_INTERRUPTIBLE;
+  	current->timeout = jiffies + duration;
++ 	cli();
+  	serial_out(info, UART_LCR, serial_inp(info, UART_LCR) | UART_LCR_SBC);
+  	schedule();
+  	serial_out(info, UART_LCR, serial_inp(info, UART_LCR) & ~UART_LCR_SBC);
++ 	sti();
+  }
+  
+  /*
+***************
+*** 1267,1272 ****
+--- 1410,1416 ----
+  	if (--info->count > 0)
+  		return;
+  	tty->stopped = 0;		/* Force flush to succeed */
++ 	rs_start(tty);
+  	wait_until_sent(tty);
+  	clear_bit(line, rs_event);
+  	info->event = 0;
+***************
+*** 1305,1311 ****
+  			   struct async_struct *info)
+  {
+  	struct wait_queue wait = { current, NULL };
+! 	int	retval;
+  	
+  	/*
+  	 * If this is a callout device, then just make sure the normal
+--- 1449,1458 ----
+  			   struct async_struct *info)
+  {
+  	struct wait_queue wait = { current, NULL };
+! 	int		retval;
+! 	int		do_clocal = C_LOCAL(tty);
+! 	struct termios	orig_termios;
+! 	int		tty_line = tty->line;
+  	
+  	/*
+  	 * If this is a callout device, then just make sure the normal
+***************
+*** 1314,1319 ****
+--- 1461,1474 ----
+  	if (MAJOR(filp->f_rdev) == 5) {
+  		if (info->flags & ASYNC_NORMAL_ACTIVE)
+  			return -EBUSY;
++ 		if ((info->flags & ASYNC_CALLOUT_ACTIVE) &&
++ 		    (info->flags & ASYNC_SESSION_LOCKOUT) &&
++ 		    (info->session != current->session))
++ 		    return -EBUSY;
++ 		if ((info->flags & ASYNC_CALLOUT_ACTIVE) &&
++ 		    (info->flags & ASYNC_PGRP_LOCKOUT) &&
++ 		    (info->pgrp != current->pgrp))
++ 		    return -EBUSY;
+  		info->flags |= ASYNC_CALLOUT_ACTIVE;
+  		return 0;
+  	}
+***************
+*** 1344,1365 ****
+  #endif
+  	info->count--;
+  	info->blocked_open++;
+  	while (1) {
+  		if (!(info->flags & ASYNC_CALLOUT_ACTIVE))
+  			serial_out(info, UART_MCR,
+  				   serial_inp(info, UART_MCR) | UART_MCR_DTR);
+  		current->state = TASK_INTERRUPTIBLE;
+! 		if (tty_hung_up_p(filp)) {
+! 			if (info->flags & ASYNC_HUP_NOTIFY)
+! 				retval = -EAGAIN;
+! 			else
+! 				retval = -ERESTARTNOINTR;
+  			break;
+  		}
+  		if (!(info->flags & ASYNC_CALLOUT_ACTIVE) &&
+! 		    (C_LOCAL(tty) ||
+! 		     (serial_in(info, UART_MSR) & UART_MSR_DCD)))
+  			break;
+  		if (current->signal & ~current->blocked) {
+  			retval = -ERESTARTSYS;
+  			break;
+--- 1499,1525 ----
+  #endif
+  	info->count--;
+  	info->blocked_open++;
++ 	memset(&orig_termios, 0, sizeof(orig_termios));
++ 	if (tty_termios[tty_line])
++ 		orig_termios = *tty_termios[tty_line];
+  	while (1) {
++ 		cli();
+  		if (!(info->flags & ASYNC_CALLOUT_ACTIVE))
+  			serial_out(info, UART_MCR,
+  				   serial_inp(info, UART_MCR) | UART_MCR_DTR);
++ 		sti();
+  		current->state = TASK_INTERRUPTIBLE;
+! 		if (tty_hung_up_p(filp) && (info->flags & ASYNC_HUP_NOTIFY)) {
+! 			retval = -EAGAIN;
+  			break;
+  		}
+  		if (!(info->flags & ASYNC_CALLOUT_ACTIVE) &&
+! 		    (do_clocal || (serial_in(info, UART_MSR) &
+! 				   UART_MSR_DCD))) {
+! 			if (tty_hung_up_p(filp))
+! 				retval = -ERESTARTNOINTR;
+  			break;
++ 		}
+  		if (current->signal & ~current->blocked) {
+  			retval = -ERESTARTSYS;
+  			break;
+***************
+*** 1381,1386 ****
+--- 1541,1549 ----
+  	if (retval)
+  		return retval;
+  	info->flags |= ASYNC_NORMAL_ACTIVE;
++ 	if ((info->flags & ASYNC_TERMIOS_RESTORE) &&
++ 	    tty_termios[tty_line])
++ 		*tty_termios[tty_line] = orig_termios;
+  	return 0;
+  }	
+  
+***************
+*** 1411,1416 ****
+--- 1574,1581 ----
+  	tty->ioctl = rs_ioctl;
+  	tty->throttle = rs_throttle;
+  	tty->set_termios = rs_set_termios;
++ 	tty->stop = rs_stop;
++ 	tty->start = rs_start;
+  
+  	if (!(info->flags & ASYNC_INITIALIZED)) {
+  		if (!info->port || !info->type) {
+***************
+*** 1443,1448 ****
+--- 1608,1616 ----
+  	retval = block_til_ready(tty, filp, info);
+  	if (retval)
+  		return retval;
++ 
++ 	info->session = current->session;
++ 	info->pgrp = current->pgrp;
+  	
+  	return 0;
+  }
+***************
+*** 1462,1468 ****
+   */
+  static void show_serial_version(void)
+  {
+! 	printk("Serial driver version 3.95 with");
+  #ifdef CONFIG_AST_FOURPORT
+  	printk(" AST_FOURPORT");
+  #define SERIAL_OPT
+--- 1630,1636 ----
+   */
+  static void show_serial_version(void)
+  {
+! 	printk("Serial driver version 3.96 with");
+  #ifdef CONFIG_AST_FOURPORT
+  	printk(" AST_FOURPORT");
+  #define SERIAL_OPT
+***************
+*** 1471,1476 ****
+--- 1639,1648 ----
+  	printk(" ACCENT_ASYNC");
+  #define SERIAL_OPT
+  #endif
++ #ifdef CONFIG_HUB6
++ 	printk(" HUB-6");
++ #define SERIAL_OPT
++ #endif
+  #ifdef CONFIG_AUTO_IRQ
+  	printk (" AUTO_IRQ");
+  #define SERIAL_OPT
+***************
+*** 1498,1503 ****
+--- 1670,1676 ----
+  	 * Enable interrupts and see who answers
+  	 */
+  	rs_irq_triggered = 0;
++ 	cli();
+  	save_IER = serial_inp(info, UART_IER);
+  	save_MCR = serial_inp(info, UART_MCR);
+  	if (info->flags & ASYNC_FOURPORT)  {
+***************
+*** 1512,1517 ****
+--- 1685,1691 ----
+  			    UART_MCR_DTR | UART_MCR_RTS | UART_MCR_OUT2);
+  		serial_outp(info, UART_IER, 0x0f);	/* enable all intrs */
+  	}
++ 	sti();
+  	/*
+  	 * Next, clear the interrupt registers.
+  	 */
+***************
+*** 1528,1537 ****
+--- 1702,1713 ----
+  	/*
+  	 * Now check to see if we got any business, and clean up.
+  	 */
++ 	cli();
+  	serial_outp(info, UART_IER, save_IER);
+  	serial_outp(info, UART_MCR, save_MCR);
+  	if (info->flags & ASYNC_FOURPORT)
+  		outb_p(save_ICP, ICP);
++ 	sti();
+  	return(rs_irq_triggered);
+  }
+  
+***************
+*** 1582,1592 ****
+--- 1758,1771 ----
+  {
+  	unsigned char status1, status2, scratch, scratch2;
+  	unsigned port = info->port;
++ 	unsigned long flags;
+  
+  	info->type = PORT_UNKNOWN;
+  	
+  	if (!port)
+  		return;
++ 
++ 	save_flags(flags); cli();
+  	
+  	/*
+  	 * Do a simple existence test first; if we fail this, there's
+***************
+*** 1596,1603 ****
+  	serial_outp(info, UART_IER, 0);
+  	scratch2 = serial_inp(info, UART_IER);
+  	serial_outp(info, UART_IER, scratch);
+! 	if (scratch2)
+  		return;		/* We failed; there's nothing here */
+  
+  	/* 
+  	 * Check to see if a UART is really there.  Certain broken
+--- 1775,1784 ----
+  	serial_outp(info, UART_IER, 0);
+  	scratch2 = serial_inp(info, UART_IER);
+  	serial_outp(info, UART_IER, scratch);
+! 	if (scratch2) {
+! 		restore_flags(flags);
+  		return;		/* We failed; there's nothing here */
++ 	}
+  
+  	/* 
+  	 * Check to see if a UART is really there.  Certain broken
+***************
+*** 1616,1623 ****
+  		status1 = serial_inp(info, UART_MSR) & 0xF0;
+  		serial_outp(info, UART_MCR, scratch);
+  		serial_outp(info, UART_MSR, scratch2);
+! 		if (status1 != 0x90)
+  			return;
+  	} 
+  	
+  	/*
+--- 1797,1806 ----
+  		status1 = serial_inp(info, UART_MSR) & 0xF0;
+  		serial_outp(info, UART_MCR, scratch);
+  		serial_outp(info, UART_MSR, scratch2);
+! 		if (status1 != 0x90) {
+! 			restore_flags(flags);
+  			return;
++ 		}
+  	} 
+  	
+  	/*
+***************
+*** 1627,1634 ****
+  	if (info->flags & ASYNC_AUTO_IRQ)
+  		info->irq = do_auto_irq(info);
+  		
+! 	outb_p(UART_FCR_ENABLE_FIFO, UART_FCR + port);
+! 	scratch = inb(UART_IIR + port) >> 6;
+  	info->xmit_fifo_size = 1;
+  	switch (scratch) {
+  		case 0:
+--- 1810,1817 ----
+  	if (info->flags & ASYNC_AUTO_IRQ)
+  		info->irq = do_auto_irq(info);
+  		
+! 	serial_outp(info, UART_FCR, UART_FCR_ENABLE_FIFO);
+! 	scratch = serial_in(info, UART_IIR) >> 6;
+  	info->xmit_fifo_size = 1;
+  	switch (scratch) {
+  		case 0:
+***************
+*** 1646,1661 ****
+  			break;
+  	}
+  	if (info->type == PORT_16450) {
+! 		scratch = inb(UART_SCR + port);
+! 		outb_p(0xa5, UART_SCR + port);
+! 		status1 = inb(UART_SCR + port);
+! 		outb_p(0x5a, UART_SCR + port);
+! 		status2 = inb(UART_SCR + port);
+! 		outb_p(scratch, UART_SCR + port);
+  		if ((status1 != 0xa5) || (status2 != 0x5a))
+  			info->type = PORT_8250;
+  	}
+  	shutdown(info);
+  }
+  
+  /*
+--- 1829,1846 ----
+  			break;
+  	}
+  	if (info->type == PORT_16450) {
+! 		scratch = serial_in(info, UART_SCR);
+! 		serial_outp(info, UART_SCR, 0xa5);
+! 		status1 = serial_in(info, UART_SCR);
+! 		serial_outp(info, UART_SCR, 0x5a);
+! 		status2 = serial_in(info, UART_SCR);
+! 		serial_outp(info, UART_SCR, scratch);
+! 
+  		if ((status1 != 0xa5) || (status2 != 0x5a))
+  			info->type = PORT_8250;
+  	}
+  	shutdown(info);
++ 	restore_flags(flags);
+  }
+  
+  /*
+===================================================================
+RCS file: kernel/chr_drv/RCS/tty_io.c,v
+retrieving revision 1.1
+diff -c -r1.1 kernel/chr_drv/tty_io.c
+*** 1.1	1993/06/16 13:11:36
+--- kernel/chr_drv/tty_io.c	1993/06/27 03:12:55
+***************
+*** 58,63 ****
+--- 58,64 ----
+  struct tty_struct *tty_table[MAX_TTYS];
+  struct termios *tty_termios[MAX_TTYS];	/* We need to keep the termios state */
+  				  	/* around, even when a tty is closed */
++ struct termios *termios_locked[MAX_TTYS]; /* Bitfield of locked termios flags*/
+  struct tty_ldisc ldiscs[NR_LDISCS];	/* line disc dispatch table	*/
+  int tty_check_write[MAX_TTYS/32];	/* bitfield for the bh handler */
+  
+***************
+*** 613,618 ****
+--- 614,621 ----
+  			        tty->status_changed = 1;
+  				tty->ctrl_status |= TIOCPKT_STOP;
+  				tty->stopped=1;
++ 				if (tty->stop)
++ 					(tty->stop)(tty);
+  				if (IS_A_CONSOLE(tty->line)) {
+  					set_vc_kbd_flag(kbd_table + fg_console, VC_SCROLLOCK);
+  					set_leds();
+***************
+*** 624,629 ****
+--- 627,634 ----
+  			        tty->status_changed = 1;
+  				tty->ctrl_status |= TIOCPKT_START;
+  				tty->stopped=0;
++ 				if (tty->start)
++ 					(tty->start)(tty);
+  				if (IS_A_CONSOLE(tty->line)) {
+  					clr_vc_kbd_flag(kbd_table + fg_console, VC_SCROLLOCK);
+  					set_leds();
+***************
+*** 1039,1045 ****
+  static int init_dev(int dev)
+  {
+  	struct tty_struct *tty, *o_tty;
+! 	struct termios *tp, *o_tp;
+  	int retval;
+  	int o_dev;
+  
+--- 1044,1050 ----
+  static int init_dev(int dev)
+  {
+  	struct tty_struct *tty, *o_tty;
+! 	struct termios *tp, *o_tp, *ltp, *o_ltp;
+  	int retval;
+  	int o_dev;
+  
+***************
+*** 1046,1051 ****
+--- 1051,1057 ----
+  	o_dev = PTY_OTHER(dev);
+  	tty = o_tty = NULL;
+  	tp = o_tp = NULL;
++ 	ltp = o_ltp = NULL;
+  repeat:
+  	retval = -EAGAIN;
+  	if (IS_A_PTY_MASTER(dev) && tty_table[dev] && tty_table[dev]->count)
+***************
+*** 1059,1073 ****
+  		goto repeat;
+  	}
+  	if (!tty_termios[dev] && !tp) {
+! 		tp = (struct termios *) kmalloc(sizeof(struct termios), GFP_KERNEL);
+  		if (!tp)
+  			goto end_init;
+  		initialize_termios(dev, tp);
+  		goto repeat;
+  	}
+  	if (IS_A_PTY(dev)) {
+  		if (!tty_table[o_dev] && !o_tty) {
+! 			o_tty = (struct tty_struct *) get_free_page(GFP_KERNEL);
+  			if (!o_tty)
+  				goto end_init;
+  			initialize_tty_struct(o_dev, o_tty);
+--- 1065,1089 ----
+  		goto repeat;
+  	}
+  	if (!tty_termios[dev] && !tp) {
+! 		tp = (struct termios *) kmalloc(sizeof(struct termios),
+! 						GFP_KERNEL);
+  		if (!tp)
+  			goto end_init;
+  		initialize_termios(dev, tp);
+  		goto repeat;
+  	}
++ 	if (!termios_locked[dev] && !ltp) {
++ 		ltp = (struct termios *) kmalloc(sizeof(struct termios),
++ 						 GFP_KERNEL);
++ 		if (!ltp)
++ 			goto end_init;
++ 		memset(ltp, 0, sizeof(struct termios));
++ 		goto repeat;
++ 	}
+  	if (IS_A_PTY(dev)) {
+  		if (!tty_table[o_dev] && !o_tty) {
+! 			o_tty = (struct tty_struct *)
+! 				get_free_page(GFP_KERNEL);
+  			if (!o_tty)
+  				goto end_init;
+  			initialize_tty_struct(o_dev, o_tty);
+***************
+*** 1074,1085 ****
+  			goto repeat;
+  		}
+  		if (!tty_termios[o_dev] && !o_tp) {
+! 			o_tp = (struct termios *) kmalloc(sizeof(struct termios), GFP_KERNEL);
+  			if (!o_tp)
+  				goto end_init;
+  			initialize_termios(o_dev, o_tp);
+  			goto repeat;
+  		}
+  	}
+  	/* Now we have allocated all the structures: update all the pointers.. */
+  	if (!tty_termios[dev]) {
+--- 1090,1111 ----
+  			goto repeat;
+  		}
+  		if (!tty_termios[o_dev] && !o_tp) {
+! 			o_tp = (struct termios *)
+! 				kmalloc(sizeof(struct termios), GFP_KERNEL);
+  			if (!o_tp)
+  				goto end_init;
+  			initialize_termios(o_dev, o_tp);
+  			goto repeat;
+  		}
++ 		if (!termios_locked[o_dev] && !o_ltp) {
++ 			o_ltp = (struct termios *)
++ 				kmalloc(sizeof(struct termios), GFP_KERNEL);
++ 			if (!o_ltp)
++ 				goto end_init;
++ 			memset(o_ltp, 0, sizeof(struct termios));
++ 			goto repeat;
++ 		}
++ 		
+  	}
+  	/* Now we have allocated all the structures: update all the pointers.. */
+  	if (!tty_termios[dev]) {
+***************
+*** 1091,1101 ****
+--- 1117,1135 ----
+  		tty_table[dev] = tty;
+  		tty = NULL;
+  	}
++ 	if (!termios_locked[dev]) {
++ 		termios_locked[dev] = ltp;
++ 		ltp = NULL;
++ 	}
+  	if (IS_A_PTY(dev)) {
+  		if (!tty_termios[o_dev]) {
+  			tty_termios[o_dev] = o_tp;
+  			o_tp = NULL;
+  		}
++ 		if (!termios_locked[o_dev]) {
++ 			termios_locked[dev] = o_ltp;
++ 			o_ltp = NULL;
++ 		}
+  		if (!tty_table[o_dev]) {
+  			o_tty->termios = tty_termios[o_dev];
+  			tty_table[o_dev] = o_tty;
+***************
+*** 1117,1122 ****
+--- 1151,1160 ----
+  		kfree_s(tp, sizeof(struct termios));
+  	if (o_tp)
+  		kfree_s(o_tp, sizeof(struct termios));
++ 	if (ltp)
++ 		kfree_s(ltp, sizeof(struct termios));
++ 	if (o_ltp)
++ 		kfree_s(o_ltp, sizeof(struct termios));
+  	return retval;
+  }
+  
+***************
+*** 1402,1408 ****
+  		    ((session > 0) && ((*p)->session == session)))
+  			send_sig(SIGKILL, *p, 1);
+  		else {
+! 			for (i=0; i < NR_FILE; i++) {
+  				filp = (*p)->filp[i];
+  				if (filp && (filp->f_op == &tty_fops) &&
+  				    (MINOR(filp->f_rdev) == line)) {
+--- 1440,1446 ----
+  		    ((session > 0) && ((*p)->session == session)))
+  			send_sig(SIGKILL, *p, 1);
+  		else {
+! 			for (i=0; i < NR_OPEN; i++) {
+  				filp = (*p)->filp[i];
+  				if (filp && (filp->f_op == &tty_fops) &&
+  				    (MINOR(filp->f_rdev) == line)) {
+===================================================================
+RCS file: kernel/chr_drv/RCS/tty_ioctl.c,v
+retrieving revision 1.1
+diff -c -r1.1 kernel/chr_drv/tty_ioctl.c
+*** 1.1	1993/06/27 03:20:01
+--- kernel/chr_drv/tty_ioctl.c	1993/06/27 03:12:55
+***************
+*** 31,36 ****
+--- 31,38 ----
+  extern int do_screendump(int arg);
+  extern int kill_pg(int pgrp, int sig, int priv);
+  
++ static int tty_set_ldisc(struct tty_struct *tty, int ldisc);
++ 
+  static void flush(struct tty_queue * queue)
+  {
+  	if (queue) {
+***************
+*** 121,126 ****
+--- 123,146 ----
+  	return(0);			
+  }
+  
++ static void unset_locked_termios(struct termios *termios,
++ 				 struct termios *old,
++ 				 struct termios *locked)
++ {
++ 	int	i;
++ 	
++ #define NOSET_MASK(x,y,z) (x = ((x) & ~(z)) | ((y) & (z)))
++ 
++ 	NOSET_MASK(termios->c_iflag, old->c_iflag, locked->c_iflag);
++ 	NOSET_MASK(termios->c_oflag, old->c_oflag, locked->c_oflag);
++ 	NOSET_MASK(termios->c_cflag, old->c_cflag, locked->c_cflag);
++ 	NOSET_MASK(termios->c_lflag, old->c_lflag, locked->c_lflag);
++ 	termios->c_line = locked->c_line ? old->c_line : termios->c_line;
++ 	for (i=0; i < NCCS; i++)
++ 		termios->c_cc[i] = locked->c_cc[i] ?
++ 			old->c_cc[i] : termios->c_cc[i];
++ }
++ 
+  static int get_termios(struct tty_struct * tty, struct termios * termios)
+  {
+  	int i;
+***************
+*** 153,159 ****
+  static int set_termios(struct tty_struct * tty, struct termios * termios,
+  			int channel)
+  {
+! 	int i;
+  	struct termios old_termios = *tty->termios;
+  
+  	i = check_change(tty, channel);
+--- 173,179 ----
+  static int set_termios(struct tty_struct * tty, struct termios * termios,
+  			int channel)
+  {
+! 	int i,retval;
+  	struct termios old_termios = *tty->termios;
+  
+  	i = check_change(tty, channel);
+***************
+*** 167,172 ****
+--- 187,199 ----
+  	   copy characters back and forth. -RAB */
+  	if (IS_A_PTY_MASTER(channel)) tty->termios->c_lflag &= ~ECHO;
+  
++ 	unset_locked_termios(tty->termios, &old_termios,
++ 			     termios_locked[tty->line]);
++ 
++ 	retval = tty_set_ldisc(tty, tty->termios->c_line);
++ 	if (retval)
++ 		return retval;
++ 
+  	if (tty->set_termios)
+  		(*tty->set_termios)(tty, &old_termios);
+  
+***************
+*** 199,205 ****
+  static int set_termio(struct tty_struct * tty, struct termio * termio,
+  			int channel)
+  {
+! 	int i;
+  	struct termio tmp_termio;
+  	struct termios old_termios = *tty->termios;
+  
+--- 226,232 ----
+  static int set_termio(struct tty_struct * tty, struct termio * termio,
+  			int channel)
+  {
+! 	int i, retval;
+  	struct termio tmp_termio;
+  	struct termios old_termios = *tty->termios;
+  
+***************
+*** 232,237 ****
+--- 259,271 ----
+  	for(i=0 ; i < NCC ; i++)
+  		tty->termios->c_cc[i] = tmp_termio.c_cc[i];
+  
++ 	unset_locked_termios(tty->termios, &old_termios,
++ 			     termios_locked[tty->line]);
++ 
++ 	retval = tty_set_ldisc(tty, tty->termios->c_line);
++ 	if (retval)
++ 		return retval;
++ 
+  	if (tty->set_termios)
+  		(*tty->set_termios)(tty, &old_termios);
+  
+***************
+*** 238,243 ****
+--- 272,305 ----
+  	return 0;
+  }
+  
++ static int get_lcktrmios(struct tty_struct * tty, struct termios * termios,
++ 			 int channel)
++ {
++ 	int i;
++ 
++ 	i = verify_area(VERIFY_WRITE, termios, sizeof (*termios));
++ 	if (i)
++ 		return i;
++ 	for (i=0 ; i< (sizeof (*termios)) ; i++)
++ 		put_fs_byte( ((char *)termios_locked[channel])[i],
++ 			    i+(char *)termios);
++ 	return 0;
++ }
++ 
++ static int set_lcktrmios(struct tty_struct * tty, struct termios * termios,
++ 			 int channel)
++ {
++ 	int i;
++ 
++ 	if (!suser())
++ 		return -EPERM;
++ 	for (i=0 ; i< (sizeof (*termios)) ; i++)
++ 		((char *)termios_locked[channel])[i] =
++ 			get_fs_byte(i+(char *)termios);
++ 
++ 	return 0;
++ }
++ 
+  static int set_window_size(struct tty_struct * tty, struct winsize * ws)
+  {
+  	int i,changed;
+***************
+*** 353,362 ****
+--- 415,428 ----
+  			switch (arg) {
+  			case TCOOFF:
+  				tty->stopped = 1;
++ 				if (tty->stop)
++ 					(tty->stop)(tty);
+  				TTY_WRITE_FLUSH(tty);
+  				return 0;
+  			case TCOON:
+  				tty->stopped = 0;
++ 				if (tty->start)
++ 					(tty->start)(tty);
+  				TTY_WRITE_FLUSH(tty);
+  				return 0;
+  			case TCIOFF:
+***************
+*** 495,501 ****
+  		case TIOCSETD:
+  			arg = get_fs_long((unsigned long *) arg);
+  			return tty_set_ldisc(tty, arg);
+! 	       case TIOCPKT:
+  			{
+  			   int on;
+  			   if (!IS_A_PTY_MASTER(dev))
+--- 561,575 ----
+  		case TIOCSETD:
+  			arg = get_fs_long((unsigned long *) arg);
+  			return tty_set_ldisc(tty, arg);
+! 		case TIOCGLCKTRMIOS:
+! 			arg = get_fs_long((unsigned long *) arg);
+! 			return get_lcktrmios(tty, (struct termios *) arg,
+! 					     termios_dev);
+! 		case TIOCSLCKTRMIOS:
+! 			arg = get_fs_long((unsigned long *) arg);
+! 			return set_lcktrmios(tty, (struct termios *) arg,
+! 					     termios_dev);
+! 		case TIOCPKT:
+  			{
+  			   int on;
+  			   if (!IS_A_PTY_MASTER(dev))

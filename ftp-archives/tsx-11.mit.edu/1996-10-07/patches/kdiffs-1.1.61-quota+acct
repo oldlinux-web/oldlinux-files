@@ -1,0 +1,3016 @@
+diff -ru --new-file linux_1.1.61/arch/i386/config.in linux_1.1.61_owld/arch/i386/config.in
+--- linux_1.1.61/arch/i386/config.in	Sun Oct 16 00:26:27 1994
++++ linux_1.1.61_owld/arch/i386/config.in	Wed Oct 26 21:02:12 1994
+@@ -162,6 +162,7 @@
+ bool 'ISO9660 cdrom filesystem support' CONFIG_ISO9660_FS n
+ bool 'OS/2 HPFS filesystem support (read only)' CONFIG_HPFS_FS n
+ bool 'System V and Coherent filesystem support' CONFIG_SYSV_FS n
++bool 'Disk QUOTA support' CONFIG_QUOTA y
+ 
+ comment 'character devices'
+ 
+diff -ru --new-file linux_1.1.61/fs/Makefile linux_1.1.61_owld/fs/Makefile
+--- linux_1.1.61/fs/Makefile	Sun Oct 16 00:26:31 1994
++++ linux_1.1.61_owld/fs/Makefile	Sun Oct 16 00:28:21 1994
+@@ -56,9 +56,9 @@
+ .s.o:
+ 	$(AS) -o $*.o $<
+ 
+-OBJS=	open.o read_write.o inode.o devices.o file_table.o buffer.o super.o \
+-	block_dev.o stat.o exec.o pipe.o namei.o fcntl.o ioctl.o \
+-	select.o fifo.o locks.o filesystems.o dcache.o $(BINFMTS)
++OBJS=	open.o read_write.o inode.o devices.o file_table.o fileio.o buffer.o \
++	super.o block_dev.o stat.o exec.o pipe.o namei.o fcntl.o ioctl.o \
++	select.o fifo.o locks.o dcache.o dquot.o filesystems.o $(BINFMTS)
+ 
+ all: fs.o filesystems.a modules
+ 
+diff -ru --new-file linux_1.1.61/fs/binfmt_elf.c linux_1.1.61_owld/fs/binfmt_elf.c
+--- linux_1.1.61/fs/binfmt_elf.c	Fri Oct 21 09:57:32 1994
++++ linux_1.1.61_owld/fs/binfmt_elf.c	Fri Oct 21 09:57:56 1994
+@@ -497,6 +497,8 @@
+ 	current->mm->end_code = 0;
+ 	current->mm->start_mmap = ELF_START_MMAP;
+ 	current->mm->mmap = NULL;
++	current->flags &= ~PF_FORKNOEXEC; /* accounting flags */
++        current->io_usage = 0;
+ 	elf_entry = (unsigned int) elf_ex.e_entry;
+ 	
+ 	/* Do this so that we can load the interpreter, if need be.  We will
+diff -ru --new-file linux_1.1.61/fs/buffer.c linux_1.1.61_owld/fs/buffer.c
+--- linux_1.1.61/fs/buffer.c	Mon Oct 24 19:56:07 1994
++++ linux_1.1.61_owld/fs/buffer.c	Mon Oct 24 20:01:48 1994
+@@ -217,6 +217,9 @@
+ 	sync_supers(dev);
+ 	sync_inodes(dev);
+ 	sync_buffers(dev, 0);
++#ifdef CONFIG_QUOTA
++	sync_dquots(dev, -1);
++#endif
+ }
+ 
+ int fsync_dev(dev_t dev)
+@@ -224,6 +227,9 @@
+ 	sync_buffers(dev, 0);
+ 	sync_supers(dev);
+ 	sync_inodes(dev);
++#ifdef CONFIG_QUOTA
++	sync_dquots(dev, -1);
++#endif
+ 	return sync_buffers(dev, 1);
+ }
+ 
+diff -ru --new-file linux_1.1.61/fs/dquot.c linux_1.1.61_owld/fs/dquot.c
+--- linux_1.1.61/fs/dquot.c
++++ linux_1.1.61_owld/fs/dquot.c	Sun Oct 30 11:43:44 1994
+@@ -0,0 +1,1007 @@
++/*
++ * QUOTA    An implementation of the diskquota system for the LINUX operating
++ *          system. QUOTA is implemented using the BSD systemcall interface as
++ *          the means of communication with the user level. Should work for all
++ *          filesystems because of integration into the VFS layer of the
++ *          operating system. This is based on the Melbourne quota system wich
++ *          uses both user and group quota files.
++ * 
++ *          Main layer of quota management
++ * 
++ * Version: $Id: dquot.c,v 3.12 1994/10/30 09:37:48 mvw Exp mvw $
++ * 
++ * Authors: Marco van Wieringen <v892273@si.hhs.nl> <mvw@mcs.ow.org>
++ *          Edvard Tuinder <v892231@si.hhs.nl> <ed@delirium.ow.org>
++ *          Linus Torvalds <Linus.Torvalds@cc.helsinki.FI>
++ * 
++ *          This program is free software; you can redistribute it and/or
++ *          modify it under the terms of the GNU General Public License as
++ *          published by the Free Software Foundation; either version 2 of the
++ *          License, or (at your option) any later version.
++ */
++
++#include <linux/errno.h>
++#include <linux/kernel.h>
++#include <linux/sched.h>
++#include <linux/config.h>
++
++#ifdef CONFIG_QUOTA
++#include <linux/types.h>
++#include <linux/string.h>
++#include <linux/fcntl.h>
++#include <linux/stat.h>
++#include <linux/segment.h>
++#include <linux/tty.h>
++#include <linux/malloc.h>
++#include <linux/mount.h>
++#include <linux/fileio.h>
++
++#include <asm/segment.h>
++#include <sys/sysmacros.h>
++
++static char quotamessage[MAX_QUOTA_MESSAGE];
++static char *quotatypes[] = INITQFNAMES;
++
++static int nr_dquots = 0, nr_free_dquots = 0;
++static struct dquot *hash_table[NR_DQHASH];
++static struct dquot *first_dquot;
++
++static struct wait_queue *dquot_wait = (struct wait_queue *)NULL;
++
++extern void add_dquot_ref(dev_t dev, short type);
++extern void reset_dquot_ptrs(dev_t dev, short type);
++extern void close_fp(struct file *filp, int fd);
++
++#ifndef min
++#define min(a,b) ((a) < (b)) ? (a) : (b)
++#endif
++
++/*
++ * Functions for management of the hashlist.
++ */
++static inline int const hashfn(dev_t dev, unsigned int id, short type)
++{
++   return ((dev ^ id) * (MAXQUOTAS - type)) % NR_DQHASH;
++}
++
++static inline struct dquot **const hash(dev_t dev, unsigned int id, short type)
++{
++   return hash_table + hashfn(dev, id, type);
++}
++
++static void insert_dquot_free(struct dquot *dquot)
++{
++   dquot->dq_next = first_dquot;
++   dquot->dq_prev = first_dquot->dq_prev;
++   dquot->dq_next->dq_prev = dquot;
++   dquot->dq_prev->dq_next = dquot;
++   first_dquot = dquot;
++}
++
++static void remove_dquot_free(struct dquot *dquot)
++{
++   if (first_dquot == dquot)
++      first_dquot = first_dquot->dq_next;
++   if (dquot->dq_next)
++      dquot->dq_next->dq_prev = dquot->dq_prev;
++   if (dquot->dq_prev)
++      dquot->dq_prev->dq_next = dquot->dq_next;
++   dquot->dq_next = dquot->dq_prev = NODQUOT;
++}
++
++static void insert_dquot_hash(struct dquot *dquot)
++{
++   struct dquot **h;
++
++   h = hash(dquot->dq_dev, dquot->dq_id, dquot->dq_type);
++   dquot->dq_hash_next = *h;
++   dquot->dq_hash_prev = NODQUOT;
++   if (dquot->dq_hash_next)
++      dquot->dq_hash_next->dq_hash_prev = dquot;
++   *h = dquot;
++}
++
++static void remove_dquot_hash(struct dquot *dquot)
++{
++   struct dquot **h;
++
++   h = hash(dquot->dq_dev, dquot->dq_id, dquot->dq_type);
++   if (*h == dquot)
++      *h = dquot->dq_hash_next;
++   if (dquot->dq_hash_next)
++      dquot->dq_hash_next->dq_hash_prev = dquot->dq_hash_prev;
++   if (dquot->dq_hash_prev)
++      dquot->dq_hash_prev->dq_hash_next = dquot->dq_hash_next;
++   dquot->dq_hash_prev = dquot->dq_hash_next = NODQUOT;
++}
++
++static void put_last_free(struct dquot *dquot)
++{
++   remove_dquot_free(dquot);
++   dquot->dq_prev = first_dquot->dq_prev;
++   dquot->dq_prev->dq_next = dquot;
++   dquot->dq_next = first_dquot;
++   dquot->dq_next->dq_prev = dquot;
++}
++
++static void grow_dquots(void)
++{
++   struct dquot *dquot;
++   int i;
++
++   if (!(dquot = (struct dquot*) get_free_page(GFP_KERNEL)))
++      return;
++   i = PAGE_SIZE / sizeof(struct dquot);
++   nr_dquots += i;
++   nr_free_dquots += i;
++   if (!first_dquot)
++      dquot->dq_next = dquot->dq_prev = first_dquot = dquot++, i--;
++   for ( ; i ; i-- )
++      insert_dquot_free(dquot++);
++}
++
++/*
++ * Functions for locking and waiting on dquots.
++ */
++static void __wait_on_dquot(struct dquot *dquot)
++{
++   struct wait_queue wait = {current, NULL};
++
++   add_wait_queue(&dquot->dq_wait, &wait);
++repeat:
++   current->state = TASK_UNINTERRUPTIBLE;
++   if (dquot->dq_flags & DQ_LOCKED) {
++      dquot->dq_flags |= DQ_WANT;
++      schedule();
++      goto repeat;
++   }
++   remove_wait_queue(&dquot->dq_wait, &wait);
++   current->state = TASK_RUNNING;
++}
++
++static inline void wait_on_dquot(struct dquot *dquot)
++{
++   if (dquot->dq_flags & DQ_LOCKED)
++      __wait_on_dquot(dquot);
++}
++
++static inline void lock_dquot(struct dquot *dquot)
++{
++   wait_on_dquot(dquot);
++   dquot->dq_flags |= DQ_LOCKED;
++}
++
++static inline void unlock_dquot(struct dquot *dquot)
++{
++   dquot->dq_flags &= ~DQ_LOCKED;
++   if (dquot->dq_flags & DQ_WANT) {
++      dquot->dq_flags &= ~DQ_WANT;
++      wake_up(&dquot->dq_wait);
++   }
++}
++/*
++ * Note that we don't want to disturb any wait-queues when we discard
++ * an dquot.
++ *
++ * FIXME: As soon as we have a nice solution for the inode problem we
++ *        can also fix this one. I.e. the volatile part.
++ */
++static void clear_dquot(struct dquot * dquot)
++{
++   struct wait_queue *wait;
++
++   wait_on_dquot(dquot);
++   remove_dquot_hash(dquot);
++   remove_dquot_free(dquot);
++   wait = ((volatile struct dquot *) dquot)->dq_wait;
++   if (dquot->dq_count)
++      nr_free_dquots++;
++   memset(dquot, 0, sizeof(*dquot));
++   ((volatile struct dquot *) dquot)->dq_wait = wait;
++   insert_dquot_free(dquot);
++}
++
++static void write_dquot(struct dquot *dquot)
++{
++   short type = dquot->dq_type;
++   struct file *filp = dquot->dq_mnt->mnt_quotas[type];
++   unsigned short fs;
++
++   if (!(dquot->dq_flags & DQ_MOD) || (filp == (struct file *)0))
++      return;
++   lock_dquot(dquot);
++   down(&dquot->dq_mnt->mnt_sem);
++   if (filp->f_op->lseek) {
++      if (filp->f_op->lseek(filp->f_inode, filp,
++          dqoff(dquot->dq_id), 0) != dqoff(dquot->dq_id)) {
++         up(&dquot->dq_mnt->mnt_sem);
++         return;
++      }
++   } else
++      filp->f_pos = dqoff(dquot->dq_id);
++   fs = get_fs();
++   set_fs(KERNEL_DS);
++   if (filp->f_op->write(filp->f_inode, filp,
++       (char *)&dquot->dq_dqb, sizeof(struct dqblk)) == sizeof(struct dqblk))
++      dquot->dq_flags &= ~DQ_MOD;
++   up(&dquot->dq_mnt->mnt_sem);
++   set_fs(fs);
++   unlock_dquot(dquot);
++}
++
++static void read_dquot(struct dquot *dquot)
++{
++   short type = dquot->dq_type;
++   struct file *filp = dquot->dq_mnt->mnt_quotas[type];
++   unsigned short fs;
++
++   if (filp == (struct file *)0)
++      return;
++   lock_dquot(dquot);
++   down(&dquot->dq_mnt->mnt_sem);
++   if (filp->f_op->lseek) {
++      if (filp->f_op->lseek(filp->f_inode, filp,
++          dqoff(dquot->dq_id),0) != dqoff(dquot->dq_id)) {
++         up(&dquot->dq_mnt->mnt_sem);
++         return;
++      }
++   } else
++      filp->f_pos = dqoff(dquot->dq_id);
++   fs = get_fs();
++   set_fs(KERNEL_DS);
++   filp->f_op->read(filp->f_inode, filp,
++                    (char *)&dquot->dq_dqb, sizeof(struct dqblk));
++   up(&dquot->dq_mnt->mnt_sem);
++   set_fs(fs);
++   if (dquot->dq_bhardlimit == 0 && dquot->dq_bsoftlimit == 0 &&
++       dquot->dq_ihardlimit == 0 && dquot->dq_isoftlimit == 0)
++      dquot->dq_flags |= DQ_FAKE;
++   unlock_dquot(dquot);
++}
++
++int sync_dquots(dev_t dev, short type)
++{
++   struct dquot *dquot = first_dquot;
++   int i;
++
++   for(i = 0; i < nr_dquots * 2; i++, dquot = dquot->dq_next) {
++      if (!dquot->dq_count || (dev && dquot->dq_dev != dev))
++         continue;
++      if (type != -1 && dquot->dq_type != type)
++         continue;
++      wait_on_dquot(dquot);
++      if (dquot->dq_flags & DQ_MOD)
++         write_dquot(dquot);
++   }
++   return 0;
++   /* NOTREACHED */
++}
++
++/*
++ * Trash the cache for a certain type on a device.
++ */
++void invalidate_dquots(dev_t dev, short type)
++{
++   struct dquot *dquot, *next;
++   int i;
++
++   next = first_dquot;
++   for(i = nr_dquots ; i > 0 ; i--) {
++      dquot = next;
++      next = dquot->dq_next;
++      if (dquot->dq_dev != dev || dquot->dq_type != type)
++         continue;
++      if (dquot->dq_flags & DQ_LOCKED) {
++         printk("VFS: dquot busy on removed device %d/%d\n", MAJOR(dev), MINOR(dev));
++         continue;
++      }
++      if (dquot->dq_flags & DQ_MOD)
++         write_dquot(dquot);
++      clear_dquot(dquot);
++   }
++}
++
++/*
++ * Check quota for inodes. Returns QUOTA_OK if can allocate and
++ * NO_QUOTA if it can't.
++ */
++static int check_idq(struct dquot *dquot, int id, short type, u_long wanted_inodes)
++{
++   if (wanted_inodes == 0 || dquot->dq_flags & DQ_FAKE)
++      return QUOTA_OK;
++   if (dquot->dq_ihardlimit &&
++      (dquot->dq_curinodes + wanted_inodes) >= dquot->dq_ihardlimit) {
++      if (!(dquot->dq_flags & DQ_INODES)) {
++         sprintf(quotamessage,
++                "File LIMIT reached on %s for %s %d. !! NO MORE !!\n\r",
++                dquot->dq_mnt->mnt_devname, quotatypes[type], id);
++         tty_write_message(current->tty, quotamessage);
++         dquot->dq_flags |= DQ_INODES;
++      }
++      return NO_QUOTA;
++   }
++   if (dquot->dq_isoftlimit &&
++      (dquot->dq_curinodes + wanted_inodes) >= dquot->dq_isoftlimit &&
++       dquot->dq_itime && CURRENT_TIME >= dquot->dq_itime) {
++      sprintf(quotamessage,
++              "File QUOTA exceeded TOO long on %s for %s %d. !! NO MORE !!\n\r",
++              dquot->dq_mnt->mnt_devname, quotatypes[type], id);
++      tty_write_message(current->tty, quotamessage);
++      return NO_QUOTA;
++   }
++   if (dquot->dq_isoftlimit &&
++      (dquot->dq_curinodes + wanted_inodes) >= dquot->dq_isoftlimit &&
++       dquot->dq_itime == 0) {
++      sprintf(quotamessage,
++              "File QUOTA exceeded on %s for %s %d\n\r",
++              dquot->dq_mnt->mnt_devname, quotatypes[type], id);
++      tty_write_message(current->tty, quotamessage);
++      dquot->dq_itime = CURRENT_TIME + dquot->dq_mnt->mnt_iexp[type];
++   }
++   return QUOTA_OK;
++   /* NOTREACHED */
++}
++
++/*
++ * Check quota for blocks. Returns QUOTA_OK if can allocate and
++ * NO_QUOTA if it can't. When we can't allocate wanted_blocks you get
++ * the number we can allocate in avail_blocks.
++ */
++static int check_bdq(struct dquot *dquot, int id, short type,
++                     u_long wanted_blocks, u_long *avail_blocks)
++{
++   *avail_blocks = wanted_blocks;
++   if (wanted_blocks == 0 || dquot->dq_flags & DQ_FAKE)
++      return QUOTA_OK;
++   if (dquot->dq_bhardlimit &&
++      (dquot->dq_curblocks + wanted_blocks) >= dquot->dq_bhardlimit) {
++      if ((dquot->dq_flags & DQ_BLKS) == 0) {
++         sprintf(quotamessage,
++                 "Block LIMIT reached on %s for %s %d. !! NO MORE !!\n\r",
++                 dquot->dq_mnt->mnt_devname, quotatypes[type], id);
++         tty_write_message(current->tty, quotamessage);
++         dquot->dq_flags |= DQ_BLKS;
++      }
++      if (dquot->dq_curblocks < dquot->dq_bhardlimit) {
++         *avail_blocks = dquot->dq_bhardlimit - dquot->dq_curblocks;
++         return QUOTA_OK;
++      } else
++         return NO_QUOTA;
++   }
++   if (dquot->dq_bsoftlimit &&
++      (dquot->dq_curblocks + wanted_blocks) >= dquot->dq_bsoftlimit &&
++       dquot->dq_btime && CURRENT_TIME >= dquot->dq_btime) {
++      sprintf(quotamessage,
++              "Block QUOTA exceeded TOO long on %s for %s %d. !! NO MORE !!\n\r",
++              dquot->dq_mnt->mnt_devname, quotatypes[type], id);
++      tty_write_message(current->tty, quotamessage);
++      return NO_QUOTA;
++   }
++   if (dquot->dq_bsoftlimit &&
++      (dquot->dq_curblocks + wanted_blocks) >= dquot->dq_bsoftlimit &&
++       dquot->dq_btime == 0) {
++      sprintf(quotamessage,
++              "Block QUOTA exceeded on %s for %s %d\n\r",
++              dquot->dq_mnt->mnt_devname, quotatypes[type], id);
++      tty_write_message(current->tty, quotamessage);
++      dquot->dq_btime = CURRENT_TIME + dquot->dq_mnt->mnt_bexp[type];
++   }
++   return QUOTA_OK;
++   /* NOTREACHED */
++}
++
++/*
++ * Add a number of inodes and blocks to a diskquota.
++ */
++static inline void incr_quota(struct dquot *dquot, u_long inodes, u_long blocks)
++{
++   lock_dquot(dquot);
++   dquot->dq_curinodes += inodes;
++   dquot->dq_curblocks += blocks;
++   dquot->dq_flags |= DQ_MOD;
++   unlock_dquot(dquot);
++}
++
++/*
++ * Remove a number of inodes and blocks from a quota.
++ * Reset gracetimes if under softlimit.
++ */
++static inline void decr_quota(struct dquot *dquot, u_long inodes, u_long blocks)
++{
++   lock_dquot(dquot);
++   if (dquot->dq_curinodes >= inodes)
++      dquot->dq_curinodes -= inodes;
++   else
++      dquot->dq_curinodes = 0;
++   if (dquot->dq_curinodes < dquot->dq_isoftlimit)
++      dquot->dq_itime = (time_t) 0;
++   dquot->dq_flags &= ~DQ_INODES;
++   if (dquot->dq_curblocks >= blocks)
++      dquot->dq_curblocks -= blocks;
++   else
++      dquot->dq_curblocks = 0;
++   if (dquot->dq_curblocks < dquot->dq_bsoftlimit)
++      dquot->dq_btime = (time_t) 0;
++   dquot->dq_flags &= ~DQ_BLKS;
++   dquot->dq_flags |= DQ_MOD;
++   unlock_dquot(dquot);
++}
++
++/*
++ * Initialize a dquot-struct with new quota info. This is used by the
++ * systemcall interface functions.
++ */ 
++static int set_dqblk(dev_t dev, int id, short type, int flags, struct dqblk *dqblk)
++{
++   struct dquot *dquot;
++   struct dqblk dq_dqblk;
++   int error;
++
++   if (dqblk == (struct dqblk *)0)
++      return -EFAULT;
++
++   if (flags & QUOTA_SYSCALL) {
++      if ((error = verify_area(VERIFY_READ, dqblk, sizeof(struct dqblk))) != 0)
++         return error;
++      memcpy_fromfs(&dq_dqblk, dqblk, sizeof(struct dqblk));
++   } else {
++      memcpy(&dq_dqblk, dqblk, sizeof(struct dqblk));
++   }
++   if ((dquot = dqget(dev, id, type)) != NODQUOT) {
++      lock_dquot(dquot);
++      if (id > 0 && ((flags & SET_QUOTA) || (flags & SET_QLIMIT))) {
++         dquot->dq_bhardlimit = dq_dqblk.dqb_bhardlimit;
++         dquot->dq_bsoftlimit = dq_dqblk.dqb_bsoftlimit;
++         dquot->dq_ihardlimit = dq_dqblk.dqb_ihardlimit;
++         dquot->dq_isoftlimit = dq_dqblk.dqb_isoftlimit;
++      }
++      if ((flags & SET_QUOTA) || (flags & SET_USE)) {
++         if (dquot->dq_isoftlimit &&
++             dquot->dq_curinodes < dquot->dq_isoftlimit &&
++             dq_dqblk.dqb_curinodes >= dquot->dq_isoftlimit)
++            dquot->dq_itime = CURRENT_TIME + dquot->dq_mnt->mnt_iexp[type];
++         dquot->dq_curinodes = dq_dqblk.dqb_curinodes;
++         if (dquot->dq_curinodes < dquot->dq_isoftlimit)
++            dquot->dq_flags &= ~DQ_INODES;
++         if (dquot->dq_bsoftlimit &&
++             dquot->dq_curblocks < dquot->dq_bsoftlimit &&
++             dq_dqblk.dqb_curblocks >= dquot->dq_bsoftlimit)
++            dquot->dq_btime = CURRENT_TIME + dquot->dq_mnt->mnt_bexp[type];
++         dquot->dq_curblocks = dq_dqblk.dqb_curblocks;
++         if (dquot->dq_curblocks < dquot->dq_bsoftlimit)
++            dquot->dq_flags &= ~DQ_BLKS;
++      }
++      if (id == 0) {
++         /* 
++          * Change in expiretimes, change them in dq_mnt.
++          */
++         dquot->dq_mnt->mnt_bexp[type] = dquot->dq_btime = dq_dqblk.dqb_btime;
++         dquot->dq_mnt->mnt_iexp[type] = dquot->dq_itime = dq_dqblk.dqb_itime;
++      }
++      if (dq_dqblk.dqb_bhardlimit == 0 && dq_dqblk.dqb_bsoftlimit == 0 &&
++          dq_dqblk.dqb_ihardlimit == 0 && dq_dqblk.dqb_isoftlimit == 0)
++         dquot->dq_flags |= DQ_FAKE; /* No limits, only usage */
++      dquot->dq_flags |= DQ_MOD;
++      unlock_dquot(dquot);
++      dqput(dquot);
++   }
++   return 0;
++}
++
++static int get_quota(dev_t dev, int id, short type, struct dqblk * dqblk)
++{
++   struct vfsmount *vfsmnt;
++   struct dquot *dquot;
++   int error;
++
++   if ((vfsmnt = lookup_vfsmnt(dev)) != (struct vfsmount *)0 &&
++        vfsmnt->mnt_quotas[type] != (struct file *)0) {
++      if (dqblk == (struct dqblk *) 0)
++         return -EFAULT;
++
++      if ((error = verify_area(VERIFY_WRITE, dqblk, sizeof(struct dqblk))) != 0)
++         return (error);
++
++      if ((dquot = dqget(dev, id, type)) != NODQUOT) {
++         memcpy_tofs(dqblk, (char *)&dquot->dq_dqb, sizeof(struct dqblk));
++         dqput(dquot);
++         return 0;
++      }
++   }
++   return -ESRCH;
++}
++
++/*
++ * Turn quota off on a device. type == -1 ==> quotaoff for all types (umount)
++ */
++int quota_off(dev_t dev, short type)
++{
++   struct vfsmount *vfsmnt;
++   short cnt;
++
++   for (cnt = 0; cnt < MAXQUOTAS; cnt++) {
++      if (type != -1 && cnt != type)
++         continue;
++      if ((vfsmnt = lookup_vfsmnt(dev)) == (struct vfsmount *)0 ||
++           vfsmnt->mnt_quotas[cnt] == (struct file *)0)
++         continue;
++      vfsmnt->mnt_flags |= QF_CLOSING;
++      reset_dquot_ptrs(dev, cnt);
++      invalidate_dquots(dev, cnt);
++      close_fp(vfsmnt->mnt_quotas[cnt], 0);
++      vfsmnt->mnt_quotas[cnt] = (struct file *)0;
++      vfsmnt->mnt_iexp[cnt] = vfsmnt->mnt_bexp[cnt] = (time_t)0;
++      vfsmnt->mnt_flags &= ~QF_CLOSING;
++   }
++   return 0;
++}
++
++static int quota_on(dev_t dev, short type, char *path)
++{
++   struct file *filp = (struct file *)0;
++   struct vfsmount *vfsmnt;
++   struct inode *inode;
++   struct dquot *dquot;
++   char *tmp;
++   int error;
++
++   if ((vfsmnt = lookup_vfsmnt(dev)) == (struct vfsmount *)0)
++      return -ENODEV;
++   if (vfsmnt->mnt_quotas[type] != (struct file *)0)
++      return -EBUSY;
++   if ((error = getname(path, &tmp)) != 0)
++      return (error);
++   vfsmnt->mnt_flags |= QF_OPENING;
++   error = open_namei(tmp, O_RDWR, 0600, &inode, 0);
++   putname(tmp);
++   if (error) {
++      vfsmnt->mnt_flags &= ~QF_OPENING;
++      return (error);
++   }
++   if (!S_ISREG(inode->i_mode)) {
++      vfsmnt->mnt_flags &= ~QF_OPENING;
++      iput(inode);
++      return -EACCES;
++   }
++   if (!inode->i_op || !inode->i_op->default_file_ops)
++      goto end_quotaon;
++   if ((filp = get_empty_filp()) == (struct file *)0)
++      goto end_quotaon;
++   filp->f_mode = (O_RDWR + 1) & O_ACCMODE;
++   filp->f_flags = O_RDWR;
++   filp->f_inode = inode;
++   filp->f_pos = 0;
++   filp->f_reada = 0;
++   filp->f_op = inode->i_op->default_file_ops;
++   if (filp->f_op->open)
++      if (filp->f_op->open(filp->f_inode, filp))
++         goto end_quotaon;
++   if (!filp->f_op->read || !filp->f_op->write)
++      goto end_quotaon;
++   vfsmnt->mnt_quotas[type] = filp;
++   vfs_open(filp);
++   vfsmnt->mnt_flags &= ~QF_OPENING;
++   dquot = dqget(dev, 0, type);
++   vfsmnt->mnt_iexp[type] = (dquot) ? dquot->dq_itime : MAX_IQ_TIME;
++   vfsmnt->mnt_bexp[type] = (dquot) ? dquot->dq_btime : MAX_DQ_TIME;
++   dqput(dquot);
++   add_dquot_ref(dev, type);
++   return 0;
++end_quotaon:
++   vfsmnt->mnt_flags &= ~QF_OPENING;
++   if (filp != (struct file *)0)
++      filp->f_count--;
++   iput(inode);
++   return -EIO;
++}
++
++/*
++ * Just like iput, decrement referencecount of dquot.
++ */
++void dqput(struct dquot *dquot)
++{
++   if (!dquot)
++      return;
++   /*
++    * If the dq_mnt pointer isn't initialized this entry needs no
++    * checking and doesn't need to be written. It just an empty
++    * dquot that is put back into the freelist.
++    */
++   if (dquot->dq_mnt != (struct vfsmount *)0) {
++      wait_on_dquot(dquot);
++      if (!dquot->dq_count) {
++         printk("VFS: iput: trying to free free dquot\n");
++         printk("VFS: device %d/%d, dquot of %s %d\n",
++                MAJOR(dquot->dq_dev), MINOR(dquot->dq_dev),
++                quotatypes[dquot->dq_type], dquot->dq_id);
++         return;
++      }
++repeat:
++      if (dquot->dq_count > 1) {
++         dquot->dq_count--;
++         return;
++      }
++      wake_up(&dquot_wait);
++      if (dquot->dq_flags & DQ_MOD) {
++         write_dquot(dquot);   /* we can sleep - so do again */
++         wait_on_dquot(dquot);
++         goto repeat;
++      }
++   }
++   if (dquot->dq_count) {
++      dquot->dq_count--;
++      nr_free_dquots++;
++   }
++   return;
++}
++
++static struct dquot *get_empty_dquot(void)
++{
++   struct dquot *dquot, *best;
++   int i;
++
++   if (nr_dquots < NR_DQUOTS && nr_free_dquots < (nr_dquots >> 2))
++      grow_dquots();
++
++repeat:
++   dquot = first_dquot;
++   best = NODQUOT;
++   for (i = 0; i < nr_dquots; dquot = dquot->dq_next, i++) {
++      if (!dquot->dq_count) {
++         if (!best)
++            best = dquot;
++         if (!(dquot->dq_flags & DQ_MOD) && !(dquot->dq_flags & DQ_LOCKED)) {
++            best = dquot;
++            break;
++         }
++      }
++   }
++   if (!best || best->dq_flags & DQ_MOD || best->dq_flags & DQ_LOCKED)
++      if (nr_dquots < NR_DQUOTS) {
++         grow_dquots();
++         goto repeat;
++      }
++   dquot = best;
++   if (!dquot) {
++      printk("VFS: No free dquots - contact mvw@mcs.ow.org\n");
++      sleep_on(&dquot_wait);
++      goto repeat;
++   }
++   if (dquot->dq_flags & DQ_LOCKED) {
++      wait_on_dquot(dquot);
++      goto repeat;
++   }
++   if (dquot->dq_flags & DQ_MOD) {
++      write_dquot(dquot);
++      goto repeat;
++   }
++   if (dquot->dq_count)
++      goto repeat;
++   clear_dquot(dquot);
++   dquot->dq_count = 1;
++   nr_free_dquots--;
++   if (nr_free_dquots < 0) {
++      printk ("VFS: get_empty_dquot: bad free dquot count.\n");
++      nr_free_dquots = 0;
++   }
++   return dquot;
++}
++
++/*
++ * Just like iget, increment referencecount of a dquot and return
++ * pointer to it in the hashqueue.
++ */
++struct dquot *dqget(dev_t dev, unsigned int id, short type)
++{
++   struct dquot *dquot, *empty;
++   struct vfsmount *vfsmnt;
++
++   if ((vfsmnt = lookup_vfsmnt(dev)) == (struct vfsmount *)0 ||
++       (vfsmnt->mnt_flags & (QF_OPENING | QF_CLOSING)) ||
++       (vfsmnt->mnt_quotas[type] == (struct file *)0))
++      return (NODQUOT);
++   empty = get_empty_dquot();
++repeat:
++   dquot = *(hash(dev, id, type));
++   while (dquot) {
++      if (dquot->dq_dev != dev || dquot->dq_id != id) {
++         dquot = dquot->dq_hash_next;
++         continue;
++      }
++      wait_on_dquot(dquot);
++      if (dquot->dq_dev != dev || dquot->dq_id != id)
++         goto repeat;
++      if (!dquot->dq_count)
++         nr_free_dquots--;
++      dquot->dq_count++;
++      if (empty)
++         dqput(empty);
++      return dquot;
++   }
++   if (!empty)
++      return (NODQUOT);
++   dquot = empty;
++   dquot->dq_id = id;
++   dquot->dq_type = type;
++   dquot->dq_dev = dev;
++   dquot->dq_mnt = vfsmnt;
++   put_last_free(dquot);
++   insert_dquot_hash(dquot);
++   read_dquot(dquot);
++   return dquot;
++}
++
++/*
++ * Initialize pointer in a inode to the right dquots.
++ * Be smart and increment count only if already valid pointervalue.
++ */
++void getinoquota(struct inode *inode, short type)
++{
++   unsigned int id = 0;
++   short cnt;
++
++   for (cnt = 0; cnt < MAXQUOTAS; cnt++) {
++      if (type != -1 && cnt != type)
++         continue;
++      if (inode->i_dquot[cnt] != NODQUOT) {
++         inode->i_dquot[cnt]->dq_count++;
++         continue;
++      }
++      switch (cnt) {
++         case USRQUOTA:
++            id = inode->i_uid;
++            break;
++         case GRPQUOTA:
++            id = inode->i_gid;
++            break;
++      }
++      inode->i_dquot[cnt] = dqget(inode->i_dev, id, cnt);
++   }
++}
++
++void putinoquota(struct inode *inode)
++{
++   short cnt;
++
++   for (cnt = 0; cnt < MAXQUOTAS; cnt++) {
++      if (inode->i_dquot[cnt] == NODQUOT)
++         continue;
++      dqput(inode->i_dquot[cnt]);
++      if (!inode->i_writecount)
++         inode->i_dquot[cnt] = NODQUOT;
++   }
++}
++
++/*
++ * This are two simple algorithms that calculates the size of a file in blocks
++ * and from a number of blocks to a isize.
++ * It is not perfect but works most of the time.
++ */
++u_long isize_to_blocks(size_t isize, size_t blksize)
++{
++   u_long blocks;
++   u_long indirect;
++
++   if (!blksize)
++      blksize = BLOCK_SIZE;
++   blocks = (isize / blksize) + ((isize % blksize) ? 1 : 0);
++   if (blocks > 10) {
++      indirect = ((blocks - 11) >> 8) + 1; /* single indirect blocks */
++      if (blocks > (10 + 256)) {
++         indirect += ((blocks - 267) >> 16) + 1; /* double indirect blocks */
++         if (blocks > (10 + 256 + (256 << 8)))
++            indirect++; /* triple indirect blocks */
++      }
++      blocks += indirect;
++   }
++   return blocks;
++}
++
++size_t blocks_to_isize(u_long blocks, size_t blksize)
++{
++   size_t isize;
++   u_long indirect;
++
++   if (!blksize)
++      blksize = BLOCK_SIZE;
++   isize = blocks * blksize;
++   if (blocks > 10) {
++      indirect = ((blocks - 11) >> 8) + 1; /* single indirect blocks */
++      if (blocks > (10 + 256)) {
++         indirect += ((blocks - 267) >> 16) + 1; /* double indirect blocks */
++         if (blocks > (10 + 256 + (256 << 8)))
++            indirect++; /* triple indirect blocks */
++      }
++      isize -= indirect * blksize;
++   }
++   return isize;
++}
++
++/*
++ * Allocate the number of inodes and blocks from a diskquota.
++ */
++int quota_alloc(struct inode *inode, u_long wanted_inodes, u_long wanted_blocks,
++                u_long *avail_blocks)
++{
++   u_long availblocks, local_avail;
++   unsigned short cnt;
++
++   availblocks = wanted_blocks;
++   if (wanted_inodes > 0 || wanted_blocks > 0) {
++      for (cnt = 0; cnt < MAXQUOTAS; cnt++) {
++         if (inode->i_dquot[cnt] == NODQUOT)
++            continue;
++         if (check_idq(inode->i_dquot[cnt], inode->i_dquot[cnt]->dq_id,
++                       cnt, wanted_inodes) == NO_QUOTA ||
++             check_bdq(inode->i_dquot[cnt], inode->i_dquot[cnt]->dq_id,
++                       cnt, wanted_blocks, &local_avail) == NO_QUOTA)
++            return NO_QUOTA;
++         availblocks = min(availblocks, local_avail);
++      }
++      for (cnt = 0; cnt < MAXQUOTAS; cnt++) {
++         if (inode->i_dquot[cnt] == NODQUOT)
++            continue;
++         incr_quota(inode->i_dquot[cnt], wanted_inodes, availblocks);
++      }
++   }
++   if (avail_blocks != (u_long *)0)
++      *avail_blocks = availblocks;
++   return QUOTA_OK;
++   /* NOTREACHED */
++}
++
++/*
++ * Remove the number of inodes and blocks from a diskquota.
++ */
++void quota_remove(struct inode *inode, u_long inodes, u_long blocks)
++{
++   short cnt;
++
++   if (inodes > 0 || blocks > 0) {
++      for (cnt = 0; cnt < MAXQUOTAS; cnt++) {
++         if (inode->i_dquot[cnt] == NODQUOT)
++            continue;
++         decr_quota(inode->i_dquot[cnt], inodes, blocks);
++      }
++   }
++}
++
++/*
++ * Transfer the number of inode and blocks from one diskquota to an other.
++ */
++int quota_transfer(struct inode *inode, struct iattr *iattr, u_long inodes,
++                   u_long blocks, char direction)
++{
++   struct dquot *transfer[MAXQUOTAS];
++   u_long availblocks;
++   unsigned int id = 0;
++   short cnt, disc;
++
++   if (inodes > 0 || blocks > 0) {
++      for (cnt = 0; cnt < MAXQUOTAS; cnt++) {
++         transfer[cnt] = NODQUOT;
++         switch(cnt) {
++            case USRQUOTA:
++               if (inode->i_uid == iattr->ia_uid)
++                  continue;
++               id = (direction) ? inode->i_uid : iattr->ia_uid;
++               break;
++            case GRPQUOTA:
++               if (inode->i_gid == iattr->ia_gid)
++                  continue;
++               id = (direction) ? inode->i_gid : iattr->ia_gid;
++               break;
++         }
++         if ((transfer[cnt] = dqget(inode->i_dev, id, cnt)) == NODQUOT)
++            continue;
++
++         if (check_idq(transfer[cnt], id, cnt, inodes) == NO_QUOTA ||
++             check_bdq(transfer[cnt], id, cnt, blocks, &availblocks) == NO_QUOTA ||
++             availblocks != blocks) {
++            for (disc = 0; disc <= cnt; disc++)
++               dqput(transfer[disc]);
++            return NO_QUOTA;
++         }
++      }
++      for (cnt = 0; cnt < MAXQUOTAS; cnt++) {
++         if (transfer[cnt] == NODQUOT)
++            continue;
++         decr_quota(inode->i_dquot[cnt], inodes, blocks);
++         incr_quota(transfer[cnt], inodes, blocks);
++         transfer[cnt]->dq_count += inode->i_writecount;
++         inode->i_dquot[cnt]->dq_count -= inode->i_writecount;
++         dqput(inode->i_dquot[cnt]);
++         inode->i_dquot[cnt] = transfer[cnt];
++      }
++   }
++   return QUOTA_OK;
++   /* NOTREACHED */
++}
++
++void quota_init(void)
++{
++   memset(hash_table, 0, sizeof(hash_table));
++   first_dquot = NODQUOT;
++}
++
++/*
++ * Ok this is the systemcall interface, this communicates with
++ * the userlevel programs.
++ */
++asmlinkage int sys_quotactl(int cmd, const char *special, int id, caddr_t addr)
++{
++   int cmds = 0, type = 0, flags = 0;
++   struct vfsmount *vfsmnt;
++   struct inode *ino;
++   dev_t dev;
++
++   cmds = cmd >> SUBCMDSHIFT;
++   type = cmd & SUBCMDMASK;
++
++   if ((u_int) type >= MAXQUOTAS)
++      return -EINVAL;
++   switch (cmds) {
++      case Q_SYNC:
++         break;
++      case Q_GETQUOTA:
++         if (((type == USRQUOTA && current->uid != id) ||
++              (type == GRPQUOTA && current->gid != id)) && !suser())
++            return -EPERM;
++         break;
++      default:
++         if (!suser())
++            return -EPERM;
++   }
++
++   if (special == (char *)0 && cmds == Q_SYNC)
++      dev = 0;
++   else {
++      if (namei(special, &ino))
++         return -EINVAL;
++      dev = ino->i_rdev;
++      if (!S_ISBLK(ino->i_mode)) {
++         iput(ino);
++         return -ENOTBLK;
++      }
++      iput(ino);
++   }
++
++   switch (cmds) {
++      case Q_QUOTAON:
++         return quota_on(dev, type, (char *) addr);
++      case Q_QUOTAOFF:
++         return quota_off(dev, type);
++      case Q_GETQUOTA:
++         return get_quota(dev, id, type, (struct dqblk *) addr);
++      case Q_SETQUOTA:
++         flags |= SET_QUOTA;
++         break;
++      case Q_SETUSE:
++         flags |= SET_USE;
++         break;
++      case Q_SETQLIM:
++         flags |= SET_QLIMIT;
++         break;
++      case Q_SYNC:
++         return sync_dquots(dev, type);
++      default:
++         return -EINVAL;
++   }
++
++   flags |= QUOTA_SYSCALL;
++   if ((vfsmnt = lookup_vfsmnt(dev)) != (struct vfsmount *)0 &&
++        vfsmnt->mnt_quotas[type] != (struct file *)0)
++      return set_dqblk(dev, id, type, flags, (struct dqblk *) addr);
++   return -ESRCH;
++   /* NOTREACHED */
++}
++
++#else
++
++asmlinkage int sys_quotactl(int cmd, const char *special, int id, caddr_t addr)
++{
++   return -ENOSYS;
++}
++
++#endif /* CONFIG_QUOTA */
++
+diff -ru --new-file linux_1.1.61/fs/exec.c linux_1.1.61_owld/fs/exec.c
+--- linux_1.1.61/fs/exec.c	Sun Oct 23 00:23:21 1994
++++ linux_1.1.61_owld/fs/exec.c	Sun Oct 23 00:23:50 1994
+@@ -43,6 +43,7 @@
+ 
+ #include <linux/binfmts.h>
+ #include <linux/personality.h>
++#include <linux/fileio.h>
+ 
+ #include <asm/segment.h>
+ #include <asm/system.h>
+@@ -137,6 +138,7 @@
+ 			return error;
+ 		}
+ 	}
++	vfs_open(f);
+ 	inode->i_count++;
+ 	return fd;
+ }
+@@ -146,7 +148,7 @@
+  * macros to write out all the necessary info.
+  */
+ #define DUMP_WRITE(addr,nr) \
+-while (file.f_op->write(inode,&file,(char *)(addr),(nr)) != (nr)) goto close_coredump
++while (vfs_write(inode,&file,(char *)(addr),(nr)) != (nr)) goto close_coredump
+ 
+ #define DUMP_SEEK(offset) \
+ if (file.f_op->lseek) { \
+@@ -154,6 +156,8 @@
+  		goto close_coredump; \
+ } else file.f_pos = (offset)		
+ 
++extern int close_fp(struct file *filp, unsigned int fd);
++
+ /*
+  * Routine writes a core dump image in the current directory.
+  * Currently only a stub-function.
+@@ -207,9 +211,11 @@
+ 	if (file.f_op->open)
+ 		if (file.f_op->open(inode,&file))
+ 			goto end_coredump;
++	vfs_open(&file);
+ 	if (!file.f_op->write)
+ 		goto close_coredump;
+ 	has_dumped = 1;
++	current->flags |= PF_DUMPCORE;
+ /* changed the size calculations - should hopefully work better. lbt */
+ 	dump.magic = CMAGIC;
+ 	dump.start_code = 0;
+@@ -271,8 +277,9 @@
+ 	set_fs(KERNEL_DS);
+ 	DUMP_WRITE(current,sizeof(*current));
+ close_coredump:
+-	if (file.f_op->release)
+-		file.f_op->release(inode,&file);
++	close_fp(&file, 0);
++	set_fs(fs);
++	return has_dumped;
+ end_coredump:
+ 	set_fs(fs);
+ 	iput(inode);
+@@ -820,6 +827,8 @@
+ 	current->mm->mmap = NULL;
+ 	current->suid = current->euid = current->fsuid = bprm->e_uid;
+ 	current->sgid = current->egid = current->fsgid = bprm->e_gid;
++	current->flags &= ~PF_FORKNOEXEC; /* accounting flags */
++	current->io_usage = 0;
+ 	if (N_MAGIC(ex) == OMAGIC) {
+ 		do_mmap(NULL, 0, ex.a_text+ex.a_data,
+ 			PROT_READ|PROT_WRITE|PROT_EXEC,
+diff -ru --new-file linux_1.1.61/fs/ext2/super.c linux_1.1.61_owld/fs/ext2/super.c
+--- linux_1.1.61/fs/ext2/super.c	Wed Oct 26 15:35:54 1994
++++ linux_1.1.61_owld/fs/ext2/super.c	Wed Oct 26 15:36:58 1994
+@@ -260,11 +260,8 @@
+ 				return 0;
+ 			}
+ 		}
+-		else {
+-			printk ("EXT2-fs: Unrecognized mount option %s\n", this_char);
+-			return 0;
++		else return 1;
+ 		}
+-	}
+ 	return 1;
+ }
+ 
+diff -ru --new-file linux_1.1.61/fs/fcntl.c linux_1.1.61_owld/fs/fcntl.c
+--- linux_1.1.61/fs/fcntl.c	Wed Oct 26 15:35:54 1994
++++ linux_1.1.61_owld/fs/fcntl.c	Wed Oct 26 15:36:58 1994
+@@ -12,6 +12,7 @@
+ #include <linux/stat.h>
+ #include <linux/fcntl.h>
+ #include <linux/string.h>
++#include <linux/fileio.h>
+ 
+ extern int fcntl_getlk(unsigned int, struct flock *);
+ extern int fcntl_setlk(unsigned int, unsigned int, struct flock *);
+@@ -32,6 +33,7 @@
+ 		return -EMFILE;
+ 	FD_CLR(arg, &current->files->close_on_exec);
+ 	(current->files->fd[arg] = current->files->fd[fd])->f_count++;
++   	vfs_open(current->files->fd[fd]);
+ 	return arg;
+ }
+ 
+diff -ru --new-file linux_1.1.61/fs/file_table.c linux_1.1.61_owld/fs/file_table.c
+--- linux_1.1.61/fs/file_table.c	Sun Oct 23 00:23:21 1994
++++ linux_1.1.61_owld/fs/file_table.c	Sun Oct 23 00:23:50 1994
+@@ -7,6 +7,7 @@
+ #include <linux/fs.h>
+ #include <linux/string.h>
+ #include <linux/mm.h>
++#include <linux/config.h>
+ 
+ struct file * first_file;
+ int nr_files = 0;
+@@ -88,3 +89,34 @@
+ 	}
+ 	return NULL;
+ }
++
++#ifdef CONFIG_QUOTA
++void add_dquot_ref(dev_t dev, short type)
++{
++	struct file *filp;
++	int i;
++
++	/* Check files that are currently opened for writing. */
++	for (filp = first_file, i = 0; i < nr_files; i++, filp = filp->f_next) {
++		if (!filp->f_count || !filp->f_inode || filp->f_inode->i_dev != dev)
++			continue;
++		if (filp->f_inode->i_writecount > 0) {
++			getinoquota(filp->f_inode, type);
++			if (filp->f_inode->i_dquot[type] != NODQUOT)
++				filp->f_inode->i_dquot[type]->dq_count +=
++				(filp->f_inode->i_writecount - 1);
++		}
++	}
++}
++
++void reset_dquot_ptrs(dev_t dev, short type)
++{
++	struct file *filp;
++	int i;
++
++	for (filp = first_file, i = 0; i < nr_files; i++, filp = filp->f_next)
++		if (filp->f_count && filp->f_inode &&
++		    filp->f_inode->i_writecount && filp->f_inode->i_dev == dev)
++			filp->f_inode->i_dquot[type] = NODQUOT;
++}
++#endif
+diff -ru --new-file linux_1.1.61/fs/fileio.c linux_1.1.61_owld/fs/fileio.c
+--- linux_1.1.61/fs/fileio.c
++++ linux_1.1.61_owld/fs/fileio.c	Sun Oct 30 11:43:31 1994
+@@ -0,0 +1,393 @@
++/*
++ *
++ * Simple VFS definitions for fileio.
++ *
++ * Authors: Marco van Wieringen <v892273@si.hhs.nl> <mvw@mcs.ow.org>
++ *          Edvard Tuinder <v892231@si.hhs.nl> <ed@delirium.ow.org>
++ *
++ * Version: $Id: fileio.c,v 1.12 1994/10/30 09:37:48 mvw Exp mvw $
++ *
++ */
++
++#include <linux/config.h>
++#include <linux/kernel.h>
++#include <linux/sched.h>
++#include <linux/stat.h>
++#include <linux/string.h>
++#include <linux/fcntl.h>
++
++#ifdef CONFIG_QUOTA
++extern int lookup(struct inode *, const char *, int, struct inode **);
++
++int vfs_write(struct inode *inode, struct file *filp, char *addr, size_t bytes)
++{
++   size_t written;
++   u_long cur_blocks, wanted_blocks = 0, avail_blocks = 0;
++
++   if (S_ISREG(inode->i_mode)) {
++      cur_blocks = isize_to_blocks(inode->i_size, inode->i_blksize);
++      if ((filp->f_pos + bytes) > inode->i_size) {
++         wanted_blocks = isize_to_blocks(filp->f_pos + bytes,
++                         inode->i_blksize) - cur_blocks;
++         if (wanted_blocks && quota_alloc(inode, 0, wanted_blocks,
++                                          &avail_blocks) == NO_QUOTA)
++            return -EDQUOT;
++         if (wanted_blocks && (avail_blocks < wanted_blocks))
++            bytes = blocks_to_isize((cur_blocks + avail_blocks),
++                    inode->i_blksize) - filp->f_pos;
++      }
++      if ((written = filp->f_op->write(inode, filp, addr, bytes)) != bytes) {
++         quota_remove(inode, 0, avail_blocks -
++                     (isize_to_blocks(inode->i_size, inode->i_blksize) -
++                      isize_to_blocks((inode->i_size - written), inode->i_blksize)));
++      }
++      current->io_usage += written;
++      if (wanted_blocks && (avail_blocks < wanted_blocks))
++         return -EDQUOT;
++
++      return written;
++   } else {
++      current->io_usage += bytes;
++      return filp->f_op->write(inode, filp, (char *)addr, bytes);
++   }
++}
++
++int vfs_create(struct inode *dir, const char *basename,
++               int namelen, int mode, struct inode **res_ino)
++{
++   int error;
++   struct inode new_inode;
++
++   memset(&new_inode, 0, sizeof(struct inode));
++   new_inode.i_dev = dir->i_dev;
++   new_inode.i_uid = current->fsuid;
++   new_inode.i_gid = current->fsgid;
++   getinoquota(&new_inode, -1);
++
++   if (quota_alloc(&new_inode, 1, 0, (u_long *)0) == NO_QUOTA) {
++      putinoquota(&new_inode);
++      return -EDQUOT;
++   }
++   error = dir->i_op->create(dir, basename, namelen, mode, res_ino);
++   if (error)
++      quota_remove(&new_inode, 1, 0);
++   putinoquota(&new_inode);
++
++   return error;
++}
++
++int vfs_truncate(struct inode *inode, size_t length)
++{
++   int error;
++   size_t old_isize;
++   struct iattr newattrs;
++
++   old_isize = inode->i_size;
++   inode->i_size = newattrs.ia_size = length;
++   if (inode->i_op && inode->i_op->truncate)
++      inode->i_op->truncate(inode);
++   newattrs.ia_ctime = newattrs.ia_mtime = CURRENT_TIME;
++   newattrs.ia_valid = ATTR_SIZE | ATTR_CTIME | ATTR_MTIME;
++   if ((error = notify_change(inode, &newattrs)))
++      return error;
++   getinoquota(inode, -1);
++   quota_remove(inode, 0, isize_to_blocks(old_isize, inode->i_blksize));
++   putinoquota(inode);
++   inode->i_dirt = 1;
++   return 0;
++}
++
++int vfs_mknod(struct inode *dir, const char *basename,
++              int namelen, int mode, dev_t dev)
++{
++   int error;
++   struct inode new_inode;
++
++   memset(&new_inode, 0, sizeof(struct inode));
++   new_inode.i_dev = dir->i_dev;
++   new_inode.i_uid = current->fsuid;
++   new_inode.i_gid = current->fsgid;
++   getinoquota(&new_inode, -1);
++
++   if (quota_alloc(&new_inode, 1, 0, (u_long *)0) == NO_QUOTA) {
++      putinoquota(&new_inode);
++      iput(dir);
++      return -EDQUOT;
++   }
++   dir->i_count++;
++   error = dir->i_op->mknod(dir, basename, namelen, mode, dev);
++   if (error)
++      quota_remove(&new_inode, 1, 0);
++   putinoquota(&new_inode);
++   iput(dir);
++
++   return error;
++}
++
++int vfs_mkdir(struct inode *dir, const char *basename, int namelen, int mode)
++{
++   int error;
++   struct inode new_inode;
++
++   memset(&new_inode, 0, sizeof(struct inode));
++   new_inode.i_dev = dir->i_dev;
++   new_inode.i_uid = current->fsuid;
++   new_inode.i_gid = current->fsgid;
++   getinoquota(&new_inode, -1);
++
++   if (quota_alloc(&new_inode, 1, 1, (u_long *)0) == NO_QUOTA) {
++      putinoquota(&new_inode);
++      iput(dir);
++      return -EDQUOT;
++   }
++   dir->i_count++;
++   error = dir->i_op->mkdir(dir, basename, namelen, mode);
++   if (error)
++      quota_remove(&new_inode, 1, 1);
++   putinoquota(&new_inode);
++   iput(dir);
++
++   return error;
++}
++
++int vfs_rmdir(struct inode *dir, const char *basename, int namelen)
++{
++   int error;
++   struct inode *old_inode;
++
++   /*
++    * Need inode entry of directory for quota operations
++    */
++   dir->i_count++;
++   if ((error = lookup(dir, basename, namelen, &old_inode))) {
++      iput(dir);
++      return error;
++   }
++   getinoquota(old_inode, -1);
++   if (!(error = dir->i_op->rmdir(dir, basename, namelen)))
++      quota_remove(old_inode, 1, 1);
++   putinoquota(old_inode);
++   iput(old_inode);
++
++   return error;
++}
++
++int vfs_unlink(struct inode *dir, const char *basename, int namelen)
++{
++   int error;
++   struct inode *old_inode;
++
++   /*
++    * Need inode info of to remove file for quota operations.
++    */
++   dir->i_count++;
++   if ((error = lookup(dir, basename, namelen, &old_inode))) {
++      iput(dir);
++      return error;
++   }
++   getinoquota(old_inode, -1);
++   error = dir->i_op->unlink(dir, basename, namelen);
++   /*
++    * Remove blocks and inode. Only if link-count is 0 !
++    */
++   if (!error && old_inode->i_nlink == 0)
++      quota_remove(old_inode, 1,
++                   isize_to_blocks(old_inode->i_size, old_inode->i_blksize));
++   putinoquota(old_inode);
++   iput(old_inode);
++
++   return error;
++}
++
++int vfs_symlink(struct inode *dir, const char *basename,
++                int namelen, const char *oldname)
++{
++   int error;
++   struct inode new_inode;
++
++   memset(&new_inode, 0, sizeof(struct inode));
++   new_inode.i_dev = dir->i_dev;
++   new_inode.i_uid = current->fsuid;
++   new_inode.i_gid = current->fsgid;
++   getinoquota(&new_inode, -1);
++
++   if (quota_alloc(&new_inode, 1, 1, (u_long *)0) == NO_QUOTA) {
++      putinoquota(&new_inode);
++      iput(dir);
++      return -EDQUOT;
++   }
++   dir->i_count++;
++   if (!(error = dir->i_op->symlink(dir, basename, namelen, oldname)))
++      quota_remove(&new_inode, 1, 1);
++   putinoquota(&new_inode);
++   iput(dir);
++
++   return error;
++}
++
++int vfs_chown(struct inode *inode, uid_t uid, gid_t gid)
++{
++   int error;
++   struct iattr newattrs;
++
++   if (IS_RDONLY(inode))
++      return -EROFS;
++   if (uid == (uid_t) -1)
++      uid = inode->i_uid;
++   if (gid == (gid_t) -1)
++      gid = inode->i_gid;
++   newattrs.ia_mode = inode->i_mode;
++   newattrs.ia_uid = uid;
++   newattrs.ia_gid = gid;
++   newattrs.ia_ctime = CURRENT_TIME;
++   newattrs.ia_valid = ATTR_UID | ATTR_GID | ATTR_CTIME;
++   /*
++    * If the owner has been changed, remove the setuid bit
++    */
++   if (uid != inode->i_uid && inode->i_mode & S_ISUID) {
++      newattrs.ia_mode &= ~S_ISUID;
++      newattrs.ia_valid |= ATTR_MODE;
++   }
++   /*
++    * If the group has been changed, remove the setgid bit
++    */
++   if (gid != inode->i_gid && inode->i_mode & S_ISGID) {
++      newattrs.ia_mode &= ~S_ISGID;
++      newattrs.ia_valid |= ATTR_MODE;
++   }
++   getinoquota(inode, -1);
++   if (quota_transfer(inode, &newattrs, 1, isize_to_blocks(inode->i_size,
++                      inode->i_blksize), 0) == NO_QUOTA) {
++      putinoquota(inode);
++      return -EDQUOT;
++   }
++   if ((error = notify_change(inode, &newattrs)))
++      quota_transfer(inode, &newattrs, 1,
++                     isize_to_blocks(inode->i_size, inode->i_blksize), 1);
++   putinoquota(inode);
++   inode->i_dirt = 1;
++   return error;
++}
++
++int vfs_rename(struct inode *old_dir, const char *old_base, int old_len,
++               struct inode *new_dir, const char *new_base, int new_len)
++{
++   int error;
++   struct inode *old_inode, *new_inode;
++
++   /*
++    * Check if target file already exists, drop quota of file if
++    * it already exists and is overwritten. Extra check needed for
++    * renames of file to the same file.
++    */
++   old_dir->i_count++;
++   if ((error = lookup(old_dir, old_base, old_len, &old_inode))) {
++      iput(old_dir);
++      iput(new_dir);
++      return error;
++   }
++   new_dir->i_count++;
++   if (!lookup(new_dir, new_base, new_len, &new_inode)) {
++      if (old_dir != new_dir && old_inode != new_inode) {
++         iput(old_inode);
++         error = old_dir->i_op->rename(old_dir, old_base, old_len, 
++                                       new_dir, new_base, new_len);
++         if (!error) {
++            getinoquota(new_inode, -1);
++            quota_remove(new_inode, 1,
++                         isize_to_blocks(new_inode->i_size, new_inode->i_blksize));
++            putinoquota(new_inode);
++         }
++         iput(new_inode);
++         return error;
++      }
++      iput(new_inode);
++   }
++   iput(old_inode);
++   return old_dir->i_op->rename(old_dir, old_base, old_len, 
++                                new_dir, new_base, new_len);
++}
++
++void vfs_open(struct file *filp)
++{
++   if (filp->f_inode && S_ISREG(filp->f_inode->i_mode) && (filp->f_mode & 2)) {
++      filp->f_inode->i_writecount++;
++      getinoquota(filp->f_inode, -1); 
++   }
++}
++
++void vfs_close(struct file *filp)
++{
++   if (filp->f_inode && S_ISREG(filp->f_inode->i_mode) && (filp->f_mode & 2)) {
++      filp->f_inode->i_writecount--;
++      putinoquota(filp->f_inode); 
++   }
++}
++
++#else /* CONFIG_QUOTA */
++
++int vfs_truncate(struct inode *inode, size_t length)
++{
++   int error;
++   struct iattr newattrs;
++
++   inode->i_size = newattrs.ia_size = length;
++   if (inode->i_op && inode->i_op->truncate)
++      inode->i_op->truncate(inode);
++   newattrs.ia_ctime = newattrs.ia_mtime = CURRENT_TIME;
++   newattrs.ia_valid = ATTR_SIZE | ATTR_CTIME | ATTR_MTIME;
++   if ((error = notify_change(inode, &newattrs)))
++      return(error);
++   inode->i_dirt = 1;
++   return 0;
++}
++
++int vfs_chown(struct inode *inode, uid_t uid, gid_t gid)
++{
++   int error;
++   struct iattr newattrs;
++
++   if (IS_RDONLY(inode))
++      return -EROFS;
++   newattrs.ia_uid = uid;
++   newattrs.ia_gid = gid;
++   newattrs.ia_ctime = CURRENT_TIME;
++   newattrs.ia_valid = ATTR_UID | ATTR_GID | ATTR_CTIME;
++   if (uid == (uid_t) -1)
++      uid = inode->i_uid;
++   if (gid == (gid_t) -1)
++      gid = inode->i_gid;
++   /*
++    * If the owner has been changed, remove the setuid bit
++    */
++   if (uid != inode->i_uid && inode->i_mode & S_ISUID) {
++      newattrs.ia_mode = inode->i_mode & ~S_ISUID;
++      newattrs.ia_valid |= ATTR_MODE;
++   }
++   /*
++    * If the group has been changed, remove the setgid bit
++    */
++   if (gid != inode->i_gid && inode->i_mode & S_ISGID) {
++      newattrs.ia_mode = inode->i_mode & ~S_ISGID;
++      newattrs.ia_valid |= ATTR_MODE;
++   }
++   if ((error = notify_change(inode, &newattrs)))
++      return error;
++   inode->i_dirt = 1;
++   return 0;
++}
++
++void vfs_open(struct file *filp)
++{
++   if (filp->f_inode && S_ISREG(filp->f_inode->i_mode) && (filp->f_mode & 2))
++      filp->f_inode->i_writecount++;
++}
++
++void vfs_close(struct file *filp)
++{
++   if (filp->f_inode && S_ISREG(filp->f_inode->i_mode) && (filp->f_mode & 2))
++      filp->f_inode->i_writecount--;
++}
++
++#endif /* CONFIG_QUOTA */
++
+diff -ru --new-file linux_1.1.61/fs/inode.c linux_1.1.61_owld/fs/inode.c
+--- linux_1.1.61/fs/inode.c	Mon Oct 24 19:56:07 1994
++++ linux_1.1.61_owld/fs/inode.c	Mon Oct 24 20:01:48 1994
+@@ -487,6 +487,7 @@
+ 	struct inode_hash_entry * h;
+ 	struct inode * inode;
+ 	struct inode * empty = NULL;
++	short cnt;
+ 
+ 	if (!sb)
+ 		panic("VFS: iget with sb==NULL");
+@@ -515,8 +516,11 @@
+ 	goto return_it;
+ 
+ found_it:
+-	if (!inode->i_count)
++	if (!inode->i_count) {
+ 		nr_free_inodes--;
++		for (cnt = 0; cnt < MAXQUOTAS; cnt++)
++			inode->i_dquot[cnt] = NODQUOT;
++	}
+ 	inode->i_count++;
+ 	wait_on_inode(inode);
+ 	if (inode->i_dev != sb->s_dev || inode->i_ino != nr) {
+diff -ru --new-file linux_1.1.61/fs/isofs/inode.c linux_1.1.61_owld/fs/isofs/inode.c
+--- linux_1.1.61/fs/isofs/inode.c	Thu Aug 11 15:40:16 1994
++++ linux_1.1.61_owld/fs/isofs/inode.c	Thu Aug 11 15:42:27 1994
+@@ -124,7 +124,7 @@
+ 		    break;
+ 		  }
+ 		}
+-		else return 0;
++		else return 1;
+ 	}
+ 	return 1;
+ }
+diff -ru --new-file linux_1.1.61/fs/msdos/inode.c linux_1.1.61_owld/fs/msdos/inode.c
+--- linux_1.1.61/fs/msdos/inode.c	Mon Oct 24 19:56:07 1994
++++ linux_1.1.61_owld/fs/msdos/inode.c	Mon Oct 24 20:01:49 1994
+@@ -133,7 +133,7 @@
+ 			if (value) return 0;
+ 			*quiet = 1;
+ 		}
+-		else return 0;
++		else return 1;
+ 	}
+ 	return 1;
+ }
+diff -ru --new-file linux_1.1.61/fs/namei.c linux_1.1.61_owld/fs/namei.c
+--- linux_1.1.61/fs/namei.c	Mon Oct 24 19:56:08 1994
++++ linux_1.1.61_owld/fs/namei.c	Thu Oct 27 12:38:46 1994
+@@ -16,6 +16,7 @@
+ #include <linux/string.h>
+ #include <linux/fcntl.h>
+ #include <linux/stat.h>
++#include <linux/fileio.h>
+ 
+ #define ACC_MODE(x) ("\000\004\002\006"[(x)&O_ACCMODE])
+ 
+@@ -345,7 +346,7 @@
+ 			error = -EROFS;
+ 		else {
+ 			dir->i_count++;		/* create eats the dir */
+-			error = dir->i_op->create(dir,basename,namelen,mode,res_inode);
++			error = vfs_create(dir,basename,namelen,mode,res_inode);
+ 			up(&dir->i_sem);
+ 			iput(dir);
+ 			return error;
+@@ -397,6 +398,7 @@
+ 			}
+  		}
+  	}
++
+ 	/*
+ 	 * An append-only file must be opened in append mode for writing
+ 	 */
+@@ -404,20 +406,9 @@
+ 		iput(inode);
+ 		return -EPERM;
+ 	}
+-	if (flag & O_TRUNC) {
+-		struct iattr newattrs;
+-
+-		newattrs.ia_size = 0;
+-		newattrs.ia_valid = ATTR_SIZE;
+-		if ((error = notify_change(inode, &newattrs))) {
+-			iput(inode);
++	if (flag & O_TRUNC)
++		if ((error = vfs_truncate(inode, 0)))
+ 			return error;
+-		}
+-		inode->i_size = 0;
+-		if (inode->i_op && inode->i_op->truncate)
+-			inode->i_op->truncate(inode);
+-		inode->i_dirt = 1;
+-	}
+ 	*res_inode = inode;
+ 	return 0;
+ }
+@@ -450,7 +441,7 @@
+ 	}
+ 	dir->i_count++;
+ 	down(&dir->i_sem);
+-	error = dir->i_op->mknod(dir,basename,namelen,mode,dev);
++	error = vfs_mknod(dir,basename,namelen,mode,dev);
+ 	up(&dir->i_sem);
+ 	iput(dir);
+ 	return error;
+@@ -507,7 +498,7 @@
+ 	}
+ 	dir->i_count++;
+ 	down(&dir->i_sem);
+-	error = dir->i_op->mkdir(dir,basename,namelen,mode);
++	error = vfs_mkdir(dir,basename,namelen,mode);
+ 	up(&dir->i_sem);
+ 	iput(dir);
+ 	return error;
+@@ -558,7 +549,7 @@
+ 		iput(dir);
+ 		return -EPERM;
+ 	}
+-	return dir->i_op->rmdir(dir,basename,namelen);
++	return vfs_rmdir(dir,basename,namelen);
+ }
+ 
+ asmlinkage int sys_rmdir(const char * pathname)
+@@ -606,7 +597,7 @@
+ 		iput(dir);
+ 		return -EPERM;
+ 	}
+-	return dir->i_op->unlink(dir,basename,namelen);
++	return vfs_unlink(dir,basename,namelen);
+ }
+ 
+ asmlinkage int sys_unlink(const char * pathname)
+@@ -649,7 +640,7 @@
+ 	}
+ 	dir->i_count++;
+ 	down(&dir->i_sem);
+-	error = dir->i_op->symlink(dir,basename,namelen,oldname);
++	error = vfs_symlink(dir,basename,namelen,oldname);
+ 	up(&dir->i_sem);
+ 	iput(dir);
+ 	return error;
+@@ -804,7 +795,7 @@
+ 	}
+ 	new_dir->i_count++;
+ 	down(&new_dir->i_sem);
+-	error = old_dir->i_op->rename(old_dir, old_base, old_len, 
++	error = vfs_rename(old_dir, old_base, old_len, 
+ 		new_dir, new_base, new_len);
+ 	up(&new_dir->i_sem);
+ 	iput(new_dir);
+diff -ru --new-file linux_1.1.61/fs/open.c linux_1.1.61_owld/fs/open.c
+--- linux_1.1.61/fs/open.c	Sat Oct 29 13:17:08 1994
++++ linux_1.1.61_owld/fs/open.c	Sat Oct 29 13:30:47 1994
+@@ -16,6 +16,7 @@
+ #include <linux/signal.h>
+ #include <linux/tty.h>
+ #include <linux/time.h>
++#include <linux/fileio.h>
+ 
+ #include <asm/segment.h>
+ 
+@@ -69,7 +70,6 @@
+ {
+ 	struct inode * inode;
+ 	int error;
+-	struct iattr newattrs;
+ 
+ 	error = namei(path,&inode);
+ 	if (error)
+@@ -86,13 +86,7 @@
+ 		iput(inode);
+ 		return -EPERM;
+ 	}
+-	inode->i_size = newattrs.ia_size = length;
+-	if (inode->i_op && inode->i_op->truncate)
+-		inode->i_op->truncate(inode);
+-	newattrs.ia_ctime = newattrs.ia_mtime = CURRENT_TIME;
+-	newattrs.ia_valid = ATTR_SIZE | ATTR_CTIME | ATTR_MTIME;
+-	inode->i_dirt = 1;
+-	error = notify_change(inode, &newattrs);
++	error = vfs_truncate(inode, length);
+ 	iput(inode);
+ 	return error;
+ }
+@@ -101,7 +95,6 @@
+ {
+ 	struct inode * inode;
+ 	struct file * file;
+-	struct iattr newattrs;
+ 
+ 	if (fd >= NR_OPEN || !(file = current->files->fd[fd]))
+ 		return -EBADF;
+@@ -111,13 +104,7 @@
+ 		return -EACCES;
+ 	if (IS_IMMUTABLE(inode) || IS_APPEND(inode))
+ 		return -EPERM;
+-	inode->i_size = newattrs.ia_size = length;
+-	if (inode->i_op && inode->i_op->truncate)
+-		inode->i_op->truncate(inode);
+-	newattrs.ia_ctime = newattrs.ia_mtime = CURRENT_TIME;
+-	newattrs.ia_valid = ATTR_SIZE | ATTR_CTIME | ATTR_MTIME;
+-	inode->i_dirt = 1;
+-	return notify_change(inode, &newattrs);
++	return vfs_truncate(inode, length);
+ }
+ 
+ /* If times==NULL, set access and modification to current time,
+@@ -300,80 +287,25 @@
+ {
+ 	struct inode * inode;
+ 	struct file * file;
+-	struct iattr newattrs;
+ 
+ 	if (fd >= NR_OPEN || !(file = current->files->fd[fd]))
+ 		return -EBADF;
+ 	if (!(inode = file->f_inode))
+ 		return -ENOENT;
+-	if (IS_RDONLY(inode))
+-		return -EROFS;
+-	if (user == (uid_t) -1)
+-		user = inode->i_uid;
+-	if (group == (gid_t) -1)
+-		group = inode->i_gid;
+-	newattrs.ia_mode = inode->i_mode;
+-	newattrs.ia_uid = user;
+-	newattrs.ia_gid = group;
+-	newattrs.ia_ctime = CURRENT_TIME;
+-	newattrs.ia_valid =  ATTR_UID | ATTR_GID | ATTR_CTIME;
+-	/*
+-	 * If the owner has been changed, remove the setuid bit
+-	 */
+-	if (user != inode->i_uid && inode->i_mode & S_ISUID) {
+-		newattrs.ia_mode &= ~S_ISUID;
+-		newattrs.ia_valid |= ATTR_MODE;
+-	}
+-	/*
+-	 * If the group has been changed, remove the setgid bit
+-	 */
+-	if (group != inode->i_gid && inode->i_mode & S_ISGID) {
+-		newattrs.ia_mode &= ~S_ISGID;
+-		newattrs.ia_valid |= ATTR_MODE;
+-	}
+-	inode->i_dirt = 1;
+-	return notify_change(inode, &newattrs);
++	return vfs_chown(inode, user, group);
+ }
+ 
+ asmlinkage int sys_chown(const char * filename, uid_t user, gid_t group)
+ {
+ 	struct inode * inode;
+ 	int error;
+-	struct iattr newattrs;
+ 
+ 	error = lnamei(filename,&inode);
+ 	if (error)
+ 		return error;
+-	if (IS_RDONLY(inode)) {
+-		iput(inode);
+-		return -EROFS;
+-	}
+-	if (user == (uid_t) -1)
+-		user = inode->i_uid;
+-	if (group == (gid_t) -1)
+-		group = inode->i_gid;
+-	newattrs.ia_uid = user;
+-	newattrs.ia_gid = group;
+-	newattrs.ia_ctime = CURRENT_TIME;
+-	newattrs.ia_valid =  ATTR_UID | ATTR_GID | ATTR_CTIME;
+-	/*
+-	 * If the owner has been changed, remove the setuid bit
+-	 */
+-	if (user != inode->i_uid && inode->i_mode & S_ISUID) {
+-		newattrs.ia_mode = inode->i_mode & ~S_ISUID;
+-		newattrs.ia_valid |= ATTR_MODE;
+-	}
+-	/*
+-	 * If the group has been changed, remove the setgid bit
+-	 */
+-	if (group != inode->i_gid && inode->i_mode & S_ISGID) {
+-		newattrs.ia_mode = inode->i_mode & ~S_ISGID;
+-		newattrs.ia_valid |= ATTR_MODE;
+-	}
+-	inode->i_dirt = 1;
+-	error = notify_change(inode, &newattrs);
++	error = vfs_chown(inode, user, group);
+ 	iput(inode);
+-	return(error);
++	return error;
+ }
+ 
+ /*
+@@ -434,6 +366,7 @@
+ 			return error;
+ 		}
+ 	}
++	vfs_open(f);
+ 	f->f_flags &= ~(O_CREAT | O_EXCL | O_NOCTTY | O_TRUNC);
+ 	return (fd);
+ }
+@@ -467,6 +400,7 @@
+ 	inode = filp->f_inode;
+ 	if (inode)
+ 		fcntl_remove_locks(current, filp, fd);
++	vfs_close(filp);
+ 	if (filp->f_count > 1) {
+ 		filp->f_count--;
+ 		return 0;
+diff -ru --new-file linux_1.1.61/fs/read_write.c linux_1.1.61_owld/fs/read_write.c
+--- linux_1.1.61/fs/read_write.c	Wed Nov  2 20:48:18 1994
++++ linux_1.1.61_owld/fs/read_write.c	Wed Nov  2 20:49:07 1994
+@@ -9,6 +9,7 @@
+ #include <linux/stat.h>
+ #include <linux/kernel.h>
+ #include <linux/sched.h>
++#include <linux/fileio.h>
+ 
+ #include <asm/segment.h>
+ 
+@@ -135,6 +136,7 @@
+ 	error = verify_area(VERIFY_WRITE,buf,count);
+ 	if (error)
+ 		return error;
++	current->io_usage += count;
+ 	return file->f_op->read(inode,file,buf,count);
+ }
+ 
+@@ -143,6 +145,7 @@
+ 	int error;
+ 	struct file * file;
+ 	struct inode * inode;
++	struct iattr newattrs;
+ 	int written;
+ 	
+ 	if (fd>=NR_OPEN || !(file=current->files->fd[fd]) || !(inode=file->f_inode))
+@@ -156,13 +159,12 @@
+ 	error = verify_area(VERIFY_READ,buf,count);
+ 	if (error)
+ 		return error;
+-	written = file->f_op->write(inode,file,buf,count);
++	written = vfs_write(inode,file,buf,count);
+ 	/*
+ 	 * If data has been written to the file, remove the setuid and
+ 	 * the setgid bits
+ 	 */
+ 	if (written > 0 && !suser() && (inode->i_mode & (S_ISUID | S_ISGID))) {
+-		struct iattr newattrs;
+ 		newattrs.ia_mode = inode->i_mode & ~(S_ISUID | S_ISGID);
+ 		newattrs.ia_valid = ATTR_MODE;
+ 		notify_change(inode, &newattrs);
+diff -ru --new-file linux_1.1.61/fs/super.c linux_1.1.61_owld/fs/super.c
+--- linux_1.1.61/fs/super.c	Thu Oct  6 21:16:23 1994
++++ linux_1.1.61_owld/fs/super.c	Thu Oct  6 21:37:27 1994
+@@ -2,16 +2,20 @@
+  *  linux/fs/super.c
+  *
+  *  Copyright (C) 1991, 1992  Linus Torvalds
++ *
++ *  super.c contains code to handle: - mount structures
++ *                                   - super-block tables.
++ *                                   - mount systemcall
++ *                                   - umount systemcall
+  */
+ 
+-/*
+- * super.c contains code to handle the super-block tables.
+- */
+ #include <stdarg.h>
+ 
+ #include <linux/config.h>
+ #include <linux/sched.h>
+ #include <linux/kernel.h>
++#include <linux/mount.h>
++#include <linux/malloc.h>
+ #include <linux/major.h>
+ #include <linux/stat.h>
+ #include <linux/errno.h>
+@@ -21,23 +25,112 @@
+ #include <asm/system.h>
+ #include <asm/segment.h>
+ #include <asm/bitops.h>
+- 
++
+ extern struct file_operations * get_blkfops(unsigned int);
+-extern struct file_operations * get_chrfops(unsigned int);
+ 
+ extern void wait_for_keypress(void);
+ extern void fcntl_init_locks(void);
+ 
+ extern int root_mountflags;
+ 
+-struct super_block super_blocks[NR_SUPER];
+-
+ static int do_remount_sb(struct super_block *sb, int flags, char * data);
+ 
+-/* this is initialized in init/main.c */
++/*
++ * This is initialized in init/main.c
++ */
+ dev_t ROOT_DEV = 0;
+ 
+-static struct file_system_type * file_systems = NULL;
++struct super_block super_blocks[NR_SUPER];
++static struct file_system_type *file_systems = (struct file_system_type *) NULL;
++static struct vfsmount *vfsmntlist = (struct vfsmount *) NULL,
++                       *vfsmnttail = (struct vfsmount *) NULL,
++                       *mru_vfsmnt = (struct vfsmount *) NULL;
++
++/* 
++ * This part handles the management of the list of mounted filesystems.
++ * Superblock retrieval is also done with this list.
++ */
++struct vfsmount *lookup_vfsmnt(dev_t dev)
++{
++	register struct vfsmount *lptr;
++
++	if (vfsmntlist == (struct vfsmount *) 0)
++		return ((struct vfsmount *) 0);
++
++	if (mru_vfsmnt != (struct vfsmount *) 0 && mru_vfsmnt->mnt_dev == dev)
++		return (mru_vfsmnt);
++
++	for (lptr = vfsmntlist; lptr != (struct vfsmount *)0; lptr = lptr->mnt_next)
++		if (lptr->mnt_dev == dev)
++			return (lptr);
++
++	return ((struct vfsmount *) 0);
++	/* NOTREACHED */
++}
++
++static struct vfsmount *add_vfsmnt(dev_t dev, const char *dev_name,
++				   const char *dir_name)
++{
++	register struct vfsmount *lptr;
++	char *tmp;
++
++	if ((lptr = (struct vfsmount *)
++	     kmalloc(sizeof(struct vfsmount), GFP_KERNEL)) == (struct vfsmount *) 0)
++		panic("VFS: Unable to allocate memory for vfsmount devicelist");
++
++	memset(lptr, 0, sizeof(struct vfsmount));
++	lptr->mnt_dev = dev;
++	if (dev_name) {
++		if (!getname(dev_name, &tmp)) {
++			if ((lptr->mnt_devname =
++			    (char *) kmalloc(strlen(tmp), GFP_KERNEL)) != (char *)0)
++				strcpy(lptr->mnt_devname, tmp);
++			putname(tmp);
++		}
++	}
++	if (dir_name) {
++		if (!getname(dir_name, &tmp)) {
++			if ((lptr->mnt_dirname =
++			    (char *) kmalloc(strlen(tmp), GFP_KERNEL)) != (char *)0)
++			strcpy(lptr->mnt_dirname, tmp);
++			putname(tmp);
++		}
++	}
++
++	if (vfsmntlist == (struct vfsmount *)0)
++		vfsmntlist = vfsmnttail = lptr;
++	else {
++		vfsmnttail->mnt_next = lptr;
++		vfsmnttail = lptr;
++	}
++	return (lptr);
++}
++
++static void remove_vfsmnt(dev_t dev)
++{
++	register struct vfsmount *lptr, *tofree;
++
++	if (vfsmntlist == (struct vfsmount *) 0)
++		return;
++	lptr = vfsmntlist;
++	if (lptr->mnt_dev == dev) {
++		tofree = lptr;
++		vfsmntlist = lptr->mnt_next;
++	} else {
++		while (lptr->mnt_next != (struct vfsmount *) 0) {
++			if (lptr->mnt_next->mnt_dev == dev)
++				break;
++			lptr = lptr->mnt_next;
++		}
++		tofree = lptr->mnt_next;
++		if (vfsmnttail->mnt_dev == dev)
++			vfsmnttail = lptr;
++		lptr->mnt_next = lptr->mnt_next->mnt_next;
++	}
++	kfree(tofree->mnt_devname);
++	kfree(tofree->mnt_dirname);
++	kfree_s(tofree, sizeof(struct vfsmount));
++}
+ 
+ int register_filesystem(struct file_system_type * fs)
+ {
+@@ -319,17 +412,30 @@
+ 			MAJOR(dev), MINOR(dev));
+ }
+ 
++extern void acct_auto_close(dev_t dev);
++
+ static int do_umount(dev_t dev)
+ {
+ 	struct super_block * sb;
+ 	int retval;
+ 	
+ 	if (dev==ROOT_DEV) {
+-		/* Special case for "unmounting" root.  We just try to remount
+-		   it readonly, and sync() the device. */
++		/*
++		 * Special case for "unmounting" root. We just try to remount
++		 * it readonly, and sync() the device.
++		 */
+ 		if (!(sb=get_super(dev)))
+ 			return -ENOENT;
+ 		if (!(sb->s_flags & MS_RDONLY)) {
++#ifdef CONFIG_QUOTA
++			/*
++			 * Make sure all quotas are turned off on this device we need to mount
++			 * it readonly so no more writes by the quotasystem.
++			 * If later on the remount fails to bad there are no quotas running
++			 * anymore. Turn them on again by hand.
++			 */
++			(void) quota_off(dev, -1);
++#endif
+ 			fsync_dev(dev);
+ 			retval = do_remount_sb(sb, MS_RDONLY, 0);
+ 			if (retval)
+@@ -342,6 +448,18 @@
+ 	if (!sb->s_covered->i_mount)
+ 		printk("VFS: umount(%d/%d): mounted inode has i_mount=NULL\n",
+ 							MAJOR(dev), MINOR(dev));
++#ifdef CONFIG_QUOTA
++	/*
++	 * Before checking if the filesystem is still busy make sure the kernel
++	 * doesn't hold any quotafiles open on that device. If the umount fails
++	 * to bad there are no quotas running anymore. Turn them on again by hand.
++	 */
++	(void) quota_off(dev, -1);
++#endif
++	/*
++	 * The same as for quota is also true for the accounting file.
++	 */
++	acct_auto_close(dev);
+ 	if (!fs_may_umount(dev, sb->s_mounted))
+ 		return -EBUSY;
+ 	sb->s_covered->i_mount = NULL;
+@@ -352,6 +470,7 @@
+ 	if (sb->s_op && sb->s_op->write_super && sb->s_dirt)
+ 		sb->s_op->write_super(sb);
+ 	put_super(dev);
++	remove_vfsmnt(dev);
+ 	return 0;
+ }
+ 
+@@ -427,13 +546,15 @@
+  * We also have to flush all inode-data for this device, as the new mount
+  * might need new info.
+  */
+-static int do_mount(dev_t dev, const char * dir, char * type, int flags, void * data)
++static int do_mount(dev_t dev, const char * dev_name, const char * dir_name,
++		    char * type, int flags, void * data)
+ {
+ 	struct inode * dir_i;
+ 	struct super_block * sb;
++	struct vfsmount *vfsmnt;
+ 	int error;
+ 
+-	error = namei(dir,&dir_i);
++	error = namei(dir_name,&dir_i);
+ 	if (error)
+ 		return error;
+ 	if (dir_i->i_count != 1 || dir_i->i_mount) {
+@@ -453,6 +574,9 @@
+ 		iput(dir_i);
+ 		return -EBUSY;
+ 	}
++	vfsmnt = add_vfsmnt(dev, dev_name, dir_name);
++	vfsmnt->mnt_sb = sb;
++	vfsmnt->mnt_sem.count = 1;
+ 	sb->s_covered = dir_i;
+ 	dir_i->i_mount = sb->s_mounted;
+ 	return 0;		/* we don't iput(dir_i) - see umount */
+@@ -623,7 +747,7 @@
+ 			return retval;
+ 		}
+ 	}
+-	retval = do_mount(dev,dir_name,t,flags,(void *) page);
++	retval = do_mount(dev,dev_name,dir_name,t,flags,(void *) page);
+ 	free_page(page);
+ 	if (retval && fops && fops->release)
+ 		fops->release(inode, NULL);
+@@ -635,10 +759,11 @@
+ {
+ 	struct file_system_type * fs_type;
+ 	struct super_block * sb;
++	struct vfsmount *vfsmnt;
+ 	struct inode * inode, d_inode;
+ 	struct file filp;
+ 	int retval;
+-
++  
+ 	memset(super_blocks, 0, sizeof(super_blocks));
+ 	fcntl_init_locks();
+ 	if (MAJOR(ROOT_DEV) == FLOPPY_MAJOR) {
+@@ -664,9 +789,9 @@
+ 	for (fs_type = file_systems ; fs_type ; fs_type = fs_type->next) {
+ 		if(retval)
+ 			break;
+-		if (!fs_type->requires_dev)
+-			continue;
+-		sb = read_super(ROOT_DEV,fs_type->name,root_mountflags,NULL,1);
++  		if (!fs_type->requires_dev)
++  			continue;
++  		sb = read_super(ROOT_DEV,fs_type->name,root_mountflags,NULL,1);
+ 		if (sb) {
+ 			inode = sb->s_mounted;
+ 			inode->i_count += 3 ;	/* NOTE! it is logically used 4 times, not 1 */
+@@ -677,6 +802,9 @@
+ 			printk ("VFS: Mounted root (%s filesystem)%s.\n",
+ 				fs_type->name,
+ 				(sb->s_flags & MS_RDONLY) ? " readonly" : "");
++			vfsmnt = add_vfsmnt(ROOT_DEV, "rootfs", "/");
++			vfsmnt->mnt_sb = sb;
++			vfsmnt->mnt_sem.count = 1;
+ 			return;
+ 		}
+ 	}
+diff -ru --new-file linux_1.1.61/ibcs/binfmt_coff.c linux_1.1.61_owld/ibcs/binfmt_coff.c
+--- linux_1.1.61/ibcs/binfmt_coff.c	Wed Aug 10 23:29:32 1994
++++ linux_1.1.61_owld/ibcs/binfmt_coff.c	Wed Aug 10 23:30:10 1994
+@@ -455,6 +455,8 @@
+ /*
+  *  Do the end processing once the stack has been constructed
+  */
++            current->flags          &= ~PF_FORKNOEXEC; /* accounting flags */
++            current->io_usage        = 0;
+ 	    current->mm->start_code  = text_vaddr & PAGE_MASK;
+ 	    current->mm->end_code    = text_vaddr + text_size;
+ 	    current->mm->end_data    = data_vaddr + data_size;
+diff -ru --new-file linux_1.1.61/include/linux/acct.h linux_1.1.61_owld/include/linux/acct.h
+--- linux_1.1.61/include/linux/acct.h	Thu Jan  1 01:00:00 1970
++++ linux_1.1.61_owld/include/linux/acct.h	Wed May  4 17:34:46 1994
+@@ -0,0 +1,28 @@
++#ifndef __LINUX_ACCT_H
++#define __LINUX_ACCT_H
++
++#define ACCT_COMM 16
++
++struct acct
++{
++   char          ac_comm[ACCT_COMM];	/* Accounting command name */
++   time_t        ac_utime;		/* Accounting user time */
++   time_t        ac_stime;		/* Accounting system time */
++   time_t        ac_etime;		/* Accounting elapsed time */
++   time_t        ac_btime;		/* Beginning time */
++   uid_t         ac_uid;		/* Accounting user ID */
++   gid_t         ac_gid;		/* Accounting group ID */
++   dev_t         ac_tty;		/* controlling tty */
++   char          ac_flag;		/* Accounting flag */
++   unsigned long ac_mem;		/* Pages of memory used */
++   unsigned long ac_io;			/* Number of bytes read/written */
++};
++
++#define AFORK	0001	/* has executed fork, but no exec */
++#define ASU	0002	/* used super-user privileges */
++#define ACORE	0004	/* dumped core */
++#define AXSIG	0010	/* killed by a signal */
++
++#define AHZ     100
++
++#endif
+diff -ru --new-file linux_1.1.61/include/linux/fileio.h linux_1.1.61_owld/include/linux/fileio.h
+--- linux_1.1.61/include/linux/fileio.h	Thu Jan  1 01:00:00 1970
++++ linux_1.1.61_owld/include/linux/fileio.h	Mon Oct 24 22:18:57 1994
+@@ -0,0 +1,70 @@
++/*
++ *
++ * Simple VFS definitions for fileio.
++ *
++ * Authors: Marco van Wieringen <v892273@si.hhs.nl> <mvw@mcs.ow.org>
++ *          Edvard Tuinder <v892231@si.hhs.nl> <ed@delirium.ow.org>
++ *
++ * Version: $Id: fileio.h,v 1.6 1994/10/24 21:18:20 mvw Exp mvw $
++ *
++ */
++#ifndef _LINUX_FILEIO_H
++#define _LINUX_FILEIO_H
++
++#include <linux/config.h>
++#include <linux/stat.h>
++
++#ifdef CONFIG_QUOTA
++
++int vfs_write(struct inode *ino, struct file *file, char *addr, size_t bytes);
++int vfs_create(struct inode *dir, const char *basename,
++               int namelen, int mode, struct inode **res_ino);
++int vfs_truncate(struct inode *ino, size_t length);
++int vfs_mknod(struct inode *dir, const char *basename,
++              int namelen, int mode, dev_t dev);
++int vfs_mkdir(struct inode *dir, const char *basename, int namelen, int mode);
++int vfs_rmdir(struct inode *dir, const char *basename, int namelen);
++int vfs_unlink(struct inode *dir, const char *basename, int namelen);
++int vfs_symlink(struct inode *dir, const char *basename,
++                int namelen, const char *oldname);
++int vfs_chown(struct inode *ino, uid_t uid, gid_t gid);
++int vfs_rename(struct inode *old_dir, const char *old_base, int old_len,
++               struct inode *new_dir, const char *mew_base, int new_len);
++void vfs_open(struct file *filp);
++void vfs_close(struct file *filp);
++
++#else /* CONFIG_QUOTA */
++
++#define vfs_write(ino, file, addr, bytes) \
++(file)->f_op->write((ino),(file),(addr),(bytes))
++
++#define vfs_create(dir, basename, namelen, mode, res_ino) \
++(dir)->i_op->create((dir),(basename),(namelen),(mode),(res_ino))
++
++int vfs_truncate(struct inode *ino, size_t length);
++
++#define vfs_mknod(dir, basename, namelen, mode, dev) \
++(dir)->i_op->mknod((dir),(basename),(namelen),(mode),(dev))
++
++#define vfs_mkdir(dir, basename, namelen, mode) \
++(dir)->i_op->mkdir((dir),(basename),(namelen),(mode))
++
++#define vfs_rmdir(dir, basename, namelen) \
++(dir)->i_op->rmdir((dir),(basename),(namelen))
++
++#define vfs_unlink(dir, basename, namelen) \
++(dir)->i_op->unlink((dir),(basename),(namelen))
++
++#define vfs_symlink(dir, basename, namelen, oldname) \
++(dir)->i_op->symlink((dir),(basename),(namelen),(oldname))
++
++int vfs_chown(struct inode *ino, uid_t uid, gid_t gid);
++
++#define vfs_rename(old_dir, old_base, old_len, new_dir, new_base, new_len) \
++(old_dir)->i_op->rename((old_dir),(old_base),(old_len),(new_dir),(new_base),(new_len))
++
++void vfs_open(struct file *filp);
++void vfs_close(struct file *filp);
++
++#endif /* CONFIG_QUOTA */
++#endif /* _LINUX_FILEIO_H */
+diff -ru --new-file linux_1.1.61/include/linux/fs.h linux_1.1.61_owld/include/linux/fs.h
+--- linux_1.1.61/include/linux/fs.h	Sat Oct 29 11:15:44 1994
++++ linux_1.1.61_owld/include/linux/fs.h	Sun Oct 30 11:45:34 1994
+@@ -199,6 +199,8 @@
+ 	time_t		ia_ctime;
+ };
+ 
++#include <linux/quota.h>
++
+ struct inode {
+ 	dev_t		i_dev;
+ 	unsigned long	i_ino;
+@@ -225,7 +227,9 @@
+ 	struct inode * i_bound_to, * i_bound_by;
+ 	struct inode * i_mount;
+ 	struct socket * i_socket;
++	struct dquot * i_dquot[MAXQUOTAS];
+ 	unsigned short i_count;
++	unsigned short i_writecount;
+ 	unsigned short i_flags;
+ 	unsigned char i_lock;
+ 	unsigned char i_dirt;
+diff -ru --new-file linux_1.1.61/include/linux/kernel.h linux_1.1.61_owld/include/linux/kernel.h
+--- linux_1.1.61/include/linux/kernel.h	Fri Aug 12 13:00:28 1994
++++ linux_1.1.61_owld/include/linux/kernel.h	Fri Aug 12 13:01:20 1994
+@@ -54,19 +54,6 @@
+ asmlinkage int printk(const char * fmt, ...)
+ 	__attribute__ ((format (printf, 1, 2)));
+ 
+-/*
+- * This is defined as a macro, but at some point this might become a
+- * real subroutine that sets a flag if it returns true (to do
+- * BSD-style accounting where the process is flagged if it uses root
+- * privs).  The implication of this is that you should do normal
+- * permissions checks first, and check suser() last.
+- *
+- * "suser()" checks against the effective user id, while "fsuser()"
+- * is used for file permission checking and checks against the fsuid..
+- */
+-#define suser() (current->euid == 0)
+-#define fsuser() (current->fsuid == 0)
+-
+ extern int splx (int new_ipl);
+ #endif /* __KERNEL__ */
+ 
+diff -ru --new-file linux_1.1.61/include/linux/mount.h linux_1.1.61_owld/include/linux/mount.h
+--- linux_1.1.61/include/linux/mount.h	Thu Jan  1 01:00:00 1970
++++ linux_1.1.61_owld/include/linux/mount.h	Wed Sep  7 23:08:40 1994
+@@ -0,0 +1,34 @@
++/*
++ *
++ * Definitions for mount interface. This describes the in the kernel build 
++ * linkedlist with mounted filesystems.
++ *
++ * Authors: Marco van Wieringen <v892273@si.hhs.nl> <mvw@mcs.ow.org>
++ *          Edvard Tuinder <v892231@si.hhs.nl> <ed@delirium.ow.org>
++ *
++ * Version: $Id: mount.h,v 1.3 1994/07/20 22:01:00 mvw Exp mvw $
++ *
++ */
++#ifndef _LINUX_MOUNT_H
++#define _LINUX_MOUNT_H
++
++#define QF_OPENING  0x01        /* Quotafile is in progress of being opened */
++#define QF_CLOSING  0x02        /* Quotafile is in progress of being closed */
++
++struct vfsmount
++{
++   dev_t mnt_dev;                      /* Device this applies to */
++   char *mnt_devname;                  /* Name of device e.g. /dev/dsk/hda1 */
++   char *mnt_dirname;                  /* Name of directory mounted on */
++   unsigned int mnt_flags;             /* Flags of this device see above */
++   struct semaphore mnt_sem;           /* lock device while I/O in progress */
++   struct super_block *mnt_sb;         /* pointer to superblock */
++   struct file *mnt_quotas[MAXQUOTAS]; /* fp's to quotafiles */
++   time_t mnt_iexp[MAXQUOTAS];         /* expiretime for inodes */
++   time_t mnt_bexp[MAXQUOTAS];         /* expiretime for blocks */
++   struct vfsmount *mnt_next;          /* pointer to next in linkedlist */
++};
++
++struct vfsmount *lookup_vfsmnt(dev_t dev);
++
++#endif /* _LINUX_MOUNT_H */
+diff -ru --new-file linux_1.1.61/include/linux/quota.h linux_1.1.61_owld/include/linux/quota.h
+--- linux_1.1.61/include/linux/quota.h
++++ linux_1.1.61_owld/include/linux/quota.h	Sun Oct 30 11:45:01 1994
+@@ -0,0 +1,208 @@
++/*
++ * Copyright (c) 1982, 1986 Regents of the University of California.
++ * All rights reserved.
++ *
++ * This code is derived from software contributed to Berkeley by
++ * Robert Elz at The University of Melbourne.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ * 3. All advertising materials mentioning features or use of this software
++ *    must display the following acknowledgement:
++ *   This product includes software developed by the University of
++ *   California, Berkeley and its contributors.
++ * 4. Neither the name of the University nor the names of its contributors
++ *    may be used to endorse or promote products derived from this software
++ *    without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
++ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
++ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
++ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
++ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++ * SUCH DAMAGE.
++ *
++ * Version: $Id: quota.h,v 1.7 1994/10/30 09:39:03 mvw Exp mvw $
++ */
++
++#ifndef _LINUX_QUOTA_
++#define _LINUX_QUOTA_
++
++#include <linux/errno.h>
++
++/*
++ * Convert diskblocks to blocks and the other way around.
++ * currently only to fool the BSD source. :-)
++ */
++#define dbtob(num) (num << 10)
++#define btodb(num) (num >> 10)
++
++/*
++ * Definitions for disk quotas imposed on the average user
++ * (big brother finally hits Linux).
++ *
++ * The following constants define the amount of time given a user
++ * before the soft limits are treated as hard limits (usually resulting
++ * in an allocation failure). The timer is started when the user crosses
++ * their soft limit, it is reset when they go below their soft limit.
++ */
++#define MAX_IQ_TIME  604800	/* (7*24*60*60) 1 week */
++#define MAX_DQ_TIME  604800	/* (7*24*60*60) 1 week */
++
++#define MAXQUOTAS 2
++#define USRQUOTA  0		/* element used for user quotas */
++#define GRPQUOTA  1		/* element used for group quotas */
++
++/*
++ * Definitions for the default names of the quotas files.
++ */
++#define INITQFNAMES { \
++   "user",      /* USRQUOTA */ \
++   "group",   /* GRPQUOTA */ \
++   "undefined", \
++};
++
++#define QUOTAFILENAME "quota"
++#define QUOTAGROUP "staff"
++
++#define NR_DQHASH 43            /* Just an arbitrary number any suggestions ? */
++#define NR_DQUOTS 256           /* Number of quotas active at one time */
++
++/*
++ * Command definitions for the 'quotactl' system call.
++ * The commands are broken into a main command defined below
++ * and a subcommand that is used to convey the type of
++ * quota that is being manipulated (see above).
++ */
++#define SUBCMDMASK  0x00ff
++#define SUBCMDSHIFT 8
++#define QCMD(cmd, type)  (((cmd) << SUBCMDSHIFT) | ((type) & SUBCMDMASK))
++
++#define Q_QUOTAON  0x0100	/* enable quotas */
++#define Q_QUOTAOFF 0x0200	/* disable quotas */
++#define Q_GETQUOTA 0x0300	/* get limits and usage */
++#define Q_SETQUOTA 0x0400	/* set limits and usage */
++#define Q_SETUSE   0x0500	/* set usage */
++#define Q_SYNC     0x0600	/* sync disk copy of a filesystems quotas */
++#define Q_SETQLIM  0x0700	/* set limits */
++
++/*
++ * The following structure defines the format of the disk quota file
++ * (as it appears on disk) - the file is an array of these structures
++ * indexed by user or group number.
++ */
++struct dqblk
++  {
++    u_long dqb_bhardlimit;	/* absolute limit on disk blks alloc */
++    u_long dqb_bsoftlimit;	/* preferred limit on disk blks */
++    u_long dqb_curblocks;	/* current block count */
++    u_long dqb_ihardlimit;	/* maximum # allocated inodes */
++    u_long dqb_isoftlimit;	/* preferred inode limit */
++    u_long dqb_curinodes;	/* current # allocated inodes */
++    time_t dqb_btime;		/* time limit for excessive disk use */
++    time_t dqb_itime;		/* time limit for excessive files */
++  };
++
++/*
++ * Shorthand notation.
++ */
++#define	dq_bhardlimit	dq_dqb.dqb_bhardlimit
++#define	dq_bsoftlimit	dq_dqb.dqb_bsoftlimit
++#define	dq_curblocks	dq_dqb.dqb_curblocks
++#define	dq_ihardlimit	dq_dqb.dqb_ihardlimit
++#define	dq_isoftlimit	dq_dqb.dqb_isoftlimit
++#define	dq_curinodes	dq_dqb.dqb_curinodes
++#define	dq_btime	dq_dqb.dqb_btime
++#define	dq_itime	dq_dqb.dqb_itime
++
++#define dqoff(UID)      ((off_t)((UID) * sizeof (struct dqblk)))
++
++#ifdef __KERNEL__
++
++/*
++ * Maximum lenght of a message generated in the quota system,
++ * that needs to be kicked onto the tty.
++ */
++#define MAX_QUOTA_MESSAGE 75
++
++#define DQ_LOCKED     0x01	/* locked for update */
++#define DQ_WANT       0x02	/* wanted for update */
++#define DQ_MOD        0x04	/* dquot modified since read */
++#define DQ_BLKS       0x10	/* uid/gid has been warned about blk limit */
++#define DQ_INODES     0x20	/* uid/gid has been warned about inode limit */
++#define DQ_FAKE       0x40	/* no limits only usage */
++
++struct dquot
++{
++   unsigned int dq_id;		/* id this applies to (uid, gid) */
++   short dq_type;		/* type of quota */
++   dev_t dq_dev;                /* Device this applies to */
++   short dq_flags;		/* see DQ_* */
++   short dq_count;		/* reference count */
++   struct vfsmount *dq_mnt;     /* vfsmountpoint this applies to */
++   struct dqblk dq_dqb;         /* diskquota usage */
++   struct wait_queue *dq_wait;	/* pointer to waitqueue */
++   struct dquot *dq_prev;	/* pointer to prev dquot */
++   struct dquot *dq_next;	/* pointer to next dquot */
++   struct dquot *dq_hash_prev;	/* pointer to prev dquot */
++   struct dquot *dq_hash_next;	/* pointer to next dquot */
++};
++
++#define NODQUOT (struct dquot *)NULL
++
++/*
++ * Flags used for set_dqblk.
++ */
++#define QUOTA_SYSCALL     0x01
++#define SET_QUOTA         0x02
++#define SET_USE           0x04
++#define SET_QLIMIT        0x08
++
++/*
++ * Return values when requesting quota.
++ */
++#define NO_QUOTA 0		/* no more quota available */
++#define QUOTA_OK 1		/* can allocate the space */
++
++/*
++ * declaration of quota_function calls in kernel.
++ */
++struct dquot *dqget (dev_t dev, unsigned int id, short type);
++void dqput (struct dquot *dquot);
++
++int quota_off (dev_t dev, short type);
++int sync_dquots (dev_t dev, short type);
++
++u_long isize_to_blocks (size_t isize, size_t blksize);
++size_t blocks_to_isize (u_long blocks, size_t blksize);
++
++void quota_remove (struct inode *inode, u_long inodes, u_long blocks);
++int quota_alloc (struct inode *inode, u_long wantedinodes,
++                 u_long wantedblocks, u_long * availblocks);
++int quota_transfer (struct inode *inode, struct iattr *iattr, u_long inodes,
++                    u_long blocks, char direction);
++
++void getinoquota (struct inode *inode, short type);
++void putinoquota (struct inode *inode);
++
++#else
++
++#include <sys/cdefs.h>
++
++__BEGIN_DECLS
++int quotactl __P ((int, const char *, int, caddr_t));
++__END_DECLS
++
++#endif /* __KERNEL__ */
++#endif /* _QUOTA_ */
+diff -ru --new-file linux_1.1.61/include/linux/sched.h linux_1.1.61_owld/include/linux/sched.h
+--- linux_1.1.61/include/linux/sched.h	Fri Aug 19 18:59:35 1994
++++ linux_1.1.61_owld/include/linux/sched.h	Fri Aug 19 19:00:31 1994
+@@ -280,6 +280,7 @@
+ 	long utime, stime, cutime, cstime, start_time;
+ 	struct rlimit rlim[RLIM_NLIMITS]; 
+ 	unsigned short used_math;
++	unsigned long io_usage; /* number of bytes read/written */
+ 	char comm[16];
+ /* virtual 86 mode stuff */
+ 	struct vm86_struct * vm86_info;
+@@ -310,6 +311,10 @@
+ 					/* Not implemented yet, only for 486*/
+ #define PF_PTRACED	0x00000010	/* set if ptrace (0) has been called. */
+ #define PF_TRACESYS	0x00000020	/* tracing system calls */
++#define PF_FORKNOEXEC	0x00000040	/* forked but didn't exec */
++#define PF_SUPERPREV	0x00000100	/* used super-user privileges */
++#define PF_DUMPCORE	0x00000200	/* dumped core */
++#define PF_SIGNALED	0x00000400	/* killed by a signal */
+ 
+ /*
+  * cloning flags:
+@@ -340,6 +345,7 @@
+ 		  {LONG_MAX, LONG_MAX}, {LONG_MAX, LONG_MAX},  \
+ 		  {       0, LONG_MAX}, {LONG_MAX, LONG_MAX}}, \
+ /* math */	0, \
++/* io_usage */  0, \
+ /* comm */	"swapper", \
+ /* vm86_info */	NULL, 0, 0, 0, 0, \
+ /* fs info */	0,NULL, \
+@@ -449,6 +455,29 @@
+ 
+ #define set_base(ldt,base) _set_base( ((char *)&(ldt)) , base )
+ #define set_limit(ldt,limit) _set_limit( ((char *)&(ldt)) , (limit-1)>>12 )
++
++/*
++ * This has now become a routine instead of a macro, it sets a flag if
++ * it returns true (to do BSD-style accounting where the process is flagged
++ * if it uses root privs). The implication of this is that you should do
++ * normal permissions checks first, and check suser() last.
++ *
++ * "suser()" checks against the effective user id, while "fsuser()"
++ * is used for file permission checking and checks against the fsuid..
++ */
++extern inline int suser(void)
++{
++	if (current->euid == 0)
++		current->flags |= PF_SUPERPREV;
++	return (current->euid == 0);
++}
++
++extern inline int fsuser(void)
++{
++	if (current->fsuid == 0)
++		current->flags |= PF_SUPERPREV;
++	return (current->fsuid == 0);
++}
+ 
+ /*
+  * The wait-queues are circular lists, and you have to be *very* sure
+diff -ru --new-file linux_1.1.61/include/linux/sys.h linux_1.1.61_owld/include/linux/sys.h
+--- linux_1.1.61/include/linux/sys.h	Mon Apr 18 22:42:22 1994
++++ linux_1.1.61_owld/include/linux/sys.h	Wed May  4 17:34:46 1994
+@@ -32,6 +32,5 @@
+  * These are system calls that haven't been implemented yet
+  * but have an entry in the table for future expansion..
+  */
+-#define _sys_quotactl	_sys_ni_syscall
+ 
+ #endif
+diff -ru --new-file linux_1.1.61/include/linux/tty.h linux_1.1.61_owld/include/linux/tty.h
+--- linux_1.1.61/include/linux/tty.h	Fri Oct 21 09:57:34 1994
++++ linux_1.1.61_owld/include/linux/tty.h	Fri Oct 21 09:57:58 1994
+@@ -292,6 +292,7 @@
+ extern int tty_unregister_driver(struct tty_driver *driver);
+ extern int tty_read_raw_data(struct tty_struct *tty, unsigned char *bufp,
+ 			     int buflen);
++extern void tty_write_message(struct tty_struct *tty, char *msg);
+ 
+ extern int is_orphaned_pgrp(int pgrp);
+ extern int is_ignored(int sig);
+diff -ru --new-file linux_1.1.61/init/main.c linux_1.1.61_owld/init/main.c
+--- linux_1.1.61/init/main.c	Mon Oct 24 19:56:10 1994
++++ linux_1.1.61_owld/init/main.c	Mon Oct 24 20:01:52 1994
+@@ -103,6 +103,9 @@
+ #ifdef CONFIG_SYSVIPC
+ extern void ipc_init(void);
+ #endif
++#ifdef CONFIG_QUOTA
++extern void quota_init(void);
++#endif
+ #ifdef CONFIG_SCSI
+ extern unsigned long scsi_dev_init(unsigned long, unsigned long);
+ #endif
+@@ -462,6 +465,9 @@
+ 	sock_init();
+ #ifdef CONFIG_SYSVIPC
+ 	ipc_init();
++#endif
++#ifdef CONFIG_QUOTA
++	quota_init();
+ #endif
+ 	sti();
+ 
+diff -ru --new-file linux_1.1.61/kernel/exit.c linux_1.1.61_owld/kernel/exit.c
+--- linux_1.1.61/kernel/exit.c	Wed Nov  2 20:48:20 1994
++++ linux_1.1.61_owld/kernel/exit.c	Wed Nov  2 20:49:57 1994
+@@ -19,6 +19,7 @@
+ #include <asm/segment.h>
+ extern void shm_exit (void);
+ extern void sem_exit (void);
++extern void acct_process (void);
+ 
+ int getrusage(struct task_struct *, int, struct rusage *);
+ 
+@@ -411,6 +412,7 @@
+ 		intr_count = 0;
+ 	}
+ fake_volatile:
++	acct_process();
+ 	if (current->semundo)
+ 		sem_exit();
+ 	if (current->shm)
+diff -ru --new-file linux_1.1.61/kernel/fork.c linux_1.1.61_owld/kernel/fork.c
+--- linux_1.1.61/kernel/fork.c	Thu Jul 28 12:37:51 1994
++++ linux_1.1.61_owld/kernel/fork.c	Thu Jul 28 12:45:27 1994
+@@ -2,9 +2,7 @@
+  *  linux/kernel/fork.c
+  *
+  *  Copyright (C) 1991, 1992  Linus Torvalds
+- */
+-
+-/*
++ *
+  *  'fork.c' contains the help-routines for the 'fork' system call
+  * (see also system_call.s).
+  * Fork is rather simple, once you get the hang of it, but the memory
+@@ -21,6 +19,7 @@
+ #include <linux/ptrace.h>
+ #include <linux/malloc.h>
+ #include <linux/ldt.h>
++#include <linux/fileio.h>
+ 
+ #include <asm/segment.h>
+ #include <asm/system.h>
+@@ -84,6 +83,7 @@
+ 				new_file->f_count = 0;
+ 				new_file = NULL;
+ 			}
++			vfs_open(new_file);
+ 		}
+ 	}
+ 	return new_file;
+@@ -124,8 +124,10 @@
+ 				p->files->fd[i] = copy_fd(f);
+ 	} else {
+ 		for (i=0; i<NR_OPEN;i++)
+-			if ((f = p->files->fd[i]) != NULL)
++			if ((f = p->files->fd[i]) != NULL) {
+ 				f->f_count++;
++				vfs_open(f);
++			}
+ 	}
+ }
+ 
+@@ -188,7 +190,9 @@
+ 	p->did_exec = 0;
+ 	p->kernel_stack_page = 0;
+ 	p->state = TASK_UNINTERRUPTIBLE;
+-	p->flags &= ~(PF_PTRACED|PF_TRACESYS);
++	p->flags &= ~(PF_PTRACED|PF_TRACESYS|PF_SUPERPREV);
++	p->flags |= PF_FORKNOEXEC;
++	p->io_usage = 0; /* Child doesn't inherit parent's I/O usage */
+ 	p->pid = last_pid;
+ 	p->p_pptr = p->p_opptr = current;
+ 	p->p_cptr = NULL;
+diff -ru --new-file linux_1.1.61/kernel/printk.c linux_1.1.61_owld/kernel/printk.c
+--- linux_1.1.61/kernel/printk.c	Sun Aug  7 20:54:32 1994
++++ linux_1.1.61_owld/kernel/printk.c	Sun Aug  7 20:56:05 1994
+@@ -19,6 +19,8 @@
+ #include <linux/errno.h>
+ #include <linux/sched.h>
+ #include <linux/kernel.h>
++#include <linux/tty.h>
++#include <linux/tty_driver.h>
+ 
+ #define LOG_BUF_LEN	4096
+ 
+@@ -226,4 +228,17 @@
+ 			msg_level = -1;
+ 		j = 0;
+ 	}
++}
++
++/*
++ * Write a message to a certain tty, not just the console. This is used for
++ * messages that need to be redirected to a specific tty.
++ * We don't put it into the syslog queue right now maybe in the future if
++ * really needed.
++ */
++void tty_write_message(struct tty_struct *tty, char *msg)
++{
++	if (tty && tty->driver.write)
++		tty->driver.write(tty, 0, msg, strlen(msg));
++	return;
+ }
+diff -ru --new-file linux_1.1.61/kernel/sys.c linux_1.1.61_owld/kernel/sys.c
+--- linux_1.1.61/kernel/sys.c	Sun Oct 23 00:23:21 1994
++++ linux_1.1.61_owld/kernel/sys.c	Sun Oct 23 00:23:51 1994
+@@ -17,6 +17,10 @@
+ #include <linux/ptrace.h>
+ #include <linux/stat.h>
+ #include <linux/mman.h>
++#include <linux/tty.h>
++#include <linux/fcntl.h>
++#include <linux/acct.h>
++#include <linux/fileio.h>
+ 
+ #include <asm/segment.h>
+ #include <asm/io.h>
+@@ -251,9 +255,128 @@
+ 	return 0;
+ }
+ 
+-asmlinkage int sys_acct(void)
++static char acct_active = 0;
++static struct file *acct_file;
++#define	KSTK_ESP(stack)	(((unsigned long *) stack)[1022])
++
++int acct_process(void)
++{
++	struct acct ac;
++	unsigned short fs;
++	unsigned long vsize, esp;
++
++	if (acct_active) {
++		memset(&ac, 0, sizeof(struct acct));
++		strncpy(ac.ac_comm, current->comm, ACCT_COMM);
++		ac.ac_comm[ACCT_COMM] = '\0';
++		ac.ac_utime = current->utime;
++		ac.ac_stime = current->stime;
++		ac.ac_btime = CT_TO_SECS(current->start_time) + (xtime.tv_sec - (jiffies / HZ));
++		ac.ac_etime = CURRENT_TIME - ac.ac_btime;
++		ac.ac_uid   = current->uid;
++		ac.ac_gid   = current->gid;
++		ac.ac_tty   = (current->tty) ? MKDEV(4, current->tty->device) : MKDEV(4, -1);
++		ac.ac_flag  = 0;
++		if (current->flags & PF_FORKNOEXEC)
++			ac.ac_flag |= AFORK;
++		if (current->flags & PF_SUPERPREV)
++			ac.ac_flag |= ASU;
++		if (current->flags & PF_DUMPCORE)
++			ac.ac_flag |= ACORE;
++		if (current->flags & PF_SIGNALED)
++			ac.ac_flag |= AXSIG;
++		ac.ac_io    = current->io_usage;
++
++		/* Figure out the vsize of the current process and divide by the
++		 * page size to calculate AC_MEM.  This is the approved method
++		 * from the proc filesystem.
++		 */
++		vsize = current->kernel_stack_page;
++		if (vsize) {
++			esp = KSTK_ESP(vsize);
++			vsize = current->mm->brk - current->mm->start_code + (PAGE_SIZE - 1);
++			if (esp)
++				vsize += TASK_SIZE - esp;
++		}
++		/* now vsize contains the number of bytes used -- we want to
++		 * find out the number of pages, so divide it by the page size
++		 * and round up.
++		 */
++		ac.ac_mem = (vsize / PAGE_SIZE) + ((vsize % PAGE_SIZE) != 0);
++
++		/* Kernel segment override */
++		fs = get_fs();
++		set_fs(KERNEL_DS);
++
++		acct_file->f_op->write(acct_file->f_inode, acct_file,
++				      (char *)&ac, sizeof(struct acct));
++
++		set_fs(fs);
++	}
++	return 0;
++}
++
++extern void close_fp(struct file *, int);
++
++asmlinkage int sys_acct(const char *name)
+ {
+-	return -ENOSYS;
++	struct inode *inode = (struct inode *)0;
++	char *tmp;
++	int error;
++
++	if (!suser())
++		return -EPERM;
++
++	if (name == (char *)0) {
++		if (acct_active) {
++			acct_process(); 
++			acct_active = 0;
++			close_fp(acct_file, 0);
++		}
++		return 0;
++	} else {
++		if (!acct_active) {
++			if ((error = getname(name, &tmp)) != 0)
++				return (error);
++			error = open_namei(tmp, O_RDWR, 0600, &inode, 0);
++			putname(tmp);
++			if (error)
++				return (error);
++			if (!S_ISREG(inode->i_mode)) {
++				iput(inode);
++				return -EACCES;
++			}
++			if (!inode->i_op || !inode->i_op->default_file_ops || 
++			    !inode->i_op->default_file_ops->write) {
++				iput(inode);
++				return -EIO;
++			}
++			if ((acct_file = get_empty_filp()) == (struct file *)0)
++				return -EUSERS;
++			acct_file->f_mode = (O_WRONLY + 1) & O_ACCMODE;
++			acct_file->f_flags = O_WRONLY;
++			acct_file->f_inode = inode;
++			acct_file->f_pos = inode->i_size;
++			acct_file->f_reada = 0;
++			acct_file->f_op = inode->i_op->default_file_ops;
++			if (acct_file->f_op->open)
++				if (acct_file->f_op->open(acct_file->f_inode, acct_file)) {
++					iput(inode);
++					return -EIO;
++				}
++
++			vfs_open(acct_file);
++			acct_active = 1;
++			return 0;
++		} else
++			return -EBUSY;
++	}
++}
++
++void acct_auto_close(dev_t dev)
++{
++	if (acct_active && acct_file && acct_file->f_inode->i_dev == dev)
++		sys_acct((char *)0);
+ }
+ 
+ asmlinkage int sys_phys(void)

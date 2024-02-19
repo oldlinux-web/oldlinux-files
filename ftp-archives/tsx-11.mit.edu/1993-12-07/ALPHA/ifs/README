@@ -1,0 +1,222 @@
+Kernel-based Inheriting File System (IFS), experimental release 5
+=================================================================
+
+
+* WARNING * WARNING * WARNING * WARNING * WARNING * WARNING * WARNING * WARNIN
+
+	THIS CODE IS EXPERIMENTAL AND HAS KNOWN BUGS. USE AT YOUR OWN
+	RISK. BE PREPARED TO EXPERIENCE FILE SYSTEM CORRUPTION AND TO
+	RESTORE YOUR SYSTEM FROM BACKUP MEDIA IF USING THIS CODE.
+
+G * * WARNING * WARNING * WARNING * WARNING * WARNING * WARNING * WARNING * WA
+
+
+Concept
+-------
+
+The Inheriting File System (IFS) provides a means to mount a "pack" of layered
+directories where upper layers "inherit" files from lower layers. Upper layers
+can also "override" files present in lower layers and the top layer can even
+hide ("whiteout") files of lower layers. If write operations are performed on
+such a pack, they are always carried out on the top layer. Directory paths and
+files are duplicated ("cloned") from lower layers if necessary. This concept
+is vaguely based on Sun's translucent file service (TFS).
+
+IFS can be used for the following applications (among others):
+  - make read-only media (e.g. CD-ROMs) pseudo-writable
+  - make local writable copies of a common precious source (e.g. a common
+    source tree used by several programmers)
+  - "map" several directories to a single directory (e.g. /usr/bin)
+  - perform loopback mounts
+
+I'd like to point out that most of this can also be done in a similar way
+using symbolic links.
+
+Whiteout entries are empty regular files in a directory ... at the top layer.
+Whiteout entries on lower layers of a pack are ignored. An empty directory in
+a ... directory indicates that the corresponding directory should not inherit
+files from lower layers.
+
+The current implementation assumes that sparse trees are mounted on top of a
+tree that contains most of the files. For extremely opposite cases, a
+depth-first search would be faster.
+
+
+Known restrictions and problems
+-------------------------------
+
+The following bugs and restrictions are known. There are probably a lot more
+yet unknown bugs.
+
+  - apparently deleted files may become visible for a short time during
+    mkdir or rmdir
+  - not all VFS operations are supported by IFS (see "Supported operations")
+  - file and directory access is kludgy
+  - changing the permissions of a file may force duplication of that file
+  - mount points of mounted file systems are invisible through IFS
+  - modifying a directory tree while it is mounted as part of a pack may yield
+    surprises
+  - link counts are usually wrong
+  - the code is way too complex
+  - IFS does not remove unused files and directories
+  - smount must be used - the regular mount will crash
+  - the top-level file system may be left in an inconsistent state (e.g. files
+    may be present and whited out at the same time)
+  - there may still be race conditions
+
+
+Installation
+------------
+
+cd to your unmodified 0.99pl11 or ALPHA 0.99pl12 kernel source tree, apply
+ifs.patch with
+
+patch -p1 -s <ifs.patch
+
+then generate the kernel with
+
+make config
+make dep
+make clean
+make (or make zlilo, etc.)
+
+Finally, extract Makefile, smount.c and unwo.c and run make to build smount
+and unwo.
+
+Note: smount has changed since the last version. IFS 5 requires the new
+      smount. IFS 4 (and older) does not work with the new smount.
+
+
+Mounting
+--------
+
+An Inheriting File System is mounted by
+
+    smount -t ifs <pack> <dir>
+
+where <pack> is a comma-separated list of directory names. All write
+operations are directed to the first directory of the list (the top-level
+directory). Read operations are performed on all directories. <dir> is the
+mount point. It must be different from the directories in <pack>. Example:
+
+    smount -t ifs a,b,c t
+
+The size of a pack is currently limited to four directories. This can be
+changed by editing include/linux/ifs_fs_param.h and re-compiling the kernel.
+
+To unmount an Inheriting File System, type
+
+    smount -u <dir>
+
+where <dir> is the mount point.
+
+Example:
+
+    smount -u t
+
+The top-level directory should not reside on a file system that is more
+restrictive than the file systems of the directories below it, e.g. using
+an MS-DOS FS on top of a Minix, Ext or Xia FS will yield unexpected
+behaviour.
+
+
+Supported operations
+--------------------
+
+The IFS currently _only_ supports the following operations:
+
+  - file and directory name lookup
+  - reading regular files
+  - reading directories (readdir)
+  - creating regular files (includes unwhiteouts and path cloning)
+  - writing to regular files (includes cloning)
+  - deleting regular files (includes whiteouts)
+  - directory creation
+  - directory deletion
+  - symbolic link creation and reading
+  - following symbolic links (only partially tested)
+  - creation and access to special files (only partially tested)
+  - changing file attributes (only partially tested)
+  - renames of random FS objects within same directory on the same layer
+  - renames of regular files in all other cases (only partially tested)
+  - statfs
+
+Among others, the following operations are _not_ supported:
+
+  - bmap
+  - creation of hard links
+  - non-local renames of non-files
+
+
+Restoring whited out files
+--------------------------
+
+When deleting a file or directory that is not located on the top layer, the
+file is not removed, but a whiteout entry is created in the top layer. (This
+is an empty regular file in a directory named "...") Such files can be made
+accessible again with unwo. Usage: unwo file ...
+
+Example:
+
+  mkdir a b a+b; touch b/file
+  smount -t ifs a,b a+b; cd a+b
+  ls; rm file; ls
+  unwo file; ls
+
+
+Test
+----
+
+IFS is accompanied by a test suite that verifies correct execution of some
+sequential operations. This test is not designed to detect race conditions.
+
+Prerequisites:
+  - a recent version of perl with syscall support. (Missing in perl as
+    distributed in some versions of SLS. Perl compiled "out of the box"
+    (without its own malloc) appears to work, though.)
+  - perl header files sys/syscall.ph, linux/errno.ph and linux/stat.ph
+    (run  h2ph sys/syscall.h linux/errno.h linux/stat.h  to generate
+    them).
+  - an empty directory on a file system with at least ~20 free blocks.
+    If possible, an empty file system should be used.
+
+To run the test, extract test.pl from the distribution and start it with
+
+./test.pl <directoryname>
+
+E.g.
+
+./test.pl /scratch
+
+
+Performance
+-----------
+
+IFS directory lookups are approx. [1..N] times as expensive as ordinary
+directory lookups, where N is the number of layers in a pack. For best
+performance, the layers should differ as close to their respective tops as
+possible, e.g.
+
+  A: ./x/foo/bar
+  B: ./y/foo/bar
+  C: ./z/foo/bar
+
+is much better than
+
+  A: ./foo/bar/x
+  B: ./foo/bar/y
+  C: ./foo/bar/z
+
+Reading a directory with readdir needs O(N^2) lookups, because for each entry
+of each pack, the whiteout directory and all entries above of it have to be
+checked.
+
+Because no namei caching is being done, using IFS to make a "unified" /usr/bin
+may actually be slower than using a long PATH with caching done by the shell.
+
+
+Contact
+-------
+
+Please send bug reports, comments, flames and such to
+Werner Almesberger <almesber@bernina.ethz.ch>

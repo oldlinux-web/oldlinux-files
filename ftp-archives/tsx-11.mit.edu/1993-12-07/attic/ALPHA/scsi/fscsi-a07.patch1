@@ -1,0 +1,523 @@
+*** a07/linux/include/linux/mtio.h.org	Sun Nov 29 17:27:33 1992
+--- dist/linux/include/linux/mtio.h	Sun Nov 29 17:28:11 1992
+***************
+*** 42,47 ****
+--- 42,48 ----
+  
+  
+  #define MTSETBLK 20	/* set block length (SCSI) */
++ #define MTSETDENSITY 21	/* set tape density (SCSI) */
+  
+  
+  /* may need to add
+*** a07/linux/include/linux/dma.h	Wed Nov 25 11:07:01 1992
+--- dist/linux/include/linux/dma.h	Mon Nov 30 11:24:24 1992
+***************
+*** 120,125 ****
+--- 120,126 ----
+  
+  #define DMA_MODE_READ	0x44	/* I/O to memory, no autoinit, increment, single mode */
+  #define DMA_MODE_WRITE	0x48	/* memory to I/O, no autoinit, increment, single mode */
++ #define DMA_MODE_CASCADE 0xC0   /* pass thru DREQ->HRQ, DACK<-HLDA only */
+  
+  /* enable/disable a specific DMA channel */
+  static __inline__ void enable_dma(unsigned int dmanr)
+*** a07/linux/kernel/blk_drv/scsi/sd_ioctl.c	Sat Nov 28 12:38:24 1992
+--- dist/linux/kernel/blk_drv/scsi/sd_ioctl.c	Mon Nov 30 11:37:36 1992
+***************
+*** 46,52 ****
+  			return 0;
+           	case BLKGETSIZE:   /* Return device size */
+  			if (!arg)  return -EINVAL;
+! 			verify_area(arg, sizeof(long));
+  			put_fs_long(sd[MINOR(inode->i_rdev)].nr_sects,
+  				(long *) arg);
+  			return 0;
+--- 46,52 ----
+  			return 0;
+           	case BLKGETSIZE:   /* Return device size */
+  			if (!arg)  return -EINVAL;
+! 			verify_area((long *) arg, sizeof(long));
+  			put_fs_long(sd[MINOR(inode->i_rdev)].nr_sects,
+  				(long *) arg);
+  			return 0;
+*** a07/linux/kernel/blk_drv/scsi/st.c	Mon Nov 16 16:57:32 1992
+--- dist/linux/kernel/blk_drv/scsi/st.c	Sun Nov 29 18:22:16 1992
+***************
+*** 29,34 ****
+--- 29,35 ----
+  
+    Kai Makisara, Nov 9, 1992  email makisara@vtinsx.ins.vtt.fi or
+                                      Kai.Makisara@vtt.fi
++   Last changes Nov 29, 1992.
+  */
+  
+  #include <linux/fs.h>
+***************
+*** 53,59 ****
+  /* #define DEBUG */
+  
+  #define ST_TIMEOUT 1000
+! #define ST_LONG_TIMEOUT 100000
+  
+  /* Number of ST_BLOCK_SIZE blocks in the buffers */
+  #define ST_BUFFER_BLOCKS 64
+--- 54,60 ----
+  /* #define DEBUG */
+  
+  #define ST_TIMEOUT 1000
+! #define ST_LONG_TIMEOUT 200000
+  
+  /* Number of ST_BLOCK_SIZE blocks in the buffers */
+  #define ST_BUFFER_BLOCKS 64
+***************
+*** 316,322 ****
+        scsi_tapes[dev].block_size = scsi_tapes[dev].buffer->b_data[9] * 65536 +
+  	scsi_tapes[dev].buffer->b_data[10] * 256 + scsi_tapes[dev].buffer->b_data[11];
+  #ifdef DEBUG
+!       printk("st%d: Density %x, blocksize: %x, tape length: %d\n", dev,
+  	     scsi_tapes[dev].buffer->b_data[4], scsi_tapes[dev].buffer->b_data[5] *
+  	     65536 + scsi_tapes[dev].buffer->b_data[6] * 256 +
+  	     scsi_tapes[dev].buffer->b_data[7], scsi_tapes[dev].buffer->b_data[9] *
+--- 317,323 ----
+        scsi_tapes[dev].block_size = scsi_tapes[dev].buffer->b_data[9] * 65536 +
+  	scsi_tapes[dev].buffer->b_data[10] * 256 + scsi_tapes[dev].buffer->b_data[11];
+  #ifdef DEBUG
+!       printk("st%d: Density %x, tape length: %x, blocksize: %d\n", dev,
+  	     scsi_tapes[dev].buffer->b_data[4], scsi_tapes[dev].buffer->b_data[5] *
+  	     65536 + scsi_tapes[dev].buffer->b_data[6] * 256 +
+  	     scsi_tapes[dev].buffer->b_data[7], scsi_tapes[dev].buffer->b_data[9] *
+***************
+*** 364,370 ****
+  static void scsi_tape_close(struct inode * inode, struct file * filp)
+  {
+      int dev;
+!     int offset, transfer, rewind;
+      static unsigned char cmd[10];
+      Scsi_Cmnd * SCpnt;
+     
+--- 365,371 ----
+  static void scsi_tape_close(struct inode * inode, struct file * filp)
+  {
+      int dev;
+!     int offset, transfer, blks, rewind;
+      static unsigned char cmd[10];
+      Scsi_Cmnd * SCpnt;
+     
+***************
+*** 401,407 ****
+  	memset(cmd, 0, 10);
+  	cmd[0] = WRITE_6;
+  	cmd[1] = 1;
+! 	cmd[4] = transfer / scsi_tapes[dev].block_size;
+  	SCpnt->request.dev = dev;
+  	scsi_do_cmd (SCpnt,
+  		     (void *) cmd, scsi_tapes[dev].buffer->b_data, transfer,
+--- 402,411 ----
+  	memset(cmd, 0, 10);
+  	cmd[0] = WRITE_6;
+  	cmd[1] = 1;
+! 	blks = transfer / scsi_tapes[dev].block_size;
+! 	cmd[2] = blks >> 16;
+! 	cmd[3] = blks >> 8;
+! 	cmd[4] = blks;
+  	SCpnt->request.dev = dev;
+  	scsi_do_cmd (SCpnt,
+  		     (void *) cmd, scsi_tapes[dev].buffer->b_data, transfer,
+***************
+*** 469,475 ****
+  int st_write(struct inode * inode, struct file * filp, char * buf, int count)
+  {
+      int dev;
+!     int total, do_count, retval;
+      static unsigned char cmd[10];
+      char *b_point;
+      Scsi_Cmnd * SCpnt;
+--- 473,479 ----
+  int st_write(struct inode * inode, struct file * filp, char * buf, int count)
+  {
+      int dev;
+!     int total, do_count, blks, retval;
+      static unsigned char cmd[10];
+      char *b_point;
+      Scsi_Cmnd * SCpnt;
+***************
+*** 525,531 ****
+        memcpy_fromfs(scsi_tapes[dev].buffer->b_data +
+  		    scsi_tapes[dev].buffer->buffer_bytes,b_point,do_count);
+  
+!       cmd[4] = scsi_tapes[dev].buffer->buffer_blocks;
+        SCpnt->sense_buffer[0] = 0;
+        SCpnt->request.dev = dev;
+        scsi_do_cmd (SCpnt,
+--- 529,538 ----
+        memcpy_fromfs(scsi_tapes[dev].buffer->b_data +
+  		    scsi_tapes[dev].buffer->buffer_bytes,b_point,do_count);
+  
+!       blks = scsi_tapes[dev].buffer->buffer_blocks;
+!       cmd[2] = blks >> 16;
+!       cmd[3] = blks >> 8;
+!       cmd[4] = blks;
+        SCpnt->sense_buffer[0] = 0;
+        SCpnt->request.dev = dev;
+        scsi_do_cmd (SCpnt,
+***************
+*** 578,584 ****
+  	scsi_tapes[dev].block_size) * scsi_tapes[dev].block_size;
+        scsi_tapes[dev].dirty = 0;
+  
+!       cmd[4] = scsi_tapes[dev].buffer->writing / scsi_tapes[dev].block_size;
+        SCpnt->result = scsi_tapes[dev].buffer->last_result = -1;
+        SCpnt->sense_buffer[0] = 0;
+        SCpnt->request.dev = dev;
+--- 585,594 ----
+  	scsi_tapes[dev].block_size) * scsi_tapes[dev].block_size;
+        scsi_tapes[dev].dirty = 0;
+  
+!       blks = scsi_tapes[dev].buffer->writing / scsi_tapes[dev].block_size;
+!       cmd[2] = blks >> 16;
+!       cmd[3] = blks >> 8;
+!       cmd[4] = blks;
+        SCpnt->result = scsi_tapes[dev].buffer->last_result = -1;
+        SCpnt->sense_buffer[0] = 0;
+        SCpnt->request.dev = dev;
+***************
+*** 600,606 ****
+  {
+      int dev;
+      int total;
+!     int transfer;
+      static unsigned char cmd[10];
+      Scsi_Cmnd * SCpnt;
+  
+--- 610,616 ----
+  {
+      int dev;
+      int total;
+!     int transfer, blks;
+      static unsigned char cmd[10];
+      Scsi_Cmnd * SCpnt;
+  
+***************
+*** 640,646 ****
+  	memset(cmd, 0, 10);
+  	cmd[0] = READ_6;
+  	cmd[1] = 1;
+! 	cmd[4] = scsi_tapes[dev].buffer->buffer_blocks;
+  
+  	SCpnt->sense_buffer[0] = 0;
+  	SCpnt->request.dev = dev;
+--- 650,659 ----
+  	memset(cmd, 0, 10);
+  	cmd[0] = READ_6;
+  	cmd[1] = 1;
+! 	blks = scsi_tapes[dev].buffer->buffer_blocks;
+! 	cmd[2] = blks >> 16;
+! 	cmd[3] = blks >> 8;
+! 	cmd[4] = blks;
+  
+  	SCpnt->sense_buffer[0] = 0;
+  	SCpnt->request.dev = dev;
+***************
+*** 881,890 ****
+  #endif
+         break;
+       case MTSETBLK:  /* Set block length */
+         if (scsi_tapes[dev].dirty || scsi_tapes[dev].buffer->buffer_bytes != 0)
+  	 return (-EIO);   /* Not allowed if data in buffer */
+!        if (arg < scsi_tapes[dev].min_block || arg > scsi_tapes[dev].max_block ||
+! 	   arg > ST_BUFFER_SIZE) {
+  	 printk("st%d: Illegal block size.\n", dev);
+  	 return (-EINVAL);
+         }
+--- 894,905 ----
+  #endif
+         break;
+       case MTSETBLK:  /* Set block length */
++      case MTSETDENSITY: /* Set tape density */
+         if (scsi_tapes[dev].dirty || scsi_tapes[dev].buffer->buffer_bytes != 0)
+  	 return (-EIO);   /* Not allowed if data in buffer */
+!        if (cmd_in == MTSETBLK &&
+! 	   (arg < scsi_tapes[dev].min_block || arg > scsi_tapes[dev].max_block ||
+! 	    arg > ST_BUFFER_SIZE)) {
+  	 printk("st%d: Illegal block size.\n", dev);
+  	 return (-EINVAL);
+         }
+***************
+*** 894,908 ****
+         memset(scsi_tapes[dev].buffer->b_data, 0, 12);
+         scsi_tapes[dev].buffer->b_data[2] = 0x10;  /* buffered mode */
+         scsi_tapes[dev].buffer->b_data[3] = 8;     /* block descriptor length */
+!        scsi_tapes[dev].buffer->b_data[9] = (arg >> 16);
+!        scsi_tapes[dev].buffer->b_data[10] = (arg >> 8);
+!        scsi_tapes[dev].buffer->b_data[11] = arg;
+         timeout = ST_TIMEOUT;
+  #ifdef DEBUG
+!        printk("st%d: Setting block size to %d bytes.\n", dev,
+! 	      scsi_tapes[dev].buffer->b_data[9] * 65536 +
+! 	      scsi_tapes[dev].buffer->b_data[10] * 256 +
+! 	      scsi_tapes[dev].buffer->b_data[11]);
+  #endif
+         break;
+       default:
+--- 909,933 ----
+         memset(scsi_tapes[dev].buffer->b_data, 0, 12);
+         scsi_tapes[dev].buffer->b_data[2] = 0x10;  /* buffered mode */
+         scsi_tapes[dev].buffer->b_data[3] = 8;     /* block descriptor length */
+!        if (cmd_in == MTSETBLK)
+! 	 ltmp = arg;
+!        else {
+! 	 scsi_tapes[dev].buffer->b_data[4] = arg;
+! 	 ltmp = scsi_tapes[dev].block_size;
+!        }
+!        scsi_tapes[dev].buffer->b_data[9] = (ltmp >> 16);
+!        scsi_tapes[dev].buffer->b_data[10] = (ltmp >> 8);
+!        scsi_tapes[dev].buffer->b_data[11] = ltmp;
+         timeout = ST_TIMEOUT;
+  #ifdef DEBUG
+!        if (cmd_in == MTSETBLK)
+! 	 printk("st%d: Setting block size to %d bytes.\n", dev,
+! 		scsi_tapes[dev].buffer->b_data[9] * 65536 +
+! 		scsi_tapes[dev].buffer->b_data[10] * 256 +
+! 		scsi_tapes[dev].buffer->b_data[11]);
+!        else
+! 	 printk("st%d: Setting density code to %x.\n", dev,
+! 		scsi_tapes[dev].buffer->b_data[4]);
+  #endif
+         break;
+       default:
+***************
+*** 1011,1017 ****
+    if (NR_ST == 0) return mem_start;
+  
+  #ifdef DEBUG
+!   printk("st: Init tape. ");
+  #endif
+    chrdev_fops[MAJOR_NR] = &st_fops;
+  
+--- 1036,1042 ----
+    if (NR_ST == 0) return mem_start;
+  
+  #ifdef DEBUG
+!   printk("st: Init tape.\n");
+  #endif
+    chrdev_fops[MAJOR_NR] = &st_fops;
+  
+*** a07/linux/kernel/blk_drv/scsi/wd7000.c	Sat Nov 28 11:03:49 1992
+--- dist/linux/kernel/blk_drv/scsi/wd7000.c	Mon Nov 30 11:25:18 1992
+***************
+*** 94,99 ****
+--- 94,100 ----
+  {
+      controlstat |= DMA_EN;
+      outb(controlstat,CONTROL);
++     set_dma_mode(DMA_CH, DMA_MODE_CASCADE);
+      enable_dma(DMA_CH);
+  }
+  
+*** a07/tape/README	Sun Nov  8 16:59:36 1992
+--- dist/tape/README	Sun Nov 29 18:22:41 1992
+***************
+*** 74,141 ****
+  
+  The ioctl-function is designed according to the *nix-tradition. The format
+  and the parameters are the same as used by Hennus Bergman in his QIC-02
+! tape driver. One command to set the tape block size has been added (the
+! command MTSETBLK; this is now included also in Hennus Bergman's mtio.h).
+  The tape control program mt shows examples of using the ioctl.
+  
+  
+  INSTALLATION
+  
+! These instructions are written as a set of things to do and the instructions
+! are thus valid for many kernel versions. The line numbers given for the
+! unmodified kernel are valid for the 0.98.3 version. For subsequent versions
+! the line numbers are approximat. Please think before applying these patches!
+  
+! 1. Copy the file mtio.h to /usr/include/sys . If you already have there a
+! file mtio.h, compare the new with the old and replace the file if possible.
+! If the two versions of mtio.h have conflicting definitions and you depend
+! on the old one, you are out of luck.
+  
+! The mtio.h in this package is Hennus Bergman's mtio.h with one addition:
+! the ioctl command MTSETBLK to set the block length for the drive.
+  
+- 2. Check that the existing /usr/include/sys/ioctl.h is compatible with the
+- new one. If it is, copy the new /usr/include/sys/ioctl.h to its place.
+- Otherwise merge the following changes to the old one:
+- 
+- /* ioctl command encoding: 32 bits total, command in lower 16 bits,
+-  * size of the parameter structure in the upper 14 bits.
+-  * Encoding size in ioctl request is useful for catching old versions
+-  * and to avoid overwriting user space outside the user buffer area.
+-  * The highest 2 bits are reserved.
+-  * NOTE: This limits the max blocksize to 16kB -1 !
+-  */
+- 
+- #define IOC_VOID        0x00000000      /* param in size field */
+- #define IOC_IN          0x40000000      /* user --> kernel */
+- #define IOC_OUT         0x80000000      /* kernel --> user */
+- #define IOC_INOUT       (IOC_IN | IOC_OUT)      /* both */
+- #define IOCSIZE_MASK    0x3fff0000      /* size (max 16k-1 bytes) */
+- #define IOCSIZE_SHIFT   16              /* how to get the size */
+- #define IOCCMD_MASK     0x0000ffff      /* command code */
+- #define IOCCMD_SHIFT    0
+- 
+- #define _IO(c,d)        (IOC_VOID | (d)<<16) | c) /* param encoded */
+- /* use _IOXX(magic, subcode, arg_t) where arg_t is the type of the
+-  * (last) argument field in the ioctl call, if present.
+-  */
+- #define _IOW(c,d,t)     (IOC_IN | ((sizeof(t)<<16) & IOCSIZE_MASK) | \
+-                                   (c<<8) | d)
+- #define _IOR(c,d,t)     (IOC_OUT | ((sizeof(t)<<16) & IOCSIZE_MASK) | \
+-                                    (c<<8) | d)
+- /* WR rather than RW to avoid conflict with stdio.h */
+- #define _IOWR(c,d,t)    (IOC_INOUT | (sizeof(t)<<16) & IOCSIZE_MASK) | \
+-                                      (c<<8) | d)
+- 
+- 3. Check that your Linux configuration has CONFIG_BLK_DEV_ST defined.
+- Make the kernel and install it (if there are no alarming error messages).
+- 
+- 4. Compile and link the program mt :
+-   gcc -o mt mt.c
+- 
+- 5. Reboot
+- 
+- 6. Create the tape special files:
+  cd /dev
+  mknod rmt0 c 9 0
+  mknod nrmt0 c 9 128
+--- 74,96 ----
+  
+  The ioctl-function is designed according to the *nix-tradition. The format
+  and the parameters are the same as used by Hennus Bergman in his QIC-02
+! tape driver. Two commands have been added: the command MTSETBLK to set the
+! tape block size and the command MTSETDENSITY to set the tape density.
+  The tape control program mt shows examples of using the ioctl.
+  
+  
+  INSTALLATION
+  
+! The tape driver is now included in Eric Youngdale's new scsi driver set. The
+! following two things must be done in order to use the tape drive:
+  
+! 1. Define CONFIG_BLK_DEV_ST before compiling the kernel.
+  
+! 2. Create the necessary special files in the directory /dev. Here is an
+! example for the first scsi tape drive recognized at Linux initialization
+! (note that the scsi tape number is not necessarily the scsi id of the
+! tape drive):
+  
+  cd /dev
+  mknod rmt0 c 9 0
+  mknod nrmt0 c 9 128
+***************
+*** 142,163 ****
+  
+  When you use the device /dev/rmt0 the tape is rewound after closing the
+  device. If you use the device /dev/nrmt0 the tape is not rewound after
+! closing the device.
+  
+- The minor numbers 0 and 128 are for the first tape device (the tape
+- with the lowest SCSI address in the controller being initialized first).
+  
+- Now you have a Linux system with SCSI tape driver.
+- 
+- 
+  THE TAPE CONTROL PROGRAM MT
+  
+  The tape control program in this package is mt from the BSD NET2-release
+! with one addition: the command setblk has been added. It takes one
+! argument which is the block size for the subsequent tape requests. For
+! example, the command to set the block size to 1024 is:
+  mt -f /dev/nrmt0 setblk 1024
+  
+  
+  THE PROGRAM TAPETEST
+  
+--- 97,119 ----
+  
+  When you use the device /dev/rmt0 the tape is rewound after closing the
+  device. If you use the device /dev/nrmt0 the tape is not rewound after
+! closing the device. For the second tape drive use minor numbers 1 and 129,
+! etc..
+  
+  
+  THE TAPE CONTROL PROGRAM MT
+  
+  The tape control program in this package is mt from the BSD NET2-release
+! with the following additions: the commands erase, setblk, and setdensity
+! have been added. setblk takes one argument which is the block size for the
+! subsequent tape requests. For example, the command to set the block size
+! to 1024 is:
+! 
+  mt -f /dev/nrmt0 setblk 1024
+  
++ setdensity takes one parameter which is the density code to be sent to the
++ drive. The proper codes should be looked up from the documentation of the
++ drive.
+  
+  THE PROGRAM TAPETEST
+  
+***************
+*** 190,195 ****
+  commonly available buffer program is dd.
+  
+  
+! November 9, 1992
+  
+  Kai Makisara, email makisara@vtinsx.ins.vtt.fi or Kai.Makisara@vtt.fi
+--- 146,151 ----
+  commonly available buffer program is dd.
+  
+  
+! November 9, 1992 (last modified Nov 29, 1992).
+  
+  Kai Makisara, email makisara@vtinsx.ins.vtt.fi or Kai.Makisara@vtt.fi
+*** a07/tape/mt.1	Sun Nov  8 16:54:59 1992
+--- dist/tape/mt.1	Sun Nov 29 18:22:41 1992
+***************
+*** 68,73 ****
+--- 68,78 ----
+  Set the block size of the drive to
+  .I count
+  bytes per record.
++ .IP setdensity
++ Set the tape density code to
++ .I count.
++ The proper codes to use with each drive should be looked up from the
++ drive documentation.
+  .PP
+  .B mt
+  exits with a status of 0 if the operation succeeded, 1 if the
+*** a07/tape/mt.c	Sun Nov  8 16:54:59 1992
+--- dist/tape/mt.c	Sun Nov 29 18:22:40 1992
+***************
+*** 30,35 ****
+--- 30,36 ----
+   * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+   * SUCH DAMAGE.
+   */
++ /* Commands erase, setblk, and setdensity added by Kai Makisara */
+  
+  #ifndef lint
+  char copyright[] =
+***************
+*** 70,76 ****
+  	{ "rewoffl",	MTOFFL,	1 },
+  	{ "reten",	MTRETEN,1 },
+  	{ "status",	MTNOP,	1 },
+! 	{ "setblk",	MTSETBLK, 512},
+  	{ 0 }
+  };
+  
+--- 71,79 ----
+  	{ "rewoffl",	MTOFFL,	1 },
+  	{ "reten",	MTRETEN,1 },
+  	{ "status",	MTNOP,	1 },
+! 	{ "erase",	MTERASE, 0},
+! 	{ "setblk",	MTSETBLK, 1},
+! 	{ "setdensity",	MTSETDENSITY, 1},
+  	{ 0 }
+  };
+  

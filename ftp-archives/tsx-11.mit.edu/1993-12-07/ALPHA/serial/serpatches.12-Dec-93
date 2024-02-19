@@ -1,0 +1,614 @@
+===================================================================
+RCS file: include/linux/RCS/serial.h,v
+retrieving revision 1.1
+diff -c -r1.1 include/linux/serial.h
+*** 1.1	1993/12/04 18:48:19
+--- include/linux/serial.h	1993/12/04 20:10:10
+***************
+*** 85,93 ****
+  #define UART_FCR_TRIGGER_8	0x80 /* Mask for trigger set at 8 */
+  #define UART_FCR_TRIGGER_14	0xC0 /* Mask for trigger set at 14 */
+  
+- #define UART_FCR_CLEAR_CMD	(UART_FCR_CLEAR_RCVR | UART_FCR_CLEAR_XMIT)
+- #define UART_FCR_SETUP_CMD	(UART_FCR_ENABLE_FIFO | UART_FCR_TRIGGER_8)
+- 	
+  /*
+   * These are the definitions for the Line Control Register
+   * 
+--- 85,90 ----
+===================================================================
+RCS file: include/linux/RCS/tty.h,v
+retrieving revision 1.1
+diff -c -r1.1 include/linux/tty.h
+*** 1.1	1993/12/04 18:48:19
+--- include/linux/tty.h	1993/12/04 20:10:10
+***************
+*** 214,221 ****
+  	struct termios *termios;
+  	int pgrp;
+  	int session;
+! 	unsigned char stopped:1, packet:1, lnext:1;
+! 	unsigned char char_error:2;
+  	unsigned char ctrl_status;
+  	short line;
+  	int disc;
+--- 214,221 ----
+  	struct termios *termios;
+  	int pgrp;
+  	int session;
+! 	unsigned char stopped:1, hw_stopped:1, packet:1, lnext:1;
+! 	unsigned char char_error:3;
+  	unsigned char ctrl_status;
+  	short line;
+  	int disc;
+***************
+*** 321,326 ****
+--- 321,327 ----
+  #define TTY_BREAK	1
+  #define TTY_FRAME	2
+  #define TTY_PARITY	3
++ #define TTY_OVERRUN	4
+  
+  #define TTY_WRITE_FLUSH(tty) tty_write_flush((tty))
+  #define TTY_READ_FLUSH(tty) tty_read_flush((tty))
+===================================================================
+RCS file: drivers/char/RCS/serial.c,v
+retrieving revision 1.1
+diff -c -r1.1 drivers/char/serial.c
+*** 1.1	1993/12/04 18:48:19
+--- drivers/char/serial.c	1993/12/06 17:34:03
+***************
+*** 62,68 ****
+  /*
+   * rs_event		- Bitfield of serial lines that events pending
+   * 				to be processed at the next clock tick.
+!  *
+   * We assume here that int's are 32 bits, so an array of two gives us
+   * 64 lines, which is the maximum we can support.
+   */
+--- 62,72 ----
+  /*
+   * rs_event		- Bitfield of serial lines that events pending
+   * 				to be processed at the next clock tick.
+!  * IRQ_timeout		- How long the timeout should be for each IRQ
+!  * 				should be after the IRQ has been active.
+!  * IRQ_timer		- Array of timeout values for each interrupt IRQ.
+!  * 				This is based on jiffies; not offsets.
+!  * 
+   * We assume here that int's are 32 bits, so an array of two gives us
+   * 64 lines, which is the maximum we can support.
+   */
+***************
+*** 350,355 ****
+--- 354,361 ----
+  				queue->buf[head++]= TTY_PARITY;
+  			else if (*status & UART_LSR_FE)
+  				queue->buf[head++]= TTY_FRAME;
++ 			else if (*status & UART_LSR_OE)
++ 				queue->buf[head++]= TTY_OVERRUN;
+  			head &= TTY_BUF_SIZE-1;
+  		}
+  		queue->buf[head++] = ch;
+***************
+*** 411,432 ****
+  	status = serial_in(info, UART_MSR);
+  		
+  	if ((status & UART_MSR_DDCD) && !C_LOCAL(info->tty)) {
+! #ifdef SERIAL_DEBUG_INTR
+! 		printk("DDCD...");
+! #endif
+  		if (status & UART_MSR_DCD)
+  			rs_sched_event(info, RS_EVENT_OPEN_WAKEUP);
+  		else if (!((info->flags & ASYNC_CALLOUT_ACTIVE) &&
+! 			   (info->flags & ASYNC_CALLOUT_NOHUP))) 
+  			rs_sched_event(info, RS_EVENT_HANGUP);
+  	}
+  	if (C_RTSCTS(info->tty)) {
+! 		if (info->tty->stopped) {
+  			if (status & UART_MSR_CTS) {
+  #ifdef SERIAL_DEBUG_INTR
+  				printk("CTS tx start...");
+  #endif
+! 				info->tty->stopped = 0;
+  				rs_start(info->tty);
+  				return 1;
+  			}
+--- 417,443 ----
+  	status = serial_in(info, UART_MSR);
+  		
+  	if ((status & UART_MSR_DDCD) && !C_LOCAL(info->tty)) {
+! #if (defined(SERIAL_DEBUG_OPEN) || defined(SERIAL_DEBUG_INTR))
+! 		printk("ttys%d CD now %s...", info->line,
+! 		       (status & UART_MSR_DCD) ? "on" : "off");
+! #endif		
+  		if (status & UART_MSR_DCD)
+  			rs_sched_event(info, RS_EVENT_OPEN_WAKEUP);
+  		else if (!((info->flags & ASYNC_CALLOUT_ACTIVE) &&
+! 			   (info->flags & ASYNC_CALLOUT_NOHUP))) {
+! #ifdef SERIAL_DEBUG_OPEN
+! 			printk("scheduling hangup...");
+! #endif
+  			rs_sched_event(info, RS_EVENT_HANGUP);
++ 		}
+  	}
+  	if (C_RTSCTS(info->tty)) {
+! 		if (info->tty->hw_stopped) {
+  			if (status & UART_MSR_CTS) {
+  #ifdef SERIAL_DEBUG_INTR
+  				printk("CTS tx start...");
+  #endif
+! 				info->tty->hw_stopped = 0;
+  				rs_start(info->tty);
+  				return 1;
+  			}
+***************
+*** 435,441 ****
+  #ifdef SERIAL_DEBUG_INTR
+  				printk("CTS tx stop...");
+  #endif
+! 				info->tty->stopped = 1;
+  				rs_stop(info->tty);
+  			}
+  		}
+--- 446,452 ----
+  #ifdef SERIAL_DEBUG_INTR
+  				printk("CTS tx stop...");
+  #endif
+! 				info->tty->hw_stopped = 1;
+  				rs_stop(info->tty);
+  			}
+  		}
+***************
+*** 490,496 ****
+  		recheck_count = 0;
+  		recheck_write:
+  			if ((status & UART_LSR_THRE) &&
+! 			    !info->tty->stopped) {
+  				transmit_chars(info, &done_work);
+  			}
+  			if (check_modem_status(info) &&
+--- 501,508 ----
+  		recheck_count = 0;
+  		recheck_write:
+  			if ((status & UART_LSR_THRE) &&
+! 			    !info->tty->stopped &&
+! 			    !info->tty->hw_stopped) {
+  				transmit_chars(info, &done_work);
+  			}
+  			if (check_modem_status(info) &&
+***************
+*** 731,741 ****
+  
+  	save_flags(flags); cli();
+  
+  	/*
+  	 * First, clear the FIFO buffers and disable them
+  	 */
+  	if (info->type == PORT_16550A)
+! 		serial_outp(info, UART_FCR, UART_FCR_CLEAR_CMD);
+  
+  	/*
+  	 * Next, clear the interrupt registers.
+--- 743,758 ----
+  
+  	save_flags(flags); cli();
+  
++ #ifdef SERIAL_DEBUG_OPEN
++ 	printk("starting up ttys%d...", info->line);
++ #endif
++ 
+  	/*
+  	 * First, clear the FIFO buffers and disable them
+  	 */
+  	if (info->type == PORT_16550A)
+! 		serial_outp(info, UART_FCR, (UART_FCR_CLEAR_RCVR |
+! 					     UART_FCR_CLEAR_XMIT));
+  
+  	/*
+  	 * Next, clear the interrupt registers.
+***************
+*** 759,765 ****
+  	 * Enable FIFO's if necessary
+  	 */
+  	if (info->type == PORT_16550A) {
+! 		serial_outp(info, UART_FCR, UART_FCR_SETUP_CMD);
+  		info->xmit_fifo_size = 16;
+  	} else {
+  		info->xmit_fifo_size = 1;
+--- 776,783 ----
+  	 * Enable FIFO's if necessary
+  	 */
+  	if (info->type == PORT_16550A) {
+! 		serial_outp(info, UART_FCR, (UART_FCR_ENABLE_FIFO |
+! 					     UART_FCR_TRIGGER_8));
+  		info->xmit_fifo_size = 16;
+  	} else {
+  		info->xmit_fifo_size = 1;
+***************
+*** 826,832 ****
+  	else
+  		/* reset DTR,RTS,OUT_2 */		
+  		serial_outp(info, UART_MCR, 0x00);
+! 	serial_outp(info, UART_FCR, UART_FCR_CLEAR_CMD); /* disable FIFO's */
+  	(void)serial_in(info, UART_RX);    /* read data port to reset things */
+  	info->flags &= ~ASYNC_INITIALIZED;
+  	if (info->tty)
+--- 844,853 ----
+  	else
+  		/* reset DTR,RTS,OUT_2 */		
+  		serial_outp(info, UART_MCR, 0x00);
+! 
+! 	/* disable FIFO's */	
+! 	serial_outp(info, UART_FCR, (UART_FCR_CLEAR_RCVR |
+! 				     UART_FCR_CLEAR_XMIT));
+  	(void)serial_in(info, UART_RX);    /* read data port to reset things */
+  	info->flags &= ~ASYNC_INITIALIZED;
+  	if (info->tty)
+***************
+*** 843,849 ****
+  	struct async_struct * info;
+  	unsigned short port;
+  	int	quot = 0;
+! 	unsigned cflag,cval,mcr;
+  	int	i;
+  
+  	if (line >= NR_PORTS)
+--- 864,870 ----
+  	struct async_struct * info;
+  	unsigned short port;
+  	int	quot = 0;
+! 	unsigned cflag,cval,mcr, fcr;
+  	int	i;
+  
+  	if (line >= NR_PORTS)
+***************
+*** 878,886 ****
+  	}
+  	cli();
+  	mcr = serial_in(info, UART_MCR);
+! 	if (quot) 
+  		serial_out(info, UART_MCR, mcr | UART_MCR_DTR);
+! 	else {
+  		serial_out(info, UART_MCR, mcr & ~UART_MCR_DTR);
+  		sti();
+  		return;
+--- 899,907 ----
+  	}
+  	cli();
+  	mcr = serial_in(info, UART_MCR);
+! 	if (quot) {
+  		serial_out(info, UART_MCR, mcr | UART_MCR_DTR);
+! 	} else {
+  		serial_out(info, UART_MCR, mcr & ~UART_MCR_DTR);
+  		sti();
+  		return;
+***************
+*** 893,903 ****
+--- 914,933 ----
+  		cval |= UART_LCR_PARITY;
+  	if (!(cflag & PARODD))
+  		cval |= UART_LCR_EPAR;
++ 	if (info->type == PORT_16550A) {
++ 		if ((info->baud_base / quot) < 2400)
++ 			fcr = UART_FCR_ENABLE_FIFO | UART_FCR_TRIGGER_1;
++ 		else
++ 			fcr = UART_FCR_ENABLE_FIFO | UART_FCR_TRIGGER_8;
++ 	} else
++ 		fcr = 0;
++ 	
+  	cli();
+  	serial_outp(info, UART_LCR, cval | UART_LCR_DLAB);	/* set DLAB */
+  	serial_outp(info, UART_DLL, quot & 0xff);	/* LS of divisor */
+  	serial_outp(info, UART_DLM, quot >> 8);		/* MS of divisor */
+  	serial_outp(info, UART_LCR, cval);		/* reset DLAB */
++ 	serial_outp(info, UART_FCR, fcr); 	/* set fcr */
+  	sti();
+  }
+  
+***************
+*** 950,956 ****
+  {
+  	struct async_struct *info;
+  
+! 	if (!tty || tty->stopped)
+  		return;
+  	info = rs_table + DEV_TO_SL(tty->line);
+  	if (!info)
+--- 980,986 ----
+  {
+  	struct async_struct *info;
+  
+! 	if (!tty || tty->stopped || tty->hw_stopped)
+  		return;
+  	info = rs_table + DEV_TO_SL(tty->line);
+  	if (!info)
+***************
+*** 1398,1404 ****
+  	
+  	if ((old_termios->c_cflag & CRTSCTS) &&
+  	    !(tty->termios->c_cflag & CRTSCTS)) {
+! 		tty->stopped = 0;
+  		rs_write(tty);
+  	}
+  
+--- 1428,1434 ----
+  	
+  	if ((old_termios->c_cflag & CRTSCTS) &&
+  	    !(tty->termios->c_cflag & CRTSCTS)) {
+! 		tty->hw_stopped = 0;
+  		rs_write(tty);
+  	}
+  
+***************
+*** 1439,1444 ****
+--- 1469,1475 ----
+  	if (--info->count > 0)
+  		return;
+  	tty->stopped = 0;		/* Force flush to succeed */
++ 	tty->hw_stopped = 0;
+  	rs_start(tty);
+  	wait_until_sent(tty);
+  	clear_bit(line, rs_event);
+***************
+*** 1465,1470 ****
+--- 1496,1503 ----
+  		if (info->irq && !IRQ_ports[info->irq])
+  			free_irq(info->irq);
+  	}
++ 	clear_bit(line, rs_event);
++ 	info->event = 0;
+  	info->flags &= ~(ASYNC_NORMAL_ACTIVE|ASYNC_CALLOUT_ACTIVE);
+  	info->tty = 0;
+  }
+***************
+*** 1635,1646 ****
+  	}
+  
+  	retval = block_til_ready(tty, filp, info);
+! 	if (retval)
+  		return retval;
+  
+  	info->session = current->session;
+  	info->pgrp = current->pgrp;
+! 	
+  	return 0;
+  }
+  
+--- 1668,1687 ----
+  	}
+  
+  	retval = block_til_ready(tty, filp, info);
+! 	if (retval) {
+! #ifdef SERIAL_DEBUG_OPEN
+! 		printk("rs_open returning after block_til_ready with %d\n",
+! 		       retval);
+! #endif
+  		return retval;
++ 	}
+  
+  	info->session = current->session;
+  	info->pgrp = current->pgrp;
+! 
+! #ifdef SERIAL_DEBUG_OPEN
+! 	printk("rs_open ttys%d successful...", info->line);
+! #endif
+  	return 0;
+  }
+  
+***************
+*** 1659,1665 ****
+   */
+  static void show_serial_version(void)
+  {
+! 	printk("Serial driver version 3.96 with");
+  #ifdef CONFIG_AST_FOURPORT
+  	printk(" AST_FOURPORT");
+  #define SERIAL_OPT
+--- 1700,1706 ----
+   */
+  static void show_serial_version(void)
+  {
+! 	printk("Serial driver version 3.97 with");
+  #ifdef CONFIG_AST_FOURPORT
+  	printk(" AST_FOURPORT");
+  #define SERIAL_OPT
+===================================================================
+RCS file: drivers/char/RCS/tty_io.c,v
+retrieving revision 1.1
+diff -c -r1.1 drivers/char/tty_io.c
+*** 1.1	1993/12/04 18:48:19
+--- drivers/char/tty_io.c	1993/12/06 17:32:31
+***************
+*** 224,230 ****
+  	hung_up_tty_write,
+  	NULL,		/* hung_up_tty_readdir */
+  	hung_up_tty_select,
+! 	tty_ioctl,
+  	NULL,		/* hung_up_tty_mmap */
+  	tty_open,
+  	tty_release
+--- 224,230 ----
+  	hung_up_tty_write,
+  	NULL,		/* hung_up_tty_readdir */
+  	hung_up_tty_select,
+! 	hung_up_tty_ioctl,
+  	NULL,		/* hung_up_tty_mmap */
+  	tty_open,
+  	tty_release
+***************
+*** 261,266 ****
+--- 261,268 ----
+  			continue;
+  		if (filp->f_op != &tty_fops)
+  			continue;
++ 		if (tty->close)
++ 			tty->close(tty, filp);
+  		filp->f_op = fops;
+  	}
+  	wake_up_interruptible(&tty->secondary.proc_list);
+***************
+*** 278,296 ****
+  
+  void tty_hangup(struct tty_struct * tty)
+  {
+  	do_tty_hangup(tty, &hung_up_tty_fops);
+  }
+  
+  void tty_vhangup(struct tty_struct * tty)
+  {
+  	do_tty_hangup(tty, &vhung_up_tty_fops);
+  }
+  
+- void tty_unhangup(struct file *filp)
+- {
+- 	filp->f_op = &tty_fops;
+- }
+- 
+  int tty_hung_up_p(struct file * filp)
+  {
+  	return ((filp->f_op == &hung_up_tty_fops) ||
+--- 280,299 ----
+  
+  void tty_hangup(struct tty_struct * tty)
+  {
++ #ifdef TTY_DEBUG_HANGUP
++ 	printk("tty%d hangup...\n", tty->line);
++ #endif
+  	do_tty_hangup(tty, &hung_up_tty_fops);
+  }
+  
+  void tty_vhangup(struct tty_struct * tty)
+  {
++ #ifdef TTY_DEBUG_HANGUP
++ 	printk("tty%d vhangup...\n", tty->line);
++ #endif
+  	do_tty_hangup(tty, &vhung_up_tty_fops);
+  }
+  
+  int tty_hung_up_p(struct file * filp)
+  {
+  	return ((filp->f_op == &hung_up_tty_fops) ||
+***************
+*** 514,520 ****
+  			break;
+  		}
+  		if (special_flag) {
+! 			tty->char_error = c & 3;
+  			continue;
+  		}
+  		if (tty->char_error) {
+--- 517,523 ----
+  			break;
+  		}
+  		if (special_flag) {
+! 			tty->char_error = c & 7;
+  			continue;
+  		}
+  		if (tty->char_error) {
+***************
+*** 529,535 ****
+  				put_tty_queue('\0', &tty->secondary);
+  				continue;
+  			}
+! 			/* If not a break, then a parity or frame error */
+  			tty->char_error = 0;
+  			if (I_IGNPAR(tty)) {
+  				continue;
+--- 532,543 ----
+  				put_tty_queue('\0', &tty->secondary);
+  				continue;
+  			}
+! 			if (tty->char_error == TTY_OVERRUN) {
+! 				tty->char_error = 0;
+! 				printk("tty%d: input overrun\n", tty->line);
+! 				continue;
+! 			}
+! 			/* Must be a parity or frame error */
+  			tty->char_error = 0;
+  			if (I_IGNPAR(tty)) {
+  				continue;
+***************
+*** 1192,1197 ****
+--- 1200,1209 ----
+  	struct termios *tp, *o_tp;
+  	struct task_struct **p;
+  
++ #ifdef TTY_DEBUG_HANGUP
++ 	printk("release_dev of tty%d...", dev);
++ #endif
++ 
+  	tty = tty_table[dev];
+  	tp = tty_termios[dev];
+  	o_tty = NULL;
+***************
+*** 1221,1227 ****
+  		}
+  	}
+  	tty->write_data_cnt = 0; /* Clear out pending trash */
+! 	if (tty->close)
+  		tty->close(tty, filp);
+  	if (IS_A_PTY_MASTER(dev)) {
+  		if (--tty->link->count < 0) {
+--- 1233,1239 ----
+  		}
+  	}
+  	tty->write_data_cnt = 0; /* Clear out pending trash */
+! 	if (tty->close && !tty_hung_up_p(filp))
+  		tty->close(tty, filp);
+  	if (IS_A_PTY_MASTER(dev)) {
+  		if (--tty->link->count < 0) {
+***************
+*** 1237,1242 ****
+--- 1249,1258 ----
+  	}
+  	if (tty->count)
+  		return;
++ 	
++ #ifdef TTY_DEBUG_HANGUP
++ 	printk("freeing tty structure...");
++ #endif
+  
+  	/*
+  	 * Make sure there aren't any processes that still think this
+***************
+*** 1298,1304 ****
+  			major = TTY_MAJOR;
+  			minor = current->tty;
+  		}
+! 		noctty = 1;
+  	} else if (major == TTY_MAJOR) {
+  		if (!minor) {
+  			minor = fg_console + 1;
+--- 1314,1320 ----
+  			major = TTY_MAJOR;
+  			minor = current->tty;
+  		}
+! 		/* noctty = 1; */
+  	} else if (major == TTY_MAJOR) {
+  		if (!minor) {
+  			minor = fg_console + 1;
+***************
+*** 1317,1322 ****
+--- 1333,1341 ----
+  	if (retval)
+  		return retval;
+  	tty = tty_table[minor];
++ #ifdef TTY_DEBUG_HANGUP
++ 	printk("opening tty%d...", tty->line);
++ #endif
+  
+  	/* clean up the packet stuff. */
+  	/*
+***************
+*** 1337,1342 ****
+--- 1356,1365 ----
+  		retval = -ENODEV;
+  	}
+  	if (retval) {
++ #ifdef TTY_DEBUG_HANGUP
++ 		printk("error %d in opening tty%d...", retval, tty->line);
++ #endif
++ 
+  		release_dev(minor, filp);
+  		return retval;
+  	}

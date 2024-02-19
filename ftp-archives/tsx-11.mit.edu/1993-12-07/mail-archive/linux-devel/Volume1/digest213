@@ -1,0 +1,363 @@
+From:     Digestifier <Linux-Development-Request@senator-bedfellow.mit.edu>
+To:       Linux-Development@senator-bedfellow.mit.edu
+Reply-To: Linux-Development@senator-bedfellow.mit.edu
+Date:     Sun, 7 Nov 93 08:13:09 EST
+Subject:  Linux-Development Digest #213
+
+Linux-Development Digest #213, Volume #1          Sun, 7 Nov 93 08:13:09 EST
+
+Contents:
+  [Q] dld package for linux (Shirman Yuri)
+  Re: mouse under VC? (Jeremy Bettis)
+  new tty line discipline (Harald Koenig)
+  Re: WILL ???BSD DIE? (Clark Mills)
+  Re: Linux for Macintosh ????? (Tim Towers)
+  Re: TERM problems- Please help! (Paul Bouchier)
+  Re: 16550A handling in serial.c (Harald Milz)
+  Re: TERM problems- Please help! (Paul Bouchier)
+  Joystick problems with PAS 16 (John Markus Bjoerndalen)
+
+----------------------------------------------------------------------------
+
+Subject: [Q] dld package for linux
+From: yuri@wiscon.weizmann.ac.il (Shirman Yuri)
+Date: Sat, 6 Nov 1993 13:12:29 GMT
+
+
+        Hi, linuxers!
+                I read some post in comp.linux.announce in September ( I can't find the source now ),
+ that somebody compiled package for dynamical linking ( GNU dld )on linux.
+There were patches supplied. But when I compiledit it with those patches, it failed on the tests.
+It seems that dld in its current form
+doesn't know something about the structure of the linux libraries *.a ( I don't know either ).
+There are two relevant questions:
+1) Did anybody try to really port dld to Linux?
+2) Is it possible to modify it for work with shared libraries?
+
+This package allows installation( linking) of *.o modules to already working programs,
+I would like to use it with fudgit ( statistics, smoothing , FFT, approximation C-like
+interpreter ), which uses dld features on platforms supported by dld.
+
+        Yuri Shirman
+
+
+------------------------------
+
+From: jbettis@cse.unl.edu (Jeremy Bettis)
+Subject: Re: mouse under VC?
+Date: 6 Nov 1993 14:54:50 GMT
+
+fmg@beta.smi.med.pitt.edu (Filip Gieszczykiewicz) writes:
+>       Greetings. [yuck] I'm using Telix (in messydos) and a tiny TSR
+>       that allows me to use the standard mouse to cut&paste in any 
+>       text application - and I was wondering how I would go about
+>       writing one for Linux... The mouse program that comes with X11
+>       works in text mode so I don't see why that wouldn't work. It
+>       would be nice to be able to cut&paste this way between VC's but
+>       I have no idea (or time) for that. Anyone have a program that
+>       does this? If not, I think it would VERY USEFUL to have this
+>       feature for Linux... 
+
+
+Yes, it exists. It is called selection, and I think the latest version is
+1.5.  It used to require a kernal patch, but the selection support has been
+built in to the kernel since pl10 or so.
+--
+Jeremy Bettis   -*-   Jerbo Jehoshaphat   -*-   University of Nebraska
+INET:   jbettis@cse.unl.edu             "Those who stand in the middle of the
+UUCP:   jerbo@tddi.UUCP                  road are often hit by passing cars."
+Running Linux .99p13 Free Unix for i386/i486/Pentium machines. Ask me how.
+
+------------------------------
+
+From: koenig@nova.tat.physik.uni-tuebingen.de (Harald Koenig)
+Subject: new tty line discipline
+Date: 6 Nov 93 16:40:50 GMT
+
+Hi,
+
+I added a new tty line discipline N_DCF (DCF is a german radio clock
+transmitter) which inserts a time time stamp (struct timeval) after
+each incoming  character. This is quite usefull for time
+synchronisation to an external clock or radio clock receiver.
+
+All comments on this topic and code are welcome,
+
+Harald
+
+===============================================================================
+--- ./include/linux/termios.h.orig      Tue Sep  7 02:41:16 1993
++++ ./include/linux/termios.h   Fri Nov  5 14:40:38 1993
+@@ -237,5 +237,6 @@
+ #define N_TTY          0
+ #define N_SLIP         1
+ #define N_MOUSE                2
++#define N_DCF          3
+ 
+ #endif
+--- ./drivers/char/tty_io.c.orig        Mon Oct 18 13:20:50 1993
++++ ./drivers/char/tty_io.c     Fri Nov  5 15:55:48 1993
+@@ -1660,6 +1660,7 @@
+        /* Setup the default TTY line discipline. */
+        memset(ldiscs, 0, sizeof(ldiscs));
+        (void) tty_register_ldisc(N_TTY, &tty_ldisc_N_TTY);
++       (void) tty_register_ldisc(N_DCF, &tty_ldisc_N_TTY);
+ 
+        kmem_start = kbd_init(kmem_start);
+        kmem_start = con_init(kmem_start);
+--- ./drivers/char/serial.c.orig        Wed Nov  3 20:23:35 1993
++++ ./drivers/char/serial.c     Sat Nov  6 16:55:51 1993
+@@ -323,6 +323,11 @@
+ {
+        struct tty_queue * queue;
+        int head, tail, ch;
++#ifdef N_DCF
++       int i, disc = info->tty->disc;
++       struct timeval tv;
++       extern void do_gettimeofday(struct timeval *tv);
++#endif /* N_DCF */
+ 
+ /*
+  * Just like the LEFT(x) macro, except it uses the loal tail
+@@ -335,6 +340,14 @@
+        tail = queue->tail;
+        do {
+                ch = serial_inp(info, UART_RX);
++#ifdef N_DCF
++               if (disc == N_DCF) {
++                 do_gettimeofday(&tv);
++                 if (VLEFT < 2 + sizeof(struct timeval))
++                   break;
++               }
++               else 
++#endif /* N_DCF */
+                /*
+                 * There must be at least 2 characters
+                 * free in the queue; otherwise we punt.
+@@ -354,6 +367,14 @@
+                }
+                queue->buf[head++] = ch;
+                head &= TTY_BUF_SIZE-1;
++#ifdef N_DCF
++               if (disc == N_DCF) {
++                 for(i=0; i<sizeof(tv); i++) {
++                   queue->buf[head++] = ((char*)(&tv))[i];
++                   head &= TTY_BUF_SIZE-1;
++                 }
++               }
++#endif /* N_DCF */
+        } while ((*status = serial_inp(info, UART_LSR)) & UART_LSR_DR);
+        queue->head = head;
+        if ((VLEFT < RQ_THRESHOLD_LW) && !set_bit(TTY_RQ_THROTTLED,
+--- ./kernel/time.c.orig        Tue Oct 12 16:24:45 1993
++++ ./kernel/time.c     Sat Nov  6 16:31:45 1993
+@@ -164,7 +164,7 @@
+ /*
+  * This version of gettimeofday has near microsecond resolution.
+  */
+-static inline void do_gettimeofday(struct timeval *tv)
++inline void do_gettimeofday(struct timeval *tv)
+ {
+ #ifdef __i386__
+        cli();
+===============================================================================
+
+-- 
+Harald Koenig, Inst.f.Theoret.Astrophysik  (koenig@tat.physik.uni-tuebingen.de)
+
+    All SCSI disks will from now on be required to send an email
+         notice 24 hours prior to complete hardware failure!
+
+------------------------------
+
+Subject: Re: WILL ???BSD DIE?
+From: clark@kiwi.gen.nz (Clark Mills)
+Date: 6 Nov 93 06:45:40 GMT
+
+gareth@gblinux.demon.co.uk (Gareth Bult) writes:
+: Is BSD really any competition for Linux?                                                                            
+Yes!  I have been toying with linux for the last week (for the first time,
+coming from Esix SysV Rel3.2) and find it an excellent system.  I have
+installed 386bsd in the past and found it a pain to co-exist ie partition with
+other OS', unfamiliar file structure (my bias) and it kept dying on my SCSI HD
+under load :-(.  I guess I like linux for several reasons:
+
+  a: it's SysV
+  b: it comes with X11r5 (compiled & source)
+  c: it comes with gnu* (compiled & source)
+  d: it comes with complete sources for everything
+  e: it runs off a CD-ROM directly if you like to `preview'
+  f: usenet software onboard (yet to configure...  I am posting from Esix)
+  f: it supports all the cards I have `out of the box'
+       ie: WD8013, Soundblaster, ET4000, Logitech Bus mouse, Scsi CD-ROM & HD
+           (my setup)
+  
+I am basing my opinion on a CD Rom version that only has linux on it.  Can't
+name the disk as I have installed and given the CD back to my friend.  Personel
+experience only,  your milage may vary...  :-)
+--
+Domain: clark@kiwi.gen.nz  -----------------------------+-------------------+
+Voice : 64-25-935002        Disclaimer: All errors are  | $ nice -20 work & |
+Fax   : 64-9-8494282                    line niose!     | $ exec games      |
+Snail : PO Box 47-195, Ponsonby, Auckland, New Zealand  +-------------------+
+
+------------------------------
+
+From: tim@lorien.demon.co.uk (Tim Towers)
+Subject: Re: Linux for Macintosh ?????
+Date: Sat, 6 Nov 1993 13:34:42 +0000
+
+> 
+> >In article <2aqsbe$n1i@network.cc.jyu.fi> Seppo write:
+> >>Is there Linux for Macintosh somwhere?
+> >>
+> >
+> >not yet, if you want a cheap U*IX clone, Minix may be what you're looking
+> >for
+> 
+> I have linux on a 386 PC. I have NetBSD for my Mac (not installed yet, but
+> I will). 
+> 
+> What is the status of Linux for Mac? Who is working for it? Maybe I had
+> time to help ... maybe not. Any plans for PowerPC version of linux?
+> 
+> Seppo
+> 
+I don't know the answer for these questions, so I am cc-ing this to
+comp.os.linux.development.
+
+My gut feeling is that the linux kernel has too many Intel-isms to be
+easily ported to any non-intel processor : the Amiga porting crowd may
+have more help for you since they use a 680x0 processor too.
+
+I suspect that the PowerPC version will have to wait until there are
+a lot of those creatures about.
+
+   Tim
+
+Porting Guru's : please aim replies at "kallio@jyu.fi (Seppo Kallio)"
+-- 
++-----------------------------------------------------------------------------+
+| Tim Towers     | Don't believe everything you read | tim@lorien.demon.co.uk |
+| +44 952 811506 |   or everything you write..       | PC Linux machine YEAH! |
++-data/voice/fax---------PGP-key-available-----------------IRC-Grimwiz--------+
+
+------------------------------
+
+Crossposted-To: comp.os.linux.help,comp.os.linux,comp.os.linux.misc
+From: bouchier@convex.com (Paul Bouchier)
+Subject: Re: TERM problems- Please help!
+Date: Sat, 6 Nov 1993 23:46:32 GMT
+
+Has anyone solved this problem? I had the same experience - term worked
+one day & didn't work the next. It's still dead.
+
+Does anyone have a fix?
+
+Thanks
+
+Paul Bouchier
+
+------------------------------
+
+From: hm@seneca.ix.de (Harald Milz)
+Subject: Re: 16550A handling in serial.c
+Date: Fri, 5 Nov 1993 21:05:58 GMT
+Reply-To: hm@seneca.ix.de
+
+Tim Cutts (Zoology) (tjrc1@mbfs.bio.cam.ac.uk) wrote:
+
+: > So I thought I'd look at the kernel sources.  I noticed that startup() in
+: > serial.c activates the FIFO with an 8 byte trigger, but only if it's a
+: > 16550A (why not a 16550?).  Now my rc.serial does indeed correctly set
+: > /dev/cua2 to a 16550A.  /dev/cua0 and /dev/cua1 are still on the old 8250.
+
+At 16550's, the FIFO was broken. Even National recommended _not_ to use
+the FIFO of 16650 Chips. 16550A was bugfixed, so everything was fine. If
+you are sure you have a 16550 (without the A), I'd rather replace it by
+a 16550A (i.e. NS16550AFN, that's National's complete name for the chip).
+
+HTH.
+
+Ciao,
+hm
+
+-- 
+Harald Milz (hm@seneca.ix.de)
+
+------------------------------
+
+Crossposted-To: comp.os.linux.help,comp.os.linux,comp.os.linux.misc
+From: bouchier@convex.com (Paul Bouchier)
+Subject: Re: TERM problems- Please help!
+Date: Sun, 7 Nov 1993 00:47:31 GMT
+
+Here's a fix the problem.
+Replace line 38 in misc.c, which was:
+current_time = t.tv_sec * 20 + t.tv_usec / 50000;
+
+with
+
+current_time = (t.tv_sec & 0xffffff) * 20 + t.tv_usec / 50000;
+
+Problem is t.tv_usec is currently around 0x2cdc459b, and will overflow
+when multiplied by 20. I don't know why it was working before - I guess
+it overflowed to a harmless number before, but now doesn't.
+
+Paul Bouchier
+
+------------------------------
+
+From: johnm@stud.cs.uit.no (John Markus Bjoerndalen)
+Subject: Joystick problems with PAS 16
+Date: Sun, 7 Nov 1993 02:02:01 GMT
+
+
+Hi... 
+
+I'm experiencing some problems getting the joystick driver to work
+with ALPHA linux 0.99.13p and the Pro Audio Spectry 16 card.  Still
+have some hacking left to get the driver to understand my flight
+stick, which looks like 1.5 joysticks. But, that's the fun part. :) 
+
+The bad part is that the sound drivers for the PAS card seems to
+disable the joystick port on the card. (Whenever I check the status of
+the 0x201 port, all I get is 0xff). (Yes, the joystick is
+connected... And this used to work for the driver I wrote under
+NextStep). 
+
+So, anybody know what to do ? I guess there is some bit in the IO_CONF
+ports to the PAS that I need to set before it starts to read the
+joystick. But as expected I cannot find anything about this in the
+documentation for the card. (Nor can I find anything in the sound
+drivers.)
+
+Thanks for any help. 
+
+
+--
+        / John Markus Bjørndalen
+        / johnm@stud.cs.uit.no  (at uit)
+        / johnm@autosim.no      (at work)
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

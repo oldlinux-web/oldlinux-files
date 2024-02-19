@@ -1,0 +1,562 @@
+Readme for the Postgres port to Linux.
+Last modified: 23 May 93
+
+IMPORTANT NOTE: Postgres V. 4.1 is already there in an VERY ALPHA
+release. It has a few severe problems, which won't hurt you running
+single user. I can't say, how long it will take for them to go
+away.
+
+Q: What is most important?
+--------------------------
+You need IPCDELTA (or any newer version, of course). Read below
+under Q: Kernel?
+
+Q: What is also important?
+--------------------------
+You need a running tcp/ip network, at least for the loopback
+device. The files necessary to set up the later are included in
+both the binary and source package, in the archive loopback.tar.
+You can run Postgres without network card.
+
+Q: Which package is which?
+--------------------------
+postgres4.0.1a.doc.tar.z:   documentation, get it.
+postgres4.0.1a.demo.tar.z:  demos, get them.
+postgres4.0.1a.bin.tar.z:   binaries.
+postgres4.0.1a.libpq.tar.z: libraries for application development.
+postgres4.0.1a.src.tar.z:   The source code, of course.
+postgres4.0.1a.diff.z:	    The diffs against the original source.
+
+You need the libpq package, if you want to access the database
+from C code. It contains all global header files, as well as the
+static libpq.a library. You don't need this package, if you get
+the source.
+
+Version summary
+---------------
+Postgres:	4.0.1
+This port:	0.1
+Linux Kernel:	0.99.7 or higher (for IPCDELTA)
+IPC:		Delta
+Shared Libs:	4.3.3
+
+Quick Installation Guide for Postgres V. 4.0.1:
+-----------------------------------------------
+- Get IPCDELTA into your kernel.
+- Run "patch -p0 <'this_file'" from the /usr/src/linux directory.
+- Recompile the kernel.
+- Create a user named postgres, user id 6 (!), with /bin/tcsh as Shell.
+- Make /usr/postgres be his or her home directory, or a symlink to it.
+- Give him a .login, which sets POSTGRESHOME to the home directory, and
+  puts $POSTGRESHOME/bin into his PATH.
+- Unpack the postgres4.0.1a.doc.tar.z in this directory.
+- Get and unpack the demos postgres4.0.1a.demo.tar.z, too.
+- Unpack either postgres4.0.1a.src.tar.z or postgres4.0.1a.bin.tar.z or
+  apply the patches in postgres4.0.1a.diff.z. You have to rename a few
+  files, before this can be done - refer to the head of the patch file.
+- Run the sripts moveme.[doc|src|bin|libpq|demo], if you're not on a
+  Minix filesystem (to get all long names right).
+- Read the setup.me in the doc section.
+- If you have the binary distribution, run initdb.
+- With the source of 4.0.1, cd to .../newconf; type Make install; wait.
+- To access postgres, ensure that the USER environment variable is set.
+  If you set it to postgres, *any* user has full access.
+- Have fun!
+
+E-Mail:
+-------
+Kai Petzke, wpp@marie.physik.tu-berlin.de
+
+[Stop reading now, if you don't like README's]
+
+Q: What is Postgres?
+--------------------
+Postgres is a relational database management system. It has many
+of new ideas inplemented, among them are:
+
+- dynamic loading of datatypes and functions into the database
+  (for example, you could define complex numbers as datatypes,
+  provide all the function for complex arithmetics, and then
+  retrieve all records, where the absolute value of the exponent
+  of one field is bigger than a given value ...).
+
+- A transaction level rule system (say you got two relations
+  (= database tables), one containing the accounts with the
+  totals, one with the bookings. You could then write a rule,
+  that always updates the totals, when a new booking is inserted).
+
+- A transparent history system, so you can query the state of
+  the database at any time in the past (unless you use the
+  vacuum cleaner, which slurps up all the outdated stuff ...).
+
+- Support for Write Once, Read Multiple (WORM) storage devices.
+
+- Many, many others ...
+
+Refer to the postgres.FAQ at the bottom of this README for more
+information.
+
+Q: Space requirements?
+----------------------
+Binaries:	2 MB HD Space + Database space
+		4 MB RAM + some swap, if nothing else is running.
+		(maybe more, I have 8 MB and did not test with 4)
+
+Docs:		a) troff source:    2 MB HD
+		b) postscript dump: 2 MB HD
+
+Q: Kernel?
+----------
+
+a) IPC
+------
+The version of your kernel should be uncritical, but you must
+have SYS/V IPC (Inter-Process-Communication) compiled into it.
+The current version of this package, ipcdelta, goes straightforward
+into 99pl7, needs one patch to be applied by hand for 99pl8, and
+so are two for 99pl9. Read the IPCDELTA's READMEs on how to install
+the package.
+
+Special instructions for 99pl8 and 99pl9 only:
+----------------------------------------------
+Don't try to apply the patches in the file named fsync.cd - there
+is already a dumb function definition for fsync in the kernel
+sources. There is one patch on the file kernel/sys.c, which fails.
+It deletes a dumb definition of the ipc call. Look for the lines:
+
+int sys_ipc(void)
+{
+	return -ENOSYS;
+}
+
+in kernel/sys.c, and delete them by hand.
+
+Special instructions for 99pl9 only:
+------------------------------------
+Replace "copy_page_tables" by "copy_vm" in the ipc.cd file,
+*before* you apply the patches in this file. Otherwise, a patch
+to the file kernel/fork.c fails. Don't try to use the clone()
+system call with processes, which use ipc ...
+
+Back to all kernels:
+--------------------
+There is a bug in ipcdelta, which breaks Postgres. Apply the
+following patch, before you recompile the kernel: (Don't cut this
+file to pieces. Fed it as a whole, as is, to patch, and realize,
+that this clever program still does the right thing!)
+
+--- ipc/sem.old.c	Tue Mar 16 18:56:14 1993
++++ ipc/sem.c	Fri Apr 16 15:50:47 1993
+@@ -276,7 +276,7 @@
+ 			return -EACCES;
+ 		for (i=0; i< sma->sem_nsems; i++)
+ 			sem_io[i] = sma->sem_base[i].semval;
+-		memcpy_tofs (sem_io, array, nsems*sizeof(ushort));
++		memcpy_tofs (array, sem_io, nsems*sizeof(ushort));
+ 		break;
+ 	case SETVAL:
+ 		if (ipcperms (ipcp, 0222))
+@@ -316,6 +316,8 @@
+ 			wake_up (&sma->eventn);
+ 		if (sma->eventz)
+ 			wake_up (&sma->eventz);
++		for (i=0; i < nsems; i++)
++			sma->sem_base[i].semval = sem_io[i];
+ 		sma->sem_ctime = CURRENT_TIME;
+ 		break;
+ 	default:
+
+For the Postgres binaries, you won't need to build the libipc.a
+library, but you might need the ipcs and ipcrm utilities to
+clear up the ipc stuff after a Postgres crash.
+
+b) TCP/IP
+---------
+You need it, so don't build a kernel without it.
+
+c) fsync()
+----------
+There are kernel patches, which implement this function call.
+Postgres by default uses fsync() after each write() to write
+the data to disk, but I've commented these out for the current
+version of Postgres (ipcdelta was enough kernel patching) ...
+
+Q: Libraries:
+-------------
+Sorry, I linked everything with the 4.3.3 shared libs, so you
+need these in order to run the binary distributed Postgres.
+
+Q: How do I install Postgres?
+-----------------------------
+Get the docs and demos, and either the binaries or sources. Get
+libpq, too, if you use the binary distribution, and if you want
+to use Postgres from C Programs. To unpack any of these packages,
+type the following in the Postgres home directory:
+	zcat postgres4.0.1a.???.tar.z | gtar xfv -
+
+There are detailed instructions on the initial setup of Postgres
+in the file doc/postgres-setup.me. To view it, type:
+	groff -Tascii -me doc/postgres-setup.me | less
+There is almost nothing, which is Linux-specific (apart from the
+section about IPC).
+
+Q: And if user ID 6 is already used by someone else?
+----------------------------------------------------
+Give the old user with this ID a new one. Execute the following:
+	chown new_user-ID `find / -uid 6`
+
+Q: Loopback network setup?
+--------------------------
+There is a file named "loopback.tar" in both the binary and
+source distribution. Type "gtar tf loopback.tar", to get a list
+of the files in it, and save all the files and directories, which
+have any of the names in this list.
+
+Then delete the directories /usr/etc/inet and /etc/inet, and
+unpack the loopback.tar archive with:
+	gtar -C / -x -f loopback.tar
+
+Last step: edit /etc/hosts and /etc/resolv.conf to represent your
+hostname (my was safran). However, the domain name does not matter
+at all. Include the line:
+	sh /etc/rc.net
+in your /etc/rc.local or /etc/rc file. If you use:
+	/etc/rc.net
+instead, you must set the x-bits of /etc/rc.net with chmod!
+
+Q: Compiling myself?
+--------------------
+If you want to compile the baby yourself, you should have at
+least 4 MB of *free* RAM. You need at least 20 MB of disk space.
+To compile everything with the debugger option -g you should have
+about 50 MB HD and 16 MB Ram. Without the later, gdb is of almost
+no use, as the symbol table gets too big.
+
+You need tcsh, a pwd executable, the getopt command, Berkeley Yacc,
+flex, cb, and bug-fixed versions of awk (2.14 or newer) and sed
+(1.13 or newer). You can find out awk's version with "awk -V" or
+"awk -W version". If you get an error message as answer, you are
+very likely to have an old version ... Check "sed -V" as well.
+
+If you don't have cb ("beautifies" C programmes - does nothing but
+change the spacing of its input), make it a shell script with the
+single line: cat
+
+I used Berkeley Yacc to compile Postgres. I did not even try bison,
+so you might have good luck or not. Berkeley Yacc is usually in a
+package called byacc, which you could find with the Ingres Port
+(which it was used for, too).
+
+The usual work-around for missing pwd ("alias pwd 'echo $cwd'" in
+your .cshrc) does not work with the C-Shell scripts of Postgres. I
+supply two fast hacks for pwd (written by me - really no problem),
+and getopt in a file called commands.tar.
+
+Some shell scripts use full path names, and you are likely to have
+some of these binaries somewhere else. So check, that
+/bin/sed
+/usr/bin/awk
+/usr/bin/bc
+/usr/bin/egrep
+/usr/bin/lex
+/usr/bin/yacc
+exist, or are links to the real locations of these. Also, check
+that /lib/cpp is a link to an existing C Preprocessor (you might
+have forgotten to update this link, when you upgraded to a new
+version of Gnu CC).
+
+Your /usr/include/regex.h might or might have the line:
+"#include <sys/types.h>. If it does not, be sure to put it either
+in /usr/include/regex.h or ~postgres/src/utils/adt/regexp.c.
+
+
+Q: What to do on error messages?
+--------------------------------
+
+UID: read-only variable
+-----------------------
+Ignore it. The initdb script wants to set UID to the current user
+ID, which is done by default by /bin/bash. I left this line there,
+in case anybody uses other shells.
+
+Error: Failed to connect to backend (host = localhost, port = 4321)
+-------------------------------------------------------------------
+Be sure, that you have the postmaster running. Check, that your
+loopback network is configered correctly. If in doubt with the
+later, start the script /etc/rc.net by hand.
+
+Database "@$#!" does not exist, bailing out ...
+-----------------------------------------------
+Specify a valid database name to the postgres backend. If there is
+none, it takes the database name from the USER environment variable,
+if there is no USER variable, the backend will fail.
+
+User "@$#!" is not a valid Postgres user:
+-----------------------------------------
+Set the USER environment variable to the name of a valid postgres
+user. If in doubt, set it to "postgres".
+
+
+The Postgres FAQ (V. 4.0.1):
+-----------------
+                 Frequently Asked Questions about Postgres
+
+Q:  What Is Postgres?
+
+    Postgres is a database research project under Prof. Michael Stonebraker
+    at U. C. Berkeley.  To facilitate research efforts, a software test-bed was
+    created; this is the "Postgres" DBMS software.  The Postgres DBMS
+    is extended relational or object oriented, depending on the buzzword du
+    jour.
+
+    The major purpose of this software is to provide a platform and a basis
+    for the testing of implementations of new ideas in database research.
+    Several graduate students, staff members, as well as undergraduate
+    programmers have been working on the implementation of the Postgres
+    software.  After this paragraph, all references to "Postgres" refer to the
+    software itself.
+
+Postgres Is:
+
+o  Relational.  One of the major goals of Postgres is to show that
+   an essentially relational DBMS can be extended to handle complex objects,
+   rules, and be highly extensible.
+
+o  Highly extensible.  Postgres allows user-defined operators, user-defined
+   objects, and user-defined functions.
+
+o  While Postgres is relational, object oriented ideas have been implemented
+   in Postgres (inheritance, etc).
+
+o  Numerous other features, such as query language procedures, rules, etc.
+   which are beyond the scope of this discussion.
+
+   For more info on the Postgres research itself, you can get the
+   Postgres technical documentation described below.
+
+Q.  What is the connection between Postgres and Ingres?
+
+A.  There is none, aside from Prof. Stonebraker.  There is no compatibility
+    between the two software packages, and the research projects have
+    differing objectives.  We do not support University Ingres at all;
+    questions about it should be sent to the USENET group "comp.databases".
+
+Q.  How do I get the Postgres software package?
+
+A.  In one of two ways:
+
+    1.  Via anonymous FTP from postgres.berkeley.edu (Internet 128.32.149.1);
+        the important files are
+
+        pub/postgres-v4r0r1.tar.Z  (Note: should be transmitted in BINARY mode.)
+        pub/postgres-setup.me
+
+    2.  If you don't have Internet access, you can get Postgres by sending
+        a check for US $150 payable to
+
+        Regents of the University of California
+
+        This should be addressed to
+
+        The Postgres Project
+        557 Evans Hall
+        University of California
+        Berkeley, CA 94720
+
+        Indicate in your accompanying letter whether you want the system on a
+        9-track tape at 1600 BPI, at 6250 BPI, on a Sun cartridge tape (QIC 24
+        format), or on a TK50 DEC cartridge tape.
+
+    Sorry - we cannot deliver Postgres via e-mail.
+
+Q.  What is the Postgres query language?
+
+A.  Postquel, which is an incompatible superset of Quel.
+
+Q.  What about SQL support?
+
+A.  We do not support SQL at this time.
+
+Q.  What does Postgres run on?
+
+A.  Postgres 4.0.1 is supported on Sun 4, Sparc, and DECstations running Ultrix
+    4.0 or higher.  Ports are distributed (but not supported) for Sun 3's and
+    Sequent Symmetry machines.  We are aware of ports for Solbourne (a Sparc
+    multiprocessor), MIPS workstations, and the Sun 386i, although we do _not_
+    have access to these ports and do not intend to support them.  
+
+    The experience of outside developers indicates that Postgres is relatively
+    easy to port to any system that supports:
+
+    1.  Berkeley-style sockets
+    2.  System V shared memory and semaphores
+    3.  A K & R compatible C compiler
+    4.  Other "normal" Unix system calls 
+
+    Some header file problems may be encountered; these are easily fixed by
+    a programmer knowledgable with the local OS.  The most difficult part
+    of the port is porting the dynamic object code loader, which requires
+    interpreting object file headers.
+
+Q.  How do I get papers about Postgres?
+
+A.  On postgres.berkeley.edu is a file called
+
+    pub/postgres-papers.tar.Z
+
+    which contains troff and Postscript versions of several of the major
+    Postgres technical reports.  If you don't have Internet access, you can
+    order hard-copies of technical reports individually; for more details,
+    send e-mail or call Sarah Burke at (510) 642-3417; her e-mail address
+    is 
+    
+        sarahb@postgres.berkeley.edu
+
+Q.  What is the status of the Postgres implementation?
+
+A.  It is not up to commercial levels of reliability.  I would not want
+    _my_ payroll records in it :-)  However, it is quite adaquate for
+    managing scientific and experimental datasets and as an instructional
+    system.  Its speed on applications which stress transaction processing
+    is not particularly good, but it is within about 50% of commercial systems
+    on the more "report-oriented" Wisconsin benchmark, and is twice as fast
+    as University Ingres on the Wisconsin.
+
+Q.  Does Postgres have a user interface?  A report generator?
+
+A.  No and no, not as shipped.
+
+Q.  What about a C-callable interface for writing applications?
+
+A.  There most definitiely is one, called libpq.  There is also an interface
+    for referencing Postgres data from shell scripts.  Get the Postgres
+    reference manual for details.
+
+Q.  Is there a BBS/discussion group about Postgres?
+
+A.  Yes - the mailing list
+
+        postgres@postgres.berkeley.edu
+
+    has over two hundred readers and gateways; you can subscribe to the mailing
+    list by sending mail to 
+
+        postgres-request@postgres.berkeley.edu
+
+    with "ADD" as the Subject.
+
+    You UNsubscribe from the mailing list by sending mail to
+
+        postgres-request@postgres.berkeley.edu
+
+    with "DEL" as the Subject.
+
+Q.  How do I make a bug report?
+
+A.  If you find a bug, send a description of your database schema, queries,
+    and a stack dump (type "where" in DBX) if possible to 
+
+        bug-postgres@postgres.berkeley.edu
+
+Q.  How do I find out about known bugs?
+
+A.  The known bug list is on Postgres in the file
+
+        pub/postgres-v4r0r1.bugs
+
+Q.  Please summarize the important files on postgres.berkeley.edu
+
+A.  File                         Purpose
+
+    pub/postgres-v4r0r1.tar.Z    Complete Postgres distribution
+    pub/postgres-v4r0r1.bugs     Postgres 4.0.1 known bug list and workarounds
+    pub/postgres-setup.me        Postgres Installation instructions in troff
+    pub/postgres-papers.tar.Z    Postgres papers
+
+    pub/picasso-README           Instructions for getting Picasso
+
+Q.  Please summarize the important Postgres mailing aliases
+
+A.  Mailing Address              Purpose
+
+    postgres@postgres            Postgres general discussion and announcements
+    postgres-request@postgres    Administrative requests (ADD/DEL)
+    bug-postgres@postgres        Postgres bug reports
+    postgres-questions@postgres  Questions to the developers of Postgres
+
+    picasso@postgres             Questions to the Picasso group
+
+Q.  Please summarize the main contacts at the Postgres group
+
+A.  Address/Phone                 Role
+
+    Marc Teitelbaum		  Postgres Chief Programmer 
+    marc@postgres.berkeley.edu    
+    (510) 643-6138
+
+    Sarah Burke			  Assistant to the Postgres group
+    sarahb@postgres.berkeley.edu
+    (510) 642-3417
+
+Comments an the postgres.faq:
+-----------------------------
+The postgres.faq says:
+    The experience of outside developers indicates that Postgres is relatively
+    easy to port to any system that supports:
+
+    1.  Berkeley-style sockets
+    2.  System V shared memory and semaphores
+    3.  A K & R compatible C compiler
+    4.  Other "normal" Unix system calls 
+
+    Some header file problems may be encountered; these are easily fixed by
+    a programmer knowledgable with the local OS.  The most difficult part
+    of the port is porting the dynamic object code loader, which requires
+    interpreting object file headers.
+
+The reverse was true: I had trouble with almost anything, but the
+dynamic object code loader was easy, as Linux uses an executable
+format similiar to that of a sun. Many Header files contained wrong
+prototypes, so I had indeed to fix lots of header file problems,
+not with Linux, but Postgres.
+
+It seems, that Linux and gcc are very strict with floating point
+data types. Lots of #include's were missing, so floating point
+values weren't fetched off the FPU stack, which lead to a floating
+point exception soon. Functions like log(x) were called with x = 0,
+which produced core files, too. The same expressions must run on
+Sparcstations with much less trouble.
+
+The worst thing was to move from standard unix lex to flex. Don't
+believe, that the Postgres scanner scans a query word by word from
+the left to the right!
+
+Bugs:
+-----
+There is a tendency for the system to hang, if you have massive
+parallel write access on the same tuples.
+
+The Postgres V4.0.1 was only a bug fix release relative to 4.0,
+so don't believe, you will have a robust database system with this
+version of Postgres. Also note, that this port is an ALPHA release.
+However, there are no bugs known to me, apart those mentioned in
+doc/release.4.0.1. I tried my best to make this port clean, but if
+you find bugs, please e-mail to:
+
+Kai Petzke, wpp@marie.physik.tu-berlin.de
+
+Questions, Problems:
+--------------------
+Feel free to ask, but please read this readme, the Linux' FAQs
+and postgres-setup.me before you bomb me with e-mail. Please be
+patient, I read e-mail two or three times a week only.
+
+Future Plans:
+-------------
+1) Finish the 4.1 Port.
+
+I planned to port Picasso, but several people already informed me,
+that they no longer use or support it at Berkeley. Instead, there
+is the tkmonitor, based on tk/tcl. Others are working on this.
+
+Have fun!

@@ -1,0 +1,203 @@
+Newsgroups: comp.os.linux
+From: Andreas.Mengel@arbi.informatik.uni-oldenburg.de (Andreas Mengel)
+Subject: [ANNOUNCE] Some small but useful kernel patches
+Organization: University of Oldenburg, Germany
+Date: Mon, 18 Jan 1993 23:15:05 GMT
+Summary: Some small patches to the linux kernel
+Keywords: patch ram kernel ramdisk
+
+
+Hi linux community!
+
+Last night a friend of mine and me started playing around with
+the ramdisk, and we quickly ran into some small problems with
+it. For example we wanted to be able to configure the size of
+the ramdisk during boot (i.e. at the lilo-prompt, e.g.
+        LILO boot: linux ramdisk=1024
+to give us a 1MB ramdisk).
+This lead us to another problem: Now we wanted to be able to
+tell the size of the ramdisk after booting, e.g. during /etc/rc,
+to be able to automagically put a filesystem on it.
+So after looking through some kernel files we came up with the
+following little patches. They implement another command line
+argument for the kernel and a BLKGETSIZE ioctl for the
+ramdisk which returns the size of the ramdisk in kilobytes.
+
+NOTE that the patch to kernel/blk_drv/ll_rw_blk.c is not really
+needed (I don't know if it does any harm to initialize the
+ramdisk even if it is of size 0). This patch simply gets us
+around the -EBADF return from an open on /dev/ram.
+
+At the end of this posting you will also find a little program
+which makes use of the new ioctl (just for the show).
+
+P.S.: Please check that the device you want to use for the ramdisk
+      should look as follows (major 1, minor 1):
+        brw-r-----  1 root     mem	  1,   1 Jan 18  1993 /dev/ramdisk
+
+P.P.S.: The diffs were done against kernel-release 0.99.3.
+
+----------SNIP-------SNAP---------
+*** linux/kernel/blk_drv/ramdisk.c.orig	Tue Dec  1 04:21:26 1992
+--- linux/kernel/blk_drv/ramdisk.c	Mon Jan 18 23:47:19 1993
+***************
+*** 5,10 ****
+--- 5,11 ----
+   */
+
+
++ #include <linux/errno.h>
+  #include <linux/config.h>
+  #include <linux/sched.h>
+  #include <linux/minix_fs.h>
+***************
+*** 47,52 ****
+--- 48,71 ----
+        goto repeat;
+  }
+
++ static int rd_ioctl(struct inode * inode, struct file * file,
++ 	unsigned int cmd, unsigned int arg)
++ {
++ 	if (!inode)
++ 		return -EINVAL;
++ 	if (MINOR(inode->i_rdev) != 1)
++ 		return -EINVAL;
++ 	switch (cmd) {
++          	case BLKGETSIZE:   /* Return device size */
++ 			if (!arg)  return -EINVAL;
++ 			verify_area((long *) arg, sizeof(long));
++ 			put_fs_long(ramdisk_size, (long *) arg);
++ 			return 0;
++ 		default:
++ 			return -EINVAL;
++ 	}
++ }
++ 
+  static struct file_operations rd_fops = {
+        NULL,			/* lseek - default */
+        block_read,		/* read - general block-dev read */
+***************
+*** 53,59 ****
+        block_write,		/* write - general block-dev write */
+        NULL,			/* readdir - bad */
+        NULL,			/* select */
+! 	NULL,			/* ioctl */
+        NULL,			/* mmap */
+        NULL,			/* no special open code */
+        NULL			/* no special release code */
+--- 72,78 ----
+        block_write,		/* write - general block-dev write */
+        NULL,			/* readdir - bad */
+        NULL,			/* select */
+! 	rd_ioctl,		/* ioctl */
+        NULL,			/* mmap */
+        NULL,			/* no special open code */
+        NULL			/* no special release code */
+*** linux/init/main.c.orig	Mon Jan 18 23:30:03 1993
+--- linux/init/main.c	Mon Jan 18 23:47:06 1993
+***************
+*** 185,190 ****
+--- 185,194 ----
+     		   ROOT_DEV = simple_strtoul(line+5,NULL,16);
+     		   continue;
+     	   }
++ 		if (!strncmp(line,"ramdisk=",8)) {
++ 			ramdisk_size = simple_strtoul(line+8,NULL,10);
++ 			continue;
++ 		}
+     	   /*
+     	    * Then check if it's an environment variable or
+     	    * an option.
+*** linux/kernel/blk_drv/ll_rw_blk.c.orig	Mon Jan 18 23:53:35 1993
+--- linux/kernel/blk_drv/ll_rw_blk.c	Mon Jan 18 23:53:56 1993
+***************
+*** 386,392 ****
+  #ifdef CONFIG_BLK_DEV_HD
+        mem_start = hd_init(mem_start,mem_end);
+  #endif
+! 	if (ramdisk_size)
+! 		mem_start += rd_init(mem_start, ramdisk_size*1024);
+        return mem_start;
+  }
+--- 386,391 ----
+  #ifdef CONFIG_BLK_DEV_HD
+        mem_start = hd_init(mem_start,mem_end);
+  #endif
+! 	mem_start += rd_init(mem_start, ramdisk_size*1024);
+        return mem_start;
+  }
+----------SNIP-------SNAP---------
+
+Now the little test-program:
+
+----------SNIP-------SNAP---------
+/*
+   rdsize.c -- sample program for the new ramdisk ioctl
+     	  simply prints out the current size of the ramdisk
+
+     	  (c) 1993 A. Mengel, B. Eilers
+*/
+
+#include <stdio.h>
+#include <sys/ioctl.h>
+#include <sys/fcntl.h>
+#include <linux/fs.h>
+
+/* Set your device for the ramdisk here */
+#define RAMDISK "/dev/ram"
+
+
+main(int ac, char *av[]) {
+  long rc = 0;
+  int dev = 0, i = 0, mode = 0;
+  char *ram = RAMDISK;
+
+  for ( i = 1 ; i < ac ; i++ ) 
+    if ( av[i][0]=='-') {
+      if ( av[i][1] == 'q' ) {
+        mode = 1;
+      } else if ( av[i][1] == 'n' ) {
+        mode = 2;
+      } else
+      fprintf(stderr,"usage: %s [-q|-n] [dev]\n",av[0]);
+    } else
+      ram = av[i];
+
+  if ( (dev = open(ram, O_RDONLY)) < 0) {
+    if ( ! mode ) {
+      printf("No Ramdisk\n");
+    } else if ( mode == 2 )
+      printf("0\n");
+    exit(1);
+  }	
+  if (ioctl(dev, BLKGETSIZE, &rc)) {
+    /* perhaps no BLKGETSIZE support in kernel */
+    /* this should only happen if the patch to kernel/blk_drv/ll_w_blk.c
+       was not applied */
+    perror("ioctl");
+    if ( mode == 2 )
+      printf("0\n");
+    exit(-1);
+  }
+  if ( ! mode ) {
+    printf("Ramdisksize=%d\n", rc);
+  } else if ( mode == 2 )
+    printf("%i\n",rc);
+  exit(0);
+}
+----------SNIP-------SNAP---------
+-- 
+Bye,
+        Falcon
+-------------------------------------------------------------------------------
+		      Real Name: Andreas Mengel
+	 Bitnet: 169371@DOLUNI1  |  UUCP:  mengel@uniol.UUCP
+      Internet: Andreas.Mengel@arbi.informatik.uni-oldenburg.de
+		   Inhouse: falcon@theoretica
+	 +-------------------------------------------------+
+	 |Some say I'm lazy, but others say that's just me.|
+	 |Some say I'm crazy, I guess I'll always be! (GnR)|
+	 +-------------------------------------------------+
+
+

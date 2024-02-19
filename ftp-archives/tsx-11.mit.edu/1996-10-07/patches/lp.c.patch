@@ -1,0 +1,194 @@
+*** linux/drivers/char/lp.c.old	Tue Mar 22 00:26:07 1994
+--- linux/drivers/char/lp.c	Fri Jul 15 11:21:57 1994
+***************
+*** 24,29 ****
+--- 24,81 ----
+  
+  #undef LP_DEBUG
+  
++ /*
++  * LP OFFLINE SUPPORT (for the polling and interrupt lp drivers)
++  * Patched by Yan ZHOU (yanz@staff.cs.su.oz.au), July 1994
++  *
++  * Why this patch?  Because :-)
++  * "if a printer (/dev/lp?) is off-line, then it acts like /dev/null"
++  *
++  * Guidelines to support off-line (powered-off) printers:
++  *
++  *  o lp_open()  fails if the printer is off-line.
++  *    `lpd' relies on this to check if a printer is available.
++  *
++  *  o lp_write() fails if the printer is off-line (even if LP_ABORT is off).
++  *    Off-line error is treated differently from other kinds of errors,
++  *    (such as `out of paper'), as most print jobs cannot continue and 
++  *    have to abort.
++  *    `lpd' restarts a print job from beginning if the job is aborted.
++  *
++  *  o Data transfer only happens when 
++  *      THERE IS NO ERROR and THE PRINTER IS ONLINE and THE PRINTER IS NOT BUSY
++  *    The ACKLNG signal (LP_PACK) is no longer checked, for 2 reasons:
++  *      1. ACKLNG is some kind of `pulse', while BUSY is a `state'
++  *      2. ACKLNG is unstable during printer power on/off.
++  *    When a printer is off-line, data transfer (thus) will never happen,
++  *    so no data will be lost.
++  */
++ 
++ /* Enable LP OFFLINE SUPPORT	*/
++ #define LP_OFFLINE_SUPPORT
++ #ifdef LP_OFFLINE_SUPPORT
++ 
++ /*
++  * Allow first n lp_open() to be successful,
++  * even if the printer is off-line.  So that
++  * `tunelp(8)' can have a chance to do its
++  * job during startup (in /etc/rc.*), even if
++  * the printers are off-line.
++  * 
++  * (n = LP_NO seems to be a good value.)
++  */
++ #define LP_OFFLINE_SUPPORT_OPEN_N_ALLOW		LP_NO
++ 
++ /*
++  * Some macros for printer status testing
++  */
++ #define LP_SERROR(x) (!((x) & LP_PERRORP))		/* Error	*/
++ #define LP_SBUSY(x) (!((x) & LP_PBUSY))			/* Busy		*/
++ #define LP_SOFFLINE(x) (!((x) & LP_PSELECD))		/* Off-line	*/
++ #define LP_SREADY(x)  (!LP_SERROR((x)) && !LP_SOFFLINE((x)) && !LP_SBUSY((x)))
++ 
++ #endif	/* LP_OFFLINE_SUPPORT	*/
++ 
+  static int lp_reset(int minor)
+  {
+  	int testvalue;
+***************
+*** 53,59 ****
+--- 105,115 ----
+  		count ++;
+  		if(need_resched)
+  			schedule();
++ #ifdef LP_OFFLINE_SUPPORT
++ 	} while(!LP_SREADY(status) && count < LP_CHAR(minor));
++ #else
+  	} while(!(status & LP_PBUSY) && count < LP_CHAR(minor));
++ #endif
+  
+  	if (count == LP_CHAR(minor)) {
+  		return 0;
+***************
+*** 84,93 ****
+  	unsigned char status;
+  
+  
+  	if (!((status = LP_S(minor)) & LP_PACK) || (status & LP_PBUSY)
+  	|| !((status = LP_S(minor)) & LP_PACK) || (status & LP_PBUSY)
+  	|| !((status = LP_S(minor)) & LP_PACK) || (status & LP_PBUSY)) {
+! 
+  		outb_p(lpchar, LP_B(minor));
+  		/* must wait before taking strobe high, and after taking strobe
+  		   low, according spec.  Some printers need it, others don't. */
+--- 140,155 ----
+  	unsigned char status;
+  
+  
++ #ifdef LP_OFFLINE_SUPPORT
++ 	status = LP_S(minor);
++ 	if (!LP_SREADY(status)) status = LP_S(minor);
++ 	if (!LP_SREADY(status)) status = LP_S(minor);
++ 	if ( LP_SREADY(status)) {
++ #else
+  	if (!((status = LP_S(minor)) & LP_PACK) || (status & LP_PBUSY)
+  	|| !((status = LP_S(minor)) & LP_PACK) || (status & LP_PBUSY)
+  	|| !((status = LP_S(minor)) & LP_PACK) || (status & LP_PBUSY)) {
+! #endif
+  		outb_p(lpchar, LP_B(minor));
+  		/* must wait before taking strobe high, and after taking strobe
+  		   low, according spec.  Some printers need it, others don't. */
+***************
+*** 140,146 ****
+--- 202,213 ----
+  				--copy_size;
+  				++bytes_written;
+  			} else {
++ #ifdef LP_OFFLINE_SUPPORT
++                                 status = LP_S(minor);
++                                 if (LP_SERROR(status)) {
++ #else
+  				if (!((status = LP_S(minor)) & LP_PERRORP)) {
++ #endif
+  					int rc = total_bytes_written + bytes_written;
+  
+  					if ((status & LP_POUTPA)) {
+***************
+*** 156,168 ****
+--- 223,243 ----
+  						if (!rc)
+  							rc = -EIO;
+  					}
++ 
+  					if(LP_F(minor) & LP_ABORT)
+  						return rc;
++ #ifdef LP_OFFLINE_SUPPORT
++                                         if (LP_SOFFLINE(status)) return rc;
++ #endif
+  				}
+  				cli();
+  				outb_p((LP_PSELECP|LP_PINITP|LP_PINTEN), (LP_C(minor)));
+  				status = LP_S(minor);
++ #ifdef LP_OFFLINE_SUPPORT
++                                 if (LP_SREADY(status)) {
++ #else
+  				if (!(status & LP_PACK) || (status & LP_PBUSY)) {
++ #endif
+  					outb_p((LP_PSELECP|LP_PINITP), (LP_C(minor)));
+  					sti();
+  					continue;
+***************
+*** 227,233 ****
+--- 302,310 ----
+  			} else
+  			if (!(status & LP_PSELECD)) {
+  				printk("lp%d off-line\n", minor);
++ #ifndef LP_OFFLINE_SUPPORT
+  				if(LP_F(minor) & LP_ABORT)
++ #endif
+  					return temp-buf?temp-buf:-EIO;
+  				current->state = TASK_INTERRUPTIBLE;
+  				current->timeout = jiffies + LP_TIMEOUT_POLLED;
+***************
+*** 291,296 ****
+--- 368,388 ----
+  	if (LP_F(minor) & LP_BUSY)
+  		return -EBUSY;
+  
++ #ifdef LP_OFFLINE_SUPPORT
++         /*
++          * Off-line ?
++          *   But the first several open requests are allowed anyway,
++          *   so that `tunelp' can have a chance to run, even if the
++          *   printers are off-line.
++          */
++         {
++           static int openCounter = 0;
++           if (openCounter >= LP_OFFLINE_SUPPORT_OPEN_N_ALLOW) {
++             if (LP_SOFFLINE(LP_S(minor))) return -EIO;
++           } else openCounter ++;
++         }
++ #endif
++ 
+  	if ((irq = LP_IRQ(minor))) {
+  		lp_table[minor].lp_buffer = (char *) kmalloc(LP_BUFFER_SIZE, GFP_KERNEL);
+  		if (!lp_table[minor].lp_buffer)
+***************
+*** 458,462 ****
+--- 550,559 ----
+  	}
+  	if (count == 0)
+  		printk("lp_init: no lp devices found\n");
++ 
++ #ifdef LP_OFFLINE_SUPPORT
++ 	printk("lp driver: off-line support enabled.\n");
++ #endif
++ 
+  	return kmem_start;
+  }

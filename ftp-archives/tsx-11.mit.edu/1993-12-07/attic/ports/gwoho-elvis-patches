@@ -1,0 +1,470 @@
+here are some patches to elvis for linux.
+
+compile with M_SYSV option.
+
+this fixes the following problems
+
+1. makes job control work better.
+2. use proper kill char, as defined in termio.
+3. allow kill char to be used in /,?,: and ! modes.
+4. allow \ to escape kill and erase.
+5. handle ZZ more like the way vi does.
+
+but probably i wrecked more than i fixed. 
+
+gwoho liu.
+
+diff +context elvis-1.4/cmd1.c elvis/cmd1.c
+*** elvis-1.4/cmd1.c	Wed Dec  5 16:50:49 1990
+--- elvis/cmd1.c	Thu Jan 23 02:06:43 1992
+***************
+*** 545,561 ****
+  	int	bang;
+  	char	*extra;
+  {
+! 	static long	whenwarned;	/* when the user was last warned of extra files */
+  	int		oldflag;
+  
+  	/* if there are more files to edit, then warn user */
+! 	if (argno + 1 < nargs && whenwarned != changes && (!bang || cmd != CMD_QUIT))
+  	{
+  		msg("More files to edit -- Use \":n\" to go to next file");
+  		whenwarned = changes;
+  		return;
+  	}
+- 
+  	if (cmd == CMD_QUIT)
+  	{
+  		if (tmpabort(bang))
+--- 545,573 ----
+  	int	bang;
+  	char	*extra;
+  {
+! static long	whenwarned;	
+! /* when the user was last warned of extra files */
+  	int		oldflag;
+  
++ 	if (cmd != CMD_QUIT) {
++ 		oldflag = tstflag(file, MODIFIED);
++ 		if (cmd == CMD_WQUIT)
++ 			setflag(file, MODIFIED);
++ 		if (tmpsave(NULL,FALSE))
++ 			cmd = CMD_QUIT;
++ 		else {
++ msg("Could not save file -- use quit! to abort changes, or w filename");
++ 		if (!oldflag)
++ 			clrflag(file, MODIFIED);
++ 		}
++ 	}
+  	/* if there are more files to edit, then warn user */
+! if (argno + 1 < nargs && whenwarned != changes && (!bang || cmd != CMD_QUIT))
+  	{
+  		msg("More files to edit -- Use \":n\" to go to next file");
+  		whenwarned = changes;
+  		return;
+  	}
+  	if (cmd == CMD_QUIT)
+  	{
+  		if (tmpabort(bang))
+***************
+*** 566,588 ****
+  		{
+  			msg("Use q! to abort changes, or wq to save changes");
+  		}
+- 	}
+- 	else
+- 	{
+- 		/* else try to save this file */
+- 		oldflag = tstflag(file, MODIFIED);
+- 		if (cmd == CMD_WQUIT)
+- 			setflag(file, MODIFIED);
+- 		if (tmpend(bang))
+- 		{
+- 			mode = MODE_QUIT;
+- 		}
+- 		else
+- 		{
+- 			msg("Could not save file -- use quit! to abort changes, or w filename");
+- 		}
+- 		if (!oldflag)
+- 			clrflag(file, MODIFIED);
+  	}
+  }
+  
+--- 578,583 ----
+diff +context elvis-1.4/curses.c elvis/curses.c
+*** elvis-1.4/curses.c	Wed Dec  5 16:50:53 1990
+--- elvis/curses.c	Thu Jan 23 01:00:53 1992
+***************
+*** 114,119 ****
+--- 114,121 ----
+  # endif
+  #endif
+  
++ int thekillchar = 1000;
++ 
+  #if OSK
+  static struct sgbuf	oldsgttyb;	/* orginal tty mode */
+  static struct sgbuf	newsgttyb;	/* noecho tty mode */
+***************
+*** 242,251 ****
+  		ospeed = (oldtermio.c_cflag & CBAUD);
+  		ERASEKEY = oldtermio.c_cc[VERASE];
+  		newtermio = oldtermio;
+  		newtermio.c_iflag &= (IXON|IXOFF|IXANY|ISTRIP|IGNBRK);
+  		newtermio.c_oflag &= ~OPOST;
+  		newtermio.c_lflag &= ISIG;
+! 		newtermio.c_cc[VINTR] = ctrl('C'); /* always use ^C for interrupts */
+  		newtermio.c_cc[VMIN] = 1;
+  		newtermio.c_cc[VTIME] = 0;
+  #  ifdef VSWTCH
+--- 244,254 ----
+  		ospeed = (oldtermio.c_cflag & CBAUD);
+  		ERASEKEY = oldtermio.c_cc[VERASE];
+  		newtermio = oldtermio;
++ 	thekillchar = oldtermio.c_cc[VKILL];
+  		newtermio.c_iflag &= (IXON|IXOFF|IXANY|ISTRIP|IGNBRK);
+  		newtermio.c_oflag &= ~OPOST;
+  		newtermio.c_lflag &= ISIG;
+! 		/*newtermio.c_cc[VINTR] = ctrl('C'); /* always use ^C for interrupts */
+  		newtermio.c_cc[VMIN] = 1;
+  		newtermio.c_cc[VTIME] = 0;
+  #  ifdef VSWTCH
+***************
+*** 267,273 ****
+  
+  		ioctl(2, TIOCGETC, &tbuf);
+  		oldint = tbuf.t_intrc;
+! 		tbuf.t_intrc = ctrl('C');	/* always use ^C for interrupts */
+  		ioctl(2, TIOCSETC, &tbuf);
+  
+  #  ifdef TIOCSLTC
+--- 270,276 ----
+  
+  		ioctl(2, TIOCGETC, &tbuf);
+  		oldint = tbuf.t_intrc;
+! 		/*tbuf.t_intrc = ctrl('C');	/* always use ^C for interrupts */
+  		ioctl(2, TIOCSETC, &tbuf);
+  
+  #  ifdef TIOCSLTC
+***************
+*** 311,316 ****
+--- 314,320 ----
+  	}
+  
+  	signal(SIGINT, SIG_IGN);
++ 	signal(SIGTSTP, SIG_IGN);
+  
+  	move(LINES - 1, 0);
+  	do_SO();
+***************
+*** 335,340 ****
+--- 339,345 ----
+  	signal(SIGINT, (void(*)()) trapint);
+  #else
+  	signal(SIGINT, trapint);
++ 	signal(SIGTSTP, trapsigtstop);
+  #endif
+  }
+  
+Common subdirectories: elvis-1.4/doc and elvis/doc
+diff +context elvis-1.4/input.c elvis/input.c
+*** elvis-1.4/input.c	Wed Dec  5 16:50:58 1990
+--- elvis/input.c	Thu Jan 23 21:13:35 1992
+***************
+*** 16,21 ****
+--- 16,23 ----
+  #include "config.h"
+  #include "vi.h"
+  
++ extern int thekillchar;
++ int quotedbackslash;
+  
+  #ifndef NO_DIGRAPH
+  static struct _DIG
+***************
+*** 409,414 ****
+--- 411,417 ----
+  	int	quit = FALSE;	/* boolean: are we exiting after this? */
+  #endif
+  
++ 	quotedbackslash = 0;
+  #ifdef DEBUG
+  	/* if "from" and "to" are reversed, complain */
+  	if (from > to)
+***************
+*** 499,504 ****
+--- 502,523 ----
+  #endif
+  				key[0] = getkey(when);
+  
++ 				if (quotedbackslash) {
++ /* what else can be escaped? i dunno */
++ 					if (*key==thekillchar || *key==ERASEKEY) {
++ 					if (markidx(cursor) == 0)
++ 					{
++ 						cursor -= BLKSIZE;
++ 						pfetch(markline(cursor));
++ 						cursor += plen;
++ 					}
++ 					else
++ 					{
++ 						cursor--;
++ 					}
++ 						goto escapedcharthing;
++ 					}
++ 				}
+  				/* if whitespace & wrapmargin is set & we're
+  				 * past the warpmargin, then change the
+  				 * whitespace character into a newline
+***************
+*** 514,519 ****
+--- 533,540 ----
+  				}
+  
+  				/* process it */
++ if (*key == ERASEKEY)
++ goto eraseplace;
+  				switch (*key)
+  				{
+  #ifndef NO_EXTENSIONS
+***************
+*** 604,609 ****
+--- 625,631 ----
+  					break;
+  
+  				  case '\b':
++ eraseplace:
+  					if (cursor <= from)
+  					{
+  						beep();
+***************
+*** 726,731 ****
+--- 748,766 ----
+  					break;
+  
+  				  default:
++ 					if (*key == thekillchar) {
++ 						if (markline(cursor) == markline(from))
++ 						{
++ 							cursor = from;
++ 						}
++ 						else
++ 						{
++ 							cursor &= ~(BLKSIZE - 1);
++ 						}
++ 						break;
++ 					}
++ escapedcharthing:
++ 				quotedbackslash = *key == '\\';
+  					if (cursor >= to && when != WHEN_VIREP)
+  					{
+  #ifndef NO_ABBR
+diff +context elvis-1.4/main.c elvis/main.c
+*** elvis-1.4/main.c	Wed Dec  5 16:51:00 1990
+--- elvis/main.c	Thu Jan 23 00:44:07 1992
+***************
+*** 70,75 ****
+--- 70,76 ----
+  
+  	/* temporarily ignore SIGINT */
+  	signal(SIGINT, SIG_IGN);
++ 	signal(SIGTSTP, SIG_IGN);
+  
+  	/* start curses */
+  	initscr();
+***************
+*** 297,302 ****
+--- 298,304 ----
+  		signal(SIGINT, (void(*)()) trapint);
+  #else
+  		signal(SIGINT, trapint);
++ 		signal(SIGTSTP, trapsigtstop);
+  #endif
+  
+  		switch (mode)
+***************
+*** 334,339 ****
+--- 336,355 ----
+  	/*NOTREACHED*/
+  }
+  
++ /*ARGSUSED*/
++ int trapsigtstop(signo)
++ 	int	signo;
++ {
++ 	suspend_curses();
++ 	signal(signo,SIG_DFL);
++ 	kill(getpid(),signo);
++ 	signal(signo, trapsigtstop);
++ 	resume_curses(TRUE);
++ 	abortdo();
++ 	longjmp(jmpenv, 1);
++ 
++ 	return 0;
++ }
+  
+  /*ARGSUSED*/
+  int trapint(signo)
+diff +context elvis-1.4/tio.c elvis/tio.c
+*** elvis-1.4/tio.c	Wed Dec  5 16:51:19 1990
+--- elvis/tio.c	Thu Jan 23 21:13:53 1992
+***************
+*** 17,22 ****
+--- 17,23 ----
+  #include <signal.h>
+  #include "vi.h"
+  
++ extern thekillchar;
+  
+  /* This function reads in a line from the terminal. */
+  int vgets(prompt, buf, bsize)
+***************
+*** 32,37 ****
+--- 33,39 ----
+  #ifndef NO_DIGRAPH
+  	int	erased;	/* 0, or first char of a digraph */
+  #endif
++ 	int backslashthing = 0;
+  
+  	/* show the prompt */
+  	move(LINES - 1, 0);
+***************
+*** 57,63 ****
+  		if (ch == ctrl('D') && len == 0)
+  			ch = ctrl('[');
+  #ifndef NO_DIGRAPH
+! 		if (*o_digraph && erased != 0 && ch != '\b')
+  		{
+  			ch = digraph(erased, ch);
+  			erased = 0;
+--- 59,65 ----
+  		if (ch == ctrl('D') && len == 0)
+  			ch = ctrl('[');
+  #ifndef NO_DIGRAPH
+! 		if (*o_digraph && erased != 0 && ch != ERASEKEY)
+  		{
+  			ch = digraph(erased, ch);
+  			erased = 0;
+***************
+*** 69,76 ****
+--- 71,93 ----
+  		{
+  			ch |= 256;
+  		}
++ if (backslashthing) {
++ 		if (ch ==ERASEKEY || ch==thekillchar) {
++ 				len--;
++ #ifndef NO_DIGRAPH
++ 				erased = buf[len];
++ #endif
++ 				addch('\b');
++ 				if (mode == MODE_EX)
++ 					clrtoeol();
++ 				tab--;
++ 			goto quotedthing;
++ 		}
++ }
+  
+  		/* process the character */
++ if (ch == ERASEKEY)
++ goto eraseplace;
+  		switch(ch)
+  		{
+  		  case ctrl('V'):
+***************
+*** 92,97 ****
+--- 109,115 ----
+  			goto BreakBreak;
+  
+  		  case '\b':
++ eraseplace:
+  			if (len > 0)
+  			{
+  				len--;
+***************
+*** 113,121 ****
+--- 131,157 ----
+  			break;
+  
+  		  default:
++ 			if (ch == thekillchar) {
++ 				while (len > 0)
++ 				{
++ 					len--;
++ #ifndef NO_DIGRAPH
++ 					erased = buf[len];
++ #endif
++ 					for (ch = widths[len]; ch > 0; ch--)
++ 						addch('\b');
++ 					if (mode == MODE_EX)
++ 					{
++ 						clrtoeol();
++ 					}
++ 					tab -= widths[len];
++ 				}
++ 				break;
++ 			}
+  			/* strip off quotation bit */
+  			if (ch & 256)
+  			{
++ quotedthing:
+  				ch &= ~256;
+  				quoted = FALSE;
+  				qaddch(' ');
+***************
+*** 122,127 ****
+--- 158,164 ----
+  				qaddch('\b');
+  			}
+  			/* add & echo the char */
++ backslashthing =  ch == '\\';
+  			if (len < bsize - 1)
+  			{
+  				if (ch == '\t')
+***************
+*** 624,636 ****
+  		}
+  	}
+  	else
+! 	/* assume key is unmapped, but still translate weird erase key to '\b' */
+  	if (keybuf[next] == ERASEKEY && when != 0)
+  	{
+  		next++;
+  		return '\b';
+  	}
+! 	else if (keybuf[next] == '\0')
+  	{
+  		next++;
+  		return ('A' & 0x1f);
+--- 661,677 ----
+  		}
+  	}
+  	else
+! /* assume key is unmapped, but still translate weird erase key to '\b' */
+! #if 0
+! /* this is really kind of indecent */
+  	if (keybuf[next] == ERASEKEY && when != 0)
+  	{
+  		next++;
+  		return '\b';
+  	}
+! 	else
+! #endif
+! 	if (keybuf[next] == '\0')
+  	{
+  		next++;
+  		return ('A' & 0x1f);
+diff +context elvis-1.4/vi.h elvis/vi.h
+*** elvis-1.4/vi.h	Wed Dec  5 16:51:26 1990
+--- elvis/vi.h	Thu Jan 23 00:27:12 1992
+***************
+*** 229,234 ****
+--- 229,235 ----
+  extern long	allocate();	/* allocate a free block of the tmp file */
+  #endif
+  extern int	trapint();	/* trap handler for SIGINT */
++ extern int	trapsigtstop();	/* trap handler for SIGTSTP */
+  extern void	blkdirty();	/* marks a block as being "dirty" */
+  extern void	blkflush();	/* writes a single dirty block to the disk */
+  extern void	blksync();	/* forces all "dirty" blocks to disk */

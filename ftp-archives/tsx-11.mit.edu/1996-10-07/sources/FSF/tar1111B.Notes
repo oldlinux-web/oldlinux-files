@@ -1,0 +1,201 @@
+GNU tar 1.11.1, with gzip patches
+Binaries for Linux prepared by faith@cs.unc.edu, Tue Jan 19 16:38:09 1993
+Compiled with gcc 2.3.3 (-O6)
+Linked with jump-4.2 libraries (-s)
+
+WARNING: Since tar is now placed in /bin, you may have to remove old soft
+links for tar.
+
+
+To install from Linux binary distribution:
+
+1) Get binary distribution (tar1111B.taz) from
+ftp.cs.unc.edu:/pub/faith/linux/utils or from
+tsx-11.mit.edu:/pub/linux/binaries/FSF
+2) cd /
+3) gtar zpxvf tar1111B.taz
+
+Alternatively, the SLS sysinstall program can be used.
+
+
+To uninstall this binary distribution, do the following:
+
+cd /usr/src/tar-1.11.1
+./tar1111B.Unins
+
+
+To install from source:
+
+1) Get source from: prep.ai.mit.edu:/pub/gnu/tar-1.11.1.tar.Z
+2) Untar tar-1.11.1.tar.Z in /usr/src
+3) cd tar-1.11.1
+4) patch -p1 < tar1111B.Notes
+5) ./configure --prefix=/
+6) Edit Makefile, changing yacc to $(YACC)
+7) make CC=gcc CFLAGS=-O6 LDFLAGS=-s tar
+8) install tar /bin
+
+NOTE: THE GZIP PATCHES ACT AS FOLLOWS:
+1) For uncompress, gzip -d is called
+2) For compress with -z or with --gzip, gzip is called
+3) For compress with -Z, compress is called
+4) If the exec for gzip fails, compress is called.
+
+
+NOTE: THIS IS A FSF BETA RELEASE!  THERE IS *NO* DOCUMENTATION!
+
+USE AT YOUR OWN RISK!
+
+
+Patches to tar.c, tar.h, and buffer.c are as follows:
+
+diff -rc tar-1.11.1.old/buffer.c tar-1.11.1/buffer.c
+*** tar-1.11.1.old/buffer.c	Mon Sep 14 16:56:39 1992
+--- tar-1.11.1/buffer.c	Tue Jan 19 13:53:09 1993
+***************
+*** 426,432 ****
+  					}
+  						/* EOF */
+  					if(err==0) {
+! 						if(f_compress<2)
+  							blocksize-=n;
+  						else
+  							bzero(ar_block->charptr+blocksize-n,n);
+--- 426,432 ----
+  					}
+  						/* EOF */
+  					if(err==0) {
+! 						if(f_compress<2 && f_gzip<2)
+  							blocksize-=n;
+  						else
+  							bzero(ar_block->charptr+blocksize-n,n);
+***************
+*** 433,439 ****
+  						err=rmtwrite(archive,ar_block->charptr,blocksize);
+  						if(err!=(blocksize))
+  							writeerror(err);
+! 						if(f_compress<2)
+  							blocksize+=n;
+  						break;
+  					}
+--- 433,439 ----
+  						err=rmtwrite(archive,ar_block->charptr,blocksize);
+  						if(err!=(blocksize))
+  							writeerror(err);
+! 						if(f_compress<2 && f_gzip<2)
+  							blocksize+=n;
+  						break;
+  					}
+***************
+*** 452,461 ****
+  		}
+  	}
+  		/* So we should exec compress (-d) */
+! 	if(ar_reading)
+! 		execlp("compress", "compress", "-d", (char *)0);
+! 	else
+! 		execlp("compress", "compress", (char *)0);
+  	msg_perror("can't exec compress");
+  	_exit(EX_SYSTEM);
+  }
+--- 452,467 ----
+  		}
+  	}
+  		/* So we should exec compress (-d) */
+! 	if(ar_reading) {
+! 	   if(execlp("gzip", "gzip", "-d", (char *)0) == -1)
+! 		 execlp("compress", "compress", "-d", (char *)0);
+! 	} else {
+! 	   if (f_gzip) {
+! 		 if(execlp("gzip", "gzip", (char *)0) == -1)
+! 		       execlp("compress", "compress", (char *)0);
+! 	   } else
+! 		 execlp("compress", "compress", (char *)0);
+! 	}
+  	msg_perror("can't exec compress");
+  	_exit(EX_SYSTEM);
+  }
+***************
+*** 521,527 ****
+  	    exit (EX_ARGSBAD);
+  	  }
+  	
+! 	if (f_compress) {
+  		if(reading==2 || f_verify) {
+  			msg("cannot update or verify compressed archives");
+  			exit(EX_ARGSBAD);
+--- 527,533 ----
+  	    exit (EX_ARGSBAD);
+  	  }
+  	
+! 	if (f_compress||f_gzip) {
+  		if(reading==2 || f_verify) {
+  			msg("cannot update or verify compressed archives");
+  			exit(EX_ARGSBAD);
+diff -rc tar-1.11.1.old/tar.c tar-1.11.1/tar.c
+*** tar-1.11.1.old/tar.c	Mon Sep 14 17:31:38 1992
+--- tar-1.11.1/tar.c	Tue Jan 19 13:53:13 1993
+***************
+*** 182,187 ****
+--- 182,188 ----
+  	{"one-file-system",	0,	&f_local_filesys, 	1},
+  	{"old-archive",		0,	0,			'o'},
+  	{"portability",		0,	0,			'o'},
++         {"gzip",                0,      &f_gzip,                1},
+  	{"compress",		0,	&f_compress,		1},
+  	{"compress-block",	0,	&f_compress,		2},
+  	{"sparse",		0,	&f_sparse_files,	1},
+***************
+*** 610,615 ****
+--- 611,617 ----
+  			break;
+  
+  		case 'z':		/* Easy to type */
++                         f_gzip++;
+  		case 'Z':		/* Like the filename extension .Z */
+  			f_compress++;
+  			break;
+***************
+*** 716,723 ****
+  -W, --verify		attempt to verify the archive after writing it\n\
+  --exclude FILE		exclude file FILE\n\
+  -X, --exclude-from FILE	exclude files listed in FILE\n\
+! -z, -Z, --compress,\n\
+      --uncompress      	filter the archive through compress\n\
+  -[0-7][lmh]		specify drive and density\n\
+  ", stdout);
+  }
+--- 718,727 ----
+  -W, --verify		attempt to verify the archive after writing it\n\
+  --exclude FILE		exclude file FILE\n\
+  -X, --exclude-from FILE	exclude files listed in FILE\n\
+! -Z, --compress,\n\
+      --uncompress      	filter the archive through compress\n\
++ -z, --gzip,\n\
++     --uncompress        filter the archive through gzip\n\
+  -[0-7][lmh]		specify drive and density\n\
+  ", stdout);
+  }
+diff -rc tar-1.11.1.old/tar.h tar-1.11.1/tar.h
+*** tar-1.11.1.old/tar.h	Tue Sep  8 15:45:34 1992
+--- tar-1.11.1/tar.h	Tue Jan 19 13:53:11 1993
+***************
+*** 224,231 ****
+  TAR_EXTERN int  f_verify;		/* -W */
+  			/* CMD_EXTRACT     -x */
+  TAR_EXTERN int  f_exclude;		/* -X */
+! TAR_EXTERN int 	f_compress;		/* -z */
+! 					/* -Z */
+  TAR_EXTERN int	f_do_chown;		/* --do-chown */
+  TAR_EXTERN int  f_totals;		/* --totals */
+  TAR_EXTERN int	f_remove_files;		/* --remove-files */
+--- 224,231 ----
+  TAR_EXTERN int  f_verify;		/* -W */
+  			/* CMD_EXTRACT     -x */
+  TAR_EXTERN int  f_exclude;		/* -X */
+! TAR_EXTERN int 	f_compress;		/* -Z */
+! TAR_EXTERN int  f_gzip;			/* -z */
+  TAR_EXTERN int	f_do_chown;		/* --do-chown */
+  TAR_EXTERN int  f_totals;		/* --totals */
+  TAR_EXTERN int	f_remove_files;		/* --remove-files */
+

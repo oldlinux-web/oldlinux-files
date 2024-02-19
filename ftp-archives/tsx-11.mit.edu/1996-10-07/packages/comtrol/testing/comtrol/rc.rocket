@@ -1,0 +1,98 @@
+#!/bin/sh
+#
+
+#
+# Initialization script configuration
+#
+ROCKET_REGEXP="rocket\b"
+
+#
+# Handle System V init conventions...
+#
+case $1 in
+start)
+	action="start";
+	;;
+stop)
+	action="stop";
+	;;
+*)
+	action="start";
+esac
+
+if test $action  = stop ; then
+	module=`grep $ROCKET_REGEXP /proc/modules | awk '{print $1}'`
+	if test -z "$module" ; then 
+		echo "The Rocketport driver is not loaded."
+		exit 0
+	fi
+	if rmmod $module ; then :; else 
+		echo "The Rocketport driver could NOT be unloaded."
+		exit 1;
+	fi
+	echo "The Rocketport driver has been unloaded."
+	exit 0
+fi
+
+#
+# If we get this far, we're supposed to load the Rocketport driver.
+# OK, first of all, get the configuration information.
+#
+if test -f /etc/rocketport.conf ; then
+	ROCKET_ARG=`sed -e '/^#/d' -e 's/[ 	]*=[ 	]*/=/' \
+		/etc/rocketport.conf`
+else
+	ROCKET_ARG="board1=0x180"
+fi
+
+DIRS="/lib/modules /usr/lib/modules ."
+PATH=/bin:/sbin:/usr/bin
+
+if grep rocket /proc/modules > /dev/null ; then
+	echo "The Rocketport driver is already loaded!"
+	exit 0
+fi
+
+for i in $DIRS
+do
+	if test -z "$ROCKET_MODULE" -a -f $i/rocket.o ; then
+		ROCKET_MODULE=$i/rocket.o
+	fi
+	if test -z "$MOD_ROCKET_MODULE" -a -f $i/mod_rocket.o ; then
+		MOD_ROCKET_MODULE=$i/mod_rocket.o
+	fi
+done
+
+if test -z "$ROCKET_MODULE" ; then
+	ROCKET_MODULE=$MOD_ROCKET_MODULE
+elif test -z "$MOD_ROCKET_MODULE" ; then
+	MOD_ROCKET_MODULE=$ROCKET_MODULE
+fi
+
+if test -z "$ROCKET_MODULE" ; then
+	echo "Couldn't find the Rocketport driver loadable kernel module!"
+	exit 1
+fi
+
+if insmod -f $MOD_ROCKET_MODULE $ROCKET_ARG 2> /tmp/modrocket.$$; then :; else
+    if insmod -f $ROCKET_MODULE $ROCKET_ARG 2> /tmp/rocket.$$; then :; else
+	echo "Couldn't load rocketport driver."
+	echo "See error logs in /tmp/rocket.$$ and /tmp/modrocket.$$"
+	exit 1
+	fi
+fi
+
+/bin/rm -f /tmp/rocket.$$ /tmp/modrocket.$$
+
+major=`grep ttyR /proc/devices | awk '{print $1}'`
+if test -z "$major"; then
+	echo "Rocketport device driver initialization failed."
+	exit 1
+fi
+
+/bin/rm -f /dev/ttyR* /dev/cuR*
+/bin/mknod /dev/ttyR0 c $major 0
+setrocket -M -v /dev/ttyR0
+
+echo " "
+echo "Rocketport driver loaded, using device #$major"

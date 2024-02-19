@@ -1,0 +1,62 @@
+This patch supports bidirectional I/O (read and write) for printers that
+can transmit status information back to the host over the parallel port.
+
+This includes HP printers released since 1992 (e.g. Laserjet 4 and up, 
+Deskjet 1200 and up).
+
+It also includes a streamlined interrupt-driven write.  It uses MUCH less
+CPU time on printers with fast interfaces.  I would be very interested
+to hear whether it works on old and cranky printers.
+
+
+===== Installation ====================
+
+   $ cd /usr/src
+   $ patch -p < lp-bidir.patch
+
+
+===== Using bidirectional I/O ====================
+
+It's pretty simple: 
+
+    $ cat /dev/lp1
+    @PJL INFO STATUS
+    CODE=10001
+    DISPLAY="00 READY"
+    ONLINE=TRUE
+    
+
+At the system call level, open("/dev/lp1", O_RDONLY) succeeds and then
+read() returns what the printer has to say.  It never returns EOF, just
+waits until the printer sends something and returns that.  O_NONBLOCK
+can be used to check whether the printer has anything to say.
+
+
+===== Using interrupt-driven write ====================
+
+No change, still
+
+    # tunelp /dev/lp1 -i 7
+
+or whatever.  
+
+As a benchmark, I tried sending a continuous stream of NULs (ascii 0)
+to a Laserjet 5.  This is about as close as I can get to testing the
+raw interface speed.
+
+The standard lp.c driver sends about 115k/sec using 100% of the CPU.
+
+The new driver sends about 97 k/sec using 2% of the CPU, but that's
+very misleading since it ignores time spent in servicing interrupts.
+I haven't been able to measure it satisfactorily, but I estimate it's
+using about 50-75% of the CPU at that speed.
+
+In actually printing ghostscript output (raster graphics), the printer
+bursts data at about 50k/sec for a few seconds, then the interface is
+idle for 20-30 seconds.
+
+At any rate, there is a noticeable effect on response time with the
+old driver, and none with the new driver.  Printing isn't any faster.
+With a non-laser printer there probably will be little difference in
+CPU use or response time, since they consume data more steadily
+instead of in huge gulps.

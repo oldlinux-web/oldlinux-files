@@ -1,0 +1,216 @@
+INSTALL  -- An installation guide.
+
+Written by Bas Laarhoven & Kai Harrekilde-Petersen.
+Last update: 16/01/94 by sjl, for ftape v0.9.9d
+
+
+WHAT YOU NEED:
+--------------
+1)	ftape-0.9.9d.tar.gz (this file is a part of it).
+2)	Kernel sources (0.99pl14d or above).
+
+(Of course, you'll also need a tape drive installed and a C compiler)
+
+
+INSTALLATION STEPS:
+-------------------
+Installation of the ftape driver consists of two main steps:
+
+1)	Installation, patching, compilation, and reboot of the kernel.
+2)	Compilation of the ftape driver proper.
+
+  If it's the first time you install ftape, there's some more steps you'll
+need
+
+3)	Compilation of the `modules' utilities.
+4)	Creation of the (n)ftape devices
+5)	Installation of syslog[dk] (not necessary, but rather useful)
+
+
+1) Installation of the new kernel.
+----------------------------------
+  To make things easier, we'll assume that you install the ftape sources in
+/usr/src/ftape-0.9.9d and the kernel sources in /usr/src/linux (if not, you
+may have to change some include paths).
+Un-tar the ftape driver (well, you've already done that, haven't you?)
+
+  Since the `modules' package has become a part of the standard kernel in
+0.99pl14d, there's a separate point for installation of the `modules' packages
+into a pre-pl14d kernel.
+
+	Installation of the `ftape' specifics into the kernel:
+	------------------------------------------------------
+        cd /usr/src/linux
+	patch -p0 < ../ftape-0.9.9d/ftape-pl15.diff 2>&1 | tee /tmp/patch-log
+
+
+  The patch goes cleanly into an *unmodified* kernel source tree. If you have
+installed other patches, e.g. Eric Youngdale's cluster patches, they may not
+go in cleanly. Check the /tmp/patch-log file for any failed chunks and look
+for any `*.rej' or `*#' files.
+
+
+Now configure the kernel and recompile it.
+
+
+	make config
+
+  Be sure to answer yes to 'QIC-117 tape support', and 3 for NR_FTAPE_BUFFERS.
+(unless you know what you're doing!). It is *not* necessary to include QIC-02
+support for proper functioning (contrary to what has been said on the net).
+
+	make dep; make clean
+	make
+
+  Take a nap, read the newspaper or drink some tea / coffee while the kernel
+is being recompiled (this takes about 20 min on my 486DLC/33 box).
+
+  Install the new kernel (keep the old one around, in case you can't boot with
+the new one) and reboot.
+
+
+  Assuming no errors occurred during the compile, we're now ready to compile
+the modules utilities.
+
+2)	Compilation of the `modules' utilities.
+-----------------------------------------------
+  The modules utilities are a separate package, called modutils-1.1.tar.gz Go
+to the modules/util directory and compile the utilities found there
+
+	cd /usr/src/modules
+	make
+
+  Test the utils by saying (as root) 'insmod drv_hello.o' This results in a
+message like this:
+
+	module `drv_hello' (1 pages @ 0x01023000) created
+	initializing module `drv_hello', 140 (0x8c) bytes
+	  init enty @ 0x01023034, cleanup entry @ 0x01023074
+	drv_hello.c: init_module called
+	hello, world
+
+Then do a 'lsmod'. This will result in something like:
+
+	Module:        #pages:
+	drv_hello          1
+
+  This means that everything worked out OK. Now that drv_hello has served it's
+purpose, remove it again:
+
+	rmmod drv_hello
+
+Install the *mod utilities somewhere handy, eg: in /sbin.
+
+	cd *mod /sbin
+
+NOTE: it may not be a good idea to install them on a non-root fs, as they may
+be needed in an emergency situation.
+
+3)	Compilation of the ftape driver proper.
+-----------------------------------------------
+
+	cd /usr/src/ftape-0.9.9d
+	make clean ; make
+
+  The `ftape' module will only run with the kernel version it's compiled
+on, if you get an error message saying that the kernel_version doesn't
+match the current kernel, you must remove the file kernel-version.h
+(or do a `make clean') and run `make' again.
+
+  There should be *NO* warnings. *ALL* compile warnings / errors should be
+investigated and reported (If you use gcc 2.5.x, you're likely to get 3
+warnings about passing signed/unsigned arguments: These can be safely
+ignored, though). Unless you're running as root, you'll get a message about
+'Operation not permitted', when trying to insert/remove the driver. 
+
+Insert the compiled ftape driver:
+
+        su
+	insmod ftape.o
+
+  This results in a similar message as when you installed the drv_hello
+module. You'd probably like to catch the messages that ftape generate with a
+syslog daemon. See (5) below for more.
+
+  If this results in messages of the type `multiple definition of symbol ...'
+or `undefined symbol ...', note which symbols you get complains about and edit
+the kernel/ksyms.S file (delete/add the appropriate symbols). Then re-compile
+the kernel (make dep clean; make) and try to `insmod ftape.o' again.
+
+
+NOTE: You have to reload the driver *every* time you boot the system (Just as
+----- with the modules utilities, it's a good idea to have ftape.o on the root
+partition. I'd suggest /sbin). Instead of doing it by hand, you could include
+the following line in your /etc/rc.local:
+
+	/sbin/insmod /sbin/ftape.o
+
+  The messages generated when opening the device can start with some "timeout
+on Acknowledge" lines. This depends on the trace-level, and is normal as long
+as the driver is probing for a tape drive. If they keep appearing after the
+device is opened something is wrong.
+
+  If all goes well, messages will appear saying something about "drive-wakeup
+compatible with <name>" and "ftape drive is <name>". If not, "unknown drive
+type, no response" says that the driver cannot activate the drive. In this
+case the driver will not work with your drive.
+
+  If some message appears with "unknown vendor id", follow the instructions in
+the message so I can include this information with a new release. In the
+meantime the driver will function correctly if it is compatible with one of
+the known types.
+
+
+  Put a tape in the driver and wait for the drive to stop making noise. Now
+type
+
+	mt -f /dev/ftape rewind
+
+  This will try to open the device. Because initially `tracing' is set to some
+value greater than zero, some debugging output (printk) is generated on the
+console.
+
+You may try to retention a tape by doing a
+
+	mt -f /dev/ftape reten
+
+  The tape should wind completely to the end once and back to the beginning
+again.
+
+
+  Well, that's it! Play around with tar etc. If anything fails, make a logfile
+with `tracing' set to 8 and try to find out what's going wrong.
+
+  How do I set the tracing level?  Either change the var `tracing' in
+ftape-rw.c (default value=5) and recompile or do `mt -f /dev/ftape fsf
+<tracelevel>' The latter is a hack, and will disappear with time.
+
+
+4)	Creation of the (n)ftape devices.
+-----------------------------------------
+Check that you have the correct ftape devices:
+
+	ls -lFG /dev/*ftape
+
+crw-rw-rw-   1 root      27,   0 Nov  9 21:56 /dev/ftape
+crw-rw-rw-   1 root      27,   4 Nov  9 21:56 /dev/nftape
+
+If not, make them thus:
+
+	mknod -m 666 /dev/ftape c 27 0
+	mknod -m 666 /dev/nftape c 27 4
+
+
+5)	Installation of syslog[dk] (not necessary, but rather useful)
+---------------------------------------------------------------------
+You'll want to capture the messages that ftape issues with syslogk or
+syslogd (NET-2 version). If you don't have a syslog daemon running add the
+following to your rc.local file:  
+
+        if [ -x /etc/syslogk ] ; then
+                syslogk on 2>&1 >>/var/log/kernel &
+        fi
+
+This will append the kernel messages to the file `/var/log/kernel'.
+(Make sure this file exists - do `cp /dev/null /var/log/kernel' as root)
+----------------------- end of the Install-guide -----------------------

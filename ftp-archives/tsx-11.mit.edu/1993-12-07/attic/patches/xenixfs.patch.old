@@ -1,0 +1,2638 @@
+#	This is a shell archive.
+#	Remove everything above and including the cut line.
+#	Then run the rest of the file through sh.
+#----cut here-----cut here-----cut here-----cut here----#
+#!/bin/sh
+# shar:    Shell Archiver
+#	Run the following text with /bin/sh to create:
+#	README
+#	xenixfs.patch
+# This archive created: Tue Aug 18 14:30:11 1992
+cat << \SHAR_EOF > README
+README for xenixfs.patch
+
+This patch provides an implementation of the Xenix filesystem for Linux.
+The implementation isn't complete in the sense that the following things
+are missing:
+
+- divvy partitions
+- badtrk table support
+- mkfs
+- fsck
+- fsdb
+
+To use this code with Linux, you must boot Xenix and run mkfs on a
+full partition. EG: mkfs /dev/hd03 ... This code can also be used with
+floppies (boot Xenix and do mkdev fd). In fact, I recommend testing
+the patch out on floppies first.
+
+I have my Linux system running on Xenix partitions as follows:
+
+200 MB IDE	30MB MSDOS
+		50MB Xenix root + swap
+		60MB Linux root + swap
+		65MB /usr/spool (Xenix + Linux)
+
+1 GIG SCSI	100MB MSDOS
+		300MB /home
+		300MB /src (Xenix + Linux)
+		360MB /u (Xenix + Linux)
+
+This patch must be applied to Linux 0.97 Patch Level 1:
+
+Apply it with (assuming the Linux source tree is in /usr/src/linux):
+
+cd /usr/src
+patch -p0 <xenixfs.patch 2>&1 | tee patch.log
+
+Doug Evans, dje@sspiff.UUCP or dje@sspiff.ampr.ab.ca, 92Aug18
+SHAR_EOF
+cat << \SHAR_EOF > xenixfs.patch
+*** linux.pl1/Makefile	Tue Aug 18 12:51:49 1992
+--- linux/Makefile	Mon Aug 17 13:54:30 1992
+***************
+*** 84,90 ****
+  AR	=ar
+  
+  ARCHIVES	=kernel/kernel.o mm/mm.o fs/fs.o net/net.o
+! FILESYSTEMS	=fs/minix/minix.o fs/ext/ext.o fs/msdos/msdos.o
+  DRIVERS		=kernel/blk_drv/blk_drv.a kernel/chr_drv/chr_drv.a \
+  		 kernel/blk_drv/scsi/scsi.a
+  MATH		=kernel/math/math.a
+--- 84,90 ----
+  AR	=ar
+  
+  ARCHIVES	=kernel/kernel.o mm/mm.o fs/fs.o net/net.o
+! FILESYSTEMS	=fs/xenix/xenix.o fs/minix/minix.o fs/msdos/msdos.o
+  DRIVERS		=kernel/blk_drv/blk_drv.a kernel/chr_drv/chr_drv.a \
+  		 kernel/blk_drv/scsi/scsi.a
+  MATH		=kernel/math/math.a
+*** linux.pl1/fs/Makefile	Sat Aug  1 15:44:01 1992
+--- linux/fs/Makefile	Sat Aug  8 00:02:15 1992
+***************
+*** 7,13 ****
+  #
+  # Note 2! The CFLAGS definitions are now in the main makefile...
+  
+! SUBDIRS	=minix ext msdos
+  
+  .c.s:
+  	$(CC) $(CFLAGS) -S $<
+--- 7,13 ----
+  #
+  # Note 2! The CFLAGS definitions are now in the main makefile...
+  
+! SUBDIRS	=minix ext msdos xenix
+  
+  .c.s:
+  	$(CC) $(CFLAGS) -S $<
+*** linux.pl1/fs/super.c	Sat Aug  1 13:09:35 1992
+--- linux/fs/super.c	Mon Aug 17 13:54:39 1992
+***************
+*** 12,17 ****
+--- 12,18 ----
+  #include <linux/minix_fs.h>
+  #include <linux/ext_fs.h>
+  #include <linux/msdos_fs.h>
++ #include <linux/xenix_fs.h>
+  #include <linux/kernel.h>
+  #include <linux/stat.h>
+  #include <linux/errno.h>
+***************
+*** 35,42 ****
+  /* Move into include file later */
+  
+  static struct file_system_type file_systems[] = {
+  	{minix_read_super,"minix"},
+! 	{ext_read_super,"ext"},
+  	{msdos_read_super,"msdos"},
+  	{NULL,NULL}
+  };
+--- 37,45 ----
+  /* Move into include file later */
+  
+  static struct file_system_type file_systems[] = {
++ 	{xenix_read_super,"xenix"},
+  	{minix_read_super,"minix"},
+! 	/*{ext_read_super,"ext"},*/
+  	{msdos_read_super,"msdos"},
+  	{NULL,NULL}
+  };
+*** linux.pl1/fs/xenix/alloc.c	Wed Aug 12 15:09:56 1992
+--- linux/fs/xenix/alloc.c	Fri Aug  7 16:11:03 1992
+***************
+*** 0 ****
+--- 1,308 ----
++ /*
++  * linux/fs/xenix/alloc.c
++  *
++  * (C) 1991  Linus Torvalds
++  *
++  * Taken from minix/bitmap.c, modified by Doug Evans, dje@sspiff.UUCP, 92Jun04.
++  *
++  * This file contains code for allocating/freeing blocks and inodes.
++  */
++ 
++ #include <linux/sched.h>
++ #include <linux/fs.h>
++ #include <linux/xenix_fs.h>
++ #include <linux/kernel.h>
++ #include <linux/string.h>
++ 
++ #define clear_block(addr) \
++ __asm__("cld\n\t" \
++ 	"rep\n\t" \
++ 	"stosl" \
++ 	::"a" (0),"c" (BLOCK_SIZE/4),"D" ((long) (addr)):"cx","di")
++ 
++ #ifndef MIN
++ #define MIN(a,b)	((a) < (b) ? (a) : (b))
++ #endif
++ 
++ int
++ xenix_free_block(int dev, int block)
++ {
++ 	struct super_block * sb;
++ 	struct buffer_head * bh;
++ 	struct xenix_free_block * xfb;
++ 
++ 	if (!(sb = get_super(dev)))
++ 		panic("xenix_free_block: trying to free block on nonexistent device");
++ 
++ 	DEBUGPK(xenix_blocks,
++ 		("xenix_free_block: dev 0x%x, block %d, s_nfree %d, s_tfree %d\n",
++ 			dev, block, sb->s_xenix_nfree,
++ #ifdef XENIX_GOT_PACK_2
++ 			sb->s_xenix_tfree
++ #else
++ 			*(daddr_t *) sb->s_xenix_tfree
++ #endif
++ 	));
++ 
++ 	lock_super(sb);
++ 	if (block < sb->s_xenix_isize || block >= sb->s_xenix_fsize) {
++ 		printk("xenix_free_block: block=%d, isize=%d, fsize=%d\n",
++ 			block, sb->s_xenix_isize, sb->s_xenix_fsize);
++ 		panic("xenix_free_block: trying to free block not in datazone");
++ 	}
++ 	if (sb->s_xenix_nfree > 100)
++ 		panic("xenix_free_block: s_nfree > 100");
++ 
++ 	/*
++ 	 * If the cached free list is full, it's copied to this block ...
++ 	 */
++ 
++ 	if (sb->s_xenix_nfree == 100) {
++ 		if (!(bh = getblk(dev, block, BLOCK_SIZE)))
++ 			panic("xenix_free_block: getblk() failed");
++ 		if (bh->b_count > 1) {
++ 			brelse(bh);
++ 			free_super(sb);
++ 			return(0);	/* FIXME: that's it? */
++ 		}
++ 		xfb = (struct xenix_free_block *) bh->b_data;
++ 		xfb->xfb_nfree = 100;
++ 		memcpy(xfb->xfb_free, sb->s_xenix_free, 100 * sizeof(long));
++ 		sb->s_xenix_nfree = 0;
++ 		bh->b_dirt = 1;
++ 		bh->b_uptodate = 1;	/* FIXME: ok? */
++ 		if (bh->b_count == 1)
++ 			brelse(bh);
++ 	} else {
++ 		bh = get_hash_table(dev, block, BLOCK_SIZE);
++ 		if (bh) {
++ 			if (bh->b_count > 1) {
++ 				brelse(bh);
++ 				free_super(sb);
++ 				return(0);	/* FIXME: that's it? */
++ 			}
++ 			bh->b_dirt = 0;
++ 			bh->b_uptodate = 0;
++ 			if (bh->b_count == 1)
++ 				brelse(bh);
++ 		}
++ 	}
++ #ifdef XENIX_GOT_PACK_2
++ 	sb->s_xenix_free[sb->s_xenix_nfree] = block;
++ #else
++ 	*((daddr_t *) sb->s_xenix_free + sb->s_xenix_nfree) = block;
++ #endif
++ 	sb->s_xenix_nfree++;
++ #ifdef XENIX_GOT_PACK_2
++ 	sb->s_xenix_tfree++;
++ #else
++ 	++*((daddr_t *) sb->s_xenix_tfree);
++ #endif
++ 	sb->s_xenix_bh->b_dirt = 1;
++ 	free_super(sb);
++ 	return(1);
++ }
++ 
++ int
++ xenix_new_block(int dev)
++ {
++ 	struct buffer_head * bh;
++ 	struct super_block * sb;
++ 	struct xenix_free_block * xfb;
++ 	int block;
++ 
++ 	if (!(sb = get_super(dev)))
++ 		panic("xenix_new_block: trying to get new block from nonexistant device");
++ 
++ 	DEBUGPK(xenix_blocks, ("xenix_new_block: dev 0x%x, s_nfree %d, s_tfree %d\n",
++ 		dev, sb->s_xenix_nfree,
++ #ifdef XENIX_GOT_PACK_2
++ 		sb->s_xenix_tfree
++ #else
++ 		*(daddr_t *) sb->s_xenix_tfree
++ #endif
++ 	));
++ 
++ 	if (sb->s_xenix_nfree == 0)	/* FIXME: review */
++ 		return(0);			/* no blocks available */
++ 	lock_super(sb);
++ #ifdef XENIX_GOT_PACK_2
++ 	block = sb->s_xenix_free[--sb->s_xenix_nfree];
++ #else
++ 	block = *((daddr_t *) sb->s_xenix_free + --sb->s_xenix_nfree);
++ #endif
++ 	if (block == 0) {
++ 		sb->s_xenix_nfree++;
++ 		free_super(sb);
++ 		return(0);		/* no blocks available */
++ 	}
++ 	if (sb->s_xenix_nfree == 0) {
++ 		if (!(bh = bread(dev, block, BLOCK_SIZE))) {
++ 			/* FIXME: was panic() */
++ 			printk("xenix_new_block: cannot read free-list block\n");
++ 			sb->s_xenix_nfree++;
++ 			free_super(sb);
++ 			return(0);
++ 		}
++ 		xfb = (struct xenix_free_block *) bh->b_data;
++ 		if (xfb->xfb_nfree <= 1 || xfb->xfb_nfree > 100)
++ 			panic("xenix_new_block: free-list block with 0 or >100 entries");
++ 		sb->s_xenix_nfree = xfb->xfb_nfree;
++ 		memcpy(sb->s_xenix_free, xfb->xfb_free, xfb->xfb_nfree * sizeof(daddr_t));
++ 		brelse(bh);
++ 	}
++ 	if (!(bh = getblk(dev, block, BLOCK_SIZE)))
++ 		panic("xenix_new_block: getblk() failed");
++ 	if (bh->b_count > 1)
++ 		panic("xenix_new_block: count > 1");
++ 	bh->b_count = 1;	/* could have been 0 (brelse() above called) */
++ 	clear_block(bh->b_data);
++ 	bh->b_uptodate = 1;
++ 	bh->b_dirt = 1;
++ 	brelse(bh);
++ #ifdef XENIX_GOT_PACK_2
++ 	sb->s_xenix_tfree--;
++ #else
++ 	--*((daddr_t *) sb->s_xenix_tfree);
++ #endif
++ 	sb->s_xenix_bh->b_dirt = 1;
++ 	free_super(sb);
++ 	return(block);
++ }
++ 
++ unsigned long
++ xenix_count_free_blocks(struct super_block * sb)
++ {
++ #ifdef XENIX_GOT_PACK_2
++ 	return(sb->s_xenix_tfree);
++ #else
++ 	return(*(daddr_t *) sb->s_xenix_tfree);
++ #endif
++ }
++ 
++ void
++ xenix_free_inode(struct inode * inode)
++ {
++ 	struct buffer_head * bh;
++ 	struct xenix_inode * raw_inode;
++ 	struct super_block * sb;
++ 
++ 	if (!inode)
++ 		return;
++ 	if (!inode->i_dev) {
++ 		memset(inode, 0, sizeof(*inode));
++ 		return;
++ 	}
++ 	if (inode->i_count > 1) {
++ 		printk("xenix_free_inode: inode has count=%d\n", inode->i_count);
++ 		return;
++ 	}
++ 	if (inode->i_nlink) {
++ 		printk("xenix_free_inode: inode has nlink=%d\n", inode->i_nlink);
++ 		return;
++ 	}
++ 	if (!(sb = inode->i_sb)) {
++ 		printk("xenix_free_inode: inode on nonexistent device\n");
++ 		return;
++ 	}
++ 
++ 	DEBUGPK(xenix_inodes,
++ 		("xenix_free_inode: dev 0x%x, inode %d, s_ninode %d, s_tinode %d\n",
++ 			inode->i_dev, inode->i_ino, sb->s_xenix_ninode, sb->s_xenix_tinode
++ 	));
++ 
++ 	if (inode->i_ino <= XENIX_ROOT_INO ||
++ 			inode->i_ino > sb->s_xenix_isize * XENIX_INODES_PER_BLOCK) {
++ 		printk("xenix_free_inode: inode 0,1,2 or nonexistent inode\n");
++ 		return;
++ 	}
++ 	if (sb->s_xenix_ninode < 100)
++ 		sb->s_xenix_inode[sb->s_xenix_ninode++] = inode->i_ino;
++ 	/* FIXME: #define 31, 16 */
++ 	if (!(bh = bread(inode->i_dev, (inode->i_ino + 31) / 16, BLOCK_SIZE))) {
++ 		panic("xenix_free_inode: unable to read inode block");
++ 		/* FIXME: too severe? */
++ 		return;
++ 	}
++ 	/* FIXME: #define 31, 15 */
++ 	raw_inode = (struct xenix_inode *) bh->b_data + (inode->i_ino + 31 & 15);
++ 	if (raw_inode->i_nlink == 0)
++ 		printk("xenix_free_inode: inode already free\n");
++ 	memset(raw_inode, 0, sizeof(*raw_inode));
++ 	memset(inode, 0, sizeof(*inode));
++ 	bh->b_dirt = 1;
++ 	sb->s_xenix_tinode++;
++ 	sb->s_xenix_bh->b_dirt = 1;
++ }
++ 
++ struct inode *
++ xenix_new_inode(int dev)
++ {
++ 	struct inode * inode;
++ 	struct buffer_head * bh;
++ 	struct super_block * sb;
++ 	struct xenix_inode * raw_inode;
++ 	int i,j,ino,block,max_alloc;
++ 
++ 	if (!(inode = get_empty_inode()))
++ 		return NULL;
++ 	if (!(inode->i_sb = sb = get_super(dev))) {
++ 		printk("xenix_new_inode: unknown device\n");
++ 		iput(inode);
++ 		return(NULL);
++ 	}
++ 	inode->i_flags = inode->i_sb->s_flags;
++ 
++ 	DEBUGPK(xenix_inodes,
++ 		("xenix_new_inode: dev 0x%x, s_ninode %d, s_tinode %d\n",
++ 			dev, sb->s_xenix_ninode, sb->s_xenix_tinode
++ 	));
++ 
++ 	if (sb->s_xenix_ninode == 0) {
++ 		for (i = 0, ino = 3, block = 2, max_alloc = MIN(100, sb->s_xenix_tinode);
++ 			i < max_alloc && block < sb->s_xenix_isize;
++ 		) {
++ 			if (!(bh = bread(dev, block, BLOCK_SIZE))) {
++ 				printk("xenix_new_inode: unable to read inode table\n");
++ 				iput(inode);
++ 				return(NULL);
++ 			}
++ 			raw_inode = (struct xenix_inode *) bh->b_data;
++ 			for (j = ino == 3 ? 2 : 0; j < 16 && i < max_alloc; j++, ino++) {
++ 				if (raw_inode[j].i_nlink == 0)
++ 					sb->s_xenix_inode[i++] = ino;
++ 			}
++ 			brelse(bh);
++ 			block++;
++ 		}
++ 		if (i == 0) {
++ 			iput(inode);
++ 			return(NULL);	/* no inodes available */
++ 		}
++ 		sb->s_xenix_ninode = i;
++ 	}
++ 	ino = sb->s_xenix_inode[--sb->s_xenix_ninode];
++ 	inode->i_count = 1;
++ 	inode->i_nlink = 1;
++ 	inode->i_dev = dev;
++ 	inode->i_uid = current->euid;
++ 	inode->i_gid = current->egid;
++ 	inode->i_dirt = 1;
++ 	inode->i_ino = ino;
++ 	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
++ 	inode->i_op = NULL;
++ 	inode->i_mode = 0;		/* for xenix_write_inode() */
++ 	inode->i_size = 0;		/* ditto */
++ 	xenix_write_inode(inode);	/* ensure inode not allocated again */
++ 					/* FIXME: caller may call this too. */
++ 	inode->i_dirt = 1;		/* cleared by xenix_write_inode() */
++ 	sb->s_xenix_tinode--;
++ 	sb->s_xenix_bh->b_dirt = 1;
++ 	return(inode);
++ }
++ 
++ unsigned long
++ xenix_count_free_inodes(struct super_block * sb)
++ {
++ 	return(sb->s_xenix_tinode);
++ }
+*** linux.pl1/fs/xenix/blkdev.c	Wed Aug 12 15:09:56 1992
+--- linux/fs/xenix/blkdev.c	Fri Aug  7 15:16:54 1992
+***************
+*** 0 ****
+--- 1,70 ----
++ /*
++  * linux/fs/xenix/blkdev.c
++  *
++  * (C) 1991  Linus Torvalds
++  *
++  * Taken from minix/blkdev.c, modified by Doug Evans, dje@sspiff.UUCP, 92Jun04.
++  *
++  * This file contains code for block device nodes.
++  */
++ 
++ #include <linux/errno.h>
++ #include <linux/sched.h>
++ #include <linux/fs.h>
++ #include <linux/xenix_fs.h>
++ #include <linux/tty.h>
++ #include <linux/stat.h>
++ #include <linux/fcntl.h>
++ 
++ /*
++  * Called every time a xenix block special file is opened.
++  */
++ 
++ static int
++ blkdev_open(struct inode * inode, struct file * filp)
++ {
++ 	int i;
++ 
++ 	/*check_disk_change(inode->i_rdev); - removed in 0.96a.pl2 */
++ 	i = MAJOR(inode->i_rdev);
++ 	if (i < MAX_BLKDEV) {
++ 		filp->f_op = blkdev_fops[i];
++ 		if (filp->f_op && filp->f_op->open)
++ 			return(filp->f_op->open(inode, filp));
++ 	}
++ 	return(0);
++ }	
++ 
++ /*
++  * Dummy default file-operations: the only thing this does
++  * is contain the open that then fills in the correct operations
++  * depending on the special file...
++  */
++ 
++ static struct file_operations def_blk_fops = {
++ 	NULL,		/* lseek */
++ 	NULL,		/* read */
++ 	NULL,		/* write */
++ 	NULL,		/* readdir */
++ 	NULL,		/* select */
++ 	NULL,		/* ioctl */
++ 	blkdev_open,	/* open */
++ 	NULL,		/* release */
++ };
++ 
++ struct inode_operations xenix_blkdev_inode_operations = {
++ 	&def_blk_fops,		/* default file operations */
++ 	NULL,			/* create */
++ 	NULL,			/* lookup */
++ 	NULL,			/* link */
++ 	NULL,			/* unlink */
++ 	NULL,			/* symlink */
++ 	NULL,			/* mkdir */
++ 	NULL,			/* rmdir */
++ 	NULL,			/* mknod */
++ 	NULL,			/* rename */
++ 	NULL,			/* readlink */
++ 	NULL,			/* follow_link */
++ 	xenix_bmap,		/* bmap */
++ 	xenix_truncate		/* truncate */
++ };
+*** linux.pl1/fs/xenix/chrdev.c	Wed Aug 12 15:09:56 1992
+--- linux/fs/xenix/chrdev.c	Fri Aug  7 15:17:02 1992
+***************
+*** 0 ****
+--- 1,69 ----
++ /*
++  * linux/fs/xenix/chrdev.c
++  *
++  * (C) 1991  Linus Torvalds
++  *
++  * Taken from minix/chrdev.c, modified by Doug Evans, dje@sspiff.UUCP, 92Jun04.
++  *
++  * This file contains code for character device nodes.
++  */
++ 
++ #include <linux/errno.h>
++ #include <linux/sched.h>
++ #include <linux/fs.h>
++ #include <linux/xenix_fs.h>
++ #include <linux/tty.h>
++ #include <linux/stat.h>
++ #include <linux/fcntl.h>
++ 
++ /*
++  * Called every time a xenix character special file is opened.
++  */
++ 
++ static int
++ chrdev_open(struct inode * inode, struct file * filp)
++ {
++ 	int i;
++ 
++ 	i = MAJOR(inode->i_rdev);
++ 	if (i < MAX_CHRDEV) {
++ 		filp->f_op = chrdev_fops[i];
++ 		if (filp->f_op && filp->f_op->open)
++ 			return(filp->f_op->open(inode, filp));
++ 	}
++ 	return(0);
++ }
++ 
++ /*
++  * Dummy default file-operations: the only thing this does
++  * is contain the open that then fills in the correct operations
++  * depending on the special file...
++  */
++ 
++ static struct file_operations def_chr_fops = {
++ 	NULL,		/* lseek */
++ 	NULL,		/* read */
++ 	NULL,		/* write */
++ 	NULL,		/* readdir */
++ 	NULL,		/* select */
++ 	NULL,		/* ioctl */
++ 	chrdev_open,	/* open */
++ 	NULL,		/* release */
++ };
++ 
++ struct inode_operations xenix_chrdev_inode_operations = {
++ 	&def_chr_fops,		/* default file operations */
++ 	NULL,			/* create */
++ 	NULL,			/* lookup */
++ 	NULL,			/* link */
++ 	NULL,			/* unlink */
++ 	NULL,			/* symlink */
++ 	NULL,			/* mkdir */
++ 	NULL,			/* rmdir */
++ 	NULL,			/* mknod */
++ 	NULL,			/* rename */
++ 	NULL,			/* readlink */
++ 	NULL,			/* follow_link */
++ 	xenix_bmap,		/* bmap */
++ 	xenix_truncate		/* truncate */
++ };
+*** linux.pl1/fs/xenix/dir.c	Wed Aug 12 15:09:56 1992
+--- linux/fs/xenix/dir.c	Fri Aug  7 15:17:46 1992
+***************
+*** 0 ****
+--- 1,95 ----
++ /*
++  * linux/fs/xenix/dir.c
++  *
++  * (C) 1991  Linus Torvalds
++  *
++  * Taken from minix/dir.c, modified by Doug Evans, dje@sspiff.UUCP, 92Jun04.
++  *
++  * This file contains xenix directory handling functions.
++  */
++ 
++ #include <asm/segment.h>
++ 
++ #include <linux/errno.h>
++ #include <linux/fs.h>
++ #include <linux/xenix_fs.h>
++ #include <linux/stat.h>
++ 
++ static int xenix_readdir(struct inode *, struct file *, struct dirent *, int);
++ 
++ static struct file_operations xenix_dir_operations = {
++ 	NULL,			/* lseek - default */
++ 	xenix_file_read,	/* read */
++ 	NULL,			/* write - bad */
++ 	xenix_readdir,		/* readdir */
++ 	NULL,			/* select - default */
++ 	NULL,			/* ioctl - default */
++ 	NULL,			/* no special open code */
++ 	NULL			/* no special release code */
++ };
++ 
++ /*
++  * directories can handle most operations...
++  */
++ 
++ struct inode_operations xenix_dir_inode_operations = {
++ 	&xenix_dir_operations,	/* default directory file-ops */
++ 	xenix_create,		/* create */
++ 	xenix_lookup,		/* lookup */
++ 	xenix_link,		/* link */
++ 	xenix_unlink,		/* unlink */
++ 	xenix_symlink,		/* symlink */
++ 	xenix_mkdir,		/* mkdir */
++ 	xenix_rmdir,		/* rmdir */
++ 	xenix_mknod,		/* mknod */
++ 	xenix_rename,		/* rename */
++ 	NULL,			/* readlink */
++ 	NULL,			/* follow_link */
++ 	xenix_bmap,		/* bmap */
++ 	xenix_truncate		/* truncate */
++ };
++ 
++ static int
++ xenix_readdir(struct inode * inode, struct file * filp,
++ 	struct dirent * dirent, int count)
++ {
++ 	unsigned int block,offset,i;
++ 	char c;
++ 	struct buffer_head * bh;
++ 	struct xenix_dir_entry * de;
++ 
++ 	if (!inode || !S_ISDIR(inode->i_mode))
++ 		return(-EBADF);
++ 	if (filp->f_pos & (sizeof (struct xenix_dir_entry) - 1))
++ 		return(-EBADF);
++ 	while (filp->f_pos < inode->i_size) {
++ 		offset = filp->f_pos & 1023;
++ 		block = xenix_bmap(inode, (filp->f_pos) >> BLOCK_SIZE_BITS);
++ 		if (!block || !(bh = bread(inode->i_dev, block, BLOCK_SIZE))) {
++ 			filp->f_pos += 1024 - offset;
++ 			continue;
++ 		}
++ 		de = (struct xenix_dir_entry *) (offset + bh->b_data);
++ 		while (offset < 1024 && filp->f_pos < inode->i_size) {
++ 			offset += sizeof (struct xenix_dir_entry);
++ 			filp->f_pos += sizeof (struct xenix_dir_entry);
++ 			if (de->inode) {
++ 				for (i = 0; i < XENIX_NAME_LEN; i++)
++ 					if (c = de->name[i])
++ 						put_fs_byte(c, i + dirent->d_name);
++ 					else
++ 						break;
++ 				if (i) {
++ 					put_fs_long(de->inode, &dirent->d_ino);
++ 					put_fs_byte(0, i + dirent->d_name);
++ 					put_fs_word(i, &dirent->d_reclen);
++ 					brelse(bh);
++ 					return(i);
++ 				}
++ 			}
++ 			de++;
++ 		}
++ 		brelse(bh);
++ 	}
++ 	return(0);
++ }
+*** linux.pl1/fs/xenix/fifo.c	Wed Aug 12 15:09:56 1992
+--- linux/fs/xenix/fifo.c	Tue Jul 28 23:56:25 1992
+***************
+*** 0 ****
+--- 1,28 ----
++ /*
++  *  linux/fs/fifo.c
++  *
++  *  written by Paul H. Hargrove
++  */
++ 
++ #include <linux/sched.h>
++ #include <linux/fs.h>
++ #include <linux/xenix_fs.h>
++ 
++ extern struct file_operations def_fifo_fops;
++ 
++ struct inode_operations xenix_fifo_inode_operations = {
++ 	&def_fifo_fops,		/* default file operations */
++ 	NULL,			/* create */
++ 	NULL,			/* lookup */
++ 	NULL,			/* link */
++ 	NULL,			/* unlink */
++ 	NULL,			/* symlink */
++ 	NULL,			/* mkdir */
++ 	NULL,			/* rmdir */
++ 	NULL,			/* mknod */
++ 	NULL,			/* rename */
++ 	NULL,			/* readlink */
++ 	NULL,			/* follow_link */
++ 	NULL,			/* bmap */
++ 	NULL			/* truncate */
++ };
+*** linux.pl1/fs/xenix/file.c	Wed Aug 12 15:09:56 1992
+--- linux/fs/xenix/file.c	Fri Aug  7 15:19:24 1992
+***************
+*** 0 ****
+--- 1,224 ----
++ /*
++  * linux/fs/xenix/file.c
++  *
++  * (C) 1991  Linus Torvalds
++  *
++  * Taken from minix/file.c, modified by Doug Evans, dje@sspiff.UUCP, 92Jun15.
++  *
++  * This file contains xenix regular file handling primitives.
++  */
++ 
++ #include <asm/segment.h>
++ #include <asm/system.h>
++ 
++ #include <linux/sched.h>
++ #include <linux/fs.h>
++ #include <linux/xenix_fs.h>
++ #include <linux/kernel.h>
++ #include <linux/errno.h>
++ #include <linux/fcntl.h>
++ #include <linux/stat.h>
++ 
++ #define	NBUF	16
++ 
++ #define MIN(a,b) (((a)<(b))?(a):(b))
++ #define MAX(a,b) (((a)>(b))?(a):(b))
++ 
++ int xenix_file_read(struct inode *, struct file *, char *, int);
++ static int xenix_file_write(struct inode *, struct file *, char *, int);
++ 
++ /*
++  * We have mostly NULL's here: the current defaults are ok for
++  * the xenix filesystem.
++  */
++ 
++ static struct file_operations xenix_file_operations = {
++ 	NULL,			/* lseek - default */
++ 	xenix_file_read,	/* read */
++ 	xenix_file_write,	/* write */
++ 	NULL,			/* readdir - bad */
++ 	NULL,			/* select - default */
++ 	NULL,			/* ioctl - default */
++ 	NULL,			/* no special open is needed */
++ 	NULL			/* release */
++ };
++ 
++ struct inode_operations xenix_file_inode_operations = {
++ 	&xenix_file_operations,	/* default file operations */
++ 	NULL,			/* create */
++ 	NULL,			/* lookup */
++ 	NULL,			/* link */
++ 	NULL,			/* unlink */
++ 	NULL,			/* symlink */
++ 	NULL,			/* mkdir */
++ 	NULL,			/* rmdir */
++ 	NULL,			/* mknod */
++ 	NULL,			/* rename */
++ 	NULL,			/* readlink */
++ 	NULL,			/* follow_link */
++ 	xenix_bmap,		/* bmap */
++ 	xenix_truncate		/* truncate */
++ };
++ 
++ static inline void
++ wait_on_buffer(struct buffer_head * bh)
++ {
++ 	cli();
++ 	while (bh->b_lock)
++ 		sleep_on(&bh->b_wait);
++ 	sti();
++ }
++ 
++ /*
++  * xenix_file_read() is also needed by the directory read-routine,
++  * so it's not static. NOTE! reading directories directly is a bad idea,
++  * but has to be supported for now for compatability reasons with older
++  * versions.
++  */
++ 
++ int
++ xenix_file_read(struct inode * inode, struct file * filp, char * buf, int count)
++ {
++ 	int read,left,chars,nr;
++ 	int block, blocks, offset;
++ 	struct buffer_head ** bhb, ** bhe;
++ 	struct buffer_head * buflist[NBUF];
++ 
++ 	if (!inode) {
++ 		printk("xenix_file_read: inode = NULL\n");
++ 		return(-EINVAL);
++ 	}
++ 	if (!(S_ISREG(inode->i_mode) || S_ISDIR(inode->i_mode))) {
++ 		printk("xenix_file_read: mode = %07o\n", inode->i_mode);
++ 		return(-EINVAL);
++ 	}
++ 	if (filp->f_pos > inode->i_size)
++ 		left = 0;
++ 	else
++ 		left = inode->i_size - filp->f_pos;
++ 	if (left > count)
++ 		left = count;
++ 	if (left <= 0)
++ 		return(0);
++ 	read = 0;
++ 	block = filp->f_pos >> BLOCK_SIZE_BITS;
++ 	offset = filp->f_pos & (BLOCK_SIZE - 1);
++ 	blocks = (left + offset + BLOCK_SIZE - 1) / BLOCK_SIZE;
++ 	bhb = bhe = buflist;
++ 	do {
++ 		if (blocks) {
++ 			--blocks;
++ 			if (nr = xenix_bmap(inode, block++)) {
++ 				*bhb = getblk(inode->i_dev, nr, BLOCK_SIZE);
++ 				if (!(*bhb)->b_uptodate)
++ 					ll_rw_block(READ, *bhb);
++ 			} else
++ 				*bhb = NULL;
++ 
++ 			if (++bhb == &buflist[NBUF])
++ 				bhb = buflist;
++ 
++ 			if (bhb != bhe)
++ 				continue;
++ 		}
++ 		if (*bhe) {
++ 			wait_on_buffer(*bhe);
++ 			if (!(*bhe)->b_uptodate) {
++ 				do {
++ 					brelse(*bhe);
++ 					if (++bhe == &buflist[NBUF])
++ 						bhe = buflist;
++ 				} while (bhe != bhb);
++ 				break;
++ 			}
++ 		}
++ 
++ 		if (left < BLOCK_SIZE - offset)
++ 			chars = left;
++ 		else
++ 			chars = BLOCK_SIZE - offset;
++ 		filp->f_pos += chars;
++ 		left -= chars;
++ 		read += chars;
++ 		if (*bhe) {
++ 			memcpy_tofs(buf, offset + (*bhe)->b_data, chars);
++ 			brelse(*bhe);
++ 			buf += chars;
++ 		} else {
++ 			while (chars-- > 0)
++ 				put_fs_byte(0, buf++);
++ 		}
++ 		offset = 0;
++ 		if (++bhe == &buflist[NBUF])
++ 			bhe = buflist;
++ 	} while (left > 0);
++ 	if (!read)
++ 		return(-EIO);
++ 	if (!IS_RDONLY(inode)) {
++ 		inode->i_atime = CURRENT_TIME;
++ 		inode->i_dirt = 1;
++ 	}
++ 	return(read);
++ }
++ 
++ static int
++ xenix_file_write(struct inode * inode, struct file * filp, char * buf, int count)
++ {
++ 	off_t pos;
++ 	int written,block,c;
++ 	struct buffer_head * bh;
++ 	char * p;
++ 
++ 	if (!inode) {
++ 		printk("xenix_file_write: inode = NULL\n");
++ 		return(-EINVAL);
++ 	}
++ 	if (!S_ISREG(inode->i_mode)) {
++ 		printk("xenix_file_write: mode = %07o\n", inode->i_mode);
++ 		return(-EINVAL);
++ 	}
++ /*
++  * ok, append may not work when many processes are writing at the same time
++  * but so what. That way leads to madness anyway.
++  */
++ 	if (filp->f_flags & O_APPEND)
++ 		pos = inode->i_size;
++ 	else
++ 		pos = filp->f_pos;
++ 	written = 0;
++ 	while (written < count) {
++ 		if (!(block = xenix_create_block(inode, pos / BLOCK_SIZE))) {
++ 			if (!written)
++ 				written = -ENOSPC;
++ 			break;
++ 		}
++ 		c = BLOCK_SIZE - (pos % BLOCK_SIZE);
++ 		if (c > count - written)
++ 			c = count - written;
++ 		if (c == BLOCK_SIZE)
++ 			bh = getblk(inode->i_dev, block, BLOCK_SIZE);
++ 		else
++ 			bh = bread(inode->i_dev, block, BLOCK_SIZE);
++ 		if (!bh) {
++ 			if (!written)
++ 				written = -EIO;
++ 			break;
++ 		}
++ 		p = (pos % BLOCK_SIZE) + bh->b_data;
++ 		pos += c;
++ 		if (pos > inode->i_size) {
++ 			inode->i_size = pos;
++ 			inode->i_dirt = 1;
++ 		}
++ 		written += c;
++ 		memcpy_fromfs(p, buf, c);
++ 		buf += c;
++ 		bh->b_uptodate = 1;
++ 		bh->b_dirt = 1;
++ 		brelse(bh);
++ 	}
++ 	inode->i_ctime = inode->i_mtime = CURRENT_TIME;
++ 	filp->f_pos = pos;
++ 	inode->i_dirt = 1;
++ 	return(written);
++ }
+*** linux.pl1/fs/xenix/inode.c	Wed Aug 12 15:09:57 1992
+--- linux/fs/xenix/inode.c	Wed Aug 12 03:33:42 1992
+***************
+*** 0 ****
+--- 1,317 ----
++ /*
++  * linux/fs/xenix/inode.c
++  *
++  * (C) 1991  Linus Torvalds
++  *
++  * Taken from minix/inode.c, modified by Doug Evans, dje@sspiff.UUCP, 92Jun04.
++  *
++  * This file contains code for allocating/freeing inodes and for read/writing
++  * the superblock.
++  */
++ 
++ #include <linux/sched.h>
++ #include <linux/fs.h>
++ #include <linux/xenix_fs.h>
++ #include <linux/kernel.h>
++ #include <linux/mm.h>
++ #include <linux/stat.h>
++ #include <linux/string.h>
++ 
++ #include <asm/system.h>
++ #include <asm/segment.h>
++ 
++ char xenix_inodes = 0;	/* for debugging */
++ char xenix_blocks = 0;
++ 
++ static int inline
++ read3byte(unsigned char *p, int index)
++ {
++ 	return(p[index * 3] + (p[index * 3 + 1] << 8) + (p[index * 3 + 2] << 16));
++ }
++ 
++ static void inline
++ write3byte(unsigned char *p, int index, int val)
++ {
++ 	p[index * 3] = (unsigned char) val;
++ 	p[index * 3 + 1] = (unsigned char) (val >> 8);
++ 	p[index * 3 + 2] = (unsigned char) (val >> 16);
++ }
++ 
++ static struct super_operations xenix_sops = { 
++ 	xenix_read_inode,
++ 	xenix_write_inode,
++ 	xenix_put_inode,
++ 	xenix_put_super,
++ 	NULL,
++ 	xenix_statfs
++ };
++ 
++ void
++ xenix_put_inode(struct inode *inode)
++ {
++ 	inode->i_size = 0;
++ 	xenix_truncate(inode);
++ 	xenix_free_inode(inode);
++ }
++ 
++ void
++ xenix_put_super(struct super_block *sb)
++ {
++ 	struct buffer_head * bh;
++ 	struct xenix_super_block * xsb;
++ 
++ 	lock_super(sb);
++ 	bh = sb->s_xenix_bh;
++ 	xsb = sb->s_xenix_xsb;
++ #ifdef XENIX_GOT_PACK_2
++ 	xsb->xs_time = CURRENT_TIME;
++ #else
++ 	*(time_t *) xsb->xs_time = CURRENT_TIME;
++ #endif
++ 	xsb->xs_clean = XENIX_SB_CLEAN;
++ 	bh->b_dirt = 1;
++ 	brelse(bh);
++ 	sb->s_dev = 0;
++ 	free_super(sb);
++ }
++ 
++ struct super_block *
++ xenix_read_super(struct super_block * sb, void * data)
++ {
++ 	struct buffer_head * bh;
++ 	struct xenix_super_block * xsb;
++ 	int dev = sb->s_dev;
++ 
++ 	lock_super(sb);
++ 	if (!(bh = bread(dev, 1, BLOCK_SIZE))) {
++ 		sb->s_dev = 0;
++ 		free_super(sb);
++ 		printk("xenix_read_super: bread failed\n");
++ 		return(NULL);
++ 	}
++ 	sb->s_blocksize = 1024;
++ 	sb->s_xenix_bh = bh;
++ 	sb->s_xenix_xsb = xsb = (struct xenix_super_block *) bh->b_data;
++ #if 0
++ 	hex_dump(xsb, 1024);
++ 	printk("xsb: 0x%x, &xs_magic: 0x%x\n", xsb, &xsb->xs_magic);
++ #endif
++ 	if (xsb->xs_magic != XENIX_SB_MAGIC) {
++ 		sb->s_dev = 0;
++ 		brelse(bh);
++ 		free_super(sb);
++ 		printk("xenix_read_super: magic match failed\n");
++ 		return(NULL);
++ 	}
++ 	sb->s_magic = xsb->xs_magic;
++ 	/*
++ 	 * <s_xenix_isize, s_xenix_fsize> are kept in the main super_block
++ 	 * struct because they are constant, and <s_xenix_fsize> suffers from
++ 	 * being wrongly aligned.
++ 	 */
++ 	sb->s_xenix_isize = xsb->xs_isize;
++ #ifdef XENIX_GOT_PACK_2
++ 	sb->s_xenix_fsize = xsb->xs_fsize;
++ #else
++ 	sb->s_xenix_fsize = *(daddr_t *) xsb->xs_fsize;
++ #endif
++ 	/* set up enough so that it can read an inode */
++ 	sb->s_dev = dev;
++ 	sb->s_op = &xenix_sops;
++ 	free_super(sb);
++ 	if (!(sb->s_mounted = iget(dev, XENIX_ROOT_INO))) {
++ 		sb->s_dev = 0;
++ 		brelse(bh);
++ 		printk("xenix_read_super: get root inode failed\n");
++ 		return(NULL);
++ 	}
++ 	/* <bh> is freed when the disk is unmounted */
++ 	return(sb);
++ }
++ 
++ void
++ xenix_statfs(struct super_block * sb, struct statfs * buf)
++ {
++ 	long tmp;
++ 
++ 	put_fs_long(XENIX_SB_MAGIC, &buf->f_type);
++ 	put_fs_long(1024, &buf->f_bsize);
++ 	put_fs_long(sb->s_xenix_fsize - sb->s_xenix_isize - 2, &buf->f_blocks);
++ 	tmp = xenix_count_free_blocks(sb);
++ 	put_fs_long(tmp, &buf->f_bfree);
++ 	put_fs_long(tmp, &buf->f_bavail);
++ 	put_fs_long(sb->s_xenix_isize * XENIX_INODES_PER_BLOCK, &buf->f_files);
++ 	put_fs_long(xenix_count_free_inodes(sb), &buf->f_ffree);
++ 	/* Don't know what value to put in buf->f_fsid */
++ }
++ 
++ static int
++ _xenix_bmap(struct inode * inode, int block, int create)
++ {
++ 	struct buffer_head * bh;
++ 	int i;
++ 
++ /* sizeof() cast to int: see truncate.c */
++ #define BLOCKS_PER_BLOCK	(BLOCK_SIZE / (int) sizeof(daddr_t))
++ 
++ 	if (block < 0) {
++ 		printk("_xenix_bmap: block<0\n");
++ 		return(0);
++ 	}
++ 	if (block >= 10 + BLOCKS_PER_BLOCK + BLOCKS_PER_BLOCK * BLOCKS_PER_BLOCK) {
++ 		printk("_xenix_bmap: block>big\n");
++ 		return(0);
++ 	}
++ 	if (block < 10) {
++ 		if (create && !inode->i_data[block])
++ 			if (inode->i_data[block] = xenix_new_block(inode->i_dev)) {
++ 				inode->i_ctime = CURRENT_TIME;
++ 				inode->i_dirt = 1;
++ 			}
++ 		return(inode->i_data[block]);
++ 	}
++ 
++ 	block -= 10;
++ 	if (block < BLOCKS_PER_BLOCK) {
++ 		if (create && !inode->i_data[10])
++ 			if (inode->i_data[10] = xenix_new_block(inode->i_dev)) {
++ 				inode->i_dirt = 1;
++ 				inode->i_ctime = CURRENT_TIME;
++ 			}
++ 		if (!inode->i_data[10])
++ 			return(0);
++ 		if (!(bh = bread(inode->i_dev, inode->i_data[10], BLOCK_SIZE)))
++ 			return(0);
++ 		i = ((daddr_t *) (bh->b_data))[block];
++ 		if (create && !i)
++ 			if (i = xenix_new_block(inode->i_dev)) {
++ 				((daddr_t *) (bh->b_data))[block] = i;
++ 				bh->b_dirt = 1;
++ 			}
++ 		brelse(bh);
++ 		return(i);
++ 	}
++ 	block -= BLOCKS_PER_BLOCK;
++ 	if (create && !inode->i_data[11])
++ 		if (inode->i_data[11] = xenix_new_block(inode->i_dev)) {
++ 			inode->i_dirt = 1;
++ 			inode->i_ctime = CURRENT_TIME;
++ 		}
++ 	if (!inode->i_data[11])
++ 		return(0);
++ 	if (!(bh = bread(inode->i_dev, inode->i_data[11], BLOCK_SIZE)))
++ 		return(0);
++ 	i = ((daddr_t *) bh->b_data)[block >> 8]; /* 8: log2(BLOCKS_PER_BLOCK) */
++ 	if (create && !i)
++ 		if (i = xenix_new_block(inode->i_dev)) {
++ 			((daddr_t *) (bh->b_data))[block >> 8] = i;
++ 			bh->b_dirt = 1;
++ 		}
++ 	brelse(bh);
++ 	if (!i)
++ 		return(0);
++ 	if (!(bh = bread(inode->i_dev, i, BLOCK_SIZE)))
++ 		return(0);
++ 	i = ((daddr_t *) bh->b_data)[block & 255];
++ 	if (create && !i)
++ 		if (i = xenix_new_block(inode->i_dev)) {
++ 			((daddr_t *) (bh->b_data))[block & 255] = i;
++ 			bh->b_dirt = 1;
++ 		}
++ 	brelse(bh);
++ 	return(i);
++ }
++ 
++ #undef BLOCKS_PER_BLOCK
++ 
++ int
++ xenix_bmap(struct inode * inode, int block)
++ {
++ 	return(_xenix_bmap(inode, block, 0));
++ }
++ 
++ int
++ xenix_create_block(struct inode * inode, int block)
++ {
++ 	return(_xenix_bmap(inode, block, 1));
++ }
++ 
++ void
++ xenix_read_inode(struct inode * inode)
++ {
++ 	struct buffer_head * bh;
++ 	struct xenix_inode * raw_inode;
++ 	int block;
++ 
++ 	DEBUGPK(xenix_inodes, ("xenix_read_inode: dev 0x%x, inode %d\n",
++ 		inode->i_dev, inode->i_ino));
++ 
++ 	block = 2 + (inode->i_ino - 1) / XENIX_INODES_PER_BLOCK;
++ 	if (!(bh = bread(inode->i_dev, block, BLOCK_SIZE)))
++ 		panic("xenix_read_inode: unable to read i-node block");
++ 	raw_inode = ((struct xenix_inode *) bh->b_data) +
++ 		(inode->i_ino - 1) % XENIX_INODES_PER_BLOCK;
++ 	inode->i_mode = raw_inode->i_mode;
++ 	inode->i_uid = raw_inode->i_uid;
++ 	inode->i_gid = raw_inode->i_gid;
++ 	inode->i_nlink = raw_inode->i_nlink;
++ 	inode->i_size = raw_inode->i_size;
++ 	inode->i_ctime = raw_inode->i_ctime;
++ 	inode->i_mtime = raw_inode->i_mtime;
++ 	inode->i_atime = raw_inode->i_atime;
++ 	if (S_ISCHR(inode->i_mode) || S_ISBLK(inode->i_mode))
++ 		inode->i_rdev = read3byte(raw_inode->i_addr, 0);
++ 	else for (block = 0; block < 13; block++)
++ 		inode->i_data[block] = read3byte(raw_inode->i_addr, block);
++ 	brelse(bh);
++ 	inode->i_op = NULL;
++ 	if (S_ISREG(inode->i_mode))
++ 		inode->i_op = &xenix_file_inode_operations;
++ 	else if (S_ISDIR(inode->i_mode))
++ 		inode->i_op = &xenix_dir_inode_operations;
++ 	else if (S_ISLNK(inode->i_mode))
++ 		inode->i_op = &xenix_symlink_inode_operations;
++ 	else if (S_ISCHR(inode->i_mode))
++ 		inode->i_op = &xenix_chrdev_inode_operations;
++ 	else if (S_ISBLK(inode->i_mode))
++ 		inode->i_op = &xenix_blkdev_inode_operations;
++ 	else if (S_ISFIFO(inode->i_mode)) {
++ 		inode->i_op = &xenix_fifo_inode_operations;
++ 		inode->i_size = 0;
++ 		inode->i_pipe = 1;
++ 		PIPE_HEAD(*inode) = PIPE_TAIL(*inode) = 0;
++ 		PIPE_READERS(*inode) = PIPE_WRITERS(*inode) = 0;
++ 	}
++ }
++ 
++ void
++ xenix_write_inode(struct inode * inode)
++ {
++ 	struct buffer_head * bh;
++ 	struct xenix_inode * raw_inode;
++ 	int block;
++ 
++ 	DEBUGPK(xenix_inodes, ("xenix_write_inode: dev 0x%x, inode %d\n",
++ 		inode->i_dev, inode->i_ino));
++ 
++ 	block = 2 + (inode->i_ino - 1) / XENIX_INODES_PER_BLOCK;
++ 	if (!(bh = bread(inode->i_dev, block, BLOCK_SIZE)))
++ 		panic("xenix_write_inode: unable to read i-node block");
++ 	raw_inode = ((struct xenix_inode *) bh->b_data) +
++ 		(inode->i_ino - 1) % XENIX_INODES_PER_BLOCK;
++ 	raw_inode->i_mode = inode->i_mode;
++ 	raw_inode->i_uid = inode->i_uid;
++ 	raw_inode->i_gid = inode->i_gid;
++ 	raw_inode->i_nlink = inode->i_nlink;
++ 	raw_inode->i_size = inode->i_size;
++ 	raw_inode->i_ctime = inode->i_ctime;
++ 	raw_inode->i_mtime = inode->i_mtime;
++ 	raw_inode->i_atime = inode->i_atime;
++ 	if (S_ISCHR(inode->i_mode) || S_ISBLK(inode->i_mode))
++ 		write3byte(raw_inode->i_addr, 0, inode->i_rdev);
++ 	else for (block = 0; block < 13; block++)
++ 		write3byte(raw_inode->i_addr, block, inode->i_data[block]);
++ 	bh->b_dirt = 1;
++ 	inode->i_dirt = 0;
++ 	brelse(bh);
++ }
+*** linux.pl1/fs/xenix/namei.c	Wed Aug 12 15:09:57 1992
+--- linux/fs/xenix/namei.c	Fri Aug  7 15:26:17 1992
+***************
+*** 0 ****
+--- 1,798 ----
++ /*
++  * linux/fs/xenix/namei.c
++  *
++  * (C) 1991  Linus Torvalds
++  *
++  * Taken from minix/namei.c, modified by Doug Evans, dje@sspiff.UUCP, 92Jun04.
++  *
++  * This file contains code for looking up entries in directories.
++  */
++ 
++ #include <linux/sched.h>
++ #include <linux/fs.h>
++ #include <linux/xenix_fs.h>
++ #include <linux/kernel.h>
++ #include <linux/string.h>
++ #include <linux/stat.h>
++ #include <linux/fcntl.h>
++ #include <linux/errno.h>
++ 
++ #include <asm/segment.h>
++ 
++ #include <const.h>
++ 
++ /*
++  * comment out this line if you want names > XENIX_NAME_LEN chars to be
++  * truncated. Else they will be disallowed.
++  */
++ /* #define NO_TRUNCATE */
++ 
++ /*
++  * ok, we cannot use strncmp, as the name is not in our data space.
++  * Thus we'll have to use xenix_match. No big problem. Match also makes
++  * some sanity tests.
++  *
++  * NOTE! unlike strncmp, xenix_match returns 1 for success, 0 for failure.
++  */
++ 
++ static int
++ xenix_match(int len, const char * name, struct xenix_dir_entry * de)
++ {
++ 	register int same __asm__("ax");
++ 
++ 	if (!de || !de->inode || len > XENIX_NAME_LEN)
++ 		return 0;
++ 	/* "" means "." ---> so paths like "/usr/lib//libc.a" work */
++ 	/* FIXME: Do I want them to work? */
++ 	if (!len && de->name[0] == '.' && de->name[1] == '\0')
++ 		return 1;
++ 	if (len < XENIX_NAME_LEN && de->name[len])
++ 		return 0;
++ 	__asm__("cld\n\t"
++ 		"fs ; repe ; cmpsb\n\t"
++ 		"setz %%al"
++ 		:"=a" (same)
++ 		:"0" (0),"S" ((long) name),"D" ((long) de->name),"c" (len)
++ 		:"cx","di","si");
++ 	return same;
++ }
++ 
++ /*
++  * xenix_find_entry()
++  *
++  * finds an entry in the specified directory with the wanted name. It
++  * returns the cache buffer in which the entry was found, and the entry
++  * itself (as a parameter - res_dir). It does NOT read the inode of the
++  * entry - you'll have to do that yourself if you want to.
++  */
++ 
++ static struct buffer_head *
++ xenix_find_entry(struct inode * dir, const char * name, int namelen,
++ 	struct xenix_dir_entry ** res_dir)
++ {
++ 	int entries;
++ 	int block,i;
++ 	struct buffer_head * bh;
++ 	struct xenix_dir_entry * de;
++ 
++ 	*res_dir = NULL;
++ 	if (!dir)
++ 		return(NULL);
++ #ifdef NO_TRUNCATE
++ 	if (namelen > XENIX_NAME_LEN)
++ 		return(NULL);
++ #else
++ 	if (namelen > XENIX_NAME_LEN)
++ 		namelen = XENIX_NAME_LEN;
++ #endif
++ 	entries = dir->i_size / (sizeof (struct xenix_dir_entry));
++ 	if (!(block = dir->i_data[0]))
++ 		return(NULL);
++ 	if (!(bh = bread(dir->i_dev, block, BLOCK_SIZE)))
++ 		return(NULL);
++ 	i = 0;
++ 	de = (struct xenix_dir_entry *) bh->b_data;
++ 	while (i < entries) {
++ 		if ((char *) de >= BLOCK_SIZE + bh->b_data) {
++ 			brelse(bh);
++ 			bh = NULL;
++ 			if (!(block = xenix_bmap(dir, i / XENIX_DIR_ENTRIES_PER_BLOCK)) ||
++ 			    !(bh = bread(dir->i_dev, block, BLOCK_SIZE))) {
++ 				i += XENIX_DIR_ENTRIES_PER_BLOCK;
++ 				continue;	/* FIXME: printk error msg? */
++ 			}
++ 			de = (struct xenix_dir_entry *) bh->b_data;
++ 		}
++ 		if (xenix_match(namelen, name, de)) {
++ 			*res_dir = de;
++ 			return(bh);
++ 		}
++ 		de++;
++ 		i++;
++ 	}
++ 	brelse(bh);
++ 	return(NULL);
++ }
++ 
++ int
++ xenix_lookup(struct inode * dir, const char * name, int len,
++ 	struct inode ** result)
++ {
++ 	int ino;
++ 	struct xenix_dir_entry * de;
++ 	struct buffer_head * bh;
++ 
++ 	*result = NULL;
++ 	if (!dir)
++ 		return(-ENOENT);
++ 	if (!S_ISDIR(dir->i_mode)) {
++ 		iput(dir);
++ 		return(-ENOENT);
++ 	}
++ 	if (!(bh = xenix_find_entry(dir, name, len, &de))) {
++ 		iput(dir);
++ 		return(-ENOENT);
++ 	}
++ 	ino = de->inode;
++ 	brelse(bh);
++ 	if (!(*result = iget(dir->i_dev, ino))) {
++ 		iput(dir);
++ 		return(-EACCES);
++ 	}
++ 	iput(dir);
++ 	return(0);
++ }
++ 
++ /*
++  * xenix_add_entry()
++  *
++  * adds a file entry to the specified directory, using the same
++  * semantics as xenix_find_entry(). It returns NULL if it failed.
++  *
++  * NOTE!! The inode part of 'de' is left at 0 - which means you
++  * may not sleep between calling this and putting something into
++  * the entry, as someone else might have used it while you slept.
++  */
++ 
++ static struct buffer_head *
++ xenix_add_entry(struct inode * dir, const char * name, int namelen,
++ 	struct xenix_dir_entry ** res_dir)
++ {
++ 	int block,i;
++ 	struct buffer_head * bh;
++ 	struct xenix_dir_entry * de;
++ 
++ 	*res_dir = NULL;
++ 	if (!dir)
++ 		return(NULL);
++ #ifdef NO_TRUNCATE
++ 	if (namelen > XENIX_NAME_LEN)
++ 		return(NULL);
++ #else
++ 	if (namelen > XENIX_NAME_LEN)
++ 		namelen = XENIX_NAME_LEN;
++ #endif
++ 	if (!namelen)
++ 		return(NULL);
++ 	if (!(block = dir->i_data[0]))
++ 		return(NULL);
++ 	if (!(bh = bread(dir->i_dev, block, BLOCK_SIZE)))
++ 		return(NULL);
++ 	i = 0;
++ 	de = (struct xenix_dir_entry *) bh->b_data;
++ 	while (1) {
++ 		if ((char *) de >= BLOCK_SIZE + bh->b_data) {
++ 			brelse(bh);
++ 			bh = NULL;
++ 			block = xenix_create_block(dir, i / XENIX_DIR_ENTRIES_PER_BLOCK);
++ 			if (!block)
++ 				return(NULL);
++ 			if (!(bh = bread(dir->i_dev, block, BLOCK_SIZE))) {
++ 				i += XENIX_DIR_ENTRIES_PER_BLOCK;
++ 				continue;
++ 				/* FIXME: That's it? What about <block>? */
++ 			}
++ 			de = (struct xenix_dir_entry *) bh->b_data;
++ 		}
++ 		if (i * sizeof(struct xenix_dir_entry) >= dir->i_size) {
++ 			de->inode = 0;
++ 			dir->i_size = (i + 1) * sizeof(struct xenix_dir_entry);
++ 			dir->i_dirt = 1;
++ 			dir->i_ctime = CURRENT_TIME;
++ 		}
++ 		if (!de->inode) {
++ 			dir->i_mtime = CURRENT_TIME;
++ 			for (i = 0; i < XENIX_NAME_LEN ; i++)
++ 				de->name[i] = (i < namelen) ?
++ 					get_fs_byte(name + i) : 0;
++ 			bh->b_dirt = 1;
++ 			*res_dir = de;
++ 			return(bh);
++ 		}
++ 		de++;
++ 		i++;
++ 	}
++ 	brelse(bh);
++ 	return(NULL);
++ }
++ 
++ int
++ xenix_create(struct inode * dir, const char * name, int len, int mode,
++ 	struct inode ** result)
++ {
++ 	struct inode * inode;
++ 	struct buffer_head * bh;
++ 	struct xenix_dir_entry * de;
++ 
++ 	*result = NULL;
++ 	if (!dir)
++ 		return(-ENOENT);
++ 	inode = xenix_new_inode(dir->i_dev);
++ 	if (!inode) {
++ 		iput(dir);
++ 		return(-ENOSPC);
++ 	}
++ 	inode->i_op = &xenix_file_inode_operations;
++ 	inode->i_mode = mode;
++ 	inode->i_dirt = 1;
++ 	bh = xenix_add_entry(dir, name, len, &de);
++ 	if (!bh) {
++ 		inode->i_nlink--;
++ 		inode->i_dirt = 1;
++ 		iput(inode);
++ 		iput(dir);
++ 		return(-ENOSPC);
++ 	}
++ 	de->inode = inode->i_ino;
++ 	bh->b_dirt = 1;
++ 	brelse(bh);
++ 	iput(dir);
++ 	*result = inode;
++ 	return(0);
++ }
++ 
++ int
++ xenix_mknod(struct inode * dir, const char * name, int len, int mode, int rdev)
++ {
++ 	struct inode * inode;
++ 	struct buffer_head * bh;
++ 	struct xenix_dir_entry * de;
++ 
++ 	if (!dir)
++ 		return(-ENOENT);
++ 	bh = xenix_find_entry(dir, name, len, &de);
++ 	if (bh) {
++ 		brelse(bh);
++ 		iput(dir);
++ 		return(-EEXIST);
++ 	}
++ 	inode = xenix_new_inode(dir->i_dev);
++ 	if (!inode) {
++ 		iput(dir);
++ 		return(-ENOSPC);
++ 	}
++ 	inode->i_uid = current->euid;
++ 	inode->i_mode = mode;
++ 	inode->i_op = NULL;
++ 	if (S_ISREG(inode->i_mode))
++ 		inode->i_op = &xenix_file_inode_operations;
++ 	else if (S_ISDIR(inode->i_mode))
++ 		inode->i_op = &xenix_dir_inode_operations;
++ 	else if (S_ISLNK(inode->i_mode))
++ 		inode->i_op = &xenix_symlink_inode_operations;
++ 	else if (S_ISCHR(inode->i_mode))
++ 		inode->i_op = &xenix_chrdev_inode_operations;
++ 	else if (S_ISBLK(inode->i_mode))
++ 		inode->i_op = &xenix_blkdev_inode_operations;
++ 	else if (S_ISFIFO(inode->i_mode)) {
++ 		inode->i_op = &xenix_fifo_inode_operations;
++ 		inode->i_size = 0;
++ 		inode->i_pipe = 1;
++ 		PIPE_HEAD(*inode) = PIPE_TAIL(*inode) = 0;
++ 		PIPE_READERS(*inode) = PIPE_WRITERS(*inode) = 0;
++ 	}
++ 	if (S_ISBLK(mode) || S_ISCHR(mode))
++ 		inode->i_rdev = rdev;
++ 	inode->i_mtime = inode->i_atime = CURRENT_TIME;
++ 	inode->i_dirt = 1;
++ 	bh = xenix_add_entry(dir, name, len, &de);
++ 	if (!bh) {
++ 		inode->i_nlink--;
++ 		inode->i_dirt = 1;
++ 		iput(inode);
++ 		iput(dir);
++ 		return(-ENOSPC);
++ 	}
++ 	de->inode = inode->i_ino;
++ 	bh->b_dirt = 1;
++ 	brelse(bh);
++ 	iput(dir);
++ 	iput(inode);
++ 	return(0);
++ }
++ 
++ int
++ xenix_mkdir(struct inode * dir, const char * name, int len, int mode)
++ {
++ 	struct inode * inode;
++ 	struct buffer_head * bh, * dir_block;
++ 	struct xenix_dir_entry * de;
++ 	
++ 	bh = xenix_find_entry(dir, name, len, &de);
++ 	if (bh) {
++ 		brelse(bh);
++ 		iput(dir);
++ 		return(-EEXIST);
++ 	}
++ 	inode = xenix_new_inode(dir->i_dev);
++ 	if (!inode) {
++ 		iput(dir);
++ 		return(-ENOSPC);
++ 	}
++ 	inode->i_op = &xenix_dir_inode_operations;
++ 	inode->i_size = 2 * sizeof (struct xenix_dir_entry);
++ 	if (!(inode->i_data[0] = xenix_new_block(inode->i_dev))) {
++ 		iput(dir);
++ 		inode->i_nlink--;
++ 		inode->i_dirt = 1;
++ 		iput(inode);
++ 		return(-ENOSPC);
++ 	}
++ 	inode->i_dirt = 1;
++ 	if (!(dir_block = bread(inode->i_dev, inode->i_data[0], BLOCK_SIZE))) {
++ 		iput(dir);
++ 		inode->i_nlink--;
++ 		inode->i_dirt = 1;
++ 		iput(inode);
++ 		return(-EIO);
++ 	}
++ 	de = (struct xenix_dir_entry *) dir_block->b_data;
++ 	de->inode = inode->i_ino;
++ 	strcpy(de->name, ".");
++ 	de++;
++ 	de->inode = dir->i_ino;
++ 	strcpy(de->name, "..");
++ 	inode->i_nlink = 2;
++ 	dir_block->b_dirt = 1;
++ 	brelse(dir_block);
++ 	inode->i_mode = I_DIRECTORY | (mode & 0777 & ~current->umask);
++ 	inode->i_dirt = 1;
++ 	bh = xenix_add_entry(dir, name, len, &de);
++ 	if (!bh) {
++ 		iput(dir);
++ 		inode->i_nlink = 0;
++ 		iput(inode);
++ 		return(-ENOSPC);
++ 	}
++ 	de->inode = inode->i_ino;
++ 	bh->b_dirt = 1;
++ 	dir->i_nlink++;
++ 	dir->i_dirt = 1;
++ 	iput(dir);
++ 	iput(inode);
++ 	brelse(bh);
++ 	return(0);
++ }
++ 
++ /*
++  * routine to check that the specified directory is empty (for rmdir)
++  */
++ 
++ static int
++ empty_dir(struct inode * inode)
++ {
++ 	int nr,block,len;
++ 	struct buffer_head * bh;
++ 	struct xenix_dir_entry * de;
++ 
++ 	len = inode->i_size / sizeof (struct xenix_dir_entry);
++ 	if (len < 2 || !inode->i_data[0] ||
++ 	    !(bh = bread(inode->i_dev,inode->i_data[0], BLOCK_SIZE))) {
++ 	    	printk("xenix.empty_dir: warning - bad directory on dev %04x\n", inode->i_dev);
++ 		return 0;
++ 	}
++ 	de = (struct xenix_dir_entry *) bh->b_data;
++ 	if (de[0].inode != inode->i_ino || !de[1].inode || 
++ 	    strcmp(".", de[0].name) || strcmp("..", de[1].name)) {
++ 	    	printk("xenix.empty_dir: warning - bad directory on dev %04x\n", inode->i_dev);
++ 		return 0;
++ 	}
++ 	nr = 2;
++ 	de += 2;
++ 	while (nr < len) {
++ 		if ((void *) de >= (void *) (bh->b_data + BLOCK_SIZE)) {
++ 			brelse(bh);
++ 			block = xenix_bmap(inode, nr / XENIX_DIR_ENTRIES_PER_BLOCK);
++ 			if (!block) {
++ 				nr += XENIX_DIR_ENTRIES_PER_BLOCK;
++ 				continue;
++ 			}
++ 			if (!(bh = bread(inode->i_dev, block, BLOCK_SIZE)))
++ 				return(0);
++ 			de = (struct xenix_dir_entry *) bh->b_data;
++ 		}
++ 		if (de->inode) {
++ 			brelse(bh);
++ 			return(0);
++ 		}
++ 		de++;
++ 		nr++;
++ 	}
++ 	brelse(bh);
++ 	return(1);
++ }
++ 
++ int
++ xenix_rmdir(struct inode * dir, const char * name, int len)
++ {
++ 	int retval;
++ 	struct inode * inode;
++ 	struct buffer_head * bh;
++ 	struct xenix_dir_entry * de;
++ 
++ 	inode = NULL;
++ 	bh = xenix_find_entry(dir, name, len, &de);
++ 	retval = -ENOENT;
++ 	if (!bh)
++ 		goto end_rmdir;
++ 	retval = -EPERM;
++ 	if (!(inode = iget(dir->i_dev, de->inode)))
++ 		goto end_rmdir;
++ 	if ((dir->i_mode & S_ISVTX) && current->euid &&
++ 	   inode->i_uid != current->euid)
++ 		goto end_rmdir;
++ 	if (inode->i_dev != dir->i_dev)
++ 		goto end_rmdir;
++ 	if (inode == dir)	/* we may not delete ".", but "../dir" is ok */
++ 		goto end_rmdir;
++ 	if (!S_ISDIR(inode->i_mode)) {
++ 		retval = -ENOTDIR;
++ 		goto end_rmdir;
++ 	}
++ 	if (!empty_dir(inode)) {
++ 		retval = -ENOTEMPTY;
++ 		goto end_rmdir;
++ 	}
++ 	if (inode->i_count > 1) {
++ 		retval = -EBUSY;
++ 		goto end_rmdir;
++ 	}
++ 	if (inode->i_nlink != 2)
++ 		printk("xenix_rmdir: empty directory has nlink!=2 (%d)\n", inode->i_nlink);
++ 	de->inode = 0;
++ 	bh->b_dirt = 1;
++ 	inode->i_nlink = 0;
++ 	inode->i_dirt = 1;
++ 	dir->i_nlink--;
++ 	dir->i_ctime = dir->i_mtime = CURRENT_TIME;
++ 	dir->i_dirt = 1;
++ 	retval = 0;
++ end_rmdir:
++ 	iput(dir);
++ 	iput(inode);
++ 	brelse(bh);
++ 	return(retval);
++ }
++ 
++ int
++ xenix_unlink(struct inode * dir, const char * name, int len)
++ {
++ 	int retval;
++ 	struct inode * inode;
++ 	struct buffer_head * bh;
++ 	struct xenix_dir_entry * de;
++ 
++ 	retval = -ENOENT;
++ 	inode = NULL;
++ 	bh = xenix_find_entry(dir, name, len, &de);
++ 	if (!bh)
++ 		goto end_unlink;
++ 	if (!(inode = iget(dir->i_dev, de->inode)))
++ 		goto end_unlink;
++ 	retval = -EPERM;
++ 	if ((dir->i_mode & S_ISVTX) && !suser() &&
++ 	    current->euid != inode->i_uid &&
++ 	    current->euid != dir->i_uid)
++ 		goto end_unlink;
++ 	if (S_ISDIR(inode->i_mode))
++ 		goto end_unlink;
++ 	if (!inode->i_nlink) {
++ 		printk("xenix_unlink: deleting nonexistent file (%04x:%d), %d\n",
++ 			inode->i_dev, inode->i_ino, inode->i_nlink);
++ 		inode->i_nlink = 1;
++ 	}
++ 	de->inode = 0;
++ 	bh->b_dirt = 1;
++ 	inode->i_nlink--;
++ 	inode->i_dirt = 1;
++ 	inode->i_ctime = CURRENT_TIME;
++ 	retval = 0;
++ end_unlink:
++ 	brelse(bh);
++ 	iput(inode);
++ 	iput(dir);
++ 	return(retval);
++ }
++ 
++ int
++ xenix_symlink(struct inode * dir, const char * name, int len, const char * symname)
++ {
++ #if 1
++ 	return(-ENOSYS); /* FIXME: for now */
++ #else
++ 	struct xenix_dir_entry * de;
++ 	struct inode * inode = NULL;
++ 	struct buffer_head * bh = NULL, * name_block = NULL;
++ 	int i;
++ 	char c;
++ 
++ 	if (!(inode = xenix_new_inode(dir->i_dev))) {
++ 		iput(dir);
++ 		return(-ENOSPC);
++ 	}
++ 	inode->i_mode = S_IFLNK | 0777;
++ 	inode->i_op = &xenix_symlink_inode_operations;
++ 	if (!(inode->i_data[0] = xenix_new_block(inode->i_dev))) {
++ 		iput(dir);
++ 		inode->i_nlink--;
++ 		inode->i_dirt = 1;
++ 		iput(inode);
++ 		return(-ENOSPC);
++ 	}
++ 	inode->i_dirt = 1;
++ 	if (!(name_block = bread(inode->i_dev, inode->i_data[0], BLOCK_SIZE))) {
++ 		iput(dir);
++ 		inode->i_nlink--;
++ 		inode->i_dirt = 1;
++ 		iput(inode);
++ 		return(-EIO);
++ 	}
++ 	i = 0;
++ 	while (i < 1023 && (c = get_fs_byte(symname++)))
++ 		name_block->b_data[i++] = c;
++ 	name_block->b_data[i] = 0;
++ 	name_block->b_dirt = 1;
++ 	brelse(name_block);
++ 	inode->i_size = i;
++ 	inode->i_dirt = 1;
++ 	bh = xenix_find_entry(dir, name, len, &de);
++ 	if (bh) {
++ 		inode->i_nlink--;
++ 		inode->i_dirt = 1;
++ 		iput(inode);
++ 		brelse(bh);
++ 		iput(dir);
++ 		return(-EEXIST);
++ 	}
++ 	bh = xenix_add_entry(dir, name, len, &de);
++ 	if (!bh) {
++ 		inode->i_nlink--;
++ 		inode->i_dirt = 1;
++ 		iput(inode);
++ 		iput(dir);
++ 		return(-ENOSPC);
++ 	}
++ 	de->inode = inode->i_ino;
++ 	bh->b_dirt = 1;
++ 	brelse(bh);
++ 	iput(dir);
++ 	iput(inode);
++ 	return(0);
++ #endif
++ }
++ 
++ int
++ xenix_link(struct inode * oldinode, struct inode * dir, const char * name, int len)
++ {
++ 	struct xenix_dir_entry * de;
++ 	struct buffer_head * bh;
++ 
++ 	if (S_ISDIR(oldinode->i_mode)) {
++ 		iput(oldinode);
++ 		iput(dir);
++ 		return(-EPERM);
++ 	}
++ 	bh = xenix_find_entry(dir,name,len,&de);
++ 	if (bh) {
++ 		brelse(bh);
++ 		iput(dir);
++ 		iput(oldinode);
++ 		return(-EEXIST);
++ 	}
++ 	bh = xenix_add_entry(dir,name,len,&de);
++ 	if (!bh) {
++ 		iput(dir);
++ 		iput(oldinode);
++ 		return(-ENOSPC);
++ 	}
++ 	de->inode = oldinode->i_ino;
++ 	bh->b_dirt = 1;
++ 	brelse(bh);
++ 	iput(dir);
++ 	oldinode->i_nlink++;
++ 	oldinode->i_ctime = CURRENT_TIME;
++ 	oldinode->i_dirt = 1;
++ 	iput(oldinode);
++ 	return(0);
++ }
++ 
++ static int
++ subdir(struct inode * new, struct inode * old)
++ {
++ 	unsigned short fs;
++ 	int ino;
++ 	int result;
++ 
++ 	__asm__("mov %%fs,%0":"=r" (fs));
++ 	__asm__("mov %0,%%fs"::"r" ((unsigned short) 0x10));
++ 	new->i_count++;
++ 	result = 0;
++ 	for (;;) {
++ 		if (new == old) {
++ 			result = 1;
++ 			break;
++ 		}
++ 		if (new->i_dev != old->i_dev)
++ 			break;
++ 		ino = new->i_ino;
++ 		if (xenix_lookup(new, "..", 2, &new))
++ 			break;
++ 		if (new->i_ino == ino)
++ 			break;
++ 	}
++ 	iput(new);
++ 	__asm__("mov %0,%%fs"::"r" (fs));
++ 	return(result);
++ }
++ 
++ #define PARENT_INO(buffer) \
++ (((struct xenix_dir_entry *) (buffer))[1].inode)
++ 
++ #define PARENT_NAME(buffer) \
++ (((struct xenix_dir_entry *) (buffer))[1].name)
++ 
++ /*
++  * rename uses retrying to avoid race-conditions: at least they should be minimal.
++  * it tries to allocate all the blocks, then sanity-checks, and if the sanity-
++  * checks fail, it tries to restart itself again. Very practical - no changes
++  * are done until we know everything works ok.. and then all the changes can be
++  * done in one fell swoop when we have claimed all the buffers needed.
++  *
++  * Anybody can rename anything with this: the permission checks are left to the
++  * higher-level routines.
++  */
++ 
++ static int
++ do_xenix_rename(struct inode * old_dir, const char * old_name, int old_len,
++ 	struct inode * new_dir, const char * new_name, int new_len)
++ {
++ 	struct inode * old_inode, * new_inode;
++ 	struct buffer_head * old_bh, * new_bh, * dir_bh;
++ 	struct xenix_dir_entry * old_de, * new_de;
++ 	int retval;
++ 
++ 	goto start_up;
++ try_again:
++ 	brelse(old_bh);
++ 	brelse(new_bh);
++ 	brelse(dir_bh);
++ 	iput(old_inode);
++ 	iput(new_inode);
++ 	current->counter = 0;
++ 	schedule();
++ start_up:
++ 	old_inode = new_inode = NULL;
++ 	old_bh = new_bh = dir_bh = NULL;
++ 	old_bh = xenix_find_entry(old_dir, old_name, old_len, &old_de);
++ 	retval = -ENOENT;
++ 	if (!old_bh)
++ 		goto end_rename;
++ 	old_inode = iget(old_dir->i_dev, old_de->inode);
++ 	if (!old_inode)
++ 		goto end_rename;
++ 	if ((old_dir->i_mode & S_ISVTX) && 
++ 	    current->euid != old_inode->i_uid &&
++ 	    current->euid != old_dir->i_uid && !suser())
++ 		goto end_rename;
++ 	new_bh = xenix_find_entry(new_dir, new_name, new_len, &new_de);
++ 	if (new_bh) {
++ 		new_inode = iget(new_dir->i_dev, new_de->inode);
++ 		if (!new_inode) {
++ 			brelse(new_bh);
++ 			new_bh = NULL;
++ 		}
++ 	}
++ 	if (new_inode == old_inode) {
++ 		retval = 0;
++ 		goto end_rename;
++ 	}
++ 	if (S_ISDIR(new_inode->i_mode)) {
++ 		retval = -EEXIST;
++ 		goto end_rename;
++ 	}
++ 	if (S_ISDIR(old_inode->i_mode)) {
++ 		retval = -EEXIST;
++ 		if (new_bh)
++ 			goto end_rename;
++ 		retval = -EACCES;
++ 		if (!permission(old_inode, MAY_WRITE))
++ 			goto end_rename;
++ 		retval = -EINVAL;
++ 		if (subdir(new_dir, old_inode))
++ 			goto end_rename;
++ 		retval = -EIO;
++ 		if (!old_inode->i_data[0])
++ 			goto end_rename;
++ 		if (!(dir_bh = bread(old_inode->i_dev, old_inode->i_data[0], BLOCK_SIZE)))
++ 			goto end_rename;
++ 		if (PARENT_INO(dir_bh->b_data) != old_dir->i_ino)
++ 			goto end_rename;
++ 	}
++ 	if (!new_bh)
++ 		new_bh = xenix_add_entry(new_dir, new_name, new_len, &new_de);
++ 	retval = -ENOSPC;
++ 	if (!new_bh)
++ 		goto end_rename;
++ /* sanity checking before doing the rename - avoid races */
++ 	if (new_inode && (new_de->inode != new_inode->i_ino))
++ 		goto try_again;
++ 	if (new_de->inode && !new_inode)
++ 		goto try_again;
++ 	if (old_de->inode != old_inode->i_ino)
++ 		goto try_again;
++ /* ok, that's it */
++ 	old_de->inode = 0;
++ 	new_de->inode = old_inode->i_ino;
++ 	if (new_inode) {
++ 		new_inode->i_nlink--;
++ 		new_inode->i_dirt = 1;
++ 	}
++ 	old_bh->b_dirt = 1;
++ 	new_bh->b_dirt = 1;
++ 	if (dir_bh) {
++ 		PARENT_INO(dir_bh->b_data) = new_dir->i_ino;
++ 		dir_bh->b_dirt = 1;
++ 		old_dir->i_nlink--;
++ 		new_dir->i_nlink++;
++ 		old_dir->i_dirt = 1;
++ 		new_dir->i_dirt = 1;
++ 	}
++ 	retval = 0;
++ end_rename:
++ 	brelse(dir_bh);
++ 	brelse(old_bh);
++ 	brelse(new_bh);
++ 	iput(old_inode);
++ 	iput(new_inode);
++ 	iput(old_dir);
++ 	iput(new_dir);
++ 	return(retval);
++ }
++ 
++ /*
++  * Ok, rename also locks out other renames, as they can change the parent of
++  * a directory, and we don't want any races. Other races are checked for by
++  * "do_rename()", which restarts if there are inconsistencies.
++  *
++  * Note that there is no race between different filesystems: it's only within
++  * the same device that races occur: many renames can happen at once, as long
++  * as they are on different partitions.
++  */
++ 
++ int
++ xenix_rename(struct inode * old_dir, const char * old_name, int old_len,
++ 	struct inode * new_dir, const char * new_name, int new_len)
++ {
++ 	static struct wait_queue * wait = NULL;
++ 	static int lock = 0;
++ 	int result;
++ 
++ 	while (lock)
++ 		sleep_on(&wait);
++ 	lock = 1;
++ 	result = do_xenix_rename(old_dir, old_name, old_len,
++ 		new_dir, new_name, new_len);
++ 	lock = 0;
++ 	wake_up(&wait);
++ 	return(result);
++ }
+*** linux.pl1/fs/xenix/symlink.c	Wed Aug 12 15:09:57 1992
+--- linux/fs/xenix/symlink.c	Fri Aug  7 15:27:23 1992
+***************
+*** 0 ****
+--- 1,107 ----
++ /*
++  * linux/fs/xenix/symlink.c
++  *
++  * (C) 1991  Linus Torvalds
++  *
++  * Taken from minix/symlink.c, modified by Doug Evans, dje@sspiff.UUCP, 92Jun04.
++  *
++  * This file contains xenix symlink handling code. While xenix filesystems
++  * don't support symbolic links, one can make a non-upward compatible extension
++  * and add them if one wants to.
++  */
++ 
++ #include <asm/segment.h>
++ 
++ #include <linux/errno.h>
++ #include <linux/sched.h>
++ #include <linux/fs.h>
++ #include <linux/xenix_fs.h>
++ #include <linux/stat.h>
++ 
++ static int xenix_readlink(struct inode *, char *, int);
++ static struct inode * xenix_follow_link(struct inode *, struct inode *);
++ 
++ /*
++  * symlinks can't do much...
++  */
++ 
++ struct inode_operations xenix_symlink_inode_operations = {
++ 	NULL,			/* no file-operations */
++ 	NULL,			/* create */
++ 	NULL,			/* lookup */
++ 	NULL,			/* link */
++ 	NULL,			/* unlink */
++ 	NULL,			/* symlink */
++ 	NULL,			/* mkdir */
++ 	NULL,			/* rmdir */
++ 	NULL,			/* mknod */
++ 	NULL,			/* rename */
++ 	xenix_readlink,		/* readlink */
++ 	xenix_follow_link,	/* follow_link */
++ 	NULL,			/* bmap */
++ 	NULL			/* truncate */
++ };
++ 
++ static struct inode *
++ xenix_follow_link(struct inode * dir, struct inode * inode)
++ {
++ 	unsigned short fs;
++ 	struct buffer_head * bh;
++ 
++ 	if (!dir) {
++ 		dir = current->root;
++ 		dir->i_count++;
++ 	}
++ 	if (!inode) {
++ 		iput(dir);
++ 		return(NULL);
++ 	}
++ 	if (!S_ISLNK(inode->i_mode)) {
++ 		iput(dir);
++ 		return(inode);
++ 	}
++ 	__asm__("mov %%fs,%0":"=r" (fs));
++ 	if ((current->link_count > 5) || !inode->i_data[0] ||
++ 	   !(bh = bread(inode->i_dev, inode->i_data[0], BLOCK_SIZE))) {
++ 		iput(dir);
++ 		iput(inode);
++ 		return(NULL);
++ 	}
++ 	iput(inode);
++ 	__asm__("mov %0,%%fs"::"r" ((unsigned short) 0x10));
++ 	current->link_count++;
++ 	inode = _namei(bh->b_data, dir, 1);
++ 	current->link_count--;
++ 	__asm__("mov %0,%%fs"::"r" (fs));
++ 	brelse(bh);
++ 	return(inode);
++ }
++ 
++ static int
++ xenix_readlink(struct inode * inode, char * buffer, int buflen)
++ {
++ 	struct buffer_head * bh;
++ 	int i;
++ 	char c;
++ 
++ 	if (!S_ISLNK(inode->i_mode)) {
++ 		iput(inode);
++ 		return(-EINVAL);
++ 	}
++ 	if (buflen > 1023)
++ 		buflen = 1023;
++ 	if (inode->i_data[0])
++ 		bh = bread(inode->i_dev, inode->i_data[0], BLOCK_SIZE);
++ 	else
++ 		bh = NULL;
++ 	iput(inode);
++ 	if (!bh)
++ 		return(0);
++ 	i = 0;
++ 	while (i < buflen && (c = bh->b_data[i])) {
++ 		i++;
++ 		put_fs_byte(c, buffer++);
++ 	}
++ 	brelse(bh);
++ 	return(i);
++ }
+*** linux.pl1/fs/xenix/truncate.c	Wed Aug 12 15:09:57 1992
+--- linux/fs/xenix/truncate.c	Fri Aug  7 15:28:06 1992
+***************
+*** 0 ****
+--- 1,171 ----
++ /*
++  * linux/fs/truncate.c
++  *
++  * (C) 1991  Linus Torvalds
++  *
++  * Taken from minix/truncate.c, modified by Doug Evans, dje@sspiff.UUCP, 92Jun04.
++  *
++  * This file contains code for truncating files.
++  */
++ 
++ #include <linux/errno.h>
++ #include <linux/sched.h>
++ #include <linux/fs.h>
++ #include <linux/xenix_fs.h>
++ #include <linux/tty.h>
++ #include <linux/stat.h>
++ #include <linux/fcntl.h>
++ 
++ /*
++  * The code in trunc_indirect() fails if BLOCKS_PER_BLOCK is unsigned!.
++  * The test in the for() loop fails when (i < 0).
++  */
++ 
++ #define BLOCKS_PER_BLOCK	(BLOCK_SIZE / (int) sizeof(daddr_t))
++ 
++ /*
++  * Truncate has the most races in the whole filesystem: coding it is
++  * a pain in the a**. Especially as I don't do any locking...
++  *
++  * The code may look a bit weird, but that's just because I've tried to
++  * handle things like file-size changes in a somewhat graceful manner.
++  * Anyway, truncating a file at the same time somebody else writes to it
++  * is likely to result in pretty weird behaviour...
++  *
++  * The new code handles normal truncates (size = 0) as well as the more
++  * general case (size = XXX). I hope.
++  */
++ 
++ static int
++ trunc_direct(struct inode * inode)
++ {
++ 	int i;
++ 	int result = 0;
++ 
++ #define DIRECT_BLOCK ((inode->i_size + BLOCK_SIZE - 1) >> 10)
++ 	/* FIXME: #define 10 */
++ 
++ repeat:
++ 	for (i = DIRECT_BLOCK ; i < 10 ; i++) {
++ 		if (i < DIRECT_BLOCK)
++ 			goto repeat;
++ 		if (!inode->i_data[i])
++ 			continue;
++ 		result = 1;
++ 		if (xenix_free_block(inode->i_dev, inode->i_data[i]))
++ 			inode->i_data[i] = 0;
++ 	}
++ 	return(result);
++ }
++ 
++ static int
++ trunc_indirect(struct inode * inode, int offset, daddr_t * p)
++ {
++ 	int i;
++ 	struct buffer_head * bh = NULL;
++ 	daddr_t * ind;
++ 	int result = 0;
++ 
++ #define INDIRECT_BLOCK (DIRECT_BLOCK - offset)
++ 
++ 	if (*p)
++ 		bh = bread(inode->i_dev, *p, BLOCK_SIZE);
++ 	if (!bh)
++ 		return(0);
++ repeat:
++ 	for (i = INDIRECT_BLOCK ; i < BLOCKS_PER_BLOCK ; i++) {
++ 		if (i < 0)
++ 			i = 0;
++ 		if (i < INDIRECT_BLOCK)
++ 			goto repeat;
++ 		ind = i + (daddr_t *) bh->b_data;
++ 		if (!*ind)
++ 			continue;
++ 		result = 1;
++ 		if (xenix_free_block(inode->i_dev, *ind))
++ 			*ind = 0;
++ 	}
++ 	ind = (daddr_t *) bh->b_data;
++ 	for (i = 0; i < BLOCKS_PER_BLOCK; i++)
++ 		if (*(ind++))
++ 			break;
++ 	brelse(bh);
++ 	if (i >= BLOCKS_PER_BLOCK) {
++ 		result = 1;
++ 		if (xenix_free_block(inode->i_dev, *p))
++ 			*p = 0;
++ 	}
++ 	return(result);
++ }
++ 		
++ static int
++ trunc_dindirect(struct inode * inode)
++ {
++ 	int i;
++ 	struct buffer_head * bh = NULL;
++ 	daddr_t * dind;
++ 	int result = 0;
++ 
++ #define DINDIRECT_BLOCK ((DIRECT_BLOCK - (BLOCKS_PER_BLOCK + 10)) >> 8)
++ 	/* 8 = log2(BLOCKS_PER_BLOCK) */
++ 
++ 	if (inode->i_data[11])
++ 		bh = bread(inode->i_dev, inode->i_data[11], BLOCK_SIZE);
++ 	if (!bh)
++ 		return(0);
++ repeat:
++ 	for (i = DINDIRECT_BLOCK ; i < BLOCKS_PER_BLOCK ; i ++) {
++ 		if (i < 0)
++ 			i = 0;
++ 		if (i < DINDIRECT_BLOCK)
++ 			goto repeat;
++ 		dind = i + (daddr_t *) bh->b_data;
++ 		if (!*dind)
++ 			continue;
++ 		result |= trunc_indirect(inode, 10 + BLOCKS_PER_BLOCK + (i << 8), dind);
++ 	}
++ 	dind = (daddr_t *) bh->b_data;
++ 	for (i = 0; i < BLOCKS_PER_BLOCK; i++)
++ 		if (*(dind++))
++ 			break;
++ 	brelse(bh);
++ 	if (i >= BLOCKS_PER_BLOCK) {
++ 		result = 1;
++ 		if (xenix_free_block(inode->i_dev, inode->i_data[11]))
++ 			inode->i_data[11] = 0;
++ 	}
++ 	return(result);
++ }
++ 		
++ void
++ xenix_truncate(struct inode * inode)
++ {
++ 	int flag;
++ 
++ 	if (!(S_ISREG(inode->i_mode) || S_ISDIR(inode->i_mode) ||
++ 			S_ISLNK(inode->i_mode)))
++ 		return;
++ 	while (1) {
++ 		flag = trunc_direct(inode);
++ 		flag |= trunc_indirect(inode, 10, (daddr_t *) &inode->i_data[10]);
++ 		flag |= trunc_dindirect(inode);
++ 		if (!flag)
++ 			break;
++ 		current->counter = 0;
++ 		schedule();
++ 	}
++ 	inode->i_mtime = inode->i_ctime = CURRENT_TIME;
++ 	inode->i_dirt = 1;
++ }
++ 
++ /*
++  * Called when a inode is released. Note that this is different
++  * from xenix_open: open gets called at every open, but release
++  * gets called only when /all/ the files are closed.
++  */
++ 
++ void
++ xenix_release(struct inode * inode, struct file * filp)
++ {
++ 	printk("xenix_release: not implemented\n");
++ }
+*** linux.pl1/fs/xenix/Makefile	Wed Aug 12 15:09:42 1992
+--- linux/fs/xenix/Makefile	Fri Aug  7 19:23:43 1992
+***************
+*** 0 ****
+--- 1,32 ----
++ #
++ # Makefile for the linux Xenix-filesystem routines.
++ #
++ # Note! Dependencies are done automagically by 'make dep', which also
++ # removes any old dependencies. DON'T put your own dependencies here
++ # unless it's something special (ie not a .c file).
++ #
++ # Note 2! The CFLAGS definitions are now in the main makefile...
++ 
++ .c.s:
++ 	$(CC) $(CFLAGS) -S $<
++ .c.o:
++ 	$(CC) $(CFLAGS) -c $<
++ .s.o:
++ 	$(AS) -o $*.o $<
++ 
++ OBJS=	alloc.o truncate.o namei.o inode.o fifo.o \
++ 	file.o dir.o symlink.o blkdev.o chrdev.o hexdump.o
++ 
++ xenix.o: $(OBJS)
++ 	$(LD) -r -o xenix.o $(OBJS)
++ 
++ clean:
++ 	rm -f core *.o *.a tmp_make
++ 	for i in *.c;do rm -f `basename $$i .c`.s;done
++ 
++ dep:
++ 	sed '/\#\#\# Dependencies/q' < Makefile > tmp_make
++ 	for i in *.c;do $(CPP) -M $$i;done >> tmp_make
++ 	cp tmp_make Makefile
++ 
++ ### Dependencies:
+*** linux.pl1/include/linux/fs.h	Tue Aug 18 12:52:34 1992
+--- linux/include/linux/fs.h	Mon Aug 17 13:25:10 1992
+***************
+*** 149,157 ****
+--- 150,169 ----
+  	off_t f_pos;
+  };
+  
++ struct file_lock {
++ 	struct file_lock *fl_next;	/* singly linked list */
++ 	struct task_struct *fl_owner;	/* NULL if on free list, for sanity checks */
++ 	struct wait_queue *fl_wait;
++ 	char fl_type;
++ 	char fl_whence;
++ 	off_t fl_start;
++ 	off_t fl_end;
++ };
++ 
+  #include <linux/minix_fs_sb.h>
+  #include <linux/ext_fs_sb.h>
+  #include <linux/msdos_fs_sb.h>
++ #include <linux/xenix_fs_sb.h>
+  
+  struct super_block {
+  	unsigned short s_dev;
+***************
+*** 170,175 ****
+--- 182,188 ----
+  		struct minix_sb_info minix_sb;
+  		struct ext_sb_info ext_sb;
+  		struct msdos_sb_info msdos_sb;
++ 		struct xenix_sb_info xenix_sb;
+  	} u;
+  };
+  
+*** linux.pl1/include/linux/xenix_fs.h	Tue Aug 18 13:03:21 1992
+--- linux/include/linux/xenix_fs.h	Mon Aug 17 13:40:36 1992
+***************
+*** 0 ****
+--- 1,171 ----
++ /*
++  * The Xenix filesystem constants/structures
++  */
++ 
++ #ifndef _LINUX_XENIX_FS_H
++ #define _LINUX_XENIX_FS_H
++ 
++ #include <linux/types.h>
++ typedef unsigned short short_ino_t;
++ 
++ #define XENIX_NAME_LEN 14
++ #define XENIX_ROOT_INO 2
++ 
++ #define	XENIX_SB_NICINOD 100	/* number of superblock inodes */
++ #define	XENIX_SB_NICFREE 100	/* number of superblock free blocks */
++ #define	XENIX_SB_FILL	371	/* aligns s_magic at end of super block */
++ #define	XENIX_SB_CLEAN	0106	/* s_clean, arbitrary magic value  */
++ #define	XENIX_SB_MAGIC 0x2b5544	/* s_magic, system 3 arbitrary magic value */
++ #define	XENIX_SB_B512	1	/* s_type, 512 byte block */
++ #define	XENIX_SB_B1024	2	/* s_type, 1024 byte block */
++ 
++ #define XENIX_INODES_PER_BLOCK ((BLOCK_SIZE) / (sizeof (struct xenix_inode)))
++ #define XENIX_DIR_ENTRIES_PER_BLOCK ((BLOCK_SIZE) / (sizeof (struct xenix_dir_entry)))
++ 
++ struct xenix_inode {
++ 	umode_t i_mode;		/* mode and type of file */
++ 	nlink_t i_nlink;    	/* number of links to file */
++ 	uid_t i_uid;      	/* owner's user id */
++ 	gid_t i_gid;      	/* owner's group id */
++ 	off_t i_size;     	/* number of bytes in file */
++ 	char i_addr[40];	/* disk block addresses */
++ 	time_t i_atime;   	/* time last accessed */
++ 	time_t i_mtime;   	/* time last modified */
++ 	time_t i_ctime;   	/* time created */
++ };
++ 
++ /*
++  * the 40 address bytes: 39 used; 13 addresses of 3 bytes each.
++  */
++ 
++ #pragma pack(2)		/* FIXME: what is gcc's version of this? */
++ 
++ struct xenix_super_block {
++ 	unsigned short xs_isize;/* size in blocks of i-list */
++ #ifdef XENIX_GOT_PACK_2
++ 	daddr_t	xs_fsize;	/* size in blocks of entire volume */
++ #else
++ 	char xs_fsize[sizeof(daddr_t)];
++ #endif
++ 	unsigned short xs_nfree; /* number of addresses in xs_free */
++ #ifdef XENIX_GOT_PACK_2
++ 	daddr_t xs_free[XENIX_SB_NICFREE]; /* free block list */
++ #else
++ 	char xs_free[XENIX_SB_NICFREE * sizeof(daddr_t)];
++ #endif
++ 	unsigned short xs_ninode; /* number of i-nodes in xs_inode */
++ 	short_ino_t xs_inode[XENIX_SB_NICINOD]; /* free i-node list */
++ 	char xs_flock;		/* lock during free list manipulation */
++ 	char xs_ilock;		/* lock during i-list manipulation */
++ 	char xs_fmod;		/* super block modified flag */
++ 	char xs_ronly;		/* mounted read-only flag */
++ #ifdef XENIX_GOT_PACK_2
++ 	time_t xs_time;		/* last super block update */
++ 	daddr_t xs_tfree;	/* total free blocks */
++ #else
++ 	char xs_time[sizeof(time_t)];
++ 	char xs_tfree[sizeof(daddr_t)];
++ #endif
++ 	short_ino_t xs_tinode;	/* total free inodes */
++ 	short xs_dinfo[4];	/* device information */
++ 	char xs_fname[6];	/* file system name */
++ 	char xs_fpack[6];	/* file system pack name */
++ 	/* remainder is maintained for xenix */
++ 	char xs_clean;		/* S_CLEAN if structure is properly closed */
++ 	char xs_fill[XENIX_SB_FILL];/* space to make sizeof filsys be BSIZE */
++ 	long xs_magic;		/* indicates version of filsys */
++ 	long xs_type;		/* type of new file system */
++ };
++ 
++ #pragma pack()
++ 
++ struct xenix_dir_entry {
++ 	short_ino_t inode;
++ 	char name[XENIX_NAME_LEN];
++ };
++ 
++ struct xenix_free_block {
++ 	unsigned short xfb_nfree;
++ #ifdef XENIX_GOT_PACK_2
++ 	daddr_t xfb_free[XENIX_SB_NICFREE];
++ #else
++ 	char xfb_free[XENIX_SB_NICFREE * sizeof(daddr_t)];
++ #endif
++ };
++ 
++ /*
++  * Simplifies porting ...
++  * See <xenix_fs_sb.h>.
++  */
++ 
++ #define s_xenix_bh	u.xenix_sb.s_bh
++ #define s_xenix_xsb	u.xenix_sb.s_xsb
++ #define s_xenix_isize	u.xenix_sb.s_isize
++ #define s_xenix_fsize	u.xenix_sb.s_fsize
++ #define s_xenix_nfree	u.xenix_sb.s_xsb->xs_nfree
++ #define s_xenix_free	u.xenix_sb.s_xsb->xs_free	/* MISALIGNED! */
++ #define s_xenix_ninode	u.xenix_sb.s_xsb->xs_ninode
++ #define s_xenix_inode	u.xenix_sb.s_xsb->xs_inode
++ #define s_xenix_tfree	u.xenix_sb.s_xsb->xs_tfree	/* MISALIGNED! */
++ #define s_xenix_tinode	u.xenix_sb.s_xsb->xs_tinode
++ 
++ /*
++  * Debugging stuff ...
++  */
++ 
++ extern char xenix_inodes;
++ extern char xenix_blocks;
++ 
++ /*
++  * Function prototypes ...
++  */
++ 
++ extern int xenix_open(struct inode * inode, struct file * filp);
++ extern void xenix_release(struct inode * inode, struct file * filp);
++ extern int xenix_lookup(struct inode * dir,const char * name, int len,
++ 	struct inode ** result);
++ extern int xenix_create(struct inode * dir,const char * name, int len, int mode,
++ 	struct inode ** result);
++ extern int xenix_mkdir(struct inode * dir, const char * name, int len, int mode);
++ extern int xenix_rmdir(struct inode * dir, const char * name, int len);
++ extern int xenix_unlink(struct inode * dir, const char * name, int len);
++ extern int xenix_symlink(struct inode * inode, const char * name, int len,
++ 	const char * symname);
++ extern int xenix_link(struct inode * oldinode, struct inode * dir, const char * name, int len);
++ extern int xenix_mknod(struct inode * dir, const char * name, int len, int mode, int rdev);
++ extern int xenix_rename(struct inode * old_dir, const char * old_name, int old_len,
++ 	struct inode * new_dir, const char * new_name, int new_len);
++ extern struct inode * xenix_new_inode(int dev);
++ extern void xenix_free_inode(struct inode * inode);
++ extern unsigned long xenix_count_free_inodes(struct super_block * sb);
++ extern int xenix_new_block(int dev);
++ extern int xenix_free_block(int dev, int block);
++ extern unsigned long xenix_count_free_blocks(struct super_block * sb);
++ 
++ extern int xenix_create_block(struct inode *, int);
++ extern int xenix_bmap(struct inode *,int);
++ 
++ extern void xenix_truncate(struct inode *);
++ extern void xenix_put_super(struct super_block *);
++ extern struct super_block *xenix_read_super(struct super_block *,void *);
++ extern void xenix_read_inode(struct inode *);
++ extern void xenix_write_inode(struct inode *);
++ extern void xenix_put_inode(struct inode *);
++ extern void xenix_statfs(struct super_block *, struct statfs *);
++ 
++ extern int xenix_lseek(struct inode *, struct file *, off_t, int);
++ extern int xenix_read(struct inode *, struct file *, char *, int);
++ extern int xenix_write(struct inode *, struct file *, char *, int);
++ extern int xenix_file_read(struct inode *, struct file *, char *, int);
++ 
++ extern struct inode_operations xenix_file_inode_operations;
++ extern struct inode_operations xenix_dir_inode_operations;
++ extern struct inode_operations xenix_symlink_inode_operations;
++ extern struct inode_operations xenix_chrdev_inode_operations;
++ extern struct inode_operations xenix_blkdev_inode_operations;
++ extern struct inode_operations xenix_fifo_inode_operations;
++ 
++ extern struct file_operations xenix_file_operations;
++ extern struct file_operations xenix_dir_operations;
++ 
++ #endif
+*** linux.pl1/include/linux/xenix_fs_sb.h	Tue Aug 18 13:03:24 1992
+--- linux/include/linux/xenix_fs_sb.h	Fri Aug  7 10:13:03 1992
+***************
+*** 0 ****
+--- 1,25 ----
++ #ifndef _XENIX_FS_SB
++ #define _XENIX_FS_SB
++ 
++ /*
++  * Xenix super-block data in memory
++  *
++  * The Xenix superblock contains dynamic data (it gets modified while the
++  * system is running). This is in contrast to the Minix and Berkeley
++  * filesystems (where the superblock is never modified). This affects the
++  * sync() operation: we must keep the superblock in a disk buffer and use this
++  * one as our "working copy".
++  *
++  * FIXME: The structure is such that it's a pain in the ass to work with
++  *	without #pragma pack(2), so we keep <s_isize, s_fsize> here (they
++  *	don't change).
++  */
++ 
++ struct xenix_sb_info {
++ 	struct buffer_head *s_bh;	/* actually, it's in a disk buffer */
++ 	struct xenix_super_block *s_xsb;
++ 	unsigned short s_isize;
++ 	daddr_t s_fsize;
++ };
++ 
++ #endif
+SHAR_EOF
+#	End of shell archive
+exit 0

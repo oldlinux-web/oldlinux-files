@@ -1,0 +1,139 @@
+This is the fourth set of patches to the serial driver versus
+0.99pl10.  It fixes some problems reported by people with the second
+and third set of patches.  Hopefully the performance problems which
+people have complained about have been fixed, somewhat.  
+
+------------------------------------
+
+The second set of patches to the serial driver versus 0.99pl10 fix a
+number of bugs reported by people who tried the first set of patches
+--- not that the first set of patches had any serious bugs, but rather
+that the changed interrupt strategy made one or two of the bugs more
+glaringly visible, and thus easier to track down.  If who have had
+problems with the serial driver, either in the past or with the first
+set of serial patches, could try this one, hopefully this set of
+patches will fix your problems.
+
+You will need to also get the latest version of setserial, version
+2.02 in order to take advantage of some of the new features in this
+version.  In any case, starting with 0.99pl10, you must have installed
+at least setserial v 2.01 if you have any non-standard hardware,
+possibly including some internal modems with the Rockwell Chipset.
+
+The following bug fixes and enhancements can be found in these serial
+patches:
+
+	* HUB-6 ports are not configured automatically.  (They can get
+		in the way of some ethernet and hard disk
+		controlleres.)
+
+	* Fixed bug which caused the serial interrupt handler to
+		continuously loop if hardware flow control was
+		enabled, while CTS was low.  This resulted in people
+		reporting lost interrupts; as well as people who had
+		problems with their machines hanging.
+
+	* Fixed potential race condition in block_til_open, which
+		could potentially cause a system crash if a getty is
+		blocked on the dialin device when the callout is being
+		closed.
+
+	* If the TERMIOS_RESTORE flag (which is set and reset using
+		setserial version 2.02 and higher) is on, then when a
+		callout device is closed while some program is blocked
+		on the corresponding dialin device, the termios for
+		that device is restored to its original state when
+		the program (usually getty) first started blocking.
+
+	* For people who want better inter-processing lockout
+		capabilities for the callout device, in addition to
+		the current callout/dialin device lockout, there are
+		two new flags which can be set by setserial (version
+		2.02 and higher): PGRP_LOCKOUT and SESSION_LOCKOUT.
+		If these flags are set, then attempts to access the
+		callout device when some other process with a
+		different process group or session id will result in
+		an EBUSY error.  (Note that each xterm has a separate
+		session id, this may be somewhat surprising to some
+		people.)
+
+		Note that this is strictly a kludge; ideally, all
+		callout programs would use a standard lockfile to take
+		care of the lock strategy.  But realistically, this is
+		unlikely to happy.
+
+	* Similarily, a feature to prevent other programs from
+		changing termios flags such as CRTSCTS and CLOCAL
+		should not be necessary, either.  But there have been
+		requests for this feature, and so I've tried to fine
+		the cleanest away to address these desires.
+
+		The method which I have selected is an ioctl which
+		allows a root process to set certain bitfields in the
+		termios structure to be "locked".  Those fields will
+		not be changeable until they are later "unlocked".  A
+		process which tries change these fields will not get
+		an error; those changes will merely not take effect.
+		This is POSIX compliant; as the OS is allowed ignore
+		certain termios requests by failing to set them so
+		that if the termios structure is read out, it is
+		unchanged.
+
+		In contrast, a patch which introduces a setserial
+		option which forces CRTSCTS behavior no matter what
+		the termios structure states would not be POSIX
+		compliant, because a program which tries to clear the
+		CRTSCTS behavior will think that it has succeeded when
+		it reads back the termios structure and sees that the
+		bit has been cleared --- when in fact the CRTSCTS
+		behavior is still taking place.
+
+=================== The following features are new to 0.99pl10, but
+		were in the previously released serial patches for
+		0.99pl10.   (dated 17-Jun-93)
+
+	* Fixed bug in Secure Attention Key processing which could
+		panic Linux.
+
+	* Added support for HUB-6 serial cards.
+
+	* Changed the interrupt handling strategy to make serial
+		interrupt processing much, much more robuest.
+		It turns out the UART assumes level triggered
+		interrupts, where as the PCIC assumes edge triggered
+		interrupts.  This occasionally results in lost
+		interrupts, and thus dropped characters.  The work
+		around is to disable the UART interrupt generation 
+		while handling an interrupt, and then reenabling them
+		before exiting.
+
+		The lost interrupts only really happened when the
+		serial port was being stressed by both incoming and
+		outgoing data being sent/received simultaneously.
+		For example, when trying to do SLIP.  
+
+		This change has also seemed to fix the problems with
+		the Boca BB-2016 16-port serial adaptor; I was able to
+		run 4 ports (using two null modems) at 38400 baud with
+		no problems at all --- and this was both running on a
+		386 at 16 MHz and 40MHz.  
+
+		Thanks to Ian Stewart from New Zeland for pointing
+		this out.  (Although the patches he sent in were vs.
+		0.99pl2, and so I had to rewrite them completely;
+		he doesn't have Internet access, so it was very hard
+		for him to get a more up-to-date kernel.)
+
+Please try out these patches, especially if you have a V.32 internal
+modem with a Rockwell Chipset and do NOT have a genuine National
+Semiconductor UART.  I want to make sure the changed interrupt
+handling strategy works on the pseudo-standard UART's found in some
+internal modems.
+
+Please send any bug reports or comments to me.  Thanks!
+
+						Ted Ts'o
+						tytso@mit.edu
+						9-Jul-93
+
+
