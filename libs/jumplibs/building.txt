@@ -1,0 +1,139 @@
+It could be expected:
+
+> Thanks a lot for your effort. I have a favor to ask. How do you make
+> the jump libs? (or even the classic shared libs for that matter).
+
+I'm totally ignorant on building non-jumped shared libs. I've done that
+in the past, but the procedure has undergone major changes. 
+
+I've had some help from David Engel myself.
+
+A (too) short description:
+
+-1) This document assumes that you know what a jump-lib is, and how it
+    (basically) works.
+
+0) Get one of my libs (package librl01.TZ comes to mind), and clean 
+   out the source directories. Also get the shlib package from HLU, 
+   which has good examples for very complex libraries like libc and 
+   libX11. Mine are much simpler, and my adapted scripts are not 
+   able to cope with cross-compiling and other goodies.
+
+1) Create the new soucre dir, build the normal lib, and run:
+
+     nm libXXX.a | grep \ D\  | awk '{print $3}' > global.data
+     nm libXXX.a | grep \ T\  | awk '{print $3}' |\
+               sed 's/^_//' | sort >global.text
+
+   (note that I'm thinking while I'm typing).
+
+2) If the global.data file is not empty then you basically have a problem,
+   because data cannot be accessed by jumptables: it has to stay in exactly
+   the same position over the years. All the data variables like:
+
+      int global_var = 3;
+
+   in the code have to be replaced by something like:
+
+      #ifndef jump
+      int global_var = 3;
+      #else
+      extern in global_var;
+      #endif
+
+   and you have to create an extra C file (I called it 00_DATA.c to
+   make it different from all the others) in which you collect all the
+   global data. In this example the following line is added:
+
+      int global_var = 3;
+
+   You could embed the whole 00_DATA.c file in '#ifdef jump' '#endif'.
+   If there any 'struct's in the global data, it is wise to put in 
+   some dummy variables with HaRd_TO_gUeSS names, to allow for growth
+   in later versions.
+
+   I don't have any experience with data that is in the BSS section. 
+   Basically it is not possible to have a 'jump' BSS section, so if
+   variables from the BSS section are needed globally, they must
+   be initialised, and therefore moved to the DATA section.
+
+   If some of the detected 'global data' will not be needed from
+   outside the library (so: from your program) then you don't need
+   to move it to 00_DATA.c, but YOU BETTER BE SURE because it could
+   break backward compatibility if you prove to be wrong.
+
+3) Ok, now adapt the Makefile and recompile the library, specifying 
+   '-Djump'. Don't forget to add in the 00_DATA.o in the library.
+
+4) Copy the library and the 00_DATA.o file up one level. I did this in
+   the Makefile that is located there, so you can probably change
+   the Makefile to do it for you.
+
+5) cd to the jump directory and 'rm lib*' there. There is also one 
+   subdirectory, which has the name of the library (eg c, for libc; 
+   rl, for readline). If you're planning to be compatible with the
+   minix filesystem (I for instance still only run that), you'll
+   have to choose a name not exceeding 3 characters. Remove the 
+   directory from the package you got, and create your own new one.
+
+6) Now modify the Makefile in the 'jump' directory, to let it
+   know where it is, and specify the lib-dependent stuff at the top.
+   In my 'f2c' and 'gr' libs, I had to add in a kludge, this is in
+   the target 'xtra'. If you're using one of these as your example,
+   you should get rid of the 'xtra' target and its references too.
+
+   Mail hlu@eecs.wsu.edu (as long as this address can be reached, 
+   otherwise try david@ods.com) to get address space for your
+   lib. If you're just experimenting this is not necessary, but
+   anyway please make sure that your lib doesn't collide with other
+   shared libs present on your system.
+
+   Modify the SYSTEM LIBRARIES field to contain all the libs your
+   lib will depend on.
+
+7) cd into your libname directory below jump (let's call it XX for
+   now), and copy the 'text.global' file here that you've built 
+   earlier. Call it libXX.jump1. Look at this file: it should contain
+   the names of all functions that are callable from the outside.
+
+   If you ever want to rebuild your library YOU MAY NEVER CHANGE THIS
+   FILE AGAIN, EXCEPT FOR ADDING NAMES AT THE END!!!!. that is the
+   principle of the jump lib: everything stays exactly at the same
+   place. Only if you bump your MAJOR version number in the Makefile,
+   you may completely replace this file: in that case you completely
+   lose your compatibility with earlier versions.
+
+8) cd up again to the 'jump' directory. type 'Make' and hope for the
+   best. If you (or I) forgot something or did something wrong, the
+   scripts will warn you. If you can't find out what goes wrong, add
+   'set -x' to the script that fails, and watch it go by.
+
+9) If your lib depends on anything else than libc, and you're afraid
+   that the other lib will sometimes not be linked in, please get my 
+   'libgr' package, and see how I solved this for the Math lib: look 
+   for math.c. The problem here is that some programs may need 
+   'libtiff' and not need any math function, while 'libtiff' itself 
+   needs the math lib. With help of 'math.c' it is insured that any 
+   program needing the libtiff.a part of the lib is always linked 
+   with the jump table math lib.
+
+10) If this is a re-build of an old jumplib: now check if all global
+    data addresses have stayed the same. Use 'nm' to do this.
+
+    If it is the first time:
+    You can also run nm on all the stub-libs, then recompile your
+    lib with another optimisation level (-O6 = -O2 !!), rebuild the
+    jumplib and see if some addresses in the stublibs change. That 
+    could indicate that you forgot something, and will lose 
+    compatibility at the next upgrade. Take corrective action 
+    immediately.
+
+11) If you have a function that does a call-back to your program at
+    a known entrypoint, you have another problem. Please get my 'libf2c'
+    package and study my kludge: It concerns the file 'main.c', which
+    calls the fortran __MAIN__ program.
+
+Please if you find out errors or omissions in this document, let me 
+know! You can also ask me questions: I'll see if I can answer them.
+
+Rob Hooft (hooft@chem.ruu.nl)
