@@ -1,0 +1,230 @@
+From: Kevin Brown (kevin@nuchat.sccsi.com)
+Subject: TRIUMPH!! 
+Newsgroups: comp.os.linux
+Date: 1992-06-23 17:39:56 PST 
+ 
+
+Do you want to hear what I went through in order to get Linux 0.96b to
+compile?  Of course you do.  :-)
+
+First, my setup:
+
+	* 386-25 with 8 meg of RAM.
+	* Seagate ST-02 SCSI host adapter for use with Minix.
+	* Bustek 542B SCSI host adapter for use with Linux (don't have
+	  it and the ST-02 in the machine at the same time, though).
+	* 3 SCSI hard drives:
+	    - Seagate ST-225N at target 0.
+	    - Seagate ST-296N at target 1.
+	    - Maxtor XT-4380S at target 2.
+	* VGA (C&T chipset).
+
+Other than that, there's nothing special about it.
+
+I.  The Preparation
+
+    Pretty hard to compile the kernel without the kernel sources, right?  So
+    I grabbed those first, by downloading them to my Minix system at 2400
+    baud, and then copying them to the Linux partition on the ST-296.
+
+    The versions of Linux that use the ST-02 driver require gcc version 2.0
+    or later, due to the register allocation instructions to the inline
+    assembler, which is apparently not supported in gcc 1.40.  So I had to
+    grab some version of gcc 2.x.  I got the latest one I could find on
+    tsx-11.mit.edu: gcc 2.12c.  The binary distribution of these is large
+    enough that I actually bothered to use floppies instead of just downloading
+    them at 2400 baud.
+
+    Unfortunately, since tar and compress are broken on the 0.95c+ root disk
+    (not the mcc-interim one), I had to obtain good copies of these.  Well,
+    I have the source for a known-good tar, GNU tar 1.09, which I modified
+    slightly under Minix to fix a bug or two, namely one involving not
+    extracting device files properly.  I also have the source for compress.
+    So I copied the sources for each over to the Linux partition on the
+    ST-296 (the kernel as distributed cannot see the Maxtor, which is why
+    I decided to bother to build the kernel to begin with), switched over
+    to Linux (this involves powering down, removing the ST-02, installing
+    the Bustek, and bringing the system back up).  At this point I already
+    had a working Linux partition, complete with gcc-1.40 and enough of
+    the 0.95c+ distribution to be somewhat useful.  I had the Minix make
+    on there, though (compiled from source).
+
+    Compress compiled properly, of course.  Then it was on to tar.  Well,
+    there were a lot of things that it had to do itself under Minix that
+    are in the libraries under Linux, so a number of #defines had to be
+    changed in both the makefile and the actual sources.  Once I had that
+    sorted out, things went relatively smoothly, until...well, it seems
+    that it requires yacc to do the date parsing.  Sigh.  Power down Linux,
+    bring Minix back up, and transport the Berkeley yacc sources over.
+    Then bring Linux back up and continue the compilation.  More #define
+    changes, etc.  Now I have a working tar.
+
+    After renaming /usr/bin/gcc to /usr/bin/gcc-1.40 so it doesn't get
+    stomped on by the 2.12 version, I unpacked gcc-2.12c:
+
+	compress -d </dev/fd0 | tar xvof -
+
+    I love unix.  :-)
+
+    Then I tried out the new compiler.  Hmm...seems the shared libraries
+    aren't in the right place.  So I copied the shared libraries to /lib.
+    Now gcc comes up.  Hmm...a "hello, world" program doesn't run properly
+    when compiled.  Oh, well...leave that until later.  Let's try compiling
+    the kernel first.
+
+
+II.  The Compilation.
+
+    First order of business: get rid of the old linux sources.  rm -rf makes
+    quick work of that.  Then install the new sources.  Now that I have a
+    working compress and tar, this is easy.  Then go to compile the kernel.
+
+    Well, this worked for the most part.  But it was real annoying to find
+    that gcc-2.12c doesn't grok (i.e., crashes and burns on) a number of the
+    Linux kernel files, such as fs/super.c.  Hmm...maybe changing the
+    optimization level (to -O instead of -O6) will work.  It did.  At least,
+    it worked for some.  But there were other files (I don't remember which,
+    sorry) for which even a different optimization level didn't work.
+
+    gcc-1.40 to the rescue!  Where gcc-2.12c failed, gcc-1.40 succeeded.  More
+    on this later.
+
+    So I used gcc-1.40 to compile the things that gcc-2.12c couldn't deal with,
+    and let gcc-2.12c deal with the rest (since I haven't looked at the sources
+    in detail, I have no idea which files contain inline assembly with register
+    allocation instructions).
+
+    The SCSI "figure" section in the Makefile failed.  Thinking that this was
+    a manifestation of a bug in ash, I decided to go ahead and get bash on
+    my system.  Time to switch over to the ST-02...
+
+    This didn't correct the problem.  Hmm...obviously must be my wimpy make
+    facility (I'm not using gmake.  Perhaps I should).  Okay, so I have to
+    fudge it.  Write the appropriate shell script and try it again.  Strange...
+    "figure" likes to dump core.  Hmm...well, as simple as "figure" is, if it
+    likes to dump core, then what about a simple "hello, world" program?  It
+    dumped core too, as it turned out.  Even if compiled with gcc-1.40.  Hmm...
+    well, perhaps it's the libraries???  So...move all the compiler files in
+    /usr/lib to an "oldlib" directory and try gcc-2.12.  Hmm...it claims that
+    it can't find crt0.o.  So move only crt0.o back to /usr/lib and try again.
+    The compile works, but the result still crashes, so apparently gcc-2.12c
+    doesn't like my crt0.o.  gcc-1.40 can't find the library, so apparently
+    it's using the /usr/lib libraries whereas gcc-2.12c is using different
+    ones.  So...move the "oldlib" libraries back to /usr/lib, move crt0.o to
+    "oldlib", and copy the gcc-2.12c crt0.o to /usr/lib.  Lo and behold, the
+    result of *both* gcc-2.12c and gcc-1.40 work!  So it's back to compiling
+    the kernel...
+
+    The SCSI section builds fine now.  The make manages to get past the ld
+    stage, and then tries to make "build"...no go.  Parse error before "*"
+    in some line in /usr/include/stdlib.h.
+
+    What the #@#@%!! is a wchar_t???  It's not defined *anywhere* in *any*
+    of the include files from either the gcc-2.12c distribution or the
+    0.95c+ include file distribution.  Sigh.  Back to the Minix configuration,
+    so I can log into a remote system and search for this.  Fortunately, it was
+    fairly easy to find.  Inserted 3 lines into /usr/include/stddef.h:
+
+	#ifndef _WCHAR_T
+	#define _WCHAR_T
+	typedef unsigned int wchar_t;
+	#endif
+
+    "build" now made properly, and I got a new kernel!!
+
+
+III.  The Testing.
+
+    Well, I forgot to change the root device from what Linus uses as his
+    default, so the first kernel failed.  No problem there.  Went back and
+    fixed it so that it would boot from /dev/sd13, which is where my
+    Linux partition is...
+
+    It worked!  It came up and recognized *all* my drives!  The Maxtor failed
+    read capacity (perhaps because it's too large?  It's 330 meg formatted),
+    but was still accessible (yeah!!!).
+
+    So after playing around with it, I decided to see how good the swap code
+    was.  So I made a 64 megabyte swap partition on the Maxtor (there was a
+    free partition on it, so this wasn't a problem) and turned on swapping.
+    No problem so far.
+
+    How to test this?  Well, I have a bunch of small source files for various
+    utilities like grep, sed, etc., on the Linux partition, so I listed the
+    first 32 of them, wrote up a small shell script, and ran it.  The shell
+    script would fork off a gcc for each of the 32 files.
+
+    As you would expect, it started to swap like crazy after a while, when the
+    main compilation stages started to kick in.  Lots of activity on the
+    Maxtor.  But it worked!  Zero problems with the swapping code.  I was quite
+    impressed.  My thanks to Linus and all the guys who have contributed so
+    far!
+
+
+IV.  Conclusion.
+
+    Well, the Adaptec SCSI code is a bit on the slow side: I'm getting a
+    throughput (reading from a raw partition into a large buffer) of about
+    50K/sec.  This needs to be fixed, and badly.  I understand that Tommy
+    Thorn has a patch to the driver that will increase the speed tenfold.
+    I very much want this patch.  Can someone direct me to a suitable place
+    for it?  Now that I have the ability to compile the kernel, I don't need
+    a prebuilt kernel.
+
+    I was quite disappointed in the robustness (rather, lack thereof) of 
+    gcc-2.12c.  They've broken things that worked in gcc-1.40.  This is a
+    bad thing, but I think it says something about gcc: namely that, although
+    it's quite good at optimization and such and it's highly portable, it's
+    also large and complex.  I think the complexity is the primary reason
+    that later versions, such as 2.12c, seem to be less robust than earlier
+    versions (earlier versions aren't as large and complex, among other
+    things).  I sure hope the version of 2.2 that H.J. Lu decides to release
+    is more robust than 1.40.
+
+    I tried to grab the latest version I could from tsx-11, but this
+    apparently isn't the version that Linus is using to compile the kernel,
+    since I expect he doesn't have problems with the compiler crashing on
+    him during a kernel build (or...perhaps he does and, like me, goes back
+    to 1.40 to deal with the hard cases).  If someone can point me to a
+    binary distribution of gcc-2.x that is at least as stable as 1.40 and
+    is capable of compiling the 0.96b kernel, I'd be grateful.
+
+    Anyway, to those of you who want to build this thing: you'd better have
+    at least two versions of gcc available, preferably something reasonably
+    stable like 1.40 in addition to 2.x.  If I hadn't had 1.40, I wouldn't
+    have been able to compile the kernel, period.
+
+    Jim wiegand said that you need a new set of header files to get stat()
+    to work in 0.96b.  Given that my include set is a bit dated (0.95c+),
+    I'd like to know where to find the include set he's talking about.
+    Here's the original article:
+
+	Newsgroups: comp.os.linux
+	From: jim <V5068U%TEMPLEVM.BITNET@mitvma.mit.edu>
+	Subject: Re: stat(): Oops, wrong header files!
+	Message-ID: <1992Jun22.153310.20942@athena.mit.edu>
+	Sender: daemon@athena.mit.edu (Mr Background)
+	Reply-To: V5068U%TEMPLEVM.BITNET@mitvma.mit.edu
+	Organization: The Internet
+	Date: Mon, 22 Jun 1992 15:33:10 GMT
+	Lines: 5
+
+	Hi,
+	   Well the subject says it all. Version 0.96b needs the new set of
+	   header files (0.96ap4inc.tar.Z) for stat() to work. Sorry to
+	   waste bandwidth.
+
+	  jim "costing Usenet hundreds if not thousands of dollars" wiegand
+
+
+    Until then, I guess I can live with what I have.  :-)
+
+    To Linus and everyone else who have contributed to Linux: my
+    congratulations and thanks for a job well done!  The system is great!
+
+
+-- 
+				Kevin Brown
+
+			    kevin@nuchat.sccsi.com
+			    kevin@taronga.taronga.com

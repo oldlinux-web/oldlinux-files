@@ -1,0 +1,89 @@
+#!/bin/sh
+# Generate an ordered list of directories to search for sysdep files.
+
+# Copyright (C) 1991, 1992 Free Software Foundation, Inc.
+# This file is part of the GNU C Library.
+
+# The GNU C Library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Library General Public License as
+# published by the Free Software Foundation; either version 2 of the
+# License, or (at your option) any later version.
+
+# The GNU C Library is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Library General Public License for more details.
+
+# You should have received a copy of the GNU Library General Public
+# License along with the GNU C Library; see the file COPYING.LIB.  If
+# not, write to the Free Software Foundation, Inc., 675 Mass Ave,
+# Cambridge, MA 02139, USA.
+
+# Reads standard input for the initial list of system directories.  Each of
+# these directories may contain a file `Implies', containing a list of other
+# directories to search.  The contents of the `Implies' file are inserted
+# between the directory containing the file and following directories.
+# Comments starting with `#' in the initial list or the `Implies' files are
+# ignored.  The output is a list of names of subdirectories within the sysdep
+# directory to search for sysdep files.
+#
+# This script expects to be run from a makefile, with `sysdep_dir' defined in
+# the environment as the base directory for sysdep files.
+
+if [ x$sysdep_dir = x ]; then
+  echo "$0: Not run in proper environment!  sysdep_dir undefined." >&2
+  exit 1
+fi
+
+sysnames="`sed 's/#.*$//'`"
+
+names=''
+
+if [ x"$sysnames" != x ]; then
+  set $sysnames
+  while [ $# -gt 0 ]; do
+    name=$1
+    shift
+
+    if [ -f $sysdep_dir/$name/Implies ]; then
+      # Collect more names from the `Implies' file.
+      implied="`sed 's/#.*$//' < $sysdep_dir/$name/Implies`"
+    else
+      implied=''
+    fi
+
+    # Add NAME to the list of names.
+    names="$names $name"
+
+    # Find the parent of NAME, using the empty string if it has none.
+    parent="`echo $name | sed -n -e '/\//!q' -e 's=/[^/]*$==p'`"
+
+    # Append the names implied by NAME, and NAME's parent (if it has one),
+    # to the list of names to be processed (the argument list).
+    sysnames="`echo $* $implied $parent`"
+    if [ "$sysnames" != "" ]; then
+      set $sysnames
+    fi
+  done
+fi
+
+names="$names generic stub"
+
+# Uniquize the list.
+seen=''
+for name in $names; do
+  if echo "$seen" | fgrep -x $name >/dev/null; then
+    # Already in the list.
+    true;
+  else
+    # A new one.
+    if [ "$seen" = "" ]; then
+      seen="$name"
+    else
+      seen="$seen
+$name"
+    fi
+  fi
+done
+
+echo "$seen"
