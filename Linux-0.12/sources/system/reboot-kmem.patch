@@ -1,0 +1,186 @@
+From: db1@ukc.ac.uk (D.Bolla)
+Newsgroups: alt.os.linux
+Subject: Patches to have reboot and /dev/kmem working
+Summary: How to add a syscall. And various considerations
+Message-ID: <5375@falcon.ukc.ac.uk>
+Date: 22 Feb 92 13:50:56 GMT
+Sender: db1@ukc.ac.uk
+Organization: Computing Lab, University of Kent at Canterbury, UK.
+Lines: 174
+
+
+
+Hello 
+
+This time I have some small solutions :-)
+
+The first one is the implentation of the reboot syscall.
+The syscall just does a reboot after having checked that you are root.
+The old method does not work anymore ( CTRL-ALT-DEL )
+
+The second is an implementation of the /dev/kmem. Most of the code is 
+done by linux. I just added FEW lines in the right place ( I hope ).
+The point is that with this /unix and nlist(3) it is possible to get 
+all information we need from the kernel WITHOUT having to add code to the 
+kernel.
+
+It seems to me that people who complain about "normal users cannot read 
+/dev/kmem" and "A library to read kernel data is not nice" don't have a 
+clear idea about what /dev/kmem is used for.
+When you look in /dev/kmem you look for VERY special information about
+the system. I am not sayng that normal user should be denied ps :-)
+but if you think, normal users use ps just to see what others are doing
+( The same thing for w )
+
+Anyway.... under Sun there are three programs that "look" into /dev/kmem
+ps, w, pstats. The amount of information you can get out of them is very 
+big. The point that I am tryng to make here is:
+To obtain the same amount of information from syscalls you need a 
+GREAT number of variations and parameters. Is this worth the work ?
+( Considering the small amount of programs that need that information )
+Again.....
+
+Negative points of kernel implementation.
+1) Extra (Unnecessary) code in the kernel -> Kernel bigger.
+2) Possible introduction of ERRORS       -> Kernel panic.
+3) Increased number of syscall and paramentrs	-> Complexity
+4) Problems on returning lists of data in user space
+To me point 2 is already enough NOT to use this method. If you can live
+with possible kernel panics.......
+
+Positive points of a library implementation.
+1) NO extra code in the kernel.		-> Save memory
+2) Impossibility to add ERRORS to the kernel code.	-> NO panic
+3) Easy to update, modify even by average user.
+4) No problems in allcating memory for the result.
+
+What it is important is to DEFINE what information we want to 
+extract from /dev/kmem and who can use them. After that is defined it 
+is possible to discuss about implementaion. 
+
+And now to the code :-)
+
+-----------------------------------------------------------------
+I decided to put the actual routine that does reboot into
+kernel/sys.c Probably your sys.c may be different....
+
+522a523,533
+> /* This function reboots the system if the current UID is root
+>  * No sync is performed. The optional flag is not used yet
+>  * The called routine is in kernel/chr_drv/keyboard.S
+>  */
+> int sys_reboot ( int flag )
+> {
+> 	if (!suser())
+> 		return (-EPERM);
+> 	__asm__("call _hard_reset;" );
+> 	return (0);
+> }
+
+The next step is to add the syscall code in the file 
+include/unistd.h
+
+148a149
+> #define __NR_reboot	87
+
+And then add the syscall address in the file
+include/linux/sys.h
+
+91a92
+> extern int sys_reboot();
+108c109
+< sys_lstat, sys_readlink, sys_uselib };
+---
+> sys_lstat, sys_readlink, sys_uselib ,sys_reboot };
+
+The last bit is to modify the keyboard.S file
+kernel/chr_drv/keyboard.S
+This file is different from yours so.... don't just apply the diff
+Understand what it does and do it by hand.
+
+25a26
+> .globl _hard_reset
+203c204
+< 	jne reboot
+---
+> 	jne 1f			/* CTRL-ALT-DEL			*/	
+659c660
+< reboot:
+---
+> _hard_reset:	
+661,662c662,663
+< 	movw $0x1234,0x472	/* don't do memory check */
+< 	movb $0xfc,%al		/* pulse reset and A20 low */
+---
+> 	movw $0x1234,0x472	/* don't do memory check 	*/
+> 	movb $0xfc,%al		/* pulse reset and A20 low 	*/
+
+At this point recompile the kernel and all should go together.
+Unfortunately the work is NOT finished. You have to add the syscall to
+libc.a To do this you need the source for the library. Usually in 
+/usr/src/lib. Go into the unistd directory and create the file
+reboot.c with the following content.
+
+/* This function will reboot the syestem
+ */
+#define __LIBRARY__
+#include <unistd.h>
+
+_syscall1(int,reboot,int,param)
+
+And then modify the Makefile as follow.
+At the end of OBJ=.... list add reboot.o and do a make dep
+
+Before making the new libary you have to change the standard  unistd.h library
+file to point to the unistd.h file in the linux directory
+cd /usr/include
+rm unistd.h
+ln -s /usr/src/linux/include/unistd.h unistd.h
+
+At this point you can make the new libc.a 
+Then you can experiment with the new syscall.
+Eg:
+
+#include <stdio.h>
+#include <errno.h>
+
+main ()
+   { 
+   if ( reboot (1) ==(-EPERM) )
+      printf ("Not superuser \n"); 
+   exit (-1);
+   }
+
+-------------------------------------------------------------
+The second part is a patch that gives you access to the kernel memory
+in particular kernel DATA memory.
+The following diff applies to the file fs/char_dev.c and in particular
+to the function rw_kmem .
+
+52,54c52,67
+< {
+< 	return -EIO;
+< }
+---
+>    {
+>    int i = *pos;	/* Current position where to read	*/
+>    
+>    /* i can go from 0 to LOW_MEM (See include/linux/mm.h	*/
+>    /* I am not shure about it but it doesn't mem fault :-)	*/
+>    while ( (count-- > 0)  && (i <LOW_MEM) )
+>       {
+>       if (rw==READ)  put_fs_byte( *(char *)i ,buf++);
+>       else return (-EIO);
+>       i++;
+>       }
+>       
+>    i -= *pos;		/* Count how many read or write		*/
+>    *pos += i;		/* Update position			*/
+>    return (i);		/* Return number read			*/
+>    }
+
+NOTE: The LOW_MEM value may not be the most appropriate. Linus please
+confirm if it is the correct one.
+
+Damiano
+
