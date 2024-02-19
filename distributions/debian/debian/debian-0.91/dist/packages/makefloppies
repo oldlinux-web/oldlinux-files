@@ -1,0 +1,148 @@
+From: grosen@argv.cs.ndsu.nodak.edu (Johannes Grosen)
+Subject: Makefloppies - copy files to floppies
+Date: Mon, 31 Jan 1994 11:38:18 -0600 (CST)
+
+Here is a quick perl script that should make it easier to copy the files in
+each package subdirectory to a series of floppy disks. If invoked with no
+arguments it prints a simple usage message. There is also a brief usage
+discussion in the source itself. Note the comment about error checking!
+
+If you have any problems with this or suggestions on how it could be
+improved please let me know.
+
+/* -------------------- >8 cut here 8< ------------------------------- */
+
+#!/usr/bin/perl
+
+# $Id: makefloppies.pl,v 1.3 1994/01/30 18:19:15 grosen Exp $
+
+#
+# makefloppies - Johannes Grosen (grosen@argv.cs.ndsu.nodak.edu)
+#
+# A simple utility to make floppies containing the Debian Linux destribution
+# using the "first-fit" algorithm. Files in a directory are sorted by size
+# in descending order and the largest file remaining that will fit on the
+# disk is copied until no more files exist or no files remain that will
+# fit in the space remaining.
+#
+# Usage: makefloppies -d [dir] -s [disksize] <drive>
+#
+# where [dir] is a directory containing a set of Debian packages,
+# [disksize] is the disk capacity in kytes, and <drive> is an
+# optional drive letter ("a:" is assumed). For example,
+#           makefloppies -d base -s 1440
+# would copy all of the files in the directory `base' to a floppy drive
+# "a:" with a disk capacity of 1440KB.
+#
+# Assumes formatted MSDOS disks are being used and the `mcopy' command
+# is available.
+#
+
+@files = ();
+%filesizes = ();
+
+while (@ARGV) {
+    $_ = shift;
+    if (/^-./) {		# assume a option
+	if (/^-d/) {
+	    $dir = shift;
+	} elsif (/^-s/) {
+	    $disksize = shift;
+	} else {
+	    print "Invalid option $_\n";
+	    &usage();
+	}
+    } else {
+	$drive = $_;		# drive letter
+    }
+}
+
+if (! defined($drive)) {	# use default drive if not specified
+    $drive = "a:";
+}
+
+if (! defined($disksize)) {
+    &usage();
+} else {
+    $capacity = $disksize * 1024; # compute capacity in bytes of disk
+}
+
+if (! defined($dir)) {
+    &usage();
+}
+
+&parsedir($dir);		# create associate array of files/sizes
+
+@files = sort cmp @files;	# sort files by size in descending order
+
+&makefloppies();		# create floppy disks
+
+sub makefloppies {
+    local($used) = 0;
+    local($dummy);
+    local($file);
+    local($err);
+
+    print "Ready to copy files to drive $drive\n";
+    print "Put a formatted MSDOS disk in drive $drive\n";
+    print "and press ENTER to continue:";
+    $dummy = <STDIN>;
+    while (@files) {		# while there are files to process
+	$file = &get_next_file($used);
+	if (! defined($file)) {	# disk is full
+	    print "\n\nThe disk is full.\nPut a new disk in drive $drive\n";
+	    print "and press ENTER when ready:";
+	    $dummy = <STDIN>;
+	    $used = 0;
+	} else {		# copy the file
+	    system "mcopy $file $drive > /dev/null 2>&1";
+	}
+    }
+    print "\n\nCopying complete.\n";
+}
+
+sub get_next_file {
+    local($numleft) = scalar(@files);
+    local($idx);
+
+    for ($idx = 0; $idx <= $numleft; $idx++) {
+	if ($filesizes{$files[$idx]} + $used <= $capacity) {
+	    $used += $filesizes{$files[$idx]};
+	    return splice(@files,$idx,1); # remove from list
+	}
+    }
+    undef;			# no suitable files found
+}
+    
+sub cmp {
+    $filesizes{$a} < $filesizes{$b};
+}
+
+# Modifies the global lists `files' and `filesizes'    
+sub parsedir {
+    local($dir) = @_;
+    local($file);
+    local(@stats);
+
+    opendir(DIR,$dir) || die "Can't open $dir for reading";
+    chdir($dir);
+    @files = grep(-f, readdir(DIR)); # get all the plain files in dir
+    closedir(DIR);
+    foreach $file (@files) {
+	@stats = stat($file);
+	$filesizes{$file} = $stats[7]; # save file size
+    }
+}
+
+sub usage {
+    print "Usage: makefloppies -d [dir] -s [disksize in KB] <drive> \n";
+    exit 1;
+}
+
+/* ------------------------- >8 cut here 8< -------------------------- */
+
+-- 
+Johannes Grosen                         grosen@argv.cs.ndsu.nodak.edu
+System Administrator
+Intelligent Systems Cluster, Room 244 IACC Building
+North Dakota State University, Fargo, ND USA 51805     (701) 237-8282
