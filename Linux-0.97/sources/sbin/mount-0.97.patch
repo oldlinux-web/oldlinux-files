@@ -1,0 +1,57 @@
+Well, mount(8) is still disaster.  Already I have reports of two problems.
+
+1) It won't compile.  This has the advantage that you'll never see any
+other bugs, but it does reduce its usefulness somewhat.  The mount(2)
+prototype I used in sys/mount.h and in the _syscall5 in mount.c doesn't
+agree with <unistd.h>.  The easy fix is to comment out the prototype in
+<unistd.h>, the better fix is to correct my prototypes by adding the
+const qualifier to the final parameter of mount(2) in both places.
+
+2) The root entry doesn't get added to the mtab when the mtab is missing.
+This used to work right, and the patch below makes it work again.
+
+
+--- 1.1	1992/09/06 13:30:53
++++ mount.c	1992/09/06 23:57:19
+@@ -15,7 +15,7 @@
+ #include <unistd.h>
+ 
+ _syscall5(int, mount, const char *, special, const char *, dir,
+-	   const char *, type, unsigned long, flags, void *, data);
++	   const char *, type, unsigned long, flags, const void *, data);
+ #endif
+ 
+ 
+--- 1.1	1992/09/06 13:30:53
++++ sundries.c	1992/09/06 23:57:20
+@@ -153,6 +153,7 @@
+       if (addmntent (F_mtab, fstab) == 1)
+ 	die (1, "mount: error writing %s: %s", MOUNTED, strerror (errno));
+     }
++  endmntent (F_mtab);
+ }
+ 
+ /* Open mtab.  */
+@@ -159,8 +160,10 @@
+ void
+ open_mtab (const char *mode)
+ {
+-  if ((F_mtab = setmntent (MOUNTED, mode)) == NULL)
++  if (fopen (MOUNTED, "r") == NULL)
+     create_mtab ();
++  if ((F_mtab = setmntent (MOUNTED, mode)) == NULL)
++    die (2, "can't open %s: %s", MOUNTED, strerror (errno));
+ }
+ 
+ /* Close mtab.  */
+--- sys/mount.h~	Sun Sep  6 08:22:57 1992
++++ sys/mount.h	Sun Sep  6 18:57:20 1992
+@@ -113,7 +113,7 @@
+ #ifdef HAVE_MOUNT5
+ /* 0.96c-pl1 and later we have a five argument mount(2).  */
+ int mount (const char *__special, const char *__dir,
+-	   const char *__type, unsigned long __flags, void *__data);
++	   const char *__type, unsigned long __flags, const void *__data);
+ #else
+ /* Before 0.96c-pl1 we had a four argument mount(2).  */
+ int mount (const char *__special, const char *__dir,
