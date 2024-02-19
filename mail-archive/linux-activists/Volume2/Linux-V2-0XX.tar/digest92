@@ -1,0 +1,577 @@
+From:     Digestifier <Linux-Activists-Request@news-digests.mit.edu>
+To:       Linux-Activists@news-digests.mit.edu
+Reply-To: Linux-Activists@news-digests.mit.edu
+Date:     Wed, 22 Apr 92 09:45:14 EDT
+Subject:  Linux-Activists Digest #92
+
+Linux-Activists Digest #92, Volume #2            Wed, 22 Apr 92 09:45:14 EDT
+
+Contents:
+  pre-0.96 (was Re: gdb still isn't working) (Linus Benedict Torvalds)
+  Re: cpio doesn't accept multi-volume archives (Douglas E. Quale)
+  Question - Boot Linux from HD (Elvis Leung)
+  A test post to comp.os.linux (System PRIVILEGED Account)
+  Re: timezone support, date, CMOS clock support: archive sites please note (Charles Hedrick)
+  dvips.a.tar.Z fixed + new directory organization at archsci.arch.su.oz.au (Peter Williams 8169821)
+  Mail access to list. (jim wiegand)
+  Re: gdb(1) and ptrace(2) (david nugent)
+  Re: Yet another X question (Steve Sykes)
+  Result of porting 'f2c' and 'ispell3.00.07' (Rob Hooft)
+  Is there an archive server for the linux files ? (Elvis Leung)
+  HD boot using shoelace. HELP! (Lars Lindner)
+  Re: How to change the path : Followup (Leslie Griffiths (Griff))
+  Re: Miscellaneous questions. (Joerg Pommnitz)
+  Announcement: SYSV init, shutdown, last, and more... (Peter Orbaek)
+
+----------------------------------------------------------------------------
+
+From: torvalds@klaava.Helsinki.FI (Linus Benedict Torvalds)
+Crossposted-To: alt.os.linux
+Subject: pre-0.96 (was Re: gdb still isn't working)
+Date: 21 Apr 92 23:15:10 GMT
+
+In article <1992Apr20.085143.23027@klaava.Helsinki.FI> torvalds@klaava.Helsinki.FI (Linus Benedict Torvalds) writes:
+> [ trace not working in gdb ]
+>
+>My personal version handles this correctly (as well as doing some other
+>things in a cleaner manner), but I'm not quite ready for a new release
+>yet.  I could make YAAR (yet another alpha-release) or just mail
+>interested parties the fixes needed - mail me if you're interested, and
+>depending on the number of messages I get I'll make it a new release. 
+
+Ok, the response seems to make a new pre-release appropriate: I have
+uploaded "pre-0.96.tar.Z" to tsx-11 and nic. 
+
+Here is what the pre-release contains:
+
+- truncate/ftruncate/fchmod/fchown system calls
+
+        note that there aren't any library functions for these, so they
+        aren't very useful yet...
+
+        [f]truncate needed a change in the logic of the internal
+        truncate VFS call - anybody that has any nonstandard filesystem
+        probably needs to look it up. 
+
+- io-bitmap syscalls giving root-processes access to selected io ports
+  from user space.  There is a "ioperm()" system call that lets the
+  process select which ports it wants to enable/disable (all ports
+  disabled as default) as well as a (standard sysv?) ioctl interface
+  that X uses.
+
+        again, no library stubs, but it allows things like reading and
+        setting the cmos clock without using /dev/port, as well as
+        control over the VGA registers... 
+
+- mmap for /dev/mem
+
+        more things needed for X...
+
+- the signal-handling fixes needed for gdb
+
+        These aren't yet complete: serial lines still send signals under
+        interrupts that can result in problems (ie ptrace doesn't
+        correctly get them), but that's pretty unlikely (and will be
+        fixed in the final 0.96).  Breakpoints should work etc.. 
+
+- multiple shared libraries
+
+        Up to 6 simultaneous shared libraries/process: the patches were
+        originally by pmacdona, but they were heavily changed by me, and
+        I think they work in a more natural manner now.  One user-level
+        change is that the libraries are now checked for read and
+        execute permissions for safety-reasons.
+
+- cleaned up special files.
+
+        read/write/ioctl no longer has special-case code: it is all
+        handled with tables to functions.  This will mean that the SCSI
+        patches won't patch in quite cleanly into 0.96: you'll need to
+        add the code that sets up the functions. 
+
+        Again: device drivers and vfs-filesystem hackers need to look
+        into the changes, although they are pretty logical (earlier
+        versions just didn't implement all the vfs-routines)
+
+        Note that the vfs-code for select is still not used: select is
+        hardcoded for the devices it supports right now. 
+
+- ptrace() has a new interface
+
+        as gdb for versions < 0.95c don't work on the new version, and
+        gdb won't work very well at all on 0.95c[+], there was no reason
+        not to break ptrace.  Thus 0.96 has a new calling convention for
+        ptrace, and the old ptrace library function no longer works. 
+        I'm including the new ptrace library function at the end of this
+        post. 
+
+- mount() takes 4 arguments, and checks that only the super-user can
+  mount/umount things. 
+
+        Happily this shouldn't break any old binaries.
+
+- some general cleanups
+
+I've made the pre-release available only as pure source code: no diffs,
+no binary. The reason is that most people that needed this release want
+it for the gdb-fixes: and they should have no problem recompiling the
+kernel.  Others just have to wait for the real 0.96.
+
+Changes that are NOT in this pre-release, but which I hope to have in
+the real 0.96:
+
+        - more include-file cleanups - I'm still working on these
+
+        - the wd8003 driver and hopefully some other parts of biro's
+          config.
+
+        - select() using the vfs-tables.
+
+And possibly bugfixes that people find in this pre-release...
+
+                Linus
+
+========== library ptrace.c (wants gcc=2.1) ==========
+#define __LIBRARY__
+#include <time.h>
+#include <unistd.h>
+
+int ptrace(int request, int pid, int addr, int data)
+{
+        long ret;
+        long res;
+
+        if (request > 0 && request < 4)
+                (long *)data = &ret;
+        __asm__ volatile ("int $0x80"
+                :"=a" (res)
+                :"0" (__NR_ptrace),"b" (request), "c" (pid),
+                 "d" (addr), "S" (data)
+                : "si","bx","cx","dx");
+        if (res >= 0) {
+                if (request > 0 && request < 4) {
+                        errno = 0;
+                        return (ret);
+                }
+                return (int) res;
+        }
+        errno = -res;
+        return -1;
+}
+
+------------------------------
+
+From: quale@saavik.cs.wisc.edu (Douglas E. Quale)
+Subject: Re: cpio doesn't accept multi-volume archives
+Date: 22 Apr 92 04:16:08 GMT
+
+In article <yn5jcsa.alm@netcom.com> alm@netcom.com (Andrew Moore) writes:
+>
+>cpio will prompt for "next tape" but immediately dies upon pressing
+>ENTER. 
+>I am using the command:
+>cpio -itv </dev/at0
+>
+>Under Coherent, multi-volume archives require using the raw device.
+>If this is true of Linux as well, what are the raw device names/numbers?
+
+Unfortunately Linux does not yet have raw disk devices.
+
+--
+Doug Quale
+quale@saavik.cs.wisc.edu
+
+------------------------------
+
+From: leunge@bohra.cpg.oz.au (Elvis Leung)
+Crossposted-To: alt.os.linux
+Subject: Question - Boot Linux from HD
+Date: 22 Apr 92 04:11:16 GMT
+
+Is it possible to install and boot linux from a HD partition?
+
+
+-- 
+================================================================================
+ Sek-Kit E. Leung                               Fax:   +61-6-2836860
+ Computer Power Software                        Voice: +61-6-2836777
+ Multimedia Research Group                      ACSnet: leunge@bohra.cpg.oz.au
+
+------------------------------
+
+From: System PRIVILEGED Account <root>
+Subject: A test post to comp.os.linux
+Reply-To: root
+Date: Wed, 22 Apr 1992 05:15:25 GMT
+
+I am testing the mail feed to comp.os.linux.  Please ignore this message
+(assuming it actually gets out!)
+
+------------------------------
+
+From: hedrick@dumas.rutgers.edu (Charles Hedrick)
+Subject: Re: timezone support, date, CMOS clock support: archive sites please note
+Date: 22 Apr 92 03:35:44 GMT
+
+cummings@hammer.Prime.COM (Kevin Cummings) writes:
+
+>I happend to find timebin.tar.Z on tsx-11 yesterday, and downloaded
+>to my LINUX machine.  I untarred it, configured it, and moved the
+>binaries to /usr/bin and /usr/lib.  I then ran date, and it told me
+>it was Mon 20 Apr, 20:xx:xx 1992.  No time zone info, even though
+>/usr/lib/localtime was present.  I then ran clock to see what was in
+>my CMOS clock, and it was Sat 20 Apr, 14:xx:xx EDT 1992.
+
+I hope you mean /usr/lib/zoneinfo/localtime was present.  Otherwise
+you don't have time zones.
+
+I'm not sure whether the day of the week is worth worrying about.  It
+wasn't set properly on my machine either.  I didn't know enough about
+DOS to feel safe in ignoring it, so I display it and set it
+appropriately.  But I have a suspicion that DOS may not be using it.
+Certainly Unix doesn't care.  clock -s will set the Unix date based on
+the date and time from the clock.  It will ignore the day of the week,
+since that is computed from the date.
+
+------------------------------
+
+From: peterw@archsci.arch.su.oz.au (Peter Williams 8169821)
+Subject: dvips.a.tar.Z fixed + new directory organization at archsci.arch.su.oz.au
+Date: Wed, 22 Apr 1992 01:35:34 GMT
+
+In article <1992Apr20.233619.7387@ucc.su.OZ.AU>, peterw@archsci.arch.su.oz.au (Peter Williams 8169821) writes:
+|> The dvips.a.tar.Z that I posted yesterday seems to be broken so I have
+|> withdrawn it temporarily. Sorry!
+|> 
+|> Should be mended and back up tomorrow.
+|> 
+|> -- 
+|> Peter Williams                |e-mail: peterw@archsci.arch.su.oz.au
+|> Key Centre for Design Quality |phone: +61-2-692 2053 or +61-2-660 6156
+|> University of Sydney          |+++++++++++++++++++++++++++++++++++++++
+
+The mended version is now in directory pub/linux/tex-etc along with all of the
+other tex related stuff at archsci.arch.su.oz.au (129.78.66.1).
+This version of dvips does not work with font libraries whereas the statically
+linked version in dvips.tar.Z does.
+
+N.B. this is a different directory than previously posted (neatness) and now
+includes a README file which gives a very brief description of the various files'
+contents.
+
+-- 
+Peter Williams                |e-mail: peterw@archsci.arch.su.oz.au
+Key Centre for Design Quality |phone: +61-2-692 2053 or +61-2-660 6156
+University of Sydney          |+++++++++++++++++++++++++++++++++++++++
+
+------------------------------
+
+From: jim wiegand <V5068U%TEMPLEVM.BITNET@mitvma.mit.edu>
+Subject: Mail access to list.
+Reply-To: tytso@athena.mit.edu
+Date: Wed, 22 Apr 1992 06:00:37 GMT
+
+hi all;
+       It seems as if I am having some trouble posting messages.
+       Sorry to waste bandwidth.
+
+------------------------------
+
+From: david@csource.oz.au (david nugent)
+Subject: Re: gdb(1) and ptrace(2)
+Date: Wed, 22 Apr 92 13:18:06 +1000
+Reply-To: david@csource.oz.au
+
+enewton@uucp (Eric C. Newton x2092) writes:
+
+>    1.  gdb does not work with the new .95c+ kernel.  
+[...]
+> 
+> I have the whole beastie compiled on my machine at home.  The problem
+> I have is that the ptrace() function is not in libc.a.  I wrote a
+> dummy ptrace() function to link the program.
+> 
+>    3.  GDB 4.5 has been released.  Is anyone building this?>
+> 
+> Yes.  I will after 4.4 works.
+> 
+> Anyone care to volunteer the sources for making a ptrace system
+> call?
+
+
+Linus has detailed some further fixes that were necessary, and I now have
+a working gdb 4.5 binary here. It does require those kernel fixes to run.
+When the new kernel is posted for download, I'll be uploading the gdb 4.5
+binary, cdiffs to the 4.5 distribution and documentation (to tsx-11.mit.edu).
+
+..............................................................................
+david nugent          Public Access Usenet        "Only Nixon can go to China"
+david@csource.oz.au     +61-3-792-3507                - ancient Vulcan proverb
+3:632/400@fidonet, 58:4100/1@intlnet, 199:4242/5@rainbownet, 33:300/6@admin
+PO Box 260, Endeavour Hills, Victoria, Australia, 3802.
+
+------------------------------
+
+From: haldane@dcs.warwick.ac.uk (Steve Sykes)
+Subject: Re: Yet another X question
+Date: 21 Apr 92 18:20:26 GMT
+
+I'm very keen to get something like X up.  At the moment my biggest
+problem is a lack of knowledge on how to implement i/o mapping.
+Rather than thinking up some obscure and probably bad way to allow
+user processes access to io-space, I was hoping someone could point me
+in the right direction.  I think it's normally done as an ioctl call
+but have now idea how to implement it.
+
+Any help gratefully received
+Please reply by e-mail
+
+Laurence Culhane
+haldane@stone.dcs.warwick.ac.uk
+
+------------------------------
+
+From: hooft@fys.ruu.nl (Rob Hooft)
+Subject: Result of porting 'f2c' and 'ispell3.00.07'
+Date: Wed, 22 Apr 1992 07:07:14 GMT
+
+Hello all,
+
+As my first post to this group (listening for a few months already)
+I would like to share my experience on installing 2 packets.
+
+1) f2c, ftp'ed from research.att.com, compiles ok, but if it is run
+   with the shared libraries, it crashes on a segmentation violation.
+   static libraries work ok. My main problem is that I do not understand
+   the full error message.
+
+   Executables from fortran, produced with the f2c/gcc2.1 pair do not
+   terminate. Only when I press the ENTER key after the program stops,
+   the prompt is returned.
+
+2) ispell3.00.07 compiles great! I've never seen a workstation 
+   compiling this software in just under a minute real time!
+   Running ispell from the command-line works really very well.
+   Running ispell from EMACS, however, takes AGES! May have something
+   to do with interprocess communication?
+
+I'll have to look into the problems I mentioned. I just thought: If I
+post it, may be somebody can assist me in locating them (I'm lazy).
+
+I'd like to compliment Linus: It is unbelievable how LINUX feels on my 
+ETEQ486/33 with 16Mb of memory. During compilations of medium-sized
+packages with GCC2.1, my 340Mb IDE drive led only flashes every 30 
+seconds for update.... Compilations run at 98+% of the CPU.....
+
+Greetings, Rob Hooft, Utrecht University, The Netherlands.
+-- 
+Rob Hooft, Bijvoet Center for Biomolecular Research, 
+Chemistry department University of Utrecht, the Netherlands
+hooft@hutruu54.bitnet hooft@chem.ruu.nl hooft@fys.ruu.nl hooft@cc.ruu.nl
+
+------------------------------
+
+From: leunge@bohra.cpg.oz.au (Elvis Leung)
+Subject: Is there an archive server for the linux files ?
+Date: 22 Apr 92 07:08:42 GMT
+
+Subject says it all.
+-- 
+================================================================================
+ Sek-Kit E. Leung                               Fax:   +61-6-2836860
+ Computer Power Software                        Voice: +61-6-2836777
+ Multimedia Research Group                      ACSnet: leunge@bohra.cpg.oz.au
+
+------------------------------
+
+From: etxlli@eos.ericsson.se (Lars Lindner)
+Subject: HD boot using shoelace. HELP!
+Date: 22 Apr 92 07:44:36 GMT
+
+The question have probably already been answered but i could not find it
+so here comes the question again.
+
+I have installed shoelace on my computer, changed /etc/config to contain
+" boot /vmlinux", made a file /vmlinux with "dd if=/dev/at0 of=/vmlinux"
+with my boot floppy in drive A.
+After the commands "laceup /dev/hda2 wini" and "laceup -w 2 /dev/hda"
+i tryed to reboot and here is what a got:
+
+/dev/fd0 not found - guessing major and minor device numbers.
+
+processor     = -1
+ramimagedev   = 512 /dev/fd0
+ramsize       = 0
+rootdev       = 770 bootdet
+scancode      = 13
+
+Component       base    text   data   bss   stack symbols   model
+shoelace      : 80000   5688   C0C    B80    91EC      0    ComI&D
+Load Parts
+kernel        : kernel not found
+
+Load Image
+
+
+And after that nothing happend. What have i done wrong. Is there something
+wrong in the /etc/config or shall i use another way to create /vmlinux?
+
+All help is appreciated.
+
+Lars.Lindner@eos.ericsson.se
+
+------------------------------
+
+From: ccx018@cch.coventry.ac.uk (Leslie Griffiths (Griff))
+Crossposted-To: alt.os.linux
+Subject: Re: How to change the path : Followup
+Date: 22 Apr 92 08:27:20 GMT
+
+In article <1992Apr21.031303.20897@serval.net.wsu.edu> hlu@yoda.eecs.wsu.edu (Hongjiu Lu -- Graduate Student) writes:
+>In article <1992Apr21.104213.1867@csdvax.csd.unsw.edu.au> s9100786@csdvax.csd.unsw.edu.au (Matthew Jackson) writes:
+>>A short while ago I posted a query on how to change the path. Attached are the
+>>responses I received. I have not tried them as my Linux machine is at home and
+>>my net access is at work. 
+>>
+>>It seems those who have had the same problem replied after they worked it out
+>>and also some more familiar with Unix than myself replied too, for which I am
+>>grateful.
+>>
+>>Anyway, I thought it would be of some use to others so I post a summary.
+>>
+>>Summary:      For historical reasons, the root user does not have the
+>>              current directory in the path.
+>
+>WRONG, WRONG, WRONG. That is not for historical reasons. Do your
+>homework about Unix. That is for security reason.
+>
+>>
+>>              Under ash and bash, PATH=dir1:dir2:...
+>>              Then export PATH
+>>
+>>              Under csh or tcsh, PATH=(dir1 dir2 ...)
+>
+>Please DO NOT DO THAT. KEEP THE WAY IT WAS.
+>
+>H.J.
+
+Hmm. Actually, under bash/sh and other Bourne-like shells
+
+        $ PATH=dir1:dir1:...
+        $ export PATH
+
+Under Csh, Tcsh and other C-shells
+
+        % set path=( dir1 dir2 dir3 )
+
+(In which case the environment variable PATH is automatically updated)
+
+or
+
+        % setenv PATH dir1:dir2:dir3
+
+Which does it directly. Preferred method (I believe) is the former (i.e.
+"set path=").
+
+Above applies to sh, bash, csh, tcsh. Don't know about ash or others.
+
+Cheers
+
+-- 
+Griff                           \\              ccx018@uk.ac.cov
+^^^^^                            :-=            ^^^^^^^^^^^^^^^^
+                                //
+
+------------------------------
+
+Crossposted-To: alt.os.linux
+From: jpo@informatik.tu-chemnitz.de (Joerg Pommnitz)
+Subject: Re: Miscellaneous questions.
+Date: Wed, 22 Apr 1992 10:38:59 GMT
+
+scottd@cs.hw.ac.uk (Scott Dunn) writes:
+
+I'd like to ask the same question:
+
+>2.     What is a working version of tar and un/compress?
+>       A lot of problems seem to be solved by getting new versions of the
+>       aforementioned.  However, nobody has indicated how to identify which
+>       are the dodgy copies.
+>       Sometimes when uncompressing it seems to get stuck in an infinite
+>       loop which takes all system resources.  ie I can't login to another
+>       terminal and kill the process.  Is this what is known as a 'race
+>       condition' ?  Is this indicate a dodgy copy of un/compress ?
+
+How can I fix these problems ?
+What's the reason ?
+
+I must say, I'm really glad somebody else ran into the same problem.
+I was very angry that this would be a problem of my specific hardware.
+
+
+------------------------------
+
+From: poe@daimi.aau.dk (Peter Orbaek)
+Subject: Announcement: SYSV init, shutdown, last, and more...
+Date: 22 Apr 92 06:49:40 GMT
+
+I just put
+
+        /pub/Linux-source/admutil-1.0.tar.Z
+
+on
+
+        ftp.daimi.aau.dk (130.225.16.27)
+
+It includes source for a better last(1) and setgrp(1) both by Michael Haardt,
+plus a SYSV compatible init(8) program with runlevels and all.
+
+This init was written by Miquel van Smoorenburg for Minix, and I ported it to 
+Linux with little effort.
+
+There's also a shutdown(8) program as well as passwd(1) and chsh(1).
+
+You should be able to build the binaries with both gcc 1.40 and gcc 2.1.
+Follow the instructions in the Makefile and README.
+
+Be warned that the init program is fairly untested, and I don't use it myself.
+It's very easy to lock your self out of the machine if you do something wrong
+with init and the new inittab format, so be sure you know what you are doing
+before you install the new init.
+
+There's also a problem with putpwent(3) in the older versions of libc, and if
+you don't fix this or use the newest gcc 2.1 libc (later than 10-Apr-92) then
+chsh and passwd will trash the /etc/passwd file and make it hard to log into
+the machine afterwards.
+
+        - Peter (poe@daimi.aau.dk)
+
+--
+Peter Orbaek ----------------- poe@daimi.aau.dk  |      ///
+Hasle Ringvej 122, DK-8200 Aarhus N, DENMARK     |     ///
+                                                 | \\\///
+"Strong typing is for people with weak memories" |  \XX/
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Activists-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux) via:
+
+    Internet: Linux-Activists@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    tupac-amaru.informatik.rwth-aachen.de	pub/msdos/replace
+
+The current version of Linux is 0.95a released on March 17, 1992
+
+End of Linux-Activists Digest
+******************************

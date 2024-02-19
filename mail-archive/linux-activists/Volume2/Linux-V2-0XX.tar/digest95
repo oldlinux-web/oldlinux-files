@@ -1,0 +1,754 @@
+From:     Digestifier <Linux-Activists-Request@news-digests.mit.edu>
+To:       Linux-Activists@news-digests.mit.edu
+Reply-To: Linux-Activists@news-digests.mit.edu
+Date:     Wed, 22 Apr 92 19:45:20 EDT
+Subject:  Linux-Activists Digest #95
+
+Linux-Activists Digest #95, Volume #2            Wed, 22 Apr 92 19:45:20 EDT
+
+Contents:
+  two questions (Alex R.N. Wetmore)
+  floptools.sh -- handle multiple-floppy archives (Bennett E. Todd)
+  Re: timezone support, date, CMOS clock support: archive sites please note (Kevin Cummings)
+  Re: timezone support, date, CMOS clock support: archive sites please note (Darren Senn)
+  Re: two questions (Jim Winstead Jr.)
+  How do I get BOOTANY to work with Linux? (rick@ee.uwm.edu)
+  Re: all kinds of questions (autoparking) (Paul Allen)
+  What is Linux's programming environemnt? (Darren Senn)
+  Bug in GCC 2.1 mktemp() (Giles D Malet)
+  Suspending emacs and bringing it back (Rajat Datta)
+  gcc 2.1, ld and -g (Rajat Datta)
+  Re: IDE drive performance with linux (Charles Hedrick)
+  help, cannot mount file system... (gary a moyer)
+  Re: gcc 2.1, ld and -g (Ross Biro)
+  Bad Sectors (M. Saggaf)
+  Re: timezone support, date, CMOS clock support: archive sites please note (Charles Hedrick)
+
+----------------------------------------------------------------------------
+
+From: aw2t+@andrew.cmu.edu (Alex R.N. Wetmore)
+Subject: two questions
+Date: 22 Apr 92 16:18:47 GMT
+
+I have two questions.
+
+1) Is there a man written yet?  I was going to write my own and port
+over man pages for all of the stuff that I don't have them for yet, but
+I figured I would ask first.
+
+2) What is the MCC release of Linux?
+
+3) When is the ABC release coming out.
+
+Okay, that was three questions.
+
+alex
+
+------------------------------
+
+From: bet@internet.sbi.com (Bennett E. Todd)
+Subject: floptools.sh -- handle multiple-floppy archives
+Reply-To: bet@internet.sbi.com (Bennett E. Todd)
+Date: Wed, 22 Apr 1992 17:30:57 GMT
+
+This is some vile, yucko throwaway code. I suspect it should be
+completely rewritten in perl. Then the same may well be true of most of
+Unix:-).
+
+I wrote this pair of programs, rdflops and wrflops. Each one prompts for
+multiple floppies in sequence. I can back up my hard disk with something
+like
+
+        tar cvf - / | compress -v | wrflops /dev/fd0
+
+and extract files back from the archive with
+
+        rdflops /dev/fd0 | compress -d | tar xvf - filenames
+
+I'm running the 0.95c+ kernel on the 0.95a rootimage, with utils out of
+collections/095binar.tar.Z. I pulled all this from tsx-11. Ash as
+/bin/sh was bombing off periodically, so I blew it away and stuffed
+bash in there. You will probably want to change the #! line on these
+scripts (especially wrflops!) to point to wherever you keep your bash.
+
+The rdflops script seems to me to be simple, correct, and robust.
+
+Catbytes could be more elegant, but it seems to do the job. With an
+extra cat(1) squatting behind it to smooth the buffering (as I did in
+wrflops), it seems to do a really clean job of driving the floppy. I
+couldn't get dd(1) to do this job, since it pays attention to the
+incoming blocksize. I wrote catbytes the way I did (avoiding printf and
+so on) to keep the binary from bloating up too badly. Eventually I will
+come to trust and appreciate shared libraries:-).
+
+The wrflops script has some *really* fragile code in it for trying to
+follow symlinks and deduce floppy sizes from major and minor device
+numbers; you may well want to rip that all out.
+
+The dirname script is probably not correct, but it seems to work well
+enough for wrflops.
+
+The reason wrflops is so careful to attempt to follow symlinks, is I use
+/dev/fd0 and /dev/fd1. fd0 is a symlink to PS0 and fd1 is a symlink to
+at1.
+
+The only problem I have had, and it hasn't resulted in any loss of data,
+has been the lack of EOF handling. When you run the restore, if you are
+using tar(1) straight then it works perfectly. If you have a compress in
+there then it works fine until you get to the end; then, instead of
+everything exiting, compress proceeds to blow up. Happily, Linux seems
+to be nicely robust in the face of programs trying to allocate up all of
+the VM.
+
+-Bennett (curmudgeon)
+bet@sbi.com
+
+
+#!/bin/sh
+echo 'x - catbytes.c'
+sed 's/^        //' <<'EOF' >'catbytes.c'
+        #include <stdio.h>
+        #include <ctype.h>
+        
+        /*
+         * catbytes n
+         *
+         * Copies ``n'' bytes from stdin to stdout. Unlike ``dd'' it doesn't
+         * care how stdin comes in buffered; unlike everything else I can find
+         * it doesn't gobble any excess bytes from stdin. Why does this have
+         * to be so hard?
+         */
+        
+        #define BS 65536
+        
+        static char msg1[] = "syntax: catbytes count\n";
+        static char msg2[] = "short input\n";
+        static char msg3[] = "short write\n";
+        
+        int main(int argc, char **argv) {
+          static char buffer[BS];
+          int i, n, total;
+          extern int read(int, char *, int);
+          extern int write(int, char *, int);
+          extern int atoi(char *);
+        
+          if (argc != 2 || !isdigit(argv[1][0])) {
+            (void) write(2, msg1, sizeof(msg1));
+            exit(1);
+          }
+          total = atoi(argv[1]);
+        
+          while (total > 0) {
+            i = (total > BS) ? BS : total;
+            if ((n = read(0, buffer, i)) <= 0) {
+              (void) write(2, msg2, sizeof(msg2));
+              exit(1);
+            }
+            if (write(1, buffer, n) != n) {
+              (void) write(2, msg3, sizeof(msg3));
+              exit(1);
+            }
+            total -= n;
+          }
+          return(0);
+        }
+EOF
+echo 'x - wrflops'
+sed 's/^        //' <<'EOF' >'wrflops'
+        #!/bin/sh
+        
+        progname=`basename $0`
+        syntax="syntax: $progname device"
+        die(){
+                echo "$progname: $*" 1>&2
+                exit 1
+        }
+        
+        case $# in
+                1)      device="$1" ;;
+                *)      die "$syntax" ;;
+        esac
+        
+        follow(){
+                [ $# -eq 1 ] || die "fn follow: syntax: follow dirname"
+                cd `dirname $1`
+                f=`basename $1`
+                (
+                    while [ -h "$f" ] ; do
+                        cd `dirname "$f"`
+                        f=`ls -l "$f" | sed 's/^.* -> //'`
+                    done
+                    echo `pwd`/`basename $f`
+                )
+        }
+        
+        f=`follow $1`
+        [ -b $f ] || die "I only know about block devices"
+        id=`ls -l $f | awk '{print $5 " " $6}' | tr -d '        '`
+        case "$id" in
+                '2,28') secs=18;;
+                '2,29') secs=18;;
+                '2,8')  secs=15;;
+                '2,9')  secs=15;;
+                *)      die "I don't know that device, sorry."
+        esac
+        
+        count=$[ $secs * 80 * 1024 ]
+        
+        while catbytes $count | cat >"$device" ; do
+                echo -n 'Insert another floppy: ' >/dev/tty
+                read ans </dev/tty >/dev/null
+        done
+EOF
+echo 'x - dirname'
+sed 's/^        //' <<'EOF' >'dirname'
+        #!/bin/sh
+        
+        progname=`basename $1`
+        syntax="syntax: $progname name"
+        die(){
+                echo "$progname: $*" 1>&2
+                exit 1
+        }
+        [ $# -eq 1 ] || die "$syntax"
+        s=`echo "$1" | sed 's,/[^/]*$,,'`
+        if [ "$s" = "$1" -o -z "$s" ] ; then
+                echo .
+        else
+                echo "$s"
+        fi
+EOF
+echo 'x - rdflops'
+sed 's/^        //' <<'EOF' >'rdflops'
+        #!/bin/sh
+        
+        progname=`basename $0`
+        syntax="syntax: $progname device"
+        die(){
+                echo "$progname: $*" 1>&2
+                exit 1
+        }
+        
+        case $# in
+                1)      device="$1" ;;
+                *)      die "$syntax" ;;
+        esac
+        
+        while cat "$device"; do
+                echo -n 'Insert another floppy: ' >/dev/tty
+                read ans </dev/tty >/dev/null
+        done
+EOF
+exit 0
+
+------------------------------
+
+From: cummings@hammer.Prime.COM (Kevin Cummings)
+Subject: Re: timezone support, date, CMOS clock support: archive sites please note
+Date: Wed, 22 Apr 1992 17:49:57 GMT
+
+In article <Apr.21.23.35.43.1992.25678@dumas.rutgers.edu>, hedrick@dumas.rutgers.edu (Charles Hedrick) writes:
+> cummings@hammer.Prime.COM (Kevin Cummings) writes:
+> 
+> >I happend to find timebin.tar.Z on tsx-11 yesterday, and downloaded
+> >to my LINUX machine.  I untarred it, configured it, and moved the
+> >binaries to /usr/bin and /usr/lib.  I then ran date, and it told me
+> >it was Mon 20 Apr, 20:xx:xx 1992.  No time zone info, even though
+> >/usr/lib/localtime was present.  I then ran clock to see what was in
+> >my CMOS clock, and it was Sat 20 Apr, 14:xx:xx EDT 1992.
+> 
+> I hope you mean /usr/lib/zoneinfo/localtime was present.  Otherwise
+> you don't have time zones.
+
+Yes, you are right, I meant to say /usr/lib/zoneinfo/localtime.
+
+Also I got the circumstances backward.  When I ran date, it came back:
+
+Mon Apr 20, 16:xx:xx EDT 1992
+
+When I ran clock it came back
+
+Sat Apr 20, 20:xx:xx 1992
+
+Furthermore I ran them again last night!  New results:
+
+date:
+
+Tue Apr 21, 17:xx:xx EDT 1992
+
+clock:
+
+Jan Apr 21,, 21:xx:xx 1992
+
+> I'm not sure whether the day of the week is worth worrying about.  It
+> wasn't set properly on my machine either.  I didn't know enough about
+> DOS to feel safe in ignoring it, so I display it and set it
+> appropriately.  But I have a suspicion that DOS may not be using it.
+> Certainly Unix doesn't care.  clock -s will set the Unix date based on
+> the date and time from the clock.  It will ignore the day of the week,
+> since that is computed from the date.
+
+Is the author aware that the DOW is stored as a number from 3-9 instead of
+a number from 0-6 or 1-7?  I found this out while playing with a DOS
+program to read the CMOS memory.  Looks like the clock program accessed
+beyond Sat into Jan!   Can you say Oops?   Sure ya can.
+
+If clock won't display the correct date, I certainly don't trust it to
+SET the correct date!  Last thing I want in LINUX is bad dates.
+
+=================================================================
+Kevin J. Cummings                       Prime Computer Inc.
+20 Briarwood Road                       500 Old Connecticut Path
+Framingham, Mass.                       Framingham, Mass.
+
+Work:  cummings@primerd.Prime.COM
+Home:  cummings@kjc386.framingham.ma.us
+
+Std. Disclaimer: "Mr. McKittrick, after careful consideration,
+                  I've come to the conclusion that your new
+                  defense system SUCKS..."   --  War Games
+=================================================================
+
+------------------------------
+
+From: sinster@scintilla.capitola.ca.us (Darren Senn)
+Subject: Re: timezone support, date, CMOS clock support: archive sites please note
+Date: 22 Apr 92 18:18:43 GMT
+
+I installed the timebin package on my system, and found the same problems that the
+rest of you had.  I witnessed both of the problems that the rest of you have.  My
+solution to the first problem was to change the ownership of clock and date.  To
+fix the latter problem, I changed the mode of the zoneinfo directory, the localtime
+file, and the posixrules file to be publicly readable.  That fixed everything up.
+Now my timezone is correct, my day and date are correct.
+
+-- 
+Darren Senn                                            Phone:    (408) 479-1521
+sinster@scintilla.capitola.ca.us                       Snail: 1785 Halterman #1
+Wasurenaide -- doko e itte mo soko ni anata wa iru yo.     Santa Cruz, Ca 95062
+
+------------------------------
+
+From: jwinstea@jarthur.claremont.edu (Jim Winstead Jr.)
+Subject: Re: two questions
+Date: 22 Apr 92 19:50:30 GMT
+
+In article <EdxN7bq00awDMEveIn@andrew.cmu.edu> aw2t+@andrew.cmu.edu (Alex R.N. Wetmore) writes:
+>1) Is there a man written yet?  I was going to write my own and port
+>over man pages for all of the stuff that I don't have them for yet, but
+>I figured I would ask first.
+
+I found a package a while back labelled man-1.0.tar.Z, which
+identified itself as the GNU 'man' package.  It's not on
+prep.ai.mit.edu, so I think the GNU Folks may have dropped it in favor
+of TeXinfo, but I've been using it on my system for some time with
+good luck.  I believe it can be found on tsx-11.mit.edu, possibly
+compiled.  Either that, or try looking it up with archie.
+
+>2) What is the MCC release of Linux?
+
+It's the Manchester Computing Center (?) release, which serves as a
+sort of extended-release, as I see it.  It includes many more
+utilities than the basic release from Linus and myself, and as a
+result comes on three (four?) floppies.
+-- 
+Jim Winstead Jr. (CSci '95)    | "Catch a fish!"
+Harvey Mudd College            |  -Geddy Lee,
+jwinstea@jarthur.Claremont.EDU |   San Diego Sports Arena
+Disclaimer: Mine, not theirs!  |   January 20, 1992
+
+------------------------------
+
+From: rick@ee.uwm.edu
+Subject: How do I get BOOTANY to work with Linux?
+Date: Wed, 22 Apr 1992 20:06:13 GMT
+
+Thanks to those few who answered my question about tar-ing from a
+rawrit' diskette...  I've got mtools up and running now, so that
+won't be necessary for file transfer any more.  :-)
+
+I'm *REALLY* thrilled with Linux so far.  Now I think it's about
+time to put it on an 'even standing' with DOS (on this machine,
+at least).  The obstacle is this annoying boot-from-floppy business.
+
+BOOTANY was *mentioned* in the various FAQs and notes, but I don't
+recall seeing a detailed description of how to make it work with
+Linux.  Could some kind soul give me some hints?
+
+Thanks in advance,
+Rick
+
+------------------------------
+
+From: Paul Allen <paula@atc.boeing.com>
+Subject: Re: all kinds of questions (autoparking)
+Reply-To: paula@atc.boeing.com
+Date: Wed, 22 Apr 1992 20:40:35 GMT
+
+cummings@hammer.Prime.COM (Kevin Cummings) wrote:
+
+|Head parking is suggested (by me anyways) as necessary before powering
+|off your computer.  Who knows what the older hard disk controllers
+|will do when you turn the power off, and the write line happens to
+|accidently spit something out.  Good way to trash whole tracks.
+|
+|Used to happen all the time on my CP/M system, until I learned to
+|park the heads before powering down.  If your drive doesn't recognize
+|the power fail, your disk controller probably doesn't either, and you could
+|lose something.  Probably happens less today than a few years ago,
+|but if you're using MFM drives, the chance is significantly increased.
+
+My first hard disk was a 5.5Mb Shugart that I ran on my old Z-100 with
+an Adaptec SASI controller, a homebrew SASI S-100 host adapter, and my
+own driver.  It was one of the original 5.25" winchester drives, with
+an access time in excess of 100ms.  (But man, was it cheap!  :-))  It
+would sometimes lose data if shut down without being parked, so I wrote
+a head parking utility for it.  I replaced it with a 10Mb drive out of
+an IBM XT, and have never parked the heads since.
+
+Basically, if you're running on 10-year-old hardware, you might need to worry
+about this.  You better believe that the drive manufacturers figured out
+a long time ago that customers will not tolerate disks that lose data.
+Head parking just isn't a problem anymore.  Old disks that don't autopark
+should be parked before moving, but that's about it.  Anything newer than
+an IBM XT will do the right thing when you turn it off.  (Unless it's
+broken, of course, but that's a special case.  :-))
+
+If someone can provide a real-life story about a post-XT drive that
+lost data consistently if not parked before power-down, please do.  I
+always enjoy being proven wrong!  :-)
+
+Paul Allen
+pallen@atc.boeing.com
+
+
+------------------------------
+
+From: sinster@scintilla.capitola.ca.us (Darren Senn)
+Subject: What is Linux's programming environemnt?
+Date: 22 Apr 92 20:22:12 GMT
+
+The subject pretty much says it all.  If I want to go out and get programming manuals,
+what should I get?  SVR4? BSD? POSIX? SCO (god forbid)?  I realize that Linux is _not_
+complete yet, so perhaps my question should be "To which programming environment does
+Linux aspire to be most similar?"
+
+P.S.: By programming environment, I refer to the API, not the tools.
+
+Thanks.
+
+-- 
+Darren Senn                                            Phone:    (408) 479-1521
+sinster@scintilla.capitola.ca.us                       Snail: 1785 Halterman #1
+Wasurenaide -- doko e itte mo soko ni anata wa iru yo.     Santa Cruz, Ca 95062
+
+------------------------------
+
+From: gdm@shrdlu.UUCP (Giles D Malet)
+Subject: Bug in GCC 2.1 mktemp()
+Date: 21 Apr 92 21:57:33 GMT
+Reply-To: gdm@shrdlu.UUCP (Giles D Malet)
+
+Attempts to run a newly installed mailer kept producing messages along the
+lines of "Can't create temporary file - already exists !". Much digging
+later I discovered the source of the problem - mktemp().
+
+mktemp should produce a unique filename, based on a template, for each call.
+Checking the source for libc.a in the GCC 2.1 distribution revealed the
+fault. For example, running the following little program should produce
+output along the lines of :
+
+Got </tmp/dummy.a00062>
+Got </tmp/dummy.b00062>
+Got </tmp/dummy.c00062>
+Got </tmp/dummy.d00062>
+Got </tmp/dummy.e00062>
+
+but instead it produces something like :
+
+Got </tmp/dummy.a00049>
+Got </tmp/dummy.a00049>
+Got </tmp/dummy.a00049>
+Got </tmp/dummy.a00049>
+Got </tmp/dummy.a00049>
+
+which is not quite unique.
+
+This huge patch to ..../compiler/lib/posix/mktemp.c (I think) fixes
+the problem, once you manage to reproduce the library :
+
+===== cut =====
+52c52
+<     count = 0;
+---
+>     count = 0, oldpid = pid;
+===== cut =====
+
+/*----------------------------------------------------------------------
+ * Test mktemp() function.
+ */
+
+#include <stdlib.h>
+#include <stdio.h>
+
+extern char *mktemp(char *name);
+char *do_mktemp(void);
+
+main()
+{
+        int i;
+        char *name;
+
+        for ( i=0 ; i<5 ; i++ ) {
+                if ( name = do_mktemp() ) {
+                        printf("Got <%s>\n",name);
+                        free(name);
+                } else {
+                        exit(-1);
+                }
+        }
+}
+
+char *do_mktemp(void)
+{
+        static char template[] = "/tmp/dummy.XXXXXX";
+        char    *f;
+
+        if ( (f = malloc(32)) == NULL ) {
+                fprintf(stderr,"malloc failed\n");
+                exit(-1);
+        }
+        (void) strcpy(f, template);
+        if (mktemp(f) == NULL) {
+                fprintf(stderr,"can't create temporary file");
+                return NULL;
+        }
+        return f;
+}
+/*----------------------------------------------------------------------
+*/
+
+-- 
+Giles D Malet    gdm@shrdlu.UUCP        Waterloo, Ont, Canada    +1 519 725 5726
+
+------------------------------
+
+From: rajat@watson.ibm.com (Rajat Datta)
+Subject: Suspending emacs and bringing it back
+Date: 22 Apr 92 21:53:23 GMT
+
+I picked up emacs from tsx-11 and seem to be having a problem with
+bringing emacs back up to the foreground once I've suspended it with
+C-z.  The console seems to come back in cooked mode.  The screen is
+not updated with the emacs screen, and any control chars I type show
+up as C-<n>.
+
+Anyone else seen this problem?  I'm on 95c+.  I'll try it on the
+pre-96 (95c++; the uninformed might think it was a rewrite in c++ :)
+release that's out there today and see if the problem is still there.
+
+
+
+-- 
+rajat (rajat@watson.ibm.com)
+
+------------------------------
+
+From: rajat@watson.ibm.com (Rajat Datta)
+Subject: gcc 2.1, ld and -g
+Date: 22 Apr 92 22:09:13 GMT
+
+I'm able to do pretty much everything with gcc 2.1 except for loading
+programs with the -g flag.  gcc -g -c a.c goes fine for any file a.c,
+but gcc -g -o a a.c does not.  ld gives an error message about not
+finding library libg.a.  Doing a gcc -v seems to pass the -g flag to
+ld which doesn't know what to do with it.  Should there be a libg.a?
+If so, where is it?  Is it the same as libgcc.a?  Most likely I'm
+doing something wrong.  What is it?  Thanks for any help.
+
+-- 
+rajat (rajat@watson.ibm.com)
+
+------------------------------
+
+From: hedrick@dartagnan.rutgers.edu (Charles Hedrick)
+Subject: Re: IDE drive performance with linux
+Date: 22 Apr 92 22:41:36 GMT
+
+If you're getting one block per rotation, that means that the system
+can't keep up with the rotation speed of the disk.  This is not at all
+unusual.  Classically what you do is arrange the files on disk using
+every other block or every third block, or whatever you need in order
+that the system can keep up.  With system v, there's an argument to
+mkfs to specify this interleave.  With the Berkeley Fast File System,
+it's specified to mkfs or tunefs.  Since folks are busy implementing
+an improved file system for Linux, I'm going to hope that this feature
+is included.  It would presumably be easy to put into the current one
+as well, but I haven't looked at the code to see what would be
+involved.
+
+------------------------------
+
+From: moyerg@jove.cs.pdx.edu (gary a moyer)
+Crossposted-To: alt.os.linux
+Subject: help, cannot mount file system...
+Date: 22 Apr 92 23:00:48 GMT
+
+Hey netters!  I _accidentally_ messed up my ability to mount
+a file system!  I did it inadvertantly while trying to incorporate
+some _protection_.  Anyhow, what other files does mount access besides
+the actual device in /dev ?  I am getting the message:
+mount: unable to open lock-file
+
+               thx.  moyerg@cs.pdx.edu
+
+------------------------------
+
+From: bir7@leland.Stanford.EDU (Ross Biro)
+Subject: Re: gcc 2.1, ld and -g
+Date: 22 Apr 92 23:03:21 GMT
+
+>ld which doesn't know what to do with it.  Should there be a libg.a?
+
+        There seems to be a lot of confusion about libg.a.  When gcc
+-g attempts to link a program, it links in libg.a before libc.a to
+include any special debugging functions.  So as a minimum libg.a you
+could simply include nothing, or as a maximum you could compile libc.a
+with the -g flag and extra debugging statments, and then use that for
+libg.a.  I chose a different route by creating a symbolic link from
+libg.a to libc.a.  Currently linux has no standard libg.a, and
+probably only needs an entry in the FAQ to tell people about it.
+
+        If you intend to do serious debugging, you should compile the
+libraries with the -g flag, call the result libg.a and then tell gdb
+to look in the library source tree for source files.  That way you
+could step through both your program and the library without any
+problems.
+
+
+
+
+-- 
+Ross Biro bir7@leland.stanford.edu 
+Member League for Programming Freedom (LPF)
+mail league@gnu.ai.mit.edu for information
+
+------------------------------
+
+From: alsaggaf@athena.mit.edu (M. Saggaf)
+Subject: Bad Sectors
+Date: Wed, 22 Apr 1992 23:28:14 GMT
+
+  I have been getting many hard disk I/O errors and timeouts under
+Linux. Those seem to occur at the same blocks. My disk was low-level
+formatted recently with the proper bad sector information and neither Disk
+Manager nor the AMI BIOS disk surfece scan program could find any more
+bad sectors. Hence, I think either Linux tries to write to sectors
+that have been marked bad by low-level formatting, or it is more
+sensitive to flaky sectors than both Disk Manger and the BIOS program.
+'mkfs' does report those bad blocks when invoked by the -c (verify)
+switch, but apparently it does not try to do anything to prevent Linux
+from using them. Is there any Linux utility that would mark those
+blocks as bad and prevent Linux from using them? Please let me know.
+(Maybe such a utility should be incorporated into mkfs). Thanks.
+
+-- M. Saggaf (alsaggaf@erl.mit.edu)
+
+------------------------------
+
+From: hedrick@dartagnan.rutgers.edu (Charles Hedrick)
+Subject: Re: timezone support, date, CMOS clock support: archive sites please note
+Date: 22 Apr 92 23:06:09 GMT
+
+cummings@hammer.Prime.COM (Kevin Cummings) writes:
+
+>Also I got the circumstances backward.  When I ran date, it came back:
+
+>Mon Apr 20, 16:xx:xx EDT 1992
+
+>When I ran clock it came back
+
+>Sat Apr 20, 20:xx:xx 1992
+
+>Furthermore I ran them again last night!  New results:
+
+>date:
+
+>Tue Apr 21, 17:xx:xx EDT 1992
+
+>clock:
+
+>Jan Apr 21,, 21:xx:xx 1992
+
+I'm not sure what you think is wrong here.  The date and time look OK.
+They're what I would expect if the CMOS clock is set to GMT, which is
+the recommended configuration.  EDT is 4 hours to the west of GMT.
+You can get clock to do the conversion for you as it displays the
+time.  Use 'clock -u'.
+
+If you want the CMOS clock to be using local time, I think the
+documentation explains how to do it.  If your complaint is about the
+day of week, you're right.
+
+I'm sorry about the -u stuff.  If everybody is willing to run the CMOS
+clock on GMT, I can make that the only behavior.  My guess was that
+most people would be using both Linux and DOS, and would want to run
+the CMOS clock on local time in order to avoid oddities in DOS.  Thus
+I set up clock to default to having the CMOS clock on local time.  I
+could also have a file in zoneinfo that specifies whether which way
+the system is set up, so you don't have to remember to type -u.
+
+
+
+>Is the author aware that the DOW is stored as a number from 3-9 instead of
+>a number from 0-6 or 1-7?  I found this out while playing with a DOS
+>program to read the CMOS memory.  Looks like the clock program accessed
+>beyond Sat into Jan!   Can you say Oops?   Sure ya can.
+
+OK, I'll fix it.  I was unable to find any documentation on the day
+of week.  3-9???  
+
+>If clock won't display the correct date, I certainly don't trust it to
+>SET the correct date!  Last thing I want in LINUX is bad dates.
+
+Huh?  As far as I can tell, all that's wrong is the day of week.  That
+is really irrelevant to Unix.  The -s function (set Unix day-time
+based on CMOS clock) completely ignores the day of week from the CMOS
+clock.  All Unix keeps is the number of seconds since the beginning of
+time.  It computes the date, day of week, etc., based on that.  As
+long as the date and time are right, everything should work OK on
+Linux.  I'll still fix it, but it doesn't affect setting the time for
+Linux.  (What it does affect is setting the CMOS clock, if you decide
+to do that under Linux.  The program will set the day of week based on
+0-6 instead of 3-9.)
+
+I'll take a look at ownerships and protections again when I make up
+the new copy of timebin.  Some postings make it look like I got them
+wrong, though it could also be an error in setting things up.  At
+least I'll note in the documentation that /usr/lib/zoneinfo and all
+files in it should be world readable, and that clock should be setuid
+to the same user that owns /dev/port.
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Activists-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux) via:
+
+    Internet: Linux-Activists@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    tupac-amaru.informatik.rwth-aachen.de	pub/msdos/replace
+
+The current version of Linux is 0.95a released on March 17, 1992
+
+End of Linux-Activists Digest
+******************************

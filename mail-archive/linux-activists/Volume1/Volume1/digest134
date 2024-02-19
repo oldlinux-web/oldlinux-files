@@ -1,0 +1,886 @@
+From:     Digestifier <Linux-Activists-Request@news-digests.mit.edu>
+To:       Linux-Activists@news-digests.mit.edu
+Reply-To: Linux-Activists@news-digests.mit.edu
+Date:     Sat, 21 Mar 92 19:30:12 EST
+Subject:  Linux-Activists Digest #134
+
+Linux-Activists Digest #134, Volume #1           Sat, 21 Mar 92 19:30:12 EST
+
+Contents:
+  cdiffs for 0.95a from Linus for alpha testing (Charles Hedrick)
+
+----------------------------------------------------------------------------
+
+From: hedrick@dartagnan.rutgers.edu (Charles Hedrick)
+Subject: cdiffs for 0.95a from Linus for alpha testing
+Date: 22 Mar 92 00:15:22 GMT
+
+The following cdiffs come from Linus.  He's had trouble getting
+postings out.  They are alpha -- only for people who like to test
+things.  They appear to fix some of the problems with multiple disks,
+and some problems with serial lines.  I can't be sure about that.
+They do fix my problem with gdb getting "bad things happen".
+If the posting from Linus shows up, the diffs in that posting
+should be identical to these.
+
+*** OLD/linux/kernel/chr_drv/console.c  Fri Mar 13 00:37:07 1992
+--- linux/kernel/chr_drv/console.c      Thu Mar 19 21:15:03 1992
+***************
+*** 456,462 ****
+                p++;
+        }
+        sti();
+!       copy_to_cooked(tty);
+  }
+  
+  static void insert_char(int currcons)
+--- 456,462 ----
+                p++;
+        }
+        sti();
+!       TTY_READ_FLUSH(tty);
+  }
+  
+  static void insert_char(int currcons)
+***************
+*** 823,829 ****
+  
+  void do_keyboard_interrupt(void)
+  {
+!       copy_to_cooked(TTY_TABLE(0));
+        timer_active &= ~(1<<BLANK_TIMER);
+        if (console_blanked) {
+                timer_table[BLANK_TIMER].expires = 0;
+--- 823,829 ----
+  
+  void do_keyboard_interrupt(void)
+  {
+!       TTY_READ_FLUSH(TTY_TABLE(0));
+        timer_active &= ~(1<<BLANK_TIMER);
+        if (console_blanked) {
+                timer_table[BLANK_TIMER].expires = 0;
+*** OLD/linux/kernel/chr_drv/tty_ioctl.c        Thu Mar 12 23:51:41 1992
+--- linux/kernel/chr_drv/tty_ioctl.c    Thu Mar 19 21:27:07 1992
+***************
+*** 260,270 ****
+                        switch (arg) {
+                        case TCOOFF:
+                                tty->stopped = 1;
+!                               TTY_WRITE(tty);
+                                return 0;
+                        case TCOON:
+                                tty->stopped = 0;
+!                               TTY_WRITE(tty);
+                                return 0;
+                        case TCIOFF:
+                                if (STOP_CHAR(tty))
+--- 260,270 ----
+                        switch (arg) {
+                        case TCOOFF:
+                                tty->stopped = 1;
+!                               TTY_WRITE_FLUSH(tty);
+                                return 0;
+                        case TCOON:
+                                tty->stopped = 0;
+!                               TTY_WRITE_FLUSH(tty);
+                                return 0;
+                        case TCIOFF:
+                                if (STOP_CHAR(tty))
+*** OLD/linux/kernel/chr_drv/tty_io.c   Tue Mar 17 22:46:46 1992
+--- linux/kernel/chr_drv/tty_io.c       Thu Mar 19 21:27:07 1992
+***************
+*** 129,141 ****
+                printk("copy_to_cooked: missing queues\n\r");
+                return;
+        }
+-       cli();
+-       if (tty->busy) {
+-               sti();
+-               return;
+-       }
+-       tty->busy = 1;
+-       sti();
+        while (1) {
+                if (EMPTY(tty->read_q))
+                        break;
+--- 129,134 ----
+***************
+*** 232,242 ****
+                                PUTCH(c,tty->write_q);
+                }
+                PUTCH(c,tty->secondary);
+        }
+-       tty->write(tty);
+-       tty->busy = 0;
+        if (!EMPTY(tty->secondary))
+                wake_up(&tty->secondary->proc_list);
+  }
+  
+  /*
+--- 225,236 ----
+                                PUTCH(c,tty->write_q);
+                }
+                PUTCH(c,tty->secondary);
++               TTY_WRITE_FLUSH(tty);
+        }
+        if (!EMPTY(tty->secondary))
+                wake_up(&tty->secondary->proc_list);
++       if (LEFT(tty->write_q) > TTY_BUF_SIZE/2)
++               wake_up(&tty->write_q->proc_list);
+  }
+  
+  /*
+***************
+*** 305,314 ****
+                time = current->timeout = 0;
+        if (minimum>nr)
+                minimum = nr;
+!       copy_to_cooked(tty);
+        while (nr>0) {
+                if (other_tty && other_tty->write)
+!                       TTY_WRITE(other_tty);
+                cli();
+                if (EMPTY(tty->secondary) || (L_CANON(tty) &&
+                    !FULL(tty->read_q) && !tty->secondary->data)) {
+--- 299,308 ----
+                time = current->timeout = 0;
+        if (minimum>nr)
+                minimum = nr;
+!       TTY_READ_FLUSH(tty);
+        while (nr>0) {
+                if (other_tty && other_tty->write)
+!                       TTY_WRITE_FLUSH(other_tty);
+                cli();
+                if (EMPTY(tty->secondary) || (L_CANON(tty) &&
+                    !FULL(tty->read_q) && !tty->secondary->data)) {
+***************
+*** 320,326 ****
+                                break;
+                        interruptible_sleep_on(&tty->secondary->proc_list);
+                        sti();
+!                       copy_to_cooked(tty);
+                        continue;
+                }
+                sti();
+--- 314,320 ----
+                                break;
+                        interruptible_sleep_on(&tty->secondary->proc_list);
+                        sti();
+!                       TTY_READ_FLUSH(tty);
+                        continue;
+                }
+                sti();
+***************
+*** 398,404 ****
+                        cr_flag = 0;
+                        PUTCH(c,tty->write_q);
+                }
+!               TTY_WRITE(tty);
+                if (nr>0)
+                        schedule();
+        }
+--- 392,398 ----
+                        cr_flag = 0;
+                        PUTCH(c,tty->write_q);
+                }
+!               TTY_WRITE_FLUSH(tty);
+                if (nr>0)
+                        schedule();
+        }
+*** OLD/linux/kernel/chr_drv/serial.c   Sat Mar 14 20:16:21 1992
+--- linux/kernel/chr_drv/serial.c       Thu Mar 19 21:15:03 1992
+***************
+*** 26,47 ****
+  
+  static void com1_timer(void)
+  {
+!       copy_to_cooked(tty_table+64);
+  }
+  
+  static void com2_timer(void)
+  {
+!       copy_to_cooked(tty_table+65);
+  }
+  
+  static void com3_timer(void)
+  {
+!       copy_to_cooked(tty_table+66);
+  }
+  
+  static void com4_timer(void)
+  {
+!       copy_to_cooked(tty_table+67);
+  }
+  
+  static inline void do_rs_write(unsigned int port)
+--- 26,47 ----
+  
+  static void com1_timer(void)
+  {
+!       TTY_READ_FLUSH(tty_table+64);
+  }
+  
+  static void com2_timer(void)
+  {
+!       TTY_READ_FLUSH(tty_table+65);
+  }
+  
+  static void com3_timer(void)
+  {
+!       TTY_READ_FLUSH(tty_table+66);
+  }
+  
+  static void com4_timer(void)
+  {
+!       TTY_READ_FLUSH(tty_table+67);
+  }
+  
+  static inline void do_rs_write(unsigned int port)
+*** OLD/linux/kernel/chr_drv/pty.c      Sat Jan 11 01:56:45 1992
+--- linux/kernel/chr_drv/pty.c  Thu Mar 19 21:15:03 1992
+***************
+*** 25,31 ****
+                if (FULL(to->read_q)) {
+                        if (FULL(to->secondary))
+                                break;
+!                       copy_to_cooked(to);
+                        continue;
+                }
+                GETCH(from->write_q,c);
+--- 25,31 ----
+                if (FULL(to->read_q)) {
+                        if (FULL(to->secondary))
+                                break;
+!                       TTY_READ_FLUSH(to);
+                        continue;
+                }
+                GETCH(from->write_q,c);
+***************
+*** 33,39 ****
+                if (current->signal & ~current->blocked)
+                        break;
+        }
+!       copy_to_cooked(to);
+        wake_up(&from->write_q->proc_list);
+  }
+  
+--- 33,39 ----
+                if (current->signal & ~current->blocked)
+                        break;
+        }
+!       TTY_READ_FLUSH(to);
+        wake_up(&from->write_q->proc_list);
+  }
+  
+*** OLD/linux/kernel/blk_drv/hd.c       Sun Mar 15 20:46:53 1992
+--- linux/kernel/blk_drv/hd.c   Fri Mar 20 00:20:49 1992
+***************
+*** 82,88 ****
+--- 82,90 ----
+        int minor, i;
+        struct buffer_head *bh;
+        struct partition *p;
++       unsigned long first_sector;
+  
++       first_sector = hd[MINOR(dev)].start_sect;
+        if (!(bh = bread(dev,0))) {
+                printk("Unable to read partition table of device %04x\n",dev);
+                return;
+***************
+*** 93,99 ****
+                for (i=0 ; i<4 ; i++,p++) {
+                        if (!(hd[i+minor].nr_sects = p->nr_sects))
+                                continue;
+!                       hd[i+minor].start_sect = p->start_sect;
+                        if ((current_minor & 0x3f) >= 60)
+                                continue;
+                        if (p->sys_ind == EXTENDED_PARTITION) {
+--- 95,101 ----
+                for (i=0 ; i<4 ; i++,p++) {
+                        if (!(hd[i+minor].nr_sects = p->nr_sects))
+                                continue;
+!                       hd[i+minor].start_sect = first_sector + p->start_sect;
+                        if ((current_minor & 0x3f) >= 60)
+                                continue;
+                        if (p->sys_ind == EXTENDED_PARTITION) {
+***************
+*** 141,156 ****
+                hd_info[drive].sect = *(unsigned char *) (14+BIOS);
+                BIOS += 16;
+        }
+-       if (hd_info[1].cyl)
+-               NR_HD=2;
+-       else
+-               NR_HD=1;
+- #endif
+-       for (i=0 ; i<NR_HD ; i++) {
+-               hd[i<<6].start_sect = 0;
+-               hd[i<<6].nr_sects = hd_info[i].head*
+-                               hd_info[i].sect*hd_info[i].cyl;
+-       }
+  
+        /*
+                We querry CMOS about hard disks : it could be that 
+--- 143,148 ----
+***************
+*** 181,190 ****
+                        NR_HD = 1;
+        else
+                NR_HD = 0;
+!       for (i = NR_HD ; i < 2 ; i++) {
+!               hd[i<<6].start_sect = 0;
+!               hd[i<<6].nr_sects = 0;
+        }
+        for (drive=0 ; drive<NR_HD ; drive++) {
+                current_minor = 1+(drive<<6);
+                check_partition(0x0300+(drive<<6));
+--- 173,186 ----
+                        NR_HD = 1;
+        else
+                NR_HD = 0;
+! #endif
+!       for (i = 0 ; i < (MAX_HD<<6) ; i++) {
+!               hd[i].start_sect = 0;
+!               hd[i].nr_sects = 0;
+        }
++       for (i = 0 ; i < NR_HD ; i++)
++               hd[i<<6].nr_sects = hd_info[i].head*
++                               hd_info[i].sect*hd_info[i].cyl;
+        for (drive=0 ; drive<NR_HD ; drive++) {
+                current_minor = 1+(drive<<6);
+                check_partition(0x0300+(drive<<6));
+*** OLD/linux/kernel/ptrace.c   Tue Mar 17 23:38:37 1992
+--- linux/kernel/ptrace.c       Thu Mar 19 23:49:42 1992
+***************
+*** 22,30 ****
+  /* set's the trap flag. */
+  #define TRAP_FLAG 0x100
+  
+- /* check's for granularity. */
+- #define GRANULARITY 0x00800000
+- 
+  /*
+   * this is the number to subtract from the top of the stack. To find
+   * the local frame.
+--- 22,27 ----
+***************
+*** 51,58 ****
+   * the offset is how far from the base addr as stored in the TSS.  
+   * this routine assumes that all the priviledged stacks are in our
+   * data space.
+!  */
+!    
+  static inline int get_stack_long(struct task_struct *task, int offset)
+  {
+        unsigned char *stack;
+--- 48,54 ----
+   * the offset is how far from the base addr as stored in the TSS.  
+   * this routine assumes that all the priviledged stacks are in our
+   * data space.
+!  */   
+  static inline int get_stack_long(struct task_struct *task, int offset)
+  {
+        unsigned char *stack;
+***************
+*** 69,213 ****
+   * data space.
+   */
+  static inline int put_stack_long(struct task_struct *task, int offset,
+!       unsigned short data)
+  {
+        unsigned char * stack;
+  
+        stack = (unsigned char *) task->tss.esp0;
+        stack += offset;
+!       *(int *) stack = data;
+        return 0;
+  }
+  
+  /*
+!  * this routine will get a word out of an arbitrary 
+!  * tasks data space.  It likes to have the task number
+!  * rather than the task pointer.  Perhaps the number
+!  * should be included in the pointer.
+   */
+! /* seg = 0 if I space */
+! static inline int get_long(int tsk, long addr, unsigned seg, int *data)
+  {
+-       int i;
+-       int limit;
+-       int cur;
+-       unsigned long address;
+        unsigned long page;
+-       unsigned oldfs;
+  
+!   /* find the task number of the current task. */
+!       for (i = 0; i < NR_TASKS ; i ++) {
+!               if (task[i] == current) break;
+        }
+-       if (i == NR_TASKS) {
+-               printk("PTRACE: Can't find current task\n");
+-               do_exit(SIGSEGV);
+-       }
+-       cur = i;
+- 
+-   /* we will need to check the readability of the segment
+-      and then the byte in order to avoid segment violations. */
+-       seg++;
+-       limit = (task[tsk]->ldt[seg].a) & 0xffff;
+-   /* this should be constant amound all of our segments, but we
+-      had better check anyway. */
+-       if (task[tsk]->ldt[seg].b & GRANULARITY)
+-               limit = limit << 12;
+- 
+-       if (limit <= addr+4)
+-               return -EIO;
+- 
+-   /* Now compute the address, and make sure that it is present. */
+-       address = task[tsk]->start_code + addr;
+- 
+-       page = *((unsigned long*) ((address >> 20) & 0xffc));
+-   /* see if it is present. */
+        if (!(page & PAGE_PRESENT)) {
+!               do_no_page(0, address, task[tsk]);
+        }
+! 
+!       oldfs = get_fs();
+!   /* now convert seg to the right format. */
+!       seg = (seg << 3) | 0x4;
+! 
+!       cli(); /* we are about to change our ldt, we better do it
+!           with interrupts off.  Perhaps we should call schedule
+!           first so that we won't be taking too much extra time. */
+!       lldt(tsk);
+!       set_fs(seg);
+!       *data = get_fs_long((void *)addr); /* we are assuming kernel space
+!                                               is in the gdt here. */
+!       lldt(cur);
+!       set_fs(oldfs);
+!       sti();
+!       return 0;
+  }
+  
+  /*
+!  * this routine will get a word out of an arbitrary 
+!  * tasks data space.  It likes to have the task number
+!  * rather than the task pointer.  Perhaps the number
+!  * should be included in the pointer.
+   */
+! /* seg = 0 if I space */
+! static inline int put_long(int tsk, long addr, int data, unsigned seg)
+  {
+-       int i;
+-       int limit;
+-       unsigned oldfs;
+-       unsigned long address;
+        unsigned long page;
+-       int cur;
+  
+!   /* find the task number of the current task. */
+!       for (i = 0; i < NR_TASKS ; i++) {
+!               if (task[i] == current) break;
+        }
+!       if (i == NR_TASKS) {
+!               printk("PTRACE: Can't find current task\n");
+!               do_exit(SIGSEGV);
+        }
+!       cur = i;
+  
+!   /* we will need to check the readability of the segment
+!      and then the byte in order to avoid segment violations. */
+!       seg++;
+!       limit = (task[tsk]->ldt[seg].a) & 0xffff;
+!   /* this should be constant amound all of our segments, but we
+!      had better check anyway. */
+!       if (task[tsk]->ldt[seg].b & GRANULARITY)
+!               limit = limit << 12;
+  
+!       if (limit <= addr+4)
+                return -EIO;
+  
+!   /* Now compute the address, and make sure that it is present. */
+!       address = task[tsk]->start_code + addr;
+  
+!       page = *((unsigned long*) ((address >> 20) & 0xffc));
+!   /* see if it is present. */
+!       if (!(page & PAGE_PRESENT)) {
+!               do_no_page(0, address, task[tsk]);
+!       }
+!       write_verify(address);
+! 
+!       oldfs=get_fs();
+!   /* now convert seg to the right format. */
+!       seg = (seg << 3) | 0x4;
+! 
+!       cli(); /* we are about to change our ldt, we better do it
+!           with interrupts off.  Perhaps we should call schedule
+!           first so that we won't be taking too much extra time. */
+!       lldt(tsk);
+!       set_fs(seg);
+!       put_fs_long(data,(void *)addr);
+!       lldt(cur);
+!       set_fs(oldfs);
+!       sti();
+        return 0;
+  }
+  
+- 
+  /* Perform ptrace(request, pid, addr, data) syscall */
+  int sys_ptrace(unsigned long *buffer)
+  {
+--- 65,223 ----
+   * data space.
+   */
+  static inline int put_stack_long(struct task_struct *task, int offset,
+!       unsigned long data)
+  {
+        unsigned char * stack;
+  
+        stack = (unsigned char *) task->tss.esp0;
+        stack += offset;
+!       *(unsigned long *) stack = data;
+        return 0;
+  }
+  
+  /*
+!  * This routine gets a long from any process space by following the page
+!  * tables. NOTE! You should check that the long isn't on a page boundary,
+!  * and that it is in the task area before calling this: this routine does
+!  * no checking.
+!  *
+!  * NOTE2! This uses "tsk->tss.cr3" even though we know it's currently always
+!  * zero. This routine shouldn't have to change when we make a better mm.
+   */
+! static unsigned long get_long(struct task_struct * tsk,
+!       unsigned long addr)
+  {
+        unsigned long page;
+  
+!       addr += tsk->start_code;
+! repeat:
+!       page = tsk->tss.cr3 + ((addr >> 20) & 0xffc);
+!       page = *(unsigned long *) page;
+!       if (page & PAGE_PRESENT) {
+!               page &= 0xfffff000;
+!               page += (addr >> 10) & 0xffc;
+!               page = *((unsigned long *) page);
+        }
+        if (!(page & PAGE_PRESENT)) {
+!               do_no_page(0,addr,tsk);
+!               goto repeat;
+        }
+!       page &= 0xfffff000;
+!       page += addr & 0xfff;
+!       return *(unsigned long *) page;
+  }
+  
+  /*
+!  * This routine puts a long into any process space by following the page
+!  * tables. NOTE! You should check that the long isn't on a page boundary,
+!  * and that it is in the task area before calling this: this routine does
+!  * no checking.
+   */
+! static void put_long(struct task_struct * tsk, unsigned long addr,
+!       unsigned long data)
+  {
+        unsigned long page;
+  
+!       addr += tsk->start_code;
+! repeat:
+!       page = tsk->tss.cr3 + ((addr >> 20) & 0xffc);
+!       page = *(unsigned long *) page;
+!       if (page & PAGE_PRESENT) {
+!               page &= 0xfffff000;
+!               page += (addr >> 10) & 0xffc;
+!               page = *((unsigned long *) page);
+        }
+!       if (!(page & PAGE_PRESENT)) {
+!               do_no_page(0,addr,tsk);
+!               goto repeat;
+        }
+!       if (!(page & PAGE_RW)) {
+!               write_verify(addr);
+!               goto repeat;
+!       }
+!       page &= 0xfffff000;
+!       page += addr & 0xfff;
+!       *(unsigned long *) page = data;
+! }
+  
+! /*
+!  * This routine checks the page boundaries, and that the offset is
+!  * within the task area. It then calls get_long() to read a long.
+!  */
+! static int read_long(struct task_struct * tsk, unsigned long addr,
+!       unsigned long * result)
+! {
+!       unsigned long low,high;
+  
+!       if (addr > TASK_SIZE-4)
+                return -EIO;
++       if ((addr & 0xfff) > PAGE_SIZE-4) {
++               low = get_long(tsk,addr & 0xfffffffc);
++               high = get_long(tsk,(addr+4) & 0xfffffffc);
++               switch (addr & 3) {
++                       case 1:
++                               low >>= 8;
++                               low |= high << 24;
++                               break;
++                       case 2:
++                               low >>= 16;
++                               low |= high << 16;
++                               break;
++                       case 3:
++                               low >>= 16;
++                               low |= high << 16;
++                               break;
++               }
++               *result = low;
++       } else
++               *result = get_long(tsk,addr);
++       return 0;
++ }
+  
+! /*
+!  * This routine checks the page boundaries, and that the offset is
+!  * within the task area. It then calls put_long() to write a long.
+!  */
+! static int write_long(struct task_struct * tsk, unsigned long addr,
+!       unsigned long data)
+! {
+!       unsigned long low,high;
+  
+!       if (addr > TASK_SIZE-4)
+!               return -EIO;
+!       if ((addr & 0xfff) > PAGE_SIZE-4) {
+!               low = get_long(tsk,addr & 0xfffffffc);
+!               high = get_long(tsk,(addr+4) & 0xfffffffc);
+!               switch (addr & 3) {
+!                       case 0: /* shouldn't happen, but safety first */
+!                               low = data;
+!                               break;
+!                       case 1:
+!                               low &= 0x000000ff;
+!                               low |= data << 8;
+!                               high &= 0xff000000;
+!                               high |= data >> 8;
+!                               break;
+!                       case 2:
+!                               low &= 0x0000ffff;
+!                               low |= data << 16;
+!                               high &= 0xffff0000;
+!                               high |= data >> 16;
+!                               break;
+!                       case 3:
+!                               low &= 0x00ffffff;
+!                               low |= data << 24;
+!                               high &= 0xffffff00;
+!                               high |= data >> 24;
+!                               break;
+!               }
+!               put_long(tsk,addr & 0xfffffffc,low);
+!               put_long(tsk,(addr+4) & 0xfffffffc,high);
+!       } else
+!               put_long(tsk,addr,data);
+        return 0;
+  }
+  
+  /* Perform ptrace(request, pid, addr, data) syscall */
+  int sys_ptrace(unsigned long *buffer)
+  {
+***************
+*** 244,250 ****
+                case 2: {
+                        int tmp,res;
+  
+!                       res = get_long(childno, addr, 1, &tmp);
+                        if (res < 0)
+                                return res;
+                        verify_area((void *) data, 4);
+--- 254,260 ----
+                case 2: {
+                        int tmp,res;
+  
+!                       res = read_long(task[childno], addr, &tmp);
+                        if (res < 0)
+                                return res;
+                        verify_area((void *) data, 4);
+***************
+*** 267,280 ****
+        /* when I and D space are seperate, this will have to be fixed. */
+                case 4: /* write the word at location addr. */
+                case 5:
+!                       if (put_long(childno, addr, data, 1))
+!                               return -EIO;
+!                       return 0;
+  
+                case 6: /* write the word at location addr in the USER area */
+                        addr = addr >> 2; /* temproary hack. */
+                        if (addr < 0 || addr >= 17)
+!                                       return -EIO;
+                        if (addr == ORIG_EAX)
+                                return -EIO;
+                        if (addr == EFL) {   /* flags. */
+--- 277,288 ----
+        /* when I and D space are seperate, this will have to be fixed. */
+                case 4: /* write the word at location addr. */
+                case 5:
+!                       return write_long(task[childno],addr,data);
+  
+                case 6: /* write the word at location addr in the USER area */
+                        addr = addr >> 2; /* temproary hack. */
+                        if (addr < 0 || addr >= 17)
+!                               return -EIO;
+                        if (addr == ORIG_EAX)
+                                return -EIO;
+                        if (addr == EFL) {   /* flags. */
+***************
+*** 281,287 ****
+                                data &= FLAG_MASK;
+                                data |= get_stack_long(child, EFL*4-MAGICNUMBER)  & ~FLAG_MASK;
+                        }
+- 
+                        if (put_stack_long(child, 4*addr-MAGICNUMBER, data))
+                                return -EIO;
+                        return 0;
+--- 289,294 ----
+*** OLD/linux/mm/memory.c       Tue Mar 17 22:35:13 1992
+--- linux/mm/memory.c   Thu Mar 19 23:19:03 1992
+***************
+*** 429,436 ****
+        return 0;
+  }
+  
+! void do_no_page(unsigned long error_code,
+!                unsigned long address, struct task_struct *tsk)
+  {
+        static unsigned int last_checked = 0;
+        int nr[4];
+--- 429,436 ----
+        return 0;
+  }
+  
+! void do_no_page(unsigned long error_code, unsigned long address,
+!       struct task_struct *tsk)
+  {
+        static unsigned int last_checked = 0;
+        int nr[4];
+***************
+*** 439,445 ****
+        int block,i;
+        struct inode * inode;
+  
+!       /* Trashing ? Make it interruptible, but don't penalize otherwise */
+        for (i = 0; i < CHECK_LAST_NR; i++)
+                if ((address & 0xfffff000) == last_pages[i]) {
+                        current->counter = 0;
+--- 439,445 ----
+        int block,i;
+        struct inode * inode;
+  
+!       /* Thrashing ? Make it interruptible, but don't penalize otherwise */
+        for (i = 0; i < CHECK_LAST_NR; i++)
+                if ((address & 0xfffff000) == last_pages[i]) {
+                        current->counter = 0;
+***************
+*** 492,499 ****
+                return;
+        }
+        if (tsk == current)
+!       if (share_page(inode,tmp))
+!               return;
+        if (!(page = get_free_page()))
+                oom();
+  /* remember that 1 block is used for header */
+--- 492,499 ----
+                return;
+        }
+        if (tsk == current)
+!               if (share_page(inode,tmp))
+!                       return;
+        if (!(page = get_free_page()))
+                oom();
+  /* remember that 1 block is used for header */
+*** OLD/linux/include/linux/tty.h       Sun Mar 15 02:43:54 1992
+--- linux/include/linux/tty.h   Thu Mar 19 21:16:26 1992
+***************
+*** 68,83 ****
+        struct tty_queue *secondary;
+        };
+  
+! #define TTY_WRITE(tty) \
+  do { \
+        cli(); \
+!       if (!(tty)->busy) { \
+!               (tty)->busy = 1; \
+                sti(); \
+                (tty)->write((tty)); \
+!               (tty)->busy = 0; \
+!       } else \
+                sti(); \
+  } while (0)
+  
+  extern struct tty_struct tty_table[];
+--- 68,105 ----
+        struct tty_queue *secondary;
+        };
+  
+! /*
+!  * so that interrupts won't be able to mess up the
+!  * queues, copy_to_cooked must be atomic with repect
+!  * to itself, as must tty->write.
+!  */
+! #define TTY_WRITE_BUSY 1
+! #define TTY_READ_BUSY 2
+! 
+! #define TTY_WRITE_FLUSH(tty) \
+  do { \
+        cli(); \
+!       if (!EMPTY((tty)->write_q) && !(TTY_WRITE_BUSY & (tty)->busy)) { \
+!               (tty)->busy |= TTY_WRITE_BUSY; \
+                sti(); \
+                (tty)->write((tty)); \
+!               cli(); \
+!               (tty)->busy &= ~TTY_WRITE_BUSY; \
+!       } \
+!       sti(); \
+! } while (0)
+! 
+! #define TTY_READ_FLUSH(tty) \
+! do { \
+!       cli(); \
+!       if (!EMPTY((tty)->read_q) && !(TTY_READ_BUSY & (tty)->busy)) { \
+!               (tty)->busy |= TTY_READ_BUSY; \
+                sti(); \
++               copy_to_cooked((tty)); \
++               cli(); \
++               (tty)->busy &= ~TTY_READ_BUSY; \
++       } \
++       sti(); \
+  } while (0)
+  
+  extern struct tty_struct tty_table[];
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Activists-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and alt.os.linux) via:
+
+    Internet: Linux-Activists@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    tupac-amaru.informatik.rwth-aachen.de	pub/msdos/replace
+
+The current version of Linux is 0.12, released on Jan 14, 1992
+
+End of Linux-Activists Digest
+******************************

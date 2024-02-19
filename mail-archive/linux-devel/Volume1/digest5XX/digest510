@@ -1,0 +1,511 @@
+From:     Digestifier <Linux-Development-Request@senator-bedfellow.mit.edu>
+To:       Linux-Development@senator-bedfellow.mit.edu
+Reply-To: Linux-Development@senator-bedfellow.mit.edu
+Date:     Tue, 1 Mar 94 02:13:07 EST
+Subject:  Linux-Development Digest #510
+
+Linux-Development Digest #510, Volume #1          Tue, 1 Mar 94 02:13:07 EST
+
+Contents:
+  Re: Specialix driver (Frank Lofaro)
+  Re: Amiga FileSystem, Anyone? (Hamish Macdonald)
+  Re: serial driver woes (Theodore Ts'o)
+  Attention Linux Adaptec developers (David Rapchun)
+  Re: Linux and X WordPerfect (Eric Youngdale)
+  Re: Specialix driver (Wayne Schlitt)
+  Re: Amiga FileSystem, Anyone? (Alan Braggins)
+  Re: Linux and X WordPerfect (Jerry Whelan)
+  Re: Amiga FileSystem, Anyone? (Rob Janssen)
+  Re: TTY bugs (Theodore Ts'o)
+  Re: Context switch for pthreads (Peyton Reed)
+
+----------------------------------------------------------------------------
+
+From: ftlofaro@unlv.edu (Frank Lofaro)
+Subject: Re: Specialix driver
+Date: Mon, 28 Feb 94 16:47:10 GMT
+
+In article <2kd0m4$9q@melchior.frmug.fr.net> thomas@melchior.frmug.fr.net (Thomas Quinot) writes:
+>Jon Brawn (jonb@specialix.com) wrote:
+>: IF Specialix were to write a driver for SI on Linux, we could NOT release the
+>: source of the download code into the public domain AT ALL. We COULD supply a
+>: binary file with it in. The Linux driver source would be made available.
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>
+>But... Why couldn't you license it under the GNU General Public License ?
+>This has nothing to do with public domain, and Linux is _not_ public domain
+>software...
+>
+>: WOULD this be legal?
+>
+>Yup. But it wouldn't be portable/customizable/hackable...
+>
+>: Comments?
+>
+
+Isn't that good enough?! The driver source (i.e. the important stuff) is 
+public, the download code is not (it might not even be 386 code, probably 
+isn't, so why even bother about it). The driver source is a part of Linux, 
+even if they released the download code source, it still would NOT be part 
+of Linux. Heck Specialix's only mistake was asking the net, instead of going 
+ahead and just doing it. 1/2 :)
+
+
+------------------------------
+
+From: Hamish.Macdonald@bnr.ca (Hamish Macdonald)
+Subject: Re: Amiga FileSystem, Anyone?
+Date: 28 Feb 1994 22:42:33 GMT
+
+>>>>> On 27 Feb 1994 02:28:14 EST,
+>>>>> In message <1994Feb27.072814.10106@dream.nullnet.fi>,
+>>>>> semi@dream.nullnet.fi (Sami-Pekka Hallikas) wrote:
+
+Sami-Pekka> Does anyone developing WORKING Amiga filesystem, that you
+Sami-Pekka> can read amiga disks with you Linux machine. I really like
+Sami-Pekka> to get this FS if anyone is working with it. I tried old
+Sami-Pekka> AFFS but it didn't worked anyway :-/.
+
+I'm using a version of affs in linux/68k to read AmigaDOS hard disk
+partitions.
+
+I got the source for this from somewhere on tsx-11.mit.edu:/pub/Linux
+
+------------------------------
+
+From: tytso@ATHENA.MIT.EDU (Theodore Ts'o)
+Subject: Re: serial driver woes
+Date: 1 Mar 1994 00:12:34 -0500
+Reply-To: tytso@ATHENA.MIT.EDU (Theodore Ts'o)
+
+   From: gkm@tmn.com (Greg McGary)
+   Date: Mon, 28 Feb 94 22:40:15 EST
+
+   I've been wrestling with the linux 0.99.15 serial driver for a couple of
+   days now with limited success.  I would appreciate hearing from others
+   who have delved into the serial/tty/ns16550a morass.
+
+What version of 0.99.15 are you using?
+
+   Here are my findings, in no particular order:
+
+   * I found at least three bugs in the calculation & deployment of
+     rs_timer() timeouts, with the net result that timeouts intended to
+     happen within a few jiffies don't happen for 60 seconds!  When an
+     interrupt is lost (and they are lost with some frequency), the
+     driver waits all that time before things start up again.  I
+     discovered this after noting that uucp performance on my 14,400bps
+     modem (with 16550a UART) was miserable due to 60 second dry-spells
+     in transmission every 20-30Kb transferred.  I fixed this, and got a
+     significant improvement, but other problems still exist...
+
+Can you send a patch?  A visual inspection of the code seems to indicate
+that it should be doing the right thing.  I have missed something,
+though.
+
+   * The code sets the 16550A FIFO trigger at 8 bytes.  This appears to
+     work for receive interrupts, but not for transmit--I always observe an
+     interrupt per character on transmissions.
+
+(1) the FIFO trigger level only applies for the receive interrupts.  (2)
+for the transmit interupts, the THRE bit is only set when the FIFO is
+*empty*, and the serial driver is programmed to load 16 bytes at a time
+into the UART if the FIFO mode is set.  This is as specified by the
+National Semincoductor databook.  If you're UART is doing something
+else, it's broken.
+
+So I question your observations.  If THRE is really getting set once per
+character, you would also be losing 15 out of every 16 characters.  I'm
+pretty sure it's doing the right thing.
+
+   * The UART seems to require a "cooling off" period after servicing the
+     interrupt, before the interrupt handler can return--I have to poll
+     until the UART_IIR_NO_INT bit is set before returning.  It usually
+     takes at least a couple times around the service loop, after all I/O
+     has been performed and there's nothing left to do, before the bit
+     comes on.  Sometimes, it takes a dozen loops before the bit comes
+     on!  This is neither here-nor-there, I just find it curious
+     behavior, and, of course, it would be nice if the interrupt could be
+     serviced faster without all the thumb-twiddling at the end,
+
+This really sounds like your UART is broken.... and is probably the
+cause of your unreliable performance.  A dozen loops around the service
+handler will seriously degrade your performance!
+
+Hmm.... actually there's another explanation.  If your modem/null modem
+is leaving the modem status lines (dcd, rts, ring, dsr, etc.) floating,
+it could be that they are bouning up and down rapidly, causing lots of
+modem status interrupts to fire.  In future versions, there will be a
+patch so that if CLOCAL is on, and CRTSCTS is off, that modem status
+interrupts will be disabled; but you will still lose if you need (say)
+RTS/CTS flow control, but the RING line is still floating and is
+oscillating rapidly between 0 and 1.
+
+I'm lucky; I don't have that problem on my serial boards, even if
+nothing's plugged into them; they just stay 0 or 1 consistently, even as
+they float.
+
+   * Is the Linux serial driver generally known to be buggy/unreliable at
+     high speed, or is there something about my hardware configuration
+     that's causing me problems that others don't have?
+
+Not that I know of.  I would suspect that there's something special
+about your hardware.
+
+   * Are there multiple versions of the 16550a, some of which don't
+     work--possibly like mine! :-(
+
+There have been reports of people with cheapskate UART's that try to be
+National Seimcoduct compitible, but really aren't.  
+
+                                                - Ted
+
+------------------------------
+
+From: rapchun@suicide.sdsu.edu (David Rapchun)
+Subject: Attention Linux Adaptec developers
+Date: 1 Mar 1994 02:00:47 GMT
+
+
+Hello, I need some help.  I recently got a new Adaptec 2742T controller and sold
+off my 1542B thinking I must press on with future development to stay current.
+My main mission is to run Linux and I cant because it wont recognize this card.
+To whoever is writing the driver (hopefully you r reading this now) could you
+please give me some feedback on the status.  Thanx a lot.
+
+Dave.
+
+--
+ 
+                                          _oI<LIKE>=vo__
+                                        ?/$="'"  """^SATAN$~\
+                                      .&?/'              `""$$,
+                                    ,/?/'       /-"^\.   .-=~\T,
+                                  ,/?/'        /SATAN|  |<MY- ,??
+                                ./?/'          `\?IS#'  `$?FRIENDi\.
+                               ,*??              `"       ""' `b'\\$$&&\.
+                              ,Td'                             `&:`H' "&7, .__
+                  ._.         H||            .                  `*\H,  `&$$S:7|
+                 |????        M|,         ,--&|\                  `&?b   ""://'
+        .,o--vo\,PJ'H|,       H|L         ``'"H?b                 ,-`?\   ,&&'
+       ,P?-""^==:=' ||b       `L9,            `H`&,               |?:!|| ,P&
+       `b?\          9/?       ??H,            |L *b.,'"\          :$:&  H]'
+        `b$\o.        */\.      ??*b.           9.  `\\:(|     .,/$6d'  |\T
+          ``\Z\\       `\7b.    ,To?&b.          \(\:-.-S:-~=-"'',P     MJ'
+             `\?*b       ?&&\.  d\|<_ `\o_       `&&M\:SATAN>\IS,&'    |LT
+               `\?\\      ``\?\^I/HATE@:~:$=v\.    `$k<MY&PAL@%#J'     HJ'
+                 `\?\.       `\b/$KIDS!-?&<?::P\\    `"^-^-?b=Sd'     |\T
+     _o~=~$&$>==v\.??\,         `\d `\$$'9P'I-LOVE=SATAN\/$$~?$\     ,R/
+  /$?~^'"""""`"\\&&< ?b               "`~$P:c: /v==v,#::?<<&:'T|   d$/'
+  [|:.             ""=o/&.                ,P    o&Z'`'.##| |MH\|| ,$$'
+  `=:$H&=\.           `"b?b.             .&'    96*.-v.:?/`\==$&?$&*'
+       `^$?\.           `*&*\\          ,P       ?~-~'      |$$S>'
+          `\7b           ,T/\&&\.      d?                    |T'
+            \/b         .&J'  `\>     d'                      T,
+             &`L        /||          ?|                        ?,
+             ||9       J\T           H                          ?,
+              H||     ||/           ||                           9,
+              ||M     PJ'           ||                           `H
+              bT,   ||T            ||                            ||
+               T/L   H||            `b                             M
+                &T,  M|              9,                            9
+                `L9, M|              `&.                           |
+                 `?*,9||              `b                           d
+                  `\?(|H.              `b                          ?b
+                   `*\ `&.              `\.                       J*|b
+                     `\o/\.              `&.                     ,P 9/L
+                        9:&.              `9\                   ??  `H9.
+                         *?9\               `b                .&'    |/|
+                          `|`\.              `L             ./'      `|H
+                          d\/qZbo.            M          .,='        ,|T
+                 ./~&$$?=??/' `"=H$|          H       .o=''          J\|
+                ,*/''  `\?        `'        ./?ov=="*b9,            ,$P
+               ,Td                         ,$$'`'    ?|M           ,$/
+               J||                       ,$?/         M||         ?$/
+               M||         |>\.     ._,~9$''          T||        d'M.
+               9`|         `Hi:R&:&&6&="'           ./$J|       `^"\Z\.
+               ||M          `=Z\:""                 H|T"            `&H&>v_
+                bT,    ..   v,?|\                   M||               .:Z|&\.
+                ||H  _DEATH~>TO9H|                  `?*\              ?$`#'H
+                 9ALL|1KIDS*  .$/                    `bZ&\       ,o\&KILL&/'
+                  \?$.:?ooo/*""'                       `\$$b_   |\MAIM*:./'
+                   `"""'  `'                              `~?&qDESTROY#/'
+                                                             "^~DIE/"
+ 
+******************************************************************************
+* No one shall wield Excalibur but me!                                       *
+* Give us the eye!                                                           *
+* When I left you I was but the learner, now I am the master!                *
+******************************************************************************
+* Rapchun@suicide.SDSU.edu                                                   *
+******************************************************************************
+
+------------------------------
+
+From: eric@tantalus.nrl.navy.mil (Eric Youngdale)
+Subject: Re: Linux and X WordPerfect
+Date: Mon, 28 Feb 1994 22:52:27 GMT
+
+In article <2kstci$9cn@renux.frmug.fr.net> cougnenc@itesec.ensta.fr (Rene COUGNENC) writes:
+>Ce brave Eric Youngdale ecrit:
+>
+>>      My own interests are in being able to run SVr4 binaries under linux.
+>> Currently I can get Emacs compiled for SVr4 to come up under linux (non-X only
+>
+>Does the COFF or ELM format change something in the performance of the
+>system ?
+>
+>I mean, is a COFF or ELM binary version of a given program, strictly 
+>equivalent in speed, memory usage, disk space, to a native Linux a.out
+>binary ?
+
+        Jeez, people want performance too :-).
+
+        Dunno about speed.  I have not specifically benchmarked anything.  In
+principle, it should be about the same.  With ELF binaries, there is a slight
+delay as the dynamic linker does its job, but other than this it should be
+close.
+
+        Memory usage - should also be similar I guess.  I have not really tried
+to compare anything yet.
+
+        Disk usage - COFF binaries should be pretty compact if they use the
+shared library.  ELF should be somewhat larger, but I do not have a good
+estimate off the top of my head as to how much larger this would be.  I would
+want to say something in the 10-20% range, but I could be off.  This should be
+quite close to the binary size for NetBSD with their new shared libraries.
+
+-Eric
+
+-- 
+"The woods are lovely, dark and deep.  But I have promises to keep,
+And lines to code before I sleep, And lines to code before I sleep."
+
+------------------------------
+
+From: wayne@backbone.uucp (Wayne Schlitt)
+Crossposted-To: gnu.misc.discuss
+Subject: Re: Specialix driver
+Date: Tue, 1 Mar 1994 03:23:08 GMT
+Reply-To: wayne@cse.unl.edu
+
+In article <robertl.762402975@amsg> robertl@arnet.com (Robert Lipe) writes:
+> Re: Specialix drivers.
+> 
+> [ ... ]
+>
+> IMHO: The reason none of us supports LINUX, BSD-386, 386-BSD, NET/2,  is
+> summarized by the preceding 100 messages.   We have proprietary card
+> executables that have taken mongo R&D $$$ to develop.  [ ... ] 
+> Given the potential legal problems outlined above (I think there were 75
+> different interpretations in those 100 messages), most of us are willing
+> to "just say no" and focus in a market w/o these hassles.
+
+First:
+
+  Don't listen to us random net loonies.  We have no power to back up
+  our words.
+
+
+Who you _should_ listen to is people like Linus, your lawyer, and yes,
+RMS and/or other _high_level_ people at the FSF.  RMS et al rarely get
+into mud slinging messes like this, but it is my understanding that
+they are much more reasonable/logical when you talk to them directly
+than when you listen to people talking for them.  Linus has seemed to
+be _very_ interested in helping people use Linux.  I have no idea how
+nice your lawyer is.  :->  
+
+
+You need to consider whether there is a market for your product, and
+what legal i's need to be dotted and t's crossed in order for you (and
+your lawyer) to feel comfortable with the product.  If you think there
+is a market, the _please_ talk to the people who count.  
+
+
+
+-wayne
+-- 
+The Fundamental Problem with USENET is that you have at least a couple
+of hours, if not a day or so to think up that witty, absolutely
+devastating retort...  The other Fundamental Problem is people don't
+even take a couple of minutes to think before they hit that send key...
+
+------------------------------
+
+From: armb@setanta.demon.co.uk (Alan Braggins)
+Subject: Re: Amiga FileSystem, Anyone?
+Date: Mon, 28 Feb 1994 18:27:08 GMT
+
+In article <1994Feb27.072814.10106@dream.nullnet.fi> semi@dream.nullnet.fi (Sami-Pekka Hallikas) writes:
+>   Does anyone developing WORKING Amiga filesystem, that you can read amiga
+>   disks with you Linux machine. I really like to get this FS if anyone is
+>   working with it. I tried old AFFS but it didn't worked anyway :-/.
+
+Most PC disk drives won't read Amiga disks - I doubt an Amiga file
+system would be easier to write under Linux than MS-DOS, and
+"How do I read Amiga disks on a PC? - You don't, use an MS-DOS
+filesystem on the Amiga" is definitely an Amiga FAQ.
+
+I'm assuming you are talking about floppies here, not transferring
+hard disks, or reading them under the Amiga Linux port.
+
+--
+Alan Braggins  armb@setanta.demon.co.uk  abraggins@cix.compulink.co.uk
+"Any technology distinguishable from magic is insufficiently advanced"
+
+------------------------------
+
+From: guru@camelot.bradley.edu (Jerry Whelan)
+Subject: Re: Linux and X WordPerfect
+Date: 28 Feb 1994 23:41:35 GMT
+
+In article <CLyI7G.6wz@ra.nrl.navy.mil>,
+Eric Youngdale <eric@tantalus.nrl.navy.mil> wrote:
+
+-}      Disk usage - COFF binaries should be pretty compact if they use the
+-} shared library.  ELF should be somewhat larger, but I do not have a good
+-} estimate off the top of my head as to how much larger this would be.  I would
+-} want to say something in the 10-20% range, but I could be off.  This should be
+-} quite close to the binary size for NetBSD with their new shared libraries.
+
+        Other than the size difference, is there any technical reason why
+Linux shouldn't just adopt the ELF format as the native binary format?
+(Debugging C++?)
+
+===============================================================================
+Jerry Whelan                                             guru@stasi.bradley.edu
+
+------------------------------
+
+From: rob@pe1chl.ampr.org (Rob Janssen)
+Subject: Re: Amiga FileSystem, Anyone?
+Date: Mon, 28 Feb 1994 22:15:05 GMT
+Reply-To: pe1chl@rabo.nl
+
+In <1994Feb27.072814.10106@dream.nullnet.fi> semi@dream.nullnet.fi (Sami-Pekka Hallikas) writes:
+
+>Does anyone developing WORKING Amiga filesystem, that you can read amiga
+>disks with you Linux machine. I really like to get this FS if anyone is
+>working with it. I tried old AFFS but it didn't worked anyway :-/.
+
+I think Amiga disks are physically incompatible with the machines Linux
+normally runs on...
+
+Rob
+-- 
+=========================================================================
+| Rob Janssen                | AMPRnet:   rob@pe1chl.ampr.org           |
+| e-mail: pe1chl@rabo.nl     | AX.25 BBS: PE1CHL@PI8UTR.#UTR.NLD.EU     |
+=========================================================================
+
+------------------------------
+
+From: tytso@ATHENA.MIT.EDU (Theodore Ts'o)
+Subject: Re: TTY bugs
+Date: 1 Mar 1994 01:46:06 -0500
+Reply-To: tytso@ATHENA.MIT.EDU (Theodore Ts'o)
+
+   From: ftlofaro@unlv.edu (Frank Lofaro)
+   Date: Mon, 28 Feb 94 07:00:29 GMT
+
+   These tty bugs exist both in standard pl15h and in the new tty code by 
+   tytso@athena.mit.edu.
+
+   1. /dev/tty0 points to the vc that was active at OPEN time, not
+   read/write time.
+
+Actually, this is only in the new tty code, I believe.  Does anyone
+care?
+
+/dev/tty0 really was a mistake, especially when people used it for
+/dev/console....  What I will probably do is create a new driver for
+/dev/console, with a new major/minor pair.  It will be a output-only
+device, and will use the console_print interface.  This will allow
+/dev/console to be used for systems where the console is a serial port,
+and where there may be no graphics adaptors at all.
+
+This will also allow writes to /dev/console to always show up on the
+active VC.
+
+   2. If /dev/tty0 is the tty of the process, all access to /dev/tty
+   returns ENXIO: No such device or address.
+   3. If /dev/tty0 is the tty of the process, control-c, etc are IGNORED.
+
+These are both features; /dev/tty0 is only to be used for output, and
+should ***not*** be used as a controlling tty.  In fact, the code very
+explicitly disallows /dev/tty0 from being a controlling tty.  This will
+cause (2) and (3), as you have noted.
+
+   This exists in the new tty code:
+
+   4. The new tty code hoses the TTY column of procps. It shows con for
+   processes with no tty, for example.
+
+Yes, this is because the TTY column of procps is broken.  It used to
+only return the minor number, which only works if you have only one
+major number.  I've changed it to return full dev_t specification (i.e.,
+(major << 8) + minor).
+
+So, you'll need to fix the procps suite to handle this.
+
+   P.S. I did send a subscribe message to the new-tty mailing list, but
+   have not got a confirmation so I am sending this post here for the
+   time being.  (I don't trust mailing lists too much anymore....
+
+Yes, that's why I'm administering linux-new-tty manully.  Please be
+patient; it may take a day or so before I can get to your request.
+
+                                                - Ted
+
+
+------------------------------
+
+From: peyton@meaddata.com (Peyton Reed)
+Subject: Re: Context switch for pthreads
+Date: 1 Mar 1994 00:14:21 GMT
+
+In article <2klvbb$5b9@genesis.ait.psu.edu>, donadio@mxd120.rh.psu.edu (Matthew Donadio) writes:
+|> Christopher Andrew Smith (z1g192@rick.cs.ubc.ca) wrote:
+|> : As one of my currrent projects, I am attempting to port a package called
+|> : pthreads ( for preemptive threads ) to Linux.  Most of the code should be
+|> : relatively straightforward to port, since it is written in Ansi C, but
+|> 
+|> You shouldn't have to do any porting.  The file
+|>      sipb.mit.edu:/pub/pthreads/pthreads-1.??.tar.gz
+|> has a linux port the should work with pl15.  I haven't had time to test 
+|> it thouroughly, but all the built in tests seemed to work.
+
+I tried ftp from anonymous@sipb.mit.edu, bot got "Anonymous ftp not allowed."
+Is there another site for this, or another method at this site?
+
+Thanks.
+
+Peyton
+
+---
+Peyton Reed                   We have met           (513) 865-6800 x4733
+Mead Data Central             the enemy,              Server Operability
+P.O. Box 933                and they is us.          peyton@meaddata.com
+Dayton, Ohio  45401             -- Pogo        ...!uunet!meaddata!peyton
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

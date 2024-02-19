@@ -1,0 +1,635 @@
+From:     Digestifier <Linux-Activists-Request@news-digests.mit.edu>
+To:       Linux-Activists@news-digests.mit.edu
+Reply-To: Linux-Activists@news-digests.mit.edu
+Date:     Sat, 7 Mar 92 23:45:09 EST
+Subject:  Linux-Activists Digest #87
+
+Linux-Activists Digest #87, Volume #1             Sat, 7 Mar 92 23:45:09 EST
+
+Contents:
+  Rebooting - an observation (R. Ramesh)
+  a simple nlist to be used with /unix :-) (Damiano Bolla)
+  Where is it? (Terry Gardner)
+  Re: Hrm...Got the stuff, but how do I get it to Linux? (Theodore Ts'o)
+  Re: Has anyone ported....? (Theodore Ts'o)
+  can't run shell under emacs (Mark Saltzman)
+  Drew Eckhardt reboot 1234 (Epstein@DOCKMASTER.NCSC.MIL)
+  Re: Running linux in < 500kB (Drew Eckhardt)
+  Re: a simple nlist to be used with /unix :-) (Jim Stewart)
+  lp patches? (John Y Cha)
+  Re: Rebooting - an observation (KiYun Roe)
+
+----------------------------------------------------------------------------
+
+From: ramesh@utdallas.edu (R. Ramesh)
+Subject: Rebooting - an observation
+Date: 7 Mar 92 17:56:27 GMT
+
+Hi linuxers:
+
+  I am one of those who suffered from the cntrl-alt-del not working.  After
+Drew's message about the patch I went straight to "fix" the kernel only to
+find that even this fix wouldn't make it reboot.  But something in my mind
+flashed and I concluded that the instructions at address 0x0fff0 do not really
+do the booting for some strange reason. In pondering over the matter I
+concluded it has some thing to do with BIOS shadowing. So, I disbled it and
+ran the kernel with Drew's patch and my baby rebooted for the first time in
+cntrl-alt-del sequence. Then came another flash and I tried the kernel without
+the reboot patch from Drew, well, that too rebooted fine. So in conclusion, 
+
+    if cntrl-alt-del doesn't work and BIOS shadow is enabled in your setup
+    the first thing you should try is diable BIOS shadow before applying a
+    patch for this purpose.
+
+My question now for the experts is: How can BIOS shadow affect reboot
+sequence. If you agree that instructions at 0xfff0 do different things
+under BIOS shadow enabled/disabled situations, then how is that cold boot
+by powerup and hard reset work? Any insight might improve our reboot code
+and make it a bit more universal. Whether it is worth the trouble depends
+on one's perspective. In mine, a deeper understanding is always some thing
+to seek,.i.e., if this can be called deeper understanding al all.
+
+BTW, can some one tell me where I can find patches that implements reboot
+system call.
+
+Ramesh
+
+------------------------------
+
+From: db1@ukc.ac.uk (Damiano Bolla)
+Subject: a simple nlist to be used with /unix :-)
+Date: 7 Mar 92 19:07:05 GMT
+
+
+Hi there. This is an implementation of the nlist function.
+
+The next example is a simple nm that uses the just created nlist
+
+NOTE: The structures needed by nlist are in a.out.h in linux.
+
+NOTE1: I am NOT shoure if what I have done is "correct". Please someone
+       tell me if the nlist that I made is "correct".
+
+================================================================
+
+
+/* Describe symbol table of a rel file.
+   Copyright (C) 1986, 1988, 1990 Free Software Foundation, Inc.
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 1, or (at your option)
+   any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+
+   This has little resemblance with the original nm.c
+   Anyway I feel that I have to include it..
+   Author Damiano Bolla
+   */
+
+#include <ar.h>
+#include <sys/types.h>
+#include <sys/file.h>
+#include <a.out.h>
+#include <strings.h>
+
+#define OFFSET  0       /* It is zero for linux....                     */
+
+/* =================================================================
+ * This requires a filename and returns an array of symbols
+ * in the filename. It requires a pointer  to an struct nlist pointer
+ * It returns 
+ * The number of symbols read and the updated pointer
+ * -1   If operation fails. ( the pinter intact )
+ */
+int nlist (name, list) char *name; struct nlist **list;
+   {
+   int desc, nchars, error;
+   char armag[SARMAG];
+  
+   desc = open (name, O_RDONLY, 0);
+   if (desc < 0) return (-1);
+
+   nchars = read (desc, armag, SARMAG);
+   if ( (nchars == SARMAG) && (strncmp(armag, ARMAG, SARMAG)==0) )
+      return (-1);      /* I don't do libraries                         */
+   
+   error = decode_file (desc, list );
+   close (desc);        /* Otherwise we finish the space                */
+   return (error);
+   }
+
+/* =========================================================    
+ * Read a file's header and fill in various pieces of information.
+ * Return 0 if it succededs
+ * return -1  if it fails
+ */
+int read_header_info (desc,offset,syms_offset,syms_size,strs_offset,strs_size)
+     int desc;
+     long int offset;
+     long int *syms_offset;     /* Returned to parent                   */
+     unsigned int *syms_size;   /* Returned to parent                   */
+     long int *strs_offset;     /* Returned to parent                   */
+     unsigned int *strs_size;   /* Returned to parent                   */
+   {
+   int len;
+   struct exec hdr;
+
+   lseek (desc, offset, 0);
+   len = read (desc, (char *) &hdr, sizeof (struct exec));
+   if (len == sizeof (struct exec) && !N_BADMAG (hdr))
+      {
+      *syms_offset = N_SYMOFF(hdr);
+      *syms_size = hdr.a_syms;
+      *strs_offset = N_STROFF(hdr);
+      lseek(desc, N_STROFF(hdr) + offset, 0);
+      if (read (desc, (char *) strs_size, sizeof *strs_size) != 
+                sizeof *strs_size)
+          {
+          /* Cannot read string table size                              */
+          return (-1);
+          }
+       return (0);      /* Operation succesful                          */
+       }
+   return (-1);         /* Operation failed                             */
+   }
+
+
+
+/* ========================================================= 
+ * This do the real work of reading the symbols from the
+ * file specified.
+ * returns the numebr of symbols read + the updated array if OK 
+ * returns -1 if fails and the array pointer intact
+ */
+int decode_file (desc, list )  int desc; struct nlist **list;
+   {
+   struct nlist *symbols_and_strings;
+   int symcount;
+   int totalsize;
+   char *strings;
+   long int syms_offset, strs_offset;
+   unsigned int syms_size, strs_size;
+
+   /* Let's see if we have a valid header from the file                 */
+   if ( read_header_info(desc,
+                        OFFSET, 
+                        &syms_offset,
+                        &syms_size,
+                        &strs_offset,
+                        &strs_size) != 0 )
+      return (-1);
+     
+     
+   /* Number of symbol entries in the file.  */
+   symcount = syms_size / sizeof (struct nlist);
+
+   totalsize = strs_size + syms_size;
+
+   /* Allocate space for symbol entries and string table.       */
+   symbols_and_strings = (struct nlist *) malloc (totalsize);
+   if ( symbols_and_strings == NULL )
+      return (-1);      /* No space to work....                 */
+      
+   strings = (char *) symbols_and_strings + syms_size;
+
+   /* Read them both in.  */
+   lseek (desc, syms_offset + OFFSET, 0);
+   if (syms_size != read (desc, (char *) symbols_and_strings, syms_size))
+      {
+      /* the file is finish ???? this is BAD !                  */ 
+      free ( symbols_and_strings );     /* Free stuff           */
+      return (-1);
+      }
+      
+   lseek (desc, strs_offset + OFFSET, 0);
+   if (strs_size != read (desc, (char *) strings, strs_size))
+      {
+      /* the file is finish ???? this is BAD !                  */ 
+      free ( symbols_and_strings );     /* Free stuff           */
+      return (-1);
+      }
+
+  /* Modify each symbol entry to point directly at the symbol name.
+   * This is so the sort routine does not need to be passed
+   * the value of `strings' separately. 
+   */
+
+    {
+    struct nlist *p = symbols_and_strings;
+    struct nlist *end = symbols_and_strings + symcount;
+
+    for (; p < end; p++)
+       {
+       /* A zero index means there is no string.  */
+       if (p->n_un.n_strx != 0)
+          {
+            if (p->n_un.n_strx > 0 && p->n_un.n_strx < strs_size)
+              p->n_un.n_name = strings + p->n_un.n_strx;
+            else
+              {
+                /* Invalid string table offset in the file              */
+                free (symbols_and_strings);     /* Free memory          */
+                return (-1);
+              }
+          }
+      }
+   }
+   
+   /* At this point we can safely modify the array pointer              */ 
+   *list = symbols_and_strings;         /* The array of symbols         */
+   return (symcount);           /* The number of symbols                */
+   }
+
+
+============ CUT HERE ======================================
+This is a simple nm.c that uses the just created nlist
+============================================================
+
+/* Describe symbol table of a rel file.
+   Copyright (C) 1986, 1988, 1990 Free Software Foundation, Inc.
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 1, or (at your option)
+   any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+
+   I got some of the code that is in here from the GNU nm.c
+   Therefore I feel that I have to include the previous Copyright.
+   Author Damiano Bolla
+   */
+   
+#include <stdio.h>
+#include <ar.h>
+#include <sys/types.h>
+#include <sys/file.h>
+#include <a.out.h>
+#include <strings.h>
+
+main ()
+   {
+   struct nlist *ll;
+   int symbols;
+
+   symbols = nlist ("a.out",&ll);
+   if ( symbols > 0 ) 
+      print_symbols (ll, symbols);
+   
+   }
+   
+/* ========================================================= */
+int print_symbols (syms, symcount) struct nlist *syms; int symcount;
+  {
+  int i;
+  for (i = 0; i < symcount; i++) print_one_symbol (&syms[i]);
+  }
+
+int print_one_symbol (sym) struct nlist *sym;
+  {
+  if (sym->n_type & ~N_EXT || sym->n_value)
+    printf ("%08x ", sym->n_value);
+  else printf ("         ");
+
+  switch (sym->n_type)
+    {
+      case N_EXT:
+        if (sym->n_value) printf ("C");
+        else printf ("U");
+        break;
+
+      case 0:
+        if (sym->n_value) printf ("c");
+        else printf ("u");
+        break;
+
+      case N_ABS | N_EXT:
+        printf ("A");
+        break;
+
+      case N_ABS:
+        printf ("a");
+        break;
+
+      case N_TEXT | N_EXT:
+        printf ("T");
+        break;
+
+      case N_TEXT:
+        printf ("t");
+        break;
+
+      case N_DATA | N_EXT:
+        printf ("D");
+        break;
+
+      case N_DATA:
+        printf ("d");
+        break;
+
+      case N_BSS | N_EXT:
+        printf ("B");
+        break;
+
+      case N_BSS:
+        printf ("b");
+        break;
+
+      case N_SETV | N_EXT:
+        printf ("V");
+        break;
+
+      case N_SETV:
+        printf ("v");
+        break;
+
+      case N_SETA | N_EXT:
+        printf ("L");
+        break;
+        
+      case N_SETA:
+        printf ("l");
+        break;
+        
+      case N_SETT | N_EXT:
+        printf ("X");
+        break;
+        
+      case N_SETT:
+        printf ("x");
+        break;
+        
+      case N_SETD | N_EXT:
+        printf ("Z");
+        break;
+        
+      case N_SETD:
+        printf ("z");
+        break;
+        
+      case N_SETB | N_EXT:
+        printf ("S");
+        break;
+        
+      case N_SETB:
+        printf ("s");
+        break;
+        
+      case N_INDR | N_EXT:
+        printf ("I");
+        break;
+        
+      case N_INDR:
+        printf ("i");
+        break;
+        
+      default:
+        {
+          char *s;
+          int i;
+          /* %x treats them as unsigned anyway, so if we didn't cast
+             them we'd get 0xffffffff for all 1's instead of 0xff
+             or 0xffff.  */
+          printf ("- %02x %04x %5s",
+#ifdef N_SECT
+                  (unsigned char) sym->n_sect,
+#else
+                  (unsigned char) sym->n_other,
+#endif
+                  (unsigned short) sym->n_desc, s);
+        }
+    }
+
+  printf (" ");
+  
+  if (sym->n_un.n_name)
+    fputs (sym->n_un.n_name, stdout);
+  
+  printf ("\n");
+}
+
+------------------------------
+
+From: tjg01@thdhub.UUCP (Terry Gardner)
+Subject: Where is it?
+Date: 7 Mar 92 21:02:57 GMT
+
+WHere can I get Linux? I could not find a FAQ, in case this is 
+answered there. E-mail please, I don't read this newsgroup, and
+I don't want to miss any replies.
+
+
+-- 
+Terry Gardner
+Senior Network Systems Programmer, The Home Depot, Inc.
+terry@thdhub
+
+------------------------------
+
+From: tytso@ATHENA.MIT.EDU (Theodore Ts'o)
+Subject: Re: Hrm...Got the stuff, but how do I get it to Linux?
+Reply-To: tytso@athena.mit.edu
+Date: Sat, 7 Mar 1992 21:31:49 GMT
+
+   From: kenc@sol.acs.unt.edu (Ken Corey - Operator)
+   Date: Sat, 7 Mar 1992 06:25:43 GMT
+
+   2) How does one get a file from MSDOS to Linux without mtools?
+      Is kermit (ugh) already implemented?  Would I have to kermit a file
+      to my Mac, start Linux, and kermit that file back?  *gasp*
+
+Well, if your unix box can write 5.25 or 3.5" DOS-format floppies, then
+you should also be able to write a tar image to the floppy, and then
+untar it unto your hard disk under Linux.  Personally, I prefer to use
+the mtools method myself, but some people prefer to use just tar.
+
+                                                        - Ted
+
+------------------------------
+
+From: tytso@ATHENA.MIT.EDU (Theodore Ts'o)
+Subject: Re: Has anyone ported....?
+Reply-To: tytso@athena.mit.edu
+Date: Sat, 7 Mar 1992 21:34:55 GMT
+
+   From: talvola@qin.Berkeley.EDU (Erik Talvola)
+   Date: 6 Mar 92 17:52:38 GMT
+
+   Now, there are a couple programs which I could not find on tsx-11 (the
+   easiest to get to from the US).  Has anyone ported any of the following:
+
+   GNU Emacs v18.58 (or something close)
+
+On tsx-11: ~ftp/pub/linux/ports/emacs-18.57
+
+                                                        - Ted
+
+------------------------------
+
+From: ak751@cleveland.Freenet.Edu (Mark Saltzman)
+Subject: can't run shell under emacs
+Date: 7 Mar 92 22:56:58 GMT
+Reply-To: ak751@cleveland.Freenet.Edu (Mark Saltzman)
+
+
+I have applied the floppy and nonblocking io patches along with the
+kernel patches that came with emacs from tsx-11, but I still cannot get
+a shell under emacs.  I do <ESC>-x shell, which loads shell, and the
+status bar says "Shell:run".  But as soon as I press a key it changes to
+"Shell:stop" and beeps, saying something like 'process not running'.
+When I press the break key to a list of running processes the status of
+the shell process is 4.  Has anyone gotten this to work?
+thanks for any info
+-mark
+
+------------------------------
+
+From: Epstein@DOCKMASTER.NCSC.MIL
+Subject: Drew Eckhardt reboot 1234
+Reply-To: Epstein@DOCKMASTER.NCSC.MIL
+Date: Sun, 8 Mar 1992 00:18:29 GMT
+
+On further investigation using _reboot with AMI BIOS ROM for NCS386
+board, which to quote AMI is not standard AMI BIOS.  Without memory tick
+enables, reboot appears to work fine --- except displays memory
+addresses as it checks memory --- with memory tick enabled, gives ticks
+at faster rate than normal `reset' for first 640K and then faster for
+rest which are not enabled in BIOS so hence the `raspberry' sound after
+the ticks for the first 640K.  Conclusion:  word 1234 is NOT being
+written into BIOS area for warm restart when jump far or jump far is to
+address where not doing warm restart.  I have no idea why executes
+memory test at accelerated speed over `reset' memory test.  John
+
+------------------------------
+
+From: drew@cs.colorado.edu (Drew Eckhardt)
+Subject: Re: Running linux in < 500kB
+Date: 8 Mar 92 02:59:38 GMT
+
+In article <1992Mar7.113850.6816@nntp.hut.fi> r36110m@kaira.hut.fi (Mika Matti Jalava) writes:
+>In article <1992Mar6.080258.29908@colorado.edu> drew@cs.colorado.edu (Drew Eckhardt) writes:
+>
+>>You don't have to.  Linux loads the kernel from floppy (Between 150K and 190K
+>>depending on which patches have been applied - so it's not that slow, and 
+>>if you want Shoelace will boot it off a hard disk) and then mounts its       
+>>root file system from wherever.  DOS is no where in the picture.
+>
+>How do you partition the hard disk without any other OS? DOS is not
+>necessary, but if you don't want to use it, you'll need some other,
+>even much more expensive OS to prepare the system to take linux on the
+>HD. 
+>
+
+That's nitpicking.  The point I was making was that once Linux is up,
+no other operating system is required.  
+
+However, technically, it is possible to partition the hard disk from within 
+Linux, although I wouldn't want to do it myself.  You could use dd on the 
+raw hard disk device to modify the partition table.
+
+------------------------------
+
+From: stewart@wimsey.bc.ca (Jim Stewart)
+Subject: Re: a simple nlist to be used with /unix :-)
+Date: Sun, 08 Mar 1992 01:42:59 GMT
+
+In article <5539@falcon.ukc.ac.uk> db1@ukc.ac.uk (Damiano Bolla) writes:
+>
+>Hi there. This is an implementation of the nlist function.
+
+Why not just use the nlist from the BSD kit? ... it works fine for me...
+
+
+
+------------------------------
+
+From: huillam@athena.mit.edu (John Y Cha)
+Subject: lp patches?
+Date: Sun, 8 Mar 1992 04:14:46 GMT
+
+
+
+The version of the FAQ I have claims that there exists a printer
+package for linux, lp.12.tar.Z.  I haven't been able to find it on
+nic, tsx-11, tupac-amaru, nor on banjo.  Can anybody point me in the
+right direction?  Email replys would be appreciated.  Thanks in
+advance.
+
+-- John
+
+huillam@athena.mit.edu
+
+
+
+------------------------------
+
+From: kroe@sbwarren.cs.sunysb.edu (KiYun Roe)
+Subject: Re: Rebooting - an observation
+Date: 8 Mar 92 04:02:49 GMT
+
+As another one of those heretofore ctrl-alt-del-less persons, I can
+verify that disabling the BIOS shadowing on my machine does permit the
+Linux reboot sequence to work.  But I have a Gateway 2000 486/33 (as
+does R. Ramesh, I believe) so that shouldn't be too surprising.  I have
+a couple of things to add:
+
+(1) A variety of reboot sequences work fine under DOS (using the 8042,
+    jumping to ffff:0000, etc.) whether or not BIOS shadowing is
+    enabled, so Linux must be doing _something_ different.  Perhaps
+    Linux is overwriting the shadow RAM in some way or the way it
+    enables A20 is not proper for a Micronics MB.  I don't know enough
+    about the hardware at this level to make even intelligent guesses.
+
+(2) BIOS shadowing is something I've always taken for granted, but now
+    that I've disabled it I prefer it that way.  When I'm running DOS,
+    I can configure QEMM to shadow only actual ROM to RAM, so I get
+    over 300KB of erstwhile shadow RAM to use for other purposes.  It
+    would be nice to utilize the shadow RAM area for Linux, too.  Does
+    anybody know how?
+
+Otherwise, my thanks to R. Ramesh for coming up with this approach.
+--
+KiYun Roe                                       kroe@sbcs.sunysb.edu
+Department of Computer Science
+SUNY at Stony Brook
+Stony Brook, NY  11794-4400                     (516) 632-7675
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Activists-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and alt.os.linux) via:
+
+    Internet: Linux-Activists@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    tupac-amaru.informatik.rwth-aachen.de	pub/msdos/replace
+
+The current version of Linux is 0.12, released on Jan 14, 1992
+
+End of Linux-Activists Digest
+******************************

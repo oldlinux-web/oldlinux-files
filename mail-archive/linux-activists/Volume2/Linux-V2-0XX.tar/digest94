@@ -1,0 +1,1048 @@
+From:     Digestifier <Linux-Activists-Request@news-digests.mit.edu>
+To:       Linux-Activists@news-digests.mit.edu
+Reply-To: Linux-Activists@news-digests.mit.edu
+Date:     Wed, 22 Apr 92 12:15:26 EDT
+Subject:  Linux-Activists Digest #94
+
+Linux-Activists Digest #94, Volume #2            Wed, 22 Apr 92 12:15:26 EDT
+
+Contents:
+  Re: IDE drive performance with linux (H.H. Bergman)
+
+----------------------------------------------------------------------------
+
+From: a0356514@let.rug.nl (H.H. Bergman)
+Subject: Re: IDE drive performance with linux
+Date: Wed, 22 Apr 1992 14:37:49 GMT
+
+In article <14082@star.cs.vu.nl> kjb@cs.vu.nl (Kees J. Bot) writes:
+>UPP200@ibm.rhrz.uni-bonn.de (Guido Kueppers) writes:
+>
+>>Greetings,
+>>thanks to all who have replied to my IDE drive problem. From the responses I
+>>got so far I gather that the drive's poor performance is specific to my drive
+>>and possibly due to inappropriate configuration (translation vs. native mode).
+>>If there is any interest I will post my newly accquired wisdom on IDE drive
+>>setup when the problem is solved (Or should I rather spare you the details?)
+Well, I'm interested!
+>
+>I don't think the problem is with your drive, I think it's better to
+>send the device driver writer back to the drawing board.
+>
+>I am currently rewriting the Minix hard disk driver to increase its
+>performance, because it also has problems with IDE drives.  I've got
+>access to three IDE drives, of 100Mb, 120Mb and 200Mb.
+>
+>The current Minix HD driver reaches reading speeds of 250, 60, and
+>500 kbps on them.  Note the slow speed for the 120Mb.  At the usual
+>rotational speed of 3600rpm, this is exactly 1k per rotation!  (The
+>native Minix block size).
+>[...]
+>My guess is that the first two disks do not have a track cache and the
+>third one does.  The current Minix HD driver can't keep up with the
+>120Mb disk.
+>
+>Further comments:
+>- I don't know what the Linux AT disk driver looks like, a Linux
+>  enthousiast should check it out to see if I'm right.  (I don't have
+>  any Linux code, I would probably label everything as "ugly". :-)
+>[...]
+>- The file system must be able to send large read-ahead requests to the
+>  driver, so it has something to work with.  Writing speed is not as
+>  important, but must be looked at too.  (Minix writes all dirty blocks
+>  for the same device at once if it must write one.)
+>
+>[Back to making to floppy driver go 30% faster reliably, slow devices
+>seem to give more trouble than fast ones!]
+>--
+>                               Kees J. Bot  (kjb@cs.vu.nl)
+>                     Systems Programmer, Vrije Universiteit Amsterdam
+
+Well, I ran the iozone benchmark on my computer, and I got very low
+results :-( 
+
+Machine: 486/33MHz, 8MB RAM, Linux 0.95c+
+Disk:    Seagate IDE, ST1144AT (ROM version 5.0, RAM version 5.D)
+
+iozone benchmark, `iozone 9` output results (clean buffers):
+=============================================================================
+
+        IOZONE: Performance Test of Sequential File I/O  --  V1.14b (1/31/92)
+                By Bill Norcott
+
+        Operating System: POSIX 1003.1-1988
+
+        Send comments to:       norcott_bill@tandem.com
+
+        IOZONE writes a 9 Megabyte sequential file consisting of
+        18432 records which are each 512 bytes in length.
+        It then reads the file.  It prints the bytes-per-second
+        rate at which the computer can read and write files.
+
+
+Writing the 9 Megabyte file, 'iozone.tmp'...161.040000 seconds
+Reading the file...95.930000 seconds
+
+IOZONE performance measurements:
+        58601 bytes/second for writing the file
+        98375 bytes/second for reading the file
+
+=============================================================================
+Note: I think reading is faster because of buffering (1.5MB, I think),
+maybe reading 4 blocks ahead (bread_page()?) helps too.
+[Question: Can the current Linux FS ever give read requests of more than
+ four blocks at a time?]
+
+Assuming a rotational speed of 3600rpm, writing one cluster per rotation:
+
+        1kB per rotation * 3600/60 rotations per second = 60kB/sec
+
+I think this nicely supports the hypothesis suggested by Kees J. Bot,
+that some drives only write one cluster per rotation of the hard disk. :-(
+
+Now, what can be done about this??? Should we disable translation mode
+for IDE drives and or use 'disktab's like other *NIXes do? Maybe do
+track buffering for hd.c too? Will performance improve with another
+filesystem? [After all, it could just be a Minix FS problem ;-)]
+
+How do the SCSI drives perform on this test?
+
+My tape driver will need at least 70KB/sec, sustained, from the filesystem
+just to keep the tape drive streaming. And that's not even counting the
+processing time the tape driver will need itself! So, aside from minor
+inconveniences caused by lack of speed, I would like to see this fixed.
+Any volunteers? I would suggest:
+a) Improve grouping of block request, and/or
+b) Add track buffering to the hard disk driver. This would probably involve
+putting a program in /etc/rc that reads a table containing the number of
+sectors in every track (for each zone a pair (t, s) where t is the number of
+tracks in the zone and s is the number of sectors per track in that zone) and
+passing it to the hd driver using ioctl() calls, or
+c) Invent something better :-)
+
+-Hennus Bergman
+a0356514@gufalet.let.rug.nl
+csg279@wing2.cs.rug.nl
+=============================================================================
+/* This is the iozone benchmark. I had to put in the #define below,
+ * to compile with Linux. Maybe we're not quite POSIX yet.... -- hhb
+ */
+#define _SC_CLK_TCK     _SC_CLOCKS_PER_SEC      /*** hhb ***/
+
+char *help[] = {
+  "       'IO Zone' Benchmark Program",
+  " ",
+  "       Author: Bill Norcott (norcott_bill@tandem.com)",
+  "               1060 Hyde Avenue",
+  "               San Jose, CA  95129",
+  " ",
+  "  Copyright 1991, 1992   William D. Norcott",
+  " ",
+  "  License to freely use and distribute this software is hereby granted ",
+  "  by the author, subject to the condition that this copyright notice ",
+  "  remains intact.  The author retains the exclusive right to publish ",
+  "  derivative works based on this work, including, but not limited to, ",
+  "  revised versions of this work",
+  " ",
+  "  This test writes a X MEGABYTE sequential file in Y byte chunks, then",
+  "  rewinds it  and reads it back.  [The size of the file should be",
+  "  big enough to factor out the effect of any disk cache.]",
+  "        ",
+  "  The file is written (filling any cache buffers), and then read.  If the",
+  "  cache is >= X MB, then most if not all the reads will be satisfied from",
+  "  the cache.  However, if it is less than or equal to .5X MB, then NONE of",
+  "  the reads will be satisfied from the cache.  This is becase after the ",
+  "  file is written, a .5X MB cache will contain the upper .5 MB of the test",
+  "  file, but we will start reading from the beginning of the file (data",
+  "  which is no longer in the cache)",
+  "        ",
+  "  In order for this to be a fair test, the length of the test file must",
+  "  be AT LEAST 2X the amount of disk cache memory for your system.  If",
+  "  not, you are really testing the speed at which your CPU can read blocks",
+  "  out of the cache (not a fair test)",
+  "        ",
+  "  IOZONE does NOT test the raw I/O speed of your disk or system.  It",
+  "  tests the speed of sequential I/O to actual files.  Therefore, this",
+  "  measurement factors in the efficiency of you machines file system,",
+  "  operating system, C compiler, and C runtime library.  It produces a ",
+  "  measurement which is the number of bytes per second that your system",
+  "  can read or write to a file.  ",
+  " ",
+  "  For V1.06, IOZONE adds the 'auto test' feature.  This is activated",
+  "  by the command:  'iozone auto' .  The auto test runs IOZONE repeatedly  ",
+  "  using record sizes from 512 to 8192 bytes, and file sizes from 1 to 16",
+  "  megabytes.  It creates a table of results.",
+  "        ",
+  "  For V1.06, IOZONE lets you specify the number of file system sizes and      ",
+  "  record lengths to test when using auto mode.  Define the constants",
+  "  MEGABYTES_ITER_LIMIT and RECLEN_ITER_LIMIT as seen below      ",
+  "        ",
+  "  For V1.09 you can show the development help by typing 'iozone help'",
+  "        ",
+  "  For V1.10 IOzone traps SIGINT (user interrupt) and SIGTERM",
+  "  (kill from shell) signals and deletes the temporary file",
+  "        ",
+  "  For V1.11 IOzone requires no compilation flags for AIX",
+  "  Also, come miscellaneous cleanups have been made to the source",
+  "        ",
+  "  For V1.12 IOzone support has been added for the MIPS RISCos,",
+  "  Tandem Non-StopUX, and Tandem GUARDIAN 90 operating systems.",
+  "  IOzone is now a 'Conforming POSIX.1 Application'  (IEEE Std 1003.1-1988)",
+
+  "        ",
+  "  For V1.14 IOzone supports Next and QNX systems.  It also prints out",
+  "  the name of the operating system when run.  There is now the option",
+  "  to force IOzone to flush all writes to disk via fsync()",
+  "  Defining USE_FSYNC will make IOzone include in its measurements the time",
+  "  it takes to actually write the data onto disk, as opposed to",
+  "  just writing into the system cache.  BSD UNIX and SVR4 support fsync(),",
+  "  but SVR3 and generic POSIX systems do not.  I have enabled USE_FSYNC",
+  "  for the systems which support it",
+  "        ",
+  " ",
+  "  This program has been ported and tested on the following computer",
+  "  operating systems:",
+  " ",
+  "    Vendor             Operating System    Notes on compiling IOzone",
+  "    -------------------------------------------------------------------------",
+  "    Convergent         Unisys/AT&T Sys5r3  cc -DCONVERGENT -o iozone iozone.c",
+  "    Digital Equipment  ULTRIX V4.1 ",
+  "    Digital Equipment  VAX/VMS V5.4        see below **         ",
+  "    Digital Equipment  VAX/VMS (POSIX) ",
+  "    Hewlett-Packard    HP-UX 7.05",
+  "    IBM                AIX Ver. 3 rel. 1",
+  "    Microsoft          MS-DOS 3.3          tested Borland, Microsoft C",
+  "    MIPS               RISCos 4.52",
+  "    NeXt               NeXt OS 2.x",
+  "    OSF                OSF/1",
+  "    Portable!          POSIX 1003.1-1988   may need to define _POSIX_SOURCE ",
+  "    QNX                QNX 4.0             compile with  -N 40K option",
+  "    SCO                UNIX System V/386 3.2.2",
+  "    SCO                XENIX 3.2",
+  "    Silicon Graphics   UNIX                cc -DSGI -o iozone iozone.c",
+  "    Sony Microsystems  UNIX                same as MIPS",
+  "    Sun Microsystems   SUNOS 4.1.1",
+  "    Tandem Computers   GUARDIAN 90         1. call the source file IOZONEC",
+  "                                           2. C/IN IOZONEC/IOZONE;RUNNABLE",
+  "                                           3. RUN IOZONE",
+  "    Tandem Computers   Non-Stop UX",
+  "        ",
+  "    ** for VMS, define iozone as a foreign command via this DCL command:       ",
+  " ",
+  "       $IOZONE :== $SYS$DISK:[]IOZONE.EXE      ",
+  " ",
+  "       this lets you pass the command line arguments to IOZONE",
+  " ",
+  "  Acknowledgements to the following persons for their feedback on IOzone:       ",
+  " ",
+  "  Andy Puchrik, Michael D. Lawler, Krishna E. Bera, Sam Drake, John H. Hartman, ",
+  "  Ted Lyszczarz, Bill Metzenthen, Jody Winston, Clarence Dold, Axel",
+  "  Dan Hildebrand",
+  "        ",
+  "  --- MODIFICATION HISTORY:",
+  " ",
+  " ",
+  "    3/7/91 William D. Norcott (Bill.Norcott@nuo.mts.dec.com)",
+  "                               created",
+  " ",
+  "    3/22/91 Bill Norcott       tested on OSF/1 ... it works",
+  " ",
+  "    3/24/91 Bill Norcott       V1.02 -- use calloc in TURBOC to",
+  "                                       fix bug with their malloc",
+  " ",
+  "    3/25/91 Bill Norcott       V1.03 -- add ifdef for XENIX",
+  "                                       ",
+  "    3/27/91 Bill Norcott       V1.04 -- Includes for SCO UNIX",
+  "                                       ",
+  "    4/26/91 Bill Norcott       V1.05 -- support AIX and SUNos, check",
+  "                                       length of read() and write()",
+  "    4/26/91 Bill Norcott       V1.06 -- tabulate results of a series ",
+  "                                       of tests",
+  "    5/17/91 Bill Norcott       V1.07 -- use time() for VMS",
+  "    5/20/91 Bill Norcott       V1.08 -- use %ld for Turbo C and",
+  "                                       use #ifdef sun to bypass",
+  "                                       inclusion of limits.h",
+  "    6/19/91 Bill Norcott       V1.09 -- rid #elif to support HP-UX and ",
+  "                                       Silicon Graphics UNIX, and",
+  "                                       add #ifdef SGI",
+  "                                       add #ifdef CONVERGENT",
+  "                                       for Convergent Technologies",
+  "                                       also add help option",
+  "    7/2/91 Bill Norcott        V1.10 -- delete file if get SIGINT",
+  "                                       or SIGTERM",
+  "    8/20/91 Bill Norcott       V1.11 -- require no flags with AIX",
+  "    11/4/91 Bill Norcott       V1.12 -- support MIPS RISCos",
+  "                                         Tandem NonStop-UX, and",
+  "                                        IEEE Std POSIX 1003.1-1988",
+  "    12/4/91 Bill Norcott       V1.13 -- support NeXT; tell host OS type",
+  "    1/23/92 Bill Norcott      V1.14 -- support QNX & use calloc() for buffer",
+  "" };
+
+/******************************************************************
+
+  INCLUDE FILES (system-dependent)
+
+  ******************************************************************/
+/* V1.14 -- use calloc instead of stack for buffer, on all platforms */
+#define usecalloc
+/*
+V1.14b -- check for ultrix which uses sysconf in newer POSIX version
+but uses BSD-style time in the pre-POSIX versions
+*/
+#ifdef ultrix
+#ifndef OS_TYPE
+#define OS_TYPE "ULTRIX"
+#define BSDtime
+#endif
+#endif
+/* V1.13 -- support NeXT by treating it like a Sun... Thanks Axel! */
+#ifdef __NeXT__
+#ifndef OS_TYPE
+#define OS_TYPE "NeXT OS"
+#endif
+#define sun
+#endif
+/*
+  define nolimits if your system has no limits.h.  Sun's don't but I
+  take care of this explicitly beginning with V1.08 of IOzone.
+  */
+#ifdef sun
+#ifndef OS_TYPE
+#define OS_TYPE "SunOS"
+#endif
+#define nolimits
+#define BSDtime
+#define USE_FSYNC
+#endif
+/* V1.09 -- Silicon Graphics compile with -DSGI  */
+#ifdef SGI
+#ifndef OS_TYPE
+#define OS_TYPE "Silicon Graphics"
+#endif
+#define nolimits
+#define BSDtime
+#endif
+
+/* V1.13 For MIPS RISC/OS and Tandem NonStop-UX*/
+#ifdef SYSTYPE_BSD43
+#define bsd4_3
+#ifndef OS_TYPE
+#define OS_TYPE "MIPS RISC/os (BSD 4.3 libraries)"
+#endif
+#endif
+
+#ifdef SYSTYPE_SYSV
+#include <sys/utsname.h>
+#define nolimits
+#ifdef T_NONSTOP
+#define OS_TYPE "TANDEM NonStop-UX (System V libraries)"
+#endif
+#ifndef OS_TYPE
+#define OS_TYPE "MIPS RISC/os (System V libraries)"
+#endif
+#define SysVtime
+#include <sys/types.h>
+#include <sys/times.h>
+#include <sys/fcntl.h>
+#endif
+/* V1.14 -- define nolimits and BSDtime for Xenix 2.3.3 */
+/* incl definitions of O_* flags for XENIX */
+#ifdef M_XENIX
+#ifndef OS_TYPE
+#define OS_TYPE "SCO XENIX"
+#endif
+#include <fcntl.h>
+#define nolimits
+#define BSDtime
+#endif
+
+/* V1.12 -- test for POSIX-conformant operating system; requires limits.h */
+#ifndef nolimits
+#include <limits.h>
+
+#ifdef _POSIX_ARG_MAX
+#ifndef OS_TYPE
+#define OS_TYPE "POSIX 1003.1-1988"
+#endif
+#define isposix
+#endif
+
+#endif
+
+/* Tandem's GUARDIAN operating system */
+#include <stdio.h>
+#ifdef __TANDEM
+#ifndef OS_TYPE
+#define OS_TYPE "TANDEM GUARDIAN 90"
+#endif
+#define nosignals
+#define ANSItime
+#define ANSI_MAIN
+#include <fcntl.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#endif
+#ifndef nosignals
+#include <signal.h>
+#endif
+#ifdef  __MSDOS__               /* Turbo C define this way for PCs... */
+#define MSDOS                   /* Microsoft C defines this */
+#endif
+/* VMS and MS-DOS both have ANSI C compilers and use rand()/srand() */
+#ifdef  VMS_POSIX
+#undef   VMS
+#define ANSI_RANDOM     1
+#endif
+#ifdef  MSDOS
+#define ANSI_RANDOM     1
+#endif
+/* Convergent Technologies M680xx based with Unisys/AT&T Sys5r3 */
+#ifdef CONVERGENT
+#ifndef OS_TYPE
+#define OS_TYPE "Convergent Technologies"
+#endif
+#include <fcntl.h>
+#define SysVtime
+#endif
+/* SCO Unix System V */
+#ifdef M_UNIX
+#ifndef OS_TYPE
+#define OS_TYPE "SCO UNIX System V/386"
+#endif
+#include <sys/types.h>
+#include <sys/fcntl.h>
+#endif
+
+/* V1.11 -- With the following includes, AIX no longer requires -Dunix */
+#ifdef _AIX
+#ifndef OS_TYPE
+#define OS_TYPE "AIX"
+#endif
+#include <fcntl.h>
+#include <sys/time.h>
+#endif
+
+#if defined(VMS)
+#ifndef OS_TYPE
+#define OS_TYPE "VAX/VMS"
+#endif
+#define ANSItime
+#define ANSI_RANDOM     1
+#include    <math.h>
+#include    <unixio.h>
+#include    <ssdef.h>
+#include    <file.h>
+#include    <time.h>
+
+#else
+/* ... either MSDOS, POSIX, or a generic non-POSIX UNIX */
+#ifdef MSDOS
+#ifndef OS_TYPE
+#define OS_TYPE "MS-DOS"
+#endif
+#define usecalloc
+#include <fcntl.h>
+#include <time.h>
+#endif
+/* nope, not MS-DOS, try POSIX */
+#ifdef isposix
+#include <time.h>
+#include <sys/times.h>
+#include <fcntl.h>
+#include <unistd.h>
+#else
+#ifdef unix
+#ifndef OS_TYPE
+#define OS_TYPE "UNIX -- vendor unknown"
+#endif
+#include <sys/file.h>
+#endif
+#endif
+
+#endif
+
+/* Define NULL in case we don't have it... */
+#ifndef NULL
+#define NULL 0
+#endif
+
+/* for systems with System V-style time, define SysVtime */
+#ifdef M_SYSV
+#define SysVtime
+#endif
+
+#ifdef SysVtime
+#include <sys/times.h>
+#include <sys/param.h>
+#ifndef CLK_TCK
+#define CLK_TCK HZ
+#endif
+#endif
+/* for systems with BSD style time, define BSDtime */
+#ifdef bsd4_2
+#define USE_FSYNC
+#ifndef OS_TYPE
+#define OS_TYPE "BSD 4.2"
+#endif
+#define BSDtime
+#endif
+#ifdef bsd4_3
+#define USE_FSYNC
+#ifndef OS_TYPE
+#define OS_TYPE "BSD 4.3"
+#endif
+#define BSDtime
+#endif
+#ifdef BSDtime
+#include <sys/time.h>
+#endif
+
+#ifndef OS_TYPE
+#define OS_TYPE "Unknown"
+#endif
+/******************************************************************
+
+  DEFINED CONSTANTS
+
+  ******************************************************************/
+/*
+  V1.14: Define ONETEST to run a single test at runtime as the default
+  V1.14: Define AUTOTEST to run in auto test mode as the default
+  i.e. the behavior of IOzone when it is invoked with no arguments.  ONETEST
+  makes IOzone run a single test using a 1 MB file and 512 byte records.
+  AUTOTEST causes IOzone to use auto test mode.
+  For compatibility with previous versions of IOZONE, ONETEST is the default
+  setting
+*/
+#define ONETEST 1
+#ifndef ONETEST
+#define AUTOTEST
+#endif
+
+/*
+  V1.14: Define USE_FSYNC to force writes to disk during the write phase
+  BSD and BSD-derived UNIX variants and also SVR4 are known to have fsync
+  UNIX).  After the file is written and before it is closed, call fsync()
+  to force the data to be written from cache to disk.  This (mostly) cancels
+  the fact that systems with a lot of memory for cache buffers or memory
+  mapping display artificially high transfer rates during the write phase
+  of IOzone, because the data never makes it onto the disk.
+
+*/
+#if 0
+#define USE_FSYNC
+#endif
+
+
+#define MEGABYTES 1                     /* number of megabytes in file */
+#define RECLEN 512                      /* number of bytes in a record */
+#define FILESIZE 1048576                /*size of file in bytes*/
+#define NUMRECS 2048                    /* number of records */
+#define MAXBUFFERSIZE 16*1024           /*maximum buffer size*/
+#define MINBUFFERSIZE 128
+#define TOOFAST 10
+#define IOZONE_USAGE \
+"\tUsage:\tiozone [megabytes] [record_length_in_bytes] [[path]filename]\n\t\tiozone auto\n\t\tiozone help\n\n"
+#define THISVERSION "V1.14b"
+#define RELEASEDATE "1/31/92"
+  /* Define only one of the following two.  All modern operating systems
+     have time functions so let TIME be defined */
+#ifndef noclock
+#define TIME 1
+#endif
+
+#define MAXNAMESIZE 1000                /* max # of characters in filename */
+#define CONTROL_STRING1 "\t%-8ld%-8ld%-20ld%-20ld\n"
+#define CONTROL_STRING2 "\t%-8s%-8s%-20s%-20s\n"
+  /*
+    For 'auto mode', these defines determine the number of iterations
+    to perform for both the file size and the record length.
+    I.e., if MEGABYTES_ITER_LIMIT = 5 use 1, 2, 4, 8 & 16 megabyte files
+    if RECLEN_ITER_LIMIT = 5 use 512, 1024, 2048, 4096 & 8192 byte records
+    */
+#define MEGABYTES_ITER_LIMIT 5
+#define RECLEN_ITER_LIMIT 5
+
+  /******************************************************************
+
+    FUNCTION DECLARATIONS
+
+
+    ******************************************************************/
+void auto_test();               /* perform automatic test series */
+void show_help();               /* show development help*/
+static double time_so_far();    /* time since start of program */
+void signal_handler();          /* clean up if user interrupts us */
+/******************************************************************
+
+  GLOBAL VARIABLES
+
+  ******************************************************************/
+int auto_mode;
+char filename [MAXNAMESIZE];            /* name of temporary file */
+/******************************************************************
+
+  MAIN -- entry point
+
+  ******************************************************************/
+#ifdef ANSI_MAIN
+int main(int argc, char *argv[], char *env[])    /* main body of code */
+#else
+     main(argc,argv)
+     int argc;
+     char *argv[];
+#endif
+{
+#ifdef ANSI_MAIN
+  char *fooenv;
+#endif
+  int fd;
+  char *default_filename;
+
+#ifdef  usecalloc
+  char *buffer;
+#else
+  char buffer [MAXBUFFERSIZE];            /*a temporary data buffer*/
+#endif
+  unsigned long i;
+  unsigned long megabytes = MEGABYTES;
+  unsigned long reclen = RECLEN;
+  unsigned long filesize;
+  unsigned long numrecs;
+#ifdef TIME
+  unsigned long filebytes;
+  unsigned long readrate, writerate;
+  unsigned long goodmegs;
+  unsigned long goodrecl;
+  double starttime1, starttime2;
+  double writetime, readtime;
+  double totaltime;
+#endif
+#ifdef usecalloc
+  buffer = (char *) calloc(1, MAXBUFFERSIZE);
+#endif
+
+#if defined (ANSI_MAIN)
+  fooenv= env[0];       /* dummy so we make some use of env (to avoid warnings) */
+#endif
+
+#if defined (__TANDEM)
+  default_filename ="IOZONET"; /* TANDEM GUARDIAN 90 has max 8 char filenames */
+#else
+  default_filename ="iozone.tmp"; /*default name of temporary file*/
+#endif
+  if (!auto_mode)
+    {
+      printf("\n\tIOZONE: Performance Test of Sequential File I/O  --  %s (%s)\n",
+            THISVERSION, RELEASEDATE);
+      printf("\t\tBy Bill Norcott\n\n");
+      printf("\tOperating System: %s\n\n", OS_TYPE);
+#ifndef nosignals
+      signal(SIGINT, signal_handler);      /* handle user interrupt */
+      signal(SIGTERM, signal_handler);     /* handle kill from shell */
+#endif
+    }
+  strcpy(filename,default_filename);
+  switch (argc) {
+  case 1:     /* no args, take all defaults */
+    printf(IOZONE_USAGE);
+#ifdef AUTOTEST
+    auto_mode = 1;
+    auto_test();
+    printf("Completed series of tests\n");
+    exit(0);
+#endif
+    break;
+  case 2:     /* <megabytes|filename> */
+    i = atoi(argv[1]); if (i) {
+      megabytes = i;
+    } else {
+      /*
+       'Auto mode' will be enabled if the first command line argument is
+       the word 'auto'.  This will trigger a series of tests
+       */
+      if ( (strcmp(argv[1], "auto") == 0) ||
+         (strcmp(argv[1], "AUTO") == 0) )
+       {
+         auto_mode = 1;
+         auto_test();
+         printf("Completed series of tests\n");
+         exit(0);
+       } else {
+         auto_mode = 0;
+       }
+      if ( (strcmp(argv[1], "help") == 0) ||
+         (strcmp(argv[1], "HELP") == 0) )
+       {
+         show_help();
+         exit(0);
+       }
+      strcpy(filename,argv[1]);
+    }
+    break;
+  case 3:     /* <megabytes> <reclen|filename> */
+    megabytes = atoi(argv[1]);
+    if (atoi(argv[2])) {
+      reclen = atoi(argv[2]);
+    } else {
+      strcpy(filename,argv[2]);
+    }
+    break;
+  case 4:     /* <megabytes> <reclen> <filename> */
+    megabytes = atoi(argv[1]);
+    reclen = atoi(argv[2]);
+    strcpy(filename,argv[3]);
+    break;
+  default:
+    printf("IOZONE: bad usage\n");
+    printf(IOZONE_USAGE);
+    exit(1);
+
+  }
+  if (!auto_mode)
+    {
+      printf("\tSend comments to:\tnorcott_bill@tandem.com\n\n");
+    }
+  filesize = megabytes*1024*1024;
+  numrecs = filesize/reclen;
+  if (reclen >  MAXBUFFERSIZE) {
+    printf("<Error: Maximum record length is %d bytes\n", MAXBUFFERSIZE);
+    exit(1);
+  }
+  if (reclen < MINBUFFERSIZE) {
+    printf("Error: Minimum record length is %d bytes\n", MINBUFFERSIZE);
+    exit(1);
+  }
+  if (!auto_mode)
+    {
+      printf("\tIOZONE writes a %ld Megabyte sequential file consisting of\n",
+            megabytes);
+      printf("\t%ld records which are each %ld bytes in length.\n",
+            numrecs, reclen);
+      printf("\tIt then reads the file.  It prints the bytes-per-second\n");
+      printf("\trate at which the computer can read and write files.\n\n");
+      printf("\nWriting the %ld Megabyte file, '%s'...", megabytes, filename);
+    }
+
+#if defined (__TANDEM)
+  /*
+    Tandem's GUARDIAN preallocates file space based on primary- and secondary extents.
+    The last 2 parameters to open are the sizes of the primary- and secondary extents,
+    in blocks which are 2K bytes each.  After the primary extent is filled, GUARDIAN
+    allocates up to 15 additional extents, one at a time.
+    */
+#define SPECIAL_CREAT
+#define PRI_EXT_BLOCKS 1024
+#define SEC_EXT_BLOCKS 1024
+  if((fd = creat(filename, 0640,
+                PRI_EXT_BLOCKS, SEC_EXT_BLOCKS))<0){
+    printf("Cannot create temporary file: %s\n", filename);
+    exit(1);
+  }
+#endif
+#ifndef SPECIAL_CREAT
+  if((fd = creat(filename, 0640))<0){
+    printf("Cannot create temporary file: %s\n", filename);
+    exit(1);
+  }
+#endif
+#ifdef TIME
+  starttime1 = time_so_far();
+#endif
+  for(i=0; i<numrecs; i++){
+#ifndef DEBUG_ME
+    if(write(fd, buffer, (unsigned) reclen) != reclen)
+      {
+       printf("Error writing block %d\n", i);
+       perror("iozone");
+       close(fd);
+#ifndef VMS
+       unlink(filename);   /* delete the file */
+       /*stop timer*/
+#endif
+       exit(1);
+      }
+#endif
+  }
+#ifdef USE_FSYNC
+  fsync(fd);
+#endif
+#ifdef TIME
+  writetime = time_so_far() - starttime1;
+  if (!auto_mode)
+    {
+      printf("%f seconds", writetime);
+    }
+#endif
+  close(fd);
+  sleep(5); /* Give writes a chance to complete on UNIX systems */
+#if defined (VMS)
+#define SPECIAL_OPEN_READ
+  if((fd = open(filename, O_RDONLY, 0640))<0){
+    printf("Cannot open temporary file for read\n");
+    exit(1);
+  }
+#endif
+
+#ifdef MSDOS
+#define SPECIAL_OPEN_READ
+  if((fd = open(filename, O_RDONLY, 0640))<0){
+    printf("Cannot open temporary file for read\n");
+    exit(1);
+  }
+#endif
+
+  /*
+    'Generic' case, compiled if no operating system-specific case was invoked
+    */
+#ifndef SPECIAL_OPEN_READ
+  if((fd = open(filename, O_RDONLY))<0){
+    printf("Cannot open temporary file for read\n");
+    exit(1);
+  }
+#endif
+
+
+
+  /*start timing*/
+#ifndef TIME
+  printf("start timing\n");
+#endif
+  if (!auto_mode)
+    {
+      printf("\nReading the file...");
+    }
+#ifdef TIME
+  starttime2 = time_so_far();
+#endif
+  for(i=0; i<numrecs; i++) {
+#ifndef DEBUG_ME
+    if(read(fd, buffer, (unsigned) reclen) != reclen)
+      {
+       printf("Error reading block %d\n", i);
+       exit(1);
+      }
+#endif
+  }
+#ifndef TIME
+  printf("stop timing\n");
+#endif
+#ifdef TIME
+  readtime = time_so_far() - starttime2;
+  if (!auto_mode)
+    {
+      printf("%f seconds\n", readtime);
+    }
+#ifdef DEBUG_ME
+  readtime = 1;
+  writetime = 1;
+#endif
+  if(readtime!=0)
+    {
+      filebytes = numrecs*reclen;
+      readrate = (unsigned long) ((double) filebytes / readtime);
+      writerate = (unsigned long) ((double) filebytes / writetime);
+      if (auto_mode)
+       {
+         printf(CONTROL_STRING1,
+                megabytes,
+                reclen,
+                writerate,
+                readrate);
+
+       } else {
+         printf("\nIOZONE performance measurements:\n");
+         printf("\t%ld bytes/second for writing the file\n", writerate);
+         printf("\t%ld bytes/second for reading the file\n", readrate);
+         totaltime = readtime + writetime;
+         if (totaltime < TOOFAST)
+           {
+             goodmegs = (TOOFAST/totaltime)*2*megabytes;
+             printf("\nThe test completed too quickly to give a good result\n");
+             printf("You will get a more precise measure of this machine's\n");
+             printf("performance by re-running IOZONE using the command:\n");
+             printf("\n\tiozone %ld ", goodmegs);
+             printf("\t(i.e., file size = %ld megabytes)\n", goodmegs);
+           }
+       }
+    } else {
+      goodrecl = reclen/2;
+      printf("\nI/O error during read.  Try again with the command:\n");
+      printf("\n\tiozone %ld %ld ", megabytes,  goodrecl);
+      printf("\t(i.e. record size = %ld bytes)\n",  goodrecl);
+    }
+#endif
+  close(fd);
+#ifndef VMS
+  unlink(filename);   /* delete the file */
+  /*stop timer*/
+#endif
+#ifdef  usecalloc
+  free(buffer);           /* deallocate the memory */
+#endif
+#ifdef VMS
+  return SS$_NORMAL;
+#else
+  return 0;
+#endif
+}
+/******************************************************************
+
+  SHOW_HELP -- show development help of this program
+
+  ******************************************************************/
+void show_help()
+{
+  int i;
+  printf("IOZONE: help mode\n\n");
+  for(i=0; strlen(help[i]); i++)
+    {
+      printf("%s\n", help[i]);
+    }
+}
+/******************************************************************
+
+  SIGNAL_HANDLER -- clean up if user interrupts the program
+
+  ******************************************************************/
+void signal_handler()
+{
+  printf("\nIOZONE: interrupted\n\n");
+#ifndef VMS
+  printf("deleting file: %s\n", filename);
+  unlink(filename);   /* delete the file */
+#endif
+  printf("exiting IOzone\n\n");
+  exit(0);
+}
+/******************************************************************
+
+  AUTO_TEST -- perform series of tests and tabulate results
+
+  ******************************************************************/
+void auto_test()
+{
+
+  int megsi, recszi;
+  char megs[10];
+  char recsz[10];
+  int i,j;
+  int auto_argc = 3;
+  char *auto_argv[3];
+
+  printf("IOZONE: auto-test mode\n\n");
+  printf(CONTROL_STRING2,
+        "MB",
+        "reclen",
+        "bytes/sec written",
+        "bytes/sec read");
+  auto_argv[0] = "IOzone auto-test";
+  auto_argv[1] = megs;
+  auto_argv[2] = recsz;
+  /*
+    Start with file size of 1 megabyte and repeat the test MEGABYTES_ITER_LIMIT
+    times.  Each time we run, the file size is doubled
+    */
+  for(i=0,megsi=1;i<MEGABYTES_ITER_LIMIT;i++,megsi*=2)
+    {
+      sprintf(megs, "%d", megsi);
+      /*
+       Start with record size of 512 bytes and repeat the test RECLEN_ITER_LIMIT
+       times.  Each time we run, the record size is doubled
+       */
+      for (j=0,recszi=512;j<RECLEN_ITER_LIMIT;j++,recszi*=2)
+        {
+         sprintf(recsz, "%d", recszi);
+#ifdef ANSI_MAIN
+         main(auto_argc, auto_argv, NULL);
+#else
+         main(auto_argc, auto_argv);
+#endif
+        }
+    }
+}
+
+#ifdef TIME
+static double
+  time_so_far()
+{
+#if defined(ANSItime)
+  /*
+   *   5/17/91 Bill Norcott        V1.07 -- use time() for VMS
+   The times() function in VMS returns proc & user CPU time in 10-millisecond
+   ticks.  Instead, use time() which lacks the precision but gives clock
+   time in seconds.
+   V1.14 make val of type clock_t if we are dealing with POSIX
+   */
+
+  return (double) time(NULL);
+
+#else
+#ifdef isposix
+  clock_t        val;
+  struct tms tms;
+
+
+  if ((val = times(&tms)) == -1)
+    perror("times");
+
+#ifndef CLK_TCK
+  return ((double) val) / ((double) sysconf(_SC_CLK_TCK));
+#else
+  return ((double) val) / ((double) CLK_TCK);
+#endif
+#endif
+#ifdef SysVtime
+  /* #elif defined(SysVtime) */
+  int        val;
+  struct tms tms;
+
+  if ((val = times(&tms)) == -1)
+    perror("times");
+
+  return ((double) val) / ((double) CLK_TCK);
+#endif
+#if defined(MSDOS)
+  return ((double) clock()) / ((double) CLK_TCK);
+#endif
+#ifndef MSDOS
+#ifndef isposix
+#ifndef SysVtime
+  /* #else */
+  struct timeval tp;
+
+  if (gettimeofday(&tp, (struct timezone *) NULL) == -1)
+    perror("gettimeofday");
+  return ((double) (tp.tv_sec)) +
+    (((double) tp.tv_usec) / 1000000.0);
+#endif
+#endif
+#endif
+#endif
+}
+#endif
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Activists-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux) via:
+
+    Internet: Linux-Activists@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    tupac-amaru.informatik.rwth-aachen.de	pub/msdos/replace
+
+The current version of Linux is 0.95a released on March 17, 1992
+
+End of Linux-Activists Digest
+******************************

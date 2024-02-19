@@ -1,0 +1,613 @@
+From:     Digestifier <Linux-Activists-Request@news-digests.mit.edu>
+To:       Linux-Activists@news-digests.mit.edu
+Reply-To: Linux-Activists@news-digests.mit.edu
+Date:     Mon, 27 Jan 92 07:15:10 EST
+Subject:  Linux-Activists Digest #18
+
+Linux-Activists Digest #18, Volume #1            Mon, 27 Jan 92 07:15:10 EST
+
+Contents:
+  more kernel (and tar) issues arising from dump (Charles Hedrick)
+  uuencode/uudecode available. (Thomas David Rivers)
+  Where's df? (nmurrayr@cc.curtin.edu.au)
+  mkfs and large drives (nmurrayr@cc.curtin.edu.au)
+  Problems with kermit (nmurrayr@cc.curtin.edu.au)
+  Re: X11R5 (Joe Green)
+  Re: ctype.h isn't ANSI compliant (Douglas E. Quale)
+  Lets make it easier on the new folks (Michael L. Kaufman)
+  kermit file transfer (Jiansheng Zhao)
+  temporary kluge for mvdir right here (Wayne Hayes)
+  Is screen available ? (Steffen Finger)
+  Has screen been ported to linux ? (Steffen Finger)
+  Re: ctype.h isn't ANSI compliant (bill)
+
+----------------------------------------------------------------------------
+
+From: hedrick@dumas.rutgers.edu (Charles Hedrick)
+Subject: more kernel (and tar) issues arising from dump
+Date: 26 Jan 92 23:51:27 GMT
+
+Well, I spoke too quickly.  The patch I gave earlier today makes dumps
+with tar work.  However you still can't read them.  At least with the
+tar that came as part of the system.  tar -ML 1200 will work for
+creating dumps.  It causes tar to ask for a new disk every 1200
+blocks.  However it doesn't work for reading dumps.  Apparently tar
+ignores -L on reading.  It expects to find ad EOF at the end of the
+volume.  Unfortunately, our good friend block_dev.c doesn't do
+that.  It issues an EIO at end of volume.  The fix is very
+simple.  In fs/block_dev.c, in block_read, at the beginning of
+the while loop, there's 
+
+  if (block > size)
+     return read?read:-EIO;
+
+That should be
+
+  if (block > size)
+     return read?read:0;
+
+This will return an EOF.  One could get more clever, I suppose, and
+return 0 if you're right at the end, and EIO if you're after it.
+Somebody needs to look up the official semantics of lseek and read.
+But it's pretty clear that you want to get end of file rather than EIO
+when reading a floppy sequentially.  This time I've not only written
+dumps but read them, so there are probably no more gremlins.
+
+Here are a few more oddities I've found this afternoon.  Some are bugs
+and some are just things somebody who knows should look at.
+
+1) The new floppy keeps a one-track read cache.  It is invalidated in
+the case of various errors.  In addition, I believe a write on that
+track should either update the cache or invalidate it.  Otherwise a
+read immediately after a write could get old data from the cache.  I
+realize that a read will seldom get to the device level, because it
+will be handled from the buffer cache, but I still think this is
+dangerous.
+
+2) In debugging the floppy stuff, I found that if you write (or read?)
+at the end of a track, in rw_interrupt ST3 is pointing to the next
+track.  I conjecture that the controller may have advanced to a new
+track.  If so, things could get confused, because current_track is
+still pointing to the track as it was before the operation.  This
+requires somebody who knows more about the details of the hardware
+than I do.  It's just a warning.  Possibly you want to set
+current_track = ST3 in rw_interrupt, or maybe set it to 255 if
+current_track != ST3.
+
+3) I note that tar seems to follow symbolic links.  I assume this is
+because the copy of tar included in the distribution predates having
+symlinks in the kernel.  A new tar is needed.  I ended up with a dump
+going around in a circle, because I had a symlink pointing back at one
+of its parents.
+
+4) I'm still losing characters from COM1 if I do kermit during a dump
+(or a compile, etc.).  In fact even on an idle machine, a kermit file
+transfer sees more errors than I think it should.  I took a look at
+how serial I/O is implemented.  Note that the serial interrupt calls
+the main tty module before issuing end-of-interrupt or doing the iret.
+I think there's too much code at interrupt level.  Experience with
+minix and SV/AT suggests that you have to be really careful to do
+serial I/O at 9600 and faster.  The serial interrupt should be the
+highest priority on the machine.  Disk interrupts, etc., can survive
+an occasional delay, but if you lose a character, you've lost it for
+good.  You want the serial interrupt handler to read the character
+from the port and put it in an interrupt-level queue.  It should do no
+processing on the character, to keep the amount of time at interrupt
+level down.  Then you want non-interrupt code (or at least code
+running at a lower interrupt level) to do the real work, pulling
+characters out of the queue.
+
+------------------------------
+
+From: rivers@ponds.uucp (Thomas David Rivers)
+Subject: uuencode/uudecode available.
+Date: 26 Jan 92 20:01:08 GMT
+
+
+ I have taken the two seconds required to get uuencode/uudecode from
+ the BSD source tree, make the necessary SYSV changes, tar it all
+ together and upload it to tsx-11.mit.edu.
+
+ The sources, makefile, executable and formated man pages are available
+ in uuxxcode.tar.Z (in /incoming for the moment.)
+
+   - Dave Rivers (rivers@ponds.uucp) -
+
+------------------------------
+
+From: nmurrayr@cc.curtin.edu.au
+Subject: Where's df?
+Date: 27 Jan 92 02:36:21 GMT
+
+
+   There've been a few postings about df and how to get it to access the root
+filesystem. This I understand, but I can't seem to find df in the first place.
+Where's it hiding?
+
+ .....Ron
+-- 
+                                 ***
+ Ron Murray
+ Internet: Murray_RJ@cc.curtin.edu.au
+     Are we having fun yet?    -- Garfield
+
+------------------------------
+
+From: nmurrayr@cc.curtin.edu.au
+Subject: mkfs and large drives
+Date: 27 Jan 92 02:43:55 GMT
+
+
+   While trying to get linux up and running on a friend's machine (he has a
+spare 80 meg hard drive which wasn't doing much), I encountered problems with
+mkfs when I tried to use the whole drive. When I entered
+
+mkfs -c /dev/hd9 80000
+
+   mkfs came back with the 'usage' message. I finally figured out that mkfs
+wouldn't accept the whole drive; when I entered a block count of 40000 it ran
+fine. This was confirmed when I finally found the source to mkfs: it prints
+the usage banner when (among other things) the block count is above 64k.
+
+   I haven't looked at the linux sources in detail yet, but is this 64k limit
+permanent? And wouldn't it be a good idea to say that the block count is too
+high, rather than just coming back with the usage message (which implies that
+there's something wrong with the syntax of the command line, not just one of
+the values).
+
+ .....Ron
+
+-- 
+                                 ***
+ Ron Murray
+ Internet: Murray_RJ@cc.curtin.edu.au
+     Are we having fun yet?    -- Garfield
+
+------------------------------
+
+From: nmurrayr@cc.curtin.edu.au
+Subject: Problems with kermit
+Date: 27 Jan 92 02:52:04 GMT
+
+
+   If I use kermit to talk to our vax, it works fine until I try to use
+something which does weird things (like clear screen) with the terminal. It
+happens with the VMS mailer, it happens with ANU News, but the result is that
+all lower case characters are mapped to the IBM extended character set (i.e.
+those above 128h). This makes them unreadable! What's more, they're still
+set that way when I log off and exit kermit in disgust, and I have to reboot
+the system to get real characters back. What's going on?
+
+   Has anyone considered porting rs/sz to linux? Some years ago I wrote a
+terminal program for CP/M which did zmodem, and since it's written in C it'd
+be a natural for linux. If nobody's doing anything along these lines I'll
+have a go at it.
+
+ .....Ron
+ (card-carrying member of the
+ "I-hate-kermit [the protocol, not the frog]" club)
+
+-- 
+                                 ***
+ Ron Murray
+ Internet: Murray_RJ@cc.curtin.edu.au
+     Are we having fun yet?    -- Garfield
+
+------------------------------
+
+From: jgreen@modcomp.uucp (Joe Green)
+Subject: Re: X11R5
+Date: 27 Jan 92 02:57:13 GMT
+
+n8141165@henson.cc.wwu.edu (gleason margaret) writes:
+>Yes, Yes, Yes - if you want to do the programming
+>No, No, No    - if you what to restore the tape, compile and run.
+
+Absolutely.  Unless your system is already represented by a .cf file in
+the config directory, you have to do *some* programming.  Admittedly, this
+takes more programming than many ports.
+
+>I think this has used up plenty of bandwidth but I could not let
+>this go without a plea to Joe Green to provide the code for STREAMS
+>based X11 local connections so we will have a base to start a linux
+>port from.
+
+I wish I could give it to you.  Unfortunately, I work for somebody else:
+the code doesn't belong to me.
+
+Look for the areas that are #ifdef'ed by TCPCONN and UNIXCONN.  Provide
+comparable functions based on a different mechanism.  Fix the files which
+include TCP headers (I don't think not defining TCPCONN gets them all).
+Really, it's easier than you might think.
+
+I'm not trying to be flip, or to flame anyone.  I wish I could do more.
+
+(Of course, you'll still need to work out how the keyboard, mouse, and
+video devices are accessed.  I'm hoping that the X386 code in X11R5 has
+already covered most of this ground.)
+
+--
+Joe Green                               jgreen@modcomp.UUCP
+Modular Computer Systems, Inc.          modcomp!jgreen@uunet.UU.NET
+                                        uunet!modcomp!jgreen
+
+------------------------------
+
+From: quale@saavik.cs.wisc.edu (Douglas E. Quale)
+Subject: Re: ctype.h isn't ANSI compliant
+Date: 27 Jan 92 04:54:05 GMT
+
+In article <aldavi01.696251800@starbase.spd.louisville.edu> aldavi01@starbase.spd.louisville.edu (Arlie Davis) writes:
+>In <1992Jan24.080314.9803@daffy.cs.wisc.edu> quale@saavik.cs.wisc.edu (Douglas E. Quale) writes:
+>
+>>According to ANSI C and POSIX, the definitions in ctype.h should be
+>>functions, not macros.
+>
+>Incorrect.  The ANSI standard allows any standard library functions to be
+>defined as macros, *provided* that there is a fall-back "real" function that
+>can be accessed by #undef'ing the symbol.
+>
+><ctype.h> is ANSI compliant, in this sense, if there is also an underlying
+>set of real functions, in addition to the macros.
+>-- 
+>Arlie Davis
+>
+
+Unfortunately I don't have a copy of the ANSI C standard.  I don't have a
+copy of POSIX either (too expensive!).  I do have the AES Operating Systems
+Programming Interfaces Volume, which is the OSF stuff.  AES is based on
+ANSI C, POSIX, XPG3 and FIPS in that order of precedence.  On ctype.h
+it says:
+
+"The <ctype.h> header declares the following as functions:
+                                                ^^^^^^^^^
+        int isalnum( int );
+        int isalpha( int );
+        ...
+The following are declared as functions or macros:      \
+                                        ^^^^^^^^^       |
+        int isascii( int );                             |     XPG3
+        int toascii( int );                             | these are not in
+The following are declared as macros:                   | ANSI or POSIX
+                              ^^^^^^                    |
+        int _tolower( int );                            |
+        int _toupper( int );"                           /
+
+All the specs that differ from ANSI or POSIX are marked.
+
+If you are right about ANSI, portable code would have to look like this:
+
+#undef clearerr;
+#undef fclose;
+#undef feof;
+#undef fflush;
+...
+
+if you take the address of any of these functions, or store them in
+data structures or, *or pass any args that have side effects*.  Is this
+really the case?  I've never seen any code written like that.  Maybe
+any function can be a macro as long it doesn't have multiple evaluation
+problems, and the exceptions (such as getc(3S)) are specifically noted.
+(I first came upon this when trying to compile Berkeley tr(1).  The ctype
+functions aren't in the Linux library so they all came back as undefined
+symbols.  In fact, BSD4.3 <ctype.h> defines these all as macros and the
+tr(1) code #undefs them before stuffing them in a data structure, just
+as you say.)
+
+Looking at K&R 2ed. pages 248-9, it says "The header <ctype.h> declares
+functions for testing characters.  For each function, ....   The
+functions ....  In addition, there are two functions ...."  No mention
+of macros.  On the other hand, they specifically mention the possibility
+that getc(3) be implemented as a macro.
+
+What's the verdict?
+
+--
+Doug Quale
+quale@saavik.cs.wisc.edu
+
+------------------------------
+
+From: kaufman@eecs.nwu.edu (Michael L. Kaufman)
+Subject: Lets make it easier on the new folks
+Date: Mon, 27 Jan 1992 03:58:55 GMT
+
+I have an idea.  As more and more people get involved with Linux, they
+will be going to ftp the software from the sites. I just tried to get the 
+software and there were about eleventy-dozen directories to go through. How 
+about lets make a big tar files with everything (including the diskwrite, and 
+shoelace utilities) that a new person who wants to get the works will need.
+Or, if that would be too large, how about a file that contains a list of the
+files.  Just an idea.
+
+Michael
+
+-- 
+Michael Kaufman | I've seen things you people wouldn't believe. Attack ships on
+ kaufman        | fire off the shoulder of Orion. I watched C-beams glitter in
+  @eecs.nwu.edu | the dark near the Tannhauser gate. All those moments will be
+                | lost in time - like tears in rain. Time to die.     Roy Batty 
+
+------------------------------
+
+From: zhao@unixg.ubc.ca (Jiansheng Zhao)
+Subject: kermit file transfer
+Date: 27 Jan 92 08:12:02 GMT
+
+Finally I got file transfer under kermit working. If I set packet-length
+to 1024, the transfer would fail. Now I use magic number 999, everything
+works fine.
+Thanks to those who responded and made ussful suggestions. 
+
+------------------------------
+
+From: wayne@csri.toronto.edu (Wayne Hayes)
+Subject: temporary kluge for mvdir right here
+Date: 27 Jan 92 08:57:26 GMT
+
+Well, I can't do without a mvdir command, so I wrote one that
+doesn't need the kernel's rename stuff.  How?  It's in shell
+script.  :-)  It's actually quite fast with bash(1) that's
+provided.  It moved the entire minix /usr/include tree in a
+few seconds.
+
+I've spent a few hours trying to make it as bulletproof as
+possible, and I think to boot it's a nice demonstration of
+recursion in shell scripts.
+
+Basically, to save space, it creates the target directory,
+and makes hard links between all the files (and recursively,
+all the directories) in the old directory and the new one,
+and when it's done (it does LOTS of error checking  to make
+sure there were no errors -- take a look, I'm about as
+paranoid as it gets) it rm -rf's the old one.  If you're even
+more paranoid than me, then just comment out the last line
+and the old one's won't get removed.
+
+It is also smart enough to handle all the cases that you'd expect:
+target directory exists (move old dir into it); doesn't exist
+(create it); relative and absolute path names.  In short, I think
+it's a full implementation of mvdir as the mv(1) command that comes
+with Linux needs.
+
+Note that bash has a nice '-e' option to it's built-in test(1) function:
+it basically says "I don't care if it's a file, directory, named pipe,
+device, ANYTHING.  Does it exist?".  Not all test(1)'s have this, so
+it may not work without bash(1).
+
+Bug reports (if any) to my mailbox.
+
+----
+#!/bin/sh
+# Bourne shell version of mvdir until it's implemented as a system call.
+# As far as I can see it's pretty robust.  However, use at your own risk.
+# If you have any doubts, comment out the very last line of this script.
+
+# must have 2 args
+case $# in
+        2) ;;
+        *) echo "usage: $0 <dir1> <dir2>" >&2
+                exit 1 ;;
+esac
+
+# arg 1 must be a dir
+if [ ! -d "$1" ]; then
+        echo "usage: $0 <dir1> <dir2>" >&2
+        exit 1
+fi
+
+# arg 1 can't be current directory
+if [ "$1" = "." ]; then
+        echo "can't move '.'" >&2
+        exit 1
+fi
+
+# Can you think of any more weird errors to consider???  If not, let's go!
+
+# if arg 2 exists it must be a dir
+if [ -e "$2" ]; then
+        # if arg 2 exists it must be a dir
+        if [ ! -d "$2" ]; then
+                echo "usage: $0 <dir1> <dir2>" >&2
+                exit 1
+        fi
+        
+        # move dir1 into dir2
+        dir1=`basename "$1"`
+        if [ -e "$2/$dir1"; then
+                echo "file exists" >&2
+                exit 1
+        fi
+        "$0" "$1" "$2/$dir1"
+        exit    # hopefully exit will exit with the above mvdir's exit code...
+fi                      # (bash does)
+
+# Now we know dir2 doesn't exist.  So make it, link all the old stuff into it,
+# and rm * and rmdir the old one (not -r, since we wanna make sure the
+# recursion works before blowing away the entire old one).
+# (Later: The recursion works, after much testing, and rm -r at the end is much
+# cleaner and faster, so that's where it is now.)
+
+userdir=`pwd`
+
+mkdir "$2"
+
+case "$1" in
+        /*)     # absolute path name
+                dir1="$1" ;;
+        *)      # relative path name
+                dir1="$userdir/$1" ;;
+esac
+case "$2" in
+        /*)     # absolute
+                dir2="$2" ;;
+        *)      # relative
+                dir2="$userdir/$2" ;;
+esac
+
+cd "$1"
+
+for i in *; do
+        if [ -f "$i" ]; then    # link in the new one
+                if ln "$i" "$dir2/$i"; then
+                        :
+                else
+                        echo "$0: ERROR linking $1/$i to $2/$i: mvdir only partially completed!  None of the
+originals have been deleted yet, but you'll have to remove the new ones by hand." >&2
+                        exit 1
+                fi
+        elif [ -d "$i" ]; then  # it's a directory; call ourselves recursively.
+                if "$0" "$i" "$dir2/$i"; then   # list i to save 1 recursive call.
+                        :
+                else
+                        echo "$0: ERROR linking $1/$i to $2/$i: mvdir only partially completed!  None of the
+originals have been deleted yet, but you'll have to remove the new ones by hand." >&2
+                        exit 1
+                fi
+        else
+                # echo "$0: WARNING $1/$i not a file or directory; assuming ln(1) and continuing." >&2
+                if ln "$i" "$dir2/$i"; then
+                        :
+                else
+                        echo "$0: ERROR linking $1/$i to $2/$i: mvdir only partially completed!  None of the
+originals have been deleted yet, but you'll have to remove the new ones by hand." >&2
+                        exit 1
+                fi
+        fi
+done
+
+cd "$userdir"
+# Hold your breath.  It seems to have worked.
+rm -rf "$1"
+----
+
+Happy hacking.
+
+-- 
+UNIX: Utility for Neatly Instilling Xenophobia.
+
+Wayne Hayes     INTERNET: wayne@csri.utoronto.ca        CompuServe: 72401,3525
+
+------------------------------
+
+From: snfinger@faui30g.informatik.uni-erlangen.de (Steffen Finger)
+Subject: Is screen available ?
+Date: 27 Jan 92 11:30:50 GMT
+
+Has screen or any other window-manager been ported to linux ?
+Where can I get them ? At the common 3 ftp sites ?
+BTW: The 64Meg HD Limit is realy unfortunate.
+
+ Thanks, Steffen
+--
+
+============================================================================
+| Steffen Finger                     |                                     |
+| Department of Computer Science III | phone : (49) 09131/41950            |
+
+------------------------------
+
+From: snfinger@faui30g.informatik.uni-erlangen.de (Steffen Finger)
+Subject: Has screen been ported to linux ?
+Date: 27 Jan 92 11:38:30 GMT
+
+Is screen or any other window manager available for linux ?
+Where can I get it from ?
+BTW: the 64 Meg. HD Limit is not very nice ...
+
+Steffen
+
+============================================================================
+| Steffen Finger                     |                                     |
+| Department of Computer Science III | phone : (49) 09131/41950            |
+| University of Erlangen/Nueremberg  | FAX   : (49) 09131/39388            |
+| Martensstr. 3                      | email : snfinger@immd3.informatik.  |
+| D-8520 Erlangen, Germany           |         uni-erlangen.de             |
++--------------------------------------------------------------------------+
+| "Sicherlich moechte ich manche Dinge schneller tun. Aber wenn man neun   |
+|  schwangere Frauen in einem Raum versammelt, wird das Baby dennoch nicht |
+|  nach einem Monat auf die Welt kommen."                                  |
+|         Grigorij Jawlinky ( ehm. sowjetischer Wirtschaftsberater)        | 
+============================================================================
+--
+
+============================================================================
+| Steffen Finger                     |                                     |
+| Department of Computer Science III | phone : (49) 09131/41950            |
+
+------------------------------
+
+From: bill@franklin.com (bill)
+Subject: Re: ctype.h isn't ANSI compliant
+Date: 27 Jan 92 10:55:01 GMT
+
+With rare exceptions (none in ctype.h), a header may override a
+function with a macro, as in:
+
+int isdigit(int __c);
+#define isdigit(c) (_Ctype[(c) + 1] & _ISDIGIT)
+
+The program can either use the header as is, thus getting a macro,
+or it can have a #undef isdigit after the include <ctype.h>, thus
+getting the function. In addition,
+
+        int (*funcptr)() = isdigit;
+
+is required to work if the header is included. (Standard C says
+this will work since the isdigit isn't expanded unless it is
+followed by an open parenthesis.)
+
+If the program really MUST use the function (e.g., for a timing
+routine), it can call isdigit thus:
+
+        (isdigit)(c)
+
+which will prevent any use of a macro definition.
+
+Finally, the program does not need to use the header at all; it
+may:
+
+extern int isdigit(int c);
+
+wherever and then use isdigit; the function will, of course, be
+called. (Actually, that is necessarily not true. The
+implementation can be smart because an external definition of
+isdigit must refer to the library function and not something in
+the program. This means that the compiler, on seeing an isdigit
+that it knows has external linkage, may do whatever it likes
+provided that the effect is the same as an isdigit.)
+
+Again with rare exceptions, when the header uses a macro to
+implement a function, it must use a "safe" macro, one that
+behaves like the function call. (The two exceptions that occur to
+me are getc and putc where the stream operand may be referenced
+more than once in the macro; i.e., getc(*fp++) probably won't do
+what you want.)
+
+(If anyone really wants chapter and perverse, I can give it, but
+please don't ask. If you need to know it that badly, you need to
+get the standard.)
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service addresse, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Activists-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and alt.os.linux) via:
+
+    Internet: Linux-Activsts@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    tupac-amaru.informatik.rwth-aachen.de	pub/msdos/replace
+
+The current version of Linux is 0.12, released on Jan 14, 1992
+
+End of Linux-Activsts Digest
+******************************

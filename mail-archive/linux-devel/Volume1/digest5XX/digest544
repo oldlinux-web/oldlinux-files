@@ -1,0 +1,709 @@
+Subject: Linux-Development Digest #544
+From: Digestifier <Linux-Development-Request@senator-bedfellow.MIT.EDU>
+To: Linux-Development@senator-bedfellow.MIT.EDU
+Reply-To: Linux-Development@senator-bedfellow.MIT.EDU
+Date:     Sat, 12 Mar 94 20:13:05 EST
+
+Linux-Development Digest #544, Volume #1         Sat, 12 Mar 94 20:13:05 EST
+
+Contents:
+  Startup code (DOS boot program) (Jon Peatfield)
+  << IDE Performance Package >> (Mark Lord)
+  mouse and SCSI controller help??! (Paul Corley Rounsavall)
+  Re: PLEASE use the GPL (La Monte Yarroll)
+  Should a file system error cause a kernel panic? (Brandon C Long)
+  Kernel startup prosedure (Sami-Pekka Hallikas)
+  Re: kernel mmap() , MAP_SHARED/PROT_READ/PROT_WRITE (Arindam Banerji)
+
+----------------------------------------------------------------------------
+
+From: jp107@amtp.cam.ac.uk (Jon Peatfield)
+Subject: Startup code (DOS boot program)
+Date: Fri, 11 Mar 1994 03:11:18 GMT
+
+While this isn't strictly to do with the linux kernel itself I hope
+that noone will mind too much.  (flames>/dev/null please)
+
+I've recently been giving myself headaches trying to understand the
+startup code for the kernel (boot/startup.S mainly), while not
+understanding 8086 assembler, so please make allowances if I'm
+completely wrong.
+
+I'm trying to write a loader which starts Linux from a running DOS
+environment.  The reason for doing this is that I need to run Linux on
+machines where for various reasons I can't overwrite the boot sectors
+and using boot floppies are frowned on. The UMSDOS fileing system
+allows the sharing of the disks so all (ha) I need is a boot program.
+I've tried the bootlin stuff referenced by the LILO documentation but
+it doesn't work on any of the machines I've tried it on.
+
+From looking at the code in startup.S it seems clear that the startup
+can be split into 2 sections:
+
+1. getting parameters from the BIOS and selecting screen size etc
+
+2. setting up the machine, moving the kernel and starting it
+
+The former need to be done while BIOS calls work, while the latter
+don't.  The problem I have is that DOS seems to have linked itself
+into the INT vectors for some of the calls that (1) makes, so I can't
+make them after placing the kernel in memory (at 0x010000 anyway),
+since this may have overwritten these handlers.
+
+What I propose to do is:
+
+a. From a DOS executable load the kernel into some memory (may need
+   DOS network devices etc up)
+b. Make BIOS calls needed by (1) to get parameters.
+c. Disable interrupts, move myself to beyond 0x098000 (and jump there)
+d. move kernel to where it wants to live including the first 2.5K at
+   0x090000 the rest at 0x010000, copy parameters from (b)
+e. Run the (2) startup code thus starting the kernel.
+
+What I'd like to do is to derive the parts of code needed for (b) and
+(e) automatically from startup.S so that if/when startup.S is changed
+this program can be easily changed.  Since I don't know 8086 assembler
+I'd like to keep most of the rest in a higher-level language if
+possible.
+
+Can anyone tell me:
+
+If I'm wasting my time 'cos they have solved this problem already (please)?
+If I'm on the right track or have missed something obvious?
+
+Any help would be gratefully recieved.
+
+-- Jon Peatfield   (DAMTP unix network admin)
+
+--
+Jon Peatfield, Computer Officer, the DAMTP, University of Cambridge
+Telephone: (+44 223) 3-37852     Mail: J.S.Peatfield@amtp.cam.ac.uk
+
+ PP breaks RFC-822 when forwarding SMTP->SMTP mail.  PP: Just say NO.
+
+
+------------------------------
+
+From: mlord@bnr.ca (Mark Lord)
+Subject: << IDE Performance Package >>
+Date: 12 Mar 1994 23:49:54 GMT
+
+Back in September/1993 I posted a patch file to enable MultipleMode
+on supporting IDE drives.  The original patch was updated once, and
+then set aside due to problems with error recovery on writes.
+
+Here is the first major revision to the patch since that time.
+
+Features:
+        -- source compatible with 99pl15 and pre-1.0 kernels
+        -- automatic drive identification/display at kernel boot time
+                (with optional detailed info display)
+        -- detects IDE drives which reliably support MultipleMode
+        -- safely enables 8-sector MultipleMode on newer drives
+                (all 2+ sector READs use it, including PAGING requests)
+                (all 2-8 sector WRITEs use it, including PAGING requests)
+        -- error recovery mechanism respected (it works) for READs & WRITEs
+        -- MultipleMode is automatically shut off if errors occur
+        -- performs lower overhead bulk transfers of multiple sectors
+        -- safely enables interrupts during data transfers
+                (for the first N-1 words of an N word transfer)
+                (this feature can be turned off with #ifdef)
+To be added someday:
+        -- support for a second IDE controller (up to 4 drives).
+
+Normally, READ/WRITE operations involving more than one disk sector (512bytes)
+transfer a single sector at a time, providing an interrupt after each sector
+to signal when the drive is ready for the next sector to be transferred.
+
+Under linux, most disk operations involve groups of 2 or 8 (paging) sectors.
+
+MultipleMode is a hardware feature of nearly all IDE drives sold these days.
+It provides an alternate set of READ/WRITE commands which can transfer more
+than a single sector at a time between interrupts, up to a configured limit.
+
+Use of this can greatly reduce kernel overhead, since the disk interrupt
+handlers get invoked fewer times for the same amount of data.  The savings are
+in the entry_save_regs_check_status and restore_regs_exit portions of the 
+handlers, perhaps 10-20% of the total execution paths.  Thus, raw device speed
+increases of 10-20%, and a corresponding 10-20% reduction in kernel CPU usage,
+can be observed with faster drives.
+
+To measure the change in raw device speed try this as a before/after test:
+
+        sync
+        time dd if=/dev/hda of=/dev/null bs=1024k count=30
+
+Run the second command twice in a row to negate most caching effects,
+and then divide 30MB by the measured elapsed/total time in seconds
+to give the effective raw device READ speed in MB/sec.  To measure
+WRITE speed, you could try a similar test on an unused swap partition,
+being careful to do a swapoff first, and a mkswap afterwards.
+
+The default setting is for 8-sector multiple mode.  I recommend this value
+as the absolute minimum, so that paging requests can be accomodated.
+It also works just fine for me in everyday use.  Larger settings are not
+recommended either, as they provide no significant added benefits, and can
+increase I/O latency on READ operations.
+
+The other big benefit of this patch is that the disk driver is much friendly
+to serial/network I/O, as it avoids disabling interrupts during data transfers
+to/from the drive.  If this breaks your system, there is an #ifdef near the
+top to turn off this function.
+
+Enjoy, and let me know if it works/breaks for you.
+
+-ml
+mlord@bnr.ca
+
+
+--- hd.c.orig   Fri Jan 21 12:50:11 1994
++++ hd.c        Sat Mar 12 14:47:45 1994
+@@ -14,8 +14,13 @@
+  *
+  *  Thanks to Branko Lankester, lankeste@fwi.uva.nl, who found a bug
+  *  in the early extended-partition checks and added DM partitions
++ *
++ *  IDE IRQ-unmask & drive-id & multiple-mode code added by Mark Lord.
+  */
+ 
++#define HD_UNMASK_INTR 1       /* set to 0 to mask other IRQs during hd I/O */
++#define VERBOSE_DRIVEID 0      /* set to 1 for more drive info at boot time */
++#define MAX_MULTIPLE   8       /* set to 1 to disable multiple mode support */
+ 
+ #include <linux/errno.h>
+ #include <linux/signal.h>
+@@ -208,6 +213,133 @@
+        outb_p(cmd,++port);
+ }
+ 
++#define WIN_MULTREAD   0xC4    /* read multiple sectors        */
++#define WIN_MULTWRITE  0xC5    /* write multiple sectors       */
++#define WIN_SETMULT    0xC6    /* enable read multiple         */
++#define WIN_IDENTIFY   0xEC    /* ask drive to identify itself */
++
++static int mult_count[MAX_HD] = {0,}, writing_mult; 
++
++#if VERBOSE_DRIVEID
++
++char *cfg_str[] =
++{      "", " HardSect", " SoftSect", " NotMFM", " HdSw>15uSec", " SpinMotCtl",
++       " Fixed", " Removeable", " DTR<=5Mbs", " DTR>5Mbs", " DTR>10Mbs",
++       " RotSpdTol>.5%", " dStbOff", " TrkOff", " FmtGapReq", "",
++};
++
++char *SlowMedFast[] = {"slow", "medium", "fast"};
++char *BuffType[] = {"?", "1Sect", "DualPort", "DualPortCache"};
++
++#define YN(b)  (((b)==0)?"no":"yes")
++
++static void rawstring (char *prefix, char *s, int n)
++{
++       printk(prefix);
++       if (*s) {
++               int i;
++               for (i=0; i < n && s[i^1] == ' '; ++i); /* strip blanks */
++               for (; i < n && s[i^1]; ++i)
++                       if (s[i^1] != ' ' || ((i+1) < n && s[(i+1)^1] != ' '))
++                               printk("%c",s[i^1]);
++       }
++}
++
++static void dmpstr (char *prefix, unsigned int i, char *s[], unsigned int maxi)
++{
++       printk(prefix);
++       printk( (i > maxi) ? "?" : s[i] );
++}
++
++static void dump_identity (unsigned int dev, unsigned short ib[])
++{
++       int i;
++       char dashes[] = "\n+-------------------------------------------------------------------+\n";
++       printk (dashes);
++       printk ("hd%c:  Drive Identification Info:\n", dev+'a');
++       rawstring (" Model=",(char *)&ib[27],40);
++       rawstring (", FwRev=",(char *)&ib[23],8);
++       rawstring (", SerialNo=",(char *)&ib[10],20);
++       printk ("\n Config={");
++       for (i=0; i<=15; i++) if (ib[0] & (1<<i)) printk (cfg_str[i]);
++       printk (" }\n");
++       printk (" Default c/h/s=%d/%d/%d, TrkSize=%d, SectSize=%d, ECCbytes=%d\n",
++               ib[1],ib[3],ib[6],ib[4],ib[5], ib[22]);
++       dmpstr (" BuffType=",ib[20],BuffType,3);
++       ib[47] &= 0xFF;
++       printk (", BuffSize=%dKB, MaxMultSect=%d\n", ib[21]/2, ib[47]);
++       printk (" Features: DblWordIO=%s, LBA=%s, DMA=%s",
++               YN(ib[48]&1),YN(ib[49]&0x20),YN(ib[49]&0x10));
++       dmpstr (", tPIO=",ib[51]>>8,SlowMedFast,2);
++       if (ib[49]&0x10 && (ib[53]&1)==0)
++               dmpstr (", tDMA=",ib[52]>>8,SlowMedFast,2);
++       printk ("\n (%s): Current c/h/s=%d/%d/%d, TotSect=%d",
++               (((ib[53]&1)==0)?"maybe":"valid"),
++               ib[54],ib[55],ib[56],*(int *)&ib[57]);
++       if (ib[49]&0x20)
++               printk (", LBAsect=%d", *(int *)&ib[60]);
++       printk ("\n (%s): CurMultSect=%d", ((ib[53]&1)==0)?"maybe":"valid",
++               (ib[59]&0x10)?ib[59]&0xFF:0);
++       if (ib[49]&0x10)
++               printk (", DMA-1w=%04X, DMA-mw=%04X", ib[62], ib[63]);
++       printk ("%s\n",dashes);
++}
++#endif /* VERBOSE_DRIVEID */
++
++static void set_multiple_intr(void)
++{
++       unsigned int dev = DEVICE_NR(CURRENT->dev);
++
++       if (inb_p(HD_STATUS)&(BUSY_STAT|ERR_STAT)) {
++               mult_count[dev] = 1;    /* disable multiple mode */
++               printk ("  hd%c: set multiple mode failed\n", dev+'a');
++       } else {
++               printk ("  hd%c: enabled %d-sector multiple mode\n",
++                       dev+'a', mult_count[dev]);
++       }
++       do_hd_request();
++       return;
++}
++
++static void identify_intr(void)
++{
++       unsigned short ib[64];
++       unsigned int dev = DEVICE_NR(CURRENT->dev);
++
++       if (inb_p(HD_STATUS)&(BUSY_STAT|ERR_STAT))
++               printk ("  hd%c: multiple mode not supported\n", dev+'a');
++       else {
++               insw(HD_DATA,(char *)ib,64); /* get first 128 ID bytes */
++               sti();
++#if VERBOSE_DRIVEID
++               dump_identity(dev, ib);
++#endif /* VERBOSE_DRIVEID */
++               if (ib[27]) {
++                       int i;
++                       for (i=27; i<= 46; i++)
++                               ib[i] = (ib[i]>>8) | (ib[i]<<8);
++                       printk ("  hd%c: %-.40s (%dMB IDE w/%dKB Cache)\n",
++                               dev+'a', (char *)&ib[27], ib[1]*ib[3]*ib[6] / 2048, ib[21]>>1);
++                       /* skip troublesome older drives with (MaxMult < 32) */
++                       if ((i = ib[47] & 0xff) >= 32)
++                               mult_count[dev] = MAX_MULTIPLE;
++                       else
++                               printk ("  hd%c: older drive, multiple mode not enabled\n", dev+'a');
++               }
++               insw(HD_DATA,(char *)ib,64); /* flush remaining 384 ID bytes */
++               insw(HD_DATA,(char *)ib,64);
++               cli();
++               insw(HD_DATA,(char *)ib,64);
++               if (mult_count[dev] > 1) {   /* try to enable multiple mode */
++                       hd_out(dev,mult_count[dev],0,0,0,WIN_SETMULT,&set_multiple_intr);
++                       if (!reset)
++                               return;
++               }
++       }
++       do_hd_request();
++       return;
++}
++
+ static int drive_busy(void)
+ {
+        unsigned int i;
+@@ -243,6 +375,11 @@
+ 
+ repeat:
+        if (reset) {
++               for (i=0; i < NR_HD; i++) {
++                       if (mult_count[i] > 1)
++                               printk ("  hd%c: multiple mode disabled\n", i+'a');
++                       mult_count[i] = 1;      /* disable multiple mode */
++               }
+                reset = 0;
+                i = -1;
+                reset_controller();
+@@ -310,8 +447,8 @@
+ 
+ static void read_intr(void)
+ {
+-       int i;
+-       int retries = 100000;
++       unsigned int dev = DEVICE_NR(CURRENT->dev);
++       int i, retries = 100000, msect = mult_count[dev];
+ 
+        do {
+                i = (unsigned) inb_p(HD_STATUS);
+@@ -333,22 +470,33 @@
+        do_hd_request();
+        return;
+ ok_to_read:
+-       insw(HD_DATA,CURRENT->buffer,256);
+-       CURRENT->errors = 0;
+-       CURRENT->buffer += 512;
+-       CURRENT->sector++;
+-       i = --CURRENT->nr_sectors;
+-       --CURRENT->current_nr_sectors;
++#if HD_UNMASK_INTR
++       sti();                          /* permit other IRQs during xfer */
++#endif
++       if ((i = CURRENT->current_nr_sectors) > msect)
++               i = msect;
++       msect -= i;
++       CURRENT->sector += i;
++       CURRENT->current_nr_sectors -= i;
++       insw(HD_DATA,CURRENT->buffer,(i<<8)-1); /* xfer all but final word */
++       CURRENT->buffer += i<<9;        /* incr buffer ptr by byte count */
++       cli();                          /* mask IRQs before completing xfer */
++       *((short *)(CURRENT->buffer-2)) = inw(HD_DATA); /* xfer final word */
++
+ #ifdef DEBUG
+-       printk("hd%d : sector = %d, %d remaining to buffer = %08x\n",
+-               MINOR(CURRENT->dev), CURRENT->sector, i, CURRENT-> 
+-               buffer);
++       printk("hd%c: read: %d sectors(%d-%d), remaining=%d, buffer=%08x\n",
++               dev+'a', i, CURRENT->sector-i, CURRENT->sector-1,
++               CURRENT->nr_sectors, (int) CURRENT->buffer);
+ #endif
+-       if (!i || (CURRENT->bh && !SUBSECTOR(i)))
++       CURRENT->nr_sectors -= i;
++       i = CURRENT->nr_sectors;        /* in case it's freed by end_request */
++       if (!CURRENT->current_nr_sectors)
+                end_request(1);
+        if (i > 0) {
++               CURRENT->errors = 0;
++               if (msect)
++                       goto ok_to_read;
+                SET_INTR(&read_intr);
+-               sti();
+                return;
+        }
+        (void) inb_p(HD_STATUS);
+@@ -370,8 +518,19 @@
+                        continue;
+                if ((i & STAT_MASK) != STAT_OK)
+                        break;
+-               if ((CURRENT->nr_sectors <= 1) || (i & DRQ_STAT))
+-                       goto ok_to_write;
++               if (!(i & DRQ_STAT)) {
++                       if (writing_mult || CURRENT->nr_sectors <= 1) {
++                               end_request(1);
++#if (HD_DELAY > 0)
++                               last_req = read_timer();
++#endif
++                               do_hd_request();
++                               return;
++                       }
++               } else {
++                       if (CURRENT->nr_sectors > 1)
++                               goto ok_to_write;
++               }
+        } while (--retries > 0);
+        sti();
+        printk("HD: write_intr: status = 0x%02x\n",i);
+@@ -384,23 +543,19 @@
+        do_hd_request();
+        return;
+ ok_to_write:
+-       CURRENT->sector++;
+-       i = --CURRENT->nr_sectors;
+-       --CURRENT->current_nr_sectors;
++       CURRENT->errors = 0;
+        CURRENT->buffer += 512;
+-       if (!i || (CURRENT->bh && !SUBSECTOR(i)))
++       CURRENT->sector++;
++       CURRENT->nr_sectors--;
++       if (!--CURRENT->current_nr_sectors)
+                end_request(1);
+-       if (i > 0) {
+-               SET_INTR(&write_intr);
+-               outsw(HD_DATA,CURRENT->buffer,256);
+-               sti();
+-       } else {
+-#if (HD_DELAY > 0)
+-               last_req = read_timer();
++#if HD_UNMASK_INTR
++       sti();
+ #endif
+-               do_hd_request();
+-       }
+-       return;
++       outsw(HD_DATA,CURRENT->buffer,255);
++       cli();
++       SET_INTR(&write_intr);
++       outw(((short *)CURRENT->buffer)[255],HD_DATA);
+ }
+ 
+ static void recal_intr(void)
+@@ -482,7 +637,6 @@
+                for (i=0; i < NR_HD; i++)
+                        recalibrate[i] = 1;
+                reset_hd();
+-               sti();
+                return;
+        }
+        if (recalibrate[dev]) {
+@@ -490,11 +644,41 @@
+                hd_out(dev,hd_info[dev].sect,0,0,0,WIN_RESTORE,&recal_intr);
+                if (reset)
+                        goto repeat;
+-               sti();
+                return;
+        }       
++       if (!mult_count[dev]) {
++               mult_count[dev] = 1;    /* as default, disable multiple mode */
++               hd_out(dev,0,0,0,0,WIN_IDENTIFY,identify_intr);
++               if (reset)
++                       goto repeat;
++               return;
++       }
++       if (CURRENT->cmd == READ) {
++               unsigned int cmd = mult_count[dev] > 1 ? WIN_MULTREAD : WIN_READ;
++               hd_out(dev,nsect,sec,head,cyl,cmd,&read_intr);
++               if (reset)
++                       goto repeat;
++               return;
++       }
+        if (CURRENT->cmd == WRITE) {
+-               hd_out(dev,nsect,sec,head,cyl,WIN_WRITE,&write_intr);
++               unsigned int cmd, wcnt;
++               if ((wcnt = mult_count[dev]) > 1
++                && nsect <= wcnt
++                && nsect == CURRENT->current_nr_sectors) {
++                       wcnt = (nsect<<8) - 1;
++                       writing_mult = 1;
++                       cmd = WIN_MULTWRITE;
++               } else {
++                       wcnt = 255;
++                       writing_mult = 0;
++                       cmd = WIN_WRITE;
++               }
++#ifdef DEBUG
++               printk("hd%c: writing %d sectors(%d-%d), buffer=%08x\n",
++                       dev+'a', (wcnt+1)>>8, CURRENT->sector,
++                       CURRENT->sector+nsect-1, (int) CURRENT->buffer);
++#endif
++               hd_out(dev,nsect,sec,head,cyl,cmd,NULL);
+                if (reset)
+                        goto repeat;
+                if (wait_DRQ()) {
+@@ -502,15 +686,13 @@
+                        bad_rw_intr();
+                        goto repeat;
+                }
+-               outsw(HD_DATA,CURRENT->buffer,256);
+-               sti();
+-               return;
+-       }
+-       if (CURRENT->cmd == READ) {
+-               hd_out(dev,nsect,sec,head,cyl,WIN_READ,&read_intr);
+-               if (reset)
+-                       goto repeat;
++#if HD_UNMASK_INTR
+                sti();
++#endif
++               outsw(HD_DATA,CURRENT->buffer,wcnt);
++               cli();
++               SET_INTR(&write_intr);
++               outw(((short *)CURRENT->buffer)[wcnt],HD_DATA);
+                return;
+        }
+        panic("unknown hd-command");
+-- 
+mlord@bnr.ca    Mark Lord       BNR Ottawa,Canada       613-763-7482
+
+------------------------------
+
+From: pcr1@super7.ERC.MsState.Edu (Paul Corley Rounsavall)
+Subject: mouse and SCSI controller help??!
+Date: 12 Mar 1994 23:55:34 GMT
+
+I have just installed Linux slackware 1.1.2.  I love this OS.  I have a 
+Buslogic Local Bus SCSI-2 controller card (BT445) that is have major problems
+with DOS.  I am about to send the card back and get another.  I was 
+considering a Adaptec.  Any suggestions on which controller to purchase with
+regards to price ( about $250-$300 ) and Linux compatability.  I have seed 
+several posts here about different Adaptec cards and problems.  Is this 
+typical of Adaptec?  
+   Also, I have a Prohance 40 button programmable trackball.  I was wondering
+if anyone has this device working in Xfree86.  If so, could you mail me what
+ever it was you did to get it working?  I was also curious as to how to go 
+about writing my own driver for the programmable buttons?  I have some ideas
+on the algorithm, but where should I start?  Is there a mouse driver already
+installed in Linux or X? Or does X handle everything straight from the port?
+Thanks in advance for any suggestions, hints, or comments.
+
+Paul
+pcr1@erc.msstate.edu
+
+------------------------------
+
+From: piggy@hilbert.maths.utas.edu.au (La Monte Yarroll)
+Subject: Re: PLEASE use the GPL
+Date: 11 Mar 1994 03:32:23 GMT
+
+Has anyone ever asked the FSF for permission to use a modified version
+of the GPL?
+--
+La Monte H. Yarroll     Home:           piggy@baqaqi.chi.il.us
+   Work:                piggy@hilbert.maths.utas.edu.au
+   If you remember nothing else:  piggy@acm.org         NIC Handle: LY
+   GPL - "Just give source a chance."
+
+------------------------------
+
+From: blong@dcl-nxt44 (Brandon C Long)
+Subject: Should a file system error cause a kernel panic?
+Date: 10 Mar 1994 17:18:43 GMT
+
+Recently I've been having a problem with one of my e2fs file partitions
+that causes the kernel to panic whenever anyone attempts to login from
+console.   (Or possibly at all, since the crash which caused the errors
+took all my network configuration with it).
+
+What I'm asking is why should this cause the kernal to panic?  Unix is 
+supposed to be the wonderfully resilient operating system, but if a file
+system error can cause a machine freeze, that just doesn't seem to make
+sense.  I thought kernal panics should be due to configuration problems,
+ie at boot up, or memory parity errors, or kernel bugs (such as the swap
+bug in pl13)?
+
+Any thoughts?
+
+BTW, in case you are curious, here was my post to c.o.l.h (with no help yet 
+offered) about my e2fs problems.  
+
+
+Subject: [Q] EXT2FS panic:buffer head pointer is NULL
+
+Recently, my IDE controller froze up (I think) and a hard reboot was
+necessary.  After the computer was turned off and back on, the hard drie
+controller was fine (well, it seems fine).
+
+DOS booted fine (no surprise there).
+Linux booted fine, until it reached rc.inet1, etc.  It seems that /conf
+as in /conf/net was turned into a file.  I don't run bootutils, so it
+does not fsck the hard drive at boot up.   I logged in, su'ed to root,
+and ran e2fsck -avf /dev/hda3 and it ticked away for quite a bit.
+It got caught on /usr/bin/ld (it just kept counting it) so I went to
+another virtual console and killed e2fsck.  I did it again, and the
+same thing happened, so I deleted /usr/bin/ld (which had become a
+directory)  e2fsck ran fine, reported that the file system had been changed,
+etc.  I started my attempt at putting things back together, when I got a 
+kernel panic.  Now, my machine boots fine, but any attempt to log in
+hangs after the motd, with:
+kernel panic: EXT2-FS panic (device 3/3): ext2_find_entry: buffer head pointer
+is NULL
+
+So, I downloaded the slackware 1.1.2 boot disk and root disk, and ran e2fsck
+off of it.  It had quite a bit to say about the drive, but said it fixed it.
+Booting the hard drive still gave the same error.  
+
+When the kernel panics, you can still type into the window, but it does nothing
+and a reset is necessary (not doing the fs any good)
+
+The installation was originally a SLS 1.01 (i think) and had been changed 
+quite a bit since then (new X, pl15h kernel, libc4.5.19, net 2, shadow, etc.)
+Like I said, no bootutils.  Its a 486/33 with 16megs and 2 hard drives.
+
+BTW, looking around the hard drive mounted on the root disk from slackware
+produced the same kernel panic and hang.
+
+The ext2 partition was probably a .1 or .2 originally, and the e2fsck is now
+.4, I don't know if that would be a problem or not.  I have run e2fsck before,
+but . . . 
+
+Any help would be greatly appreciated.  Most of my important files are
+on a separate (and newer) partition, but I really don't want to reinstall
+if I don't have to.
+
+Since I post this, I have grabbed the new e2fsck, and tried it.  Although it
+came up with some new errors (and fixed them) the kernel still panics upon
+login, or if the partition is used from the slackware boot disk.
+
+Brandon
+================================================================================
+> Brandon Long            ][ Yeah, I blong here too.                           [
+> Computer Engineering    ][ "A man who could make so vile a pun would not     [
+> University of Illinois  ][    scruple to pick a pocket."  -- John Dennis     [
+> Urbana-Champaign        ][ blong@uiuc.edu  blong@sumter.cso.uiuc.edu (NeXT)  [
+===========<a href="http://www.cen.uiuc.edu/~bl6456/> blong </a>================
+      The aforementioned views may not be those of this fine University.
+         Let's just say that I would be really surprised if they were.
+-- 
+================================================================================
+> Brandon Long            ][ Yeah, I blong here too.                           [
+> Computer Engineering    ][ "A man who could make so vile a pun would not     [
+> University of Illinois  ][    scruple to pick a pocket."  -- John Dennis     [
+
+
+------------------------------
+
+From: semi@dream.nullnet.fi (Sami-Pekka Hallikas)
+Subject: Kernel startup prosedure
+Date: Fri, 11 Mar 1994 02:59:50 GMT
+
+What is FULL Kernel startup prosedure. So what kernel loads before init?
+First system loads kernel and I need to know EVERY programs needed after
+that.. Is it going like this:
+
+Kernel
+if exist init
+do
+  init
+  rc
+else 
+  bash
+done
+
+Also I like to know how to make programs to use shared libraries
+(/lib/libc.so.???).
+
+Please, email answers to me.
+
+--
++--------------------------+----------+-------------------------------------+
+| semi@dream.nullnet.fi    |  OH1KYL  | MAIL MEDIA. Do Not Expose to Flame! |
+| samip@freeport.uwasa.fi  +----------+-------------------------------------|
+| semi@freenet.hut.fi      |  Dream World BBS * 358-21-4389843 * 24H * 9600 |
++--------------------------+------------------------------------------------+
+
+------------------------------
+
+From: axb@defender.dcrl.nd.edu (Arindam Banerji)
+Subject: Re: kernel mmap() , MAP_SHARED/PROT_READ/PROT_WRITE
+Date: 12 Mar 1994 15:24:33 GMT
+
+
+Although, David Jordan had done some work in instantiating C++ objects in 
+shared memory, some problems with his approach were quite obvious. I have since
+then constructed an implementation of C++ objects in shared memory. This 
+implementation at present runs only on AIX, but could be ported to other
+systems, with some effort. I've since written a paper on this. Send me some 
+e-mail, and I'll point you in the right direction. 
+
+
+=============================================================================
+Arindam Banerji                              (219)-631-5273 (Voice)
+384 FitzPatrick Hall                         (219)-631-5772 (Voice)
+Dept. of Computer Science and Engineering    (219)-273-0862 (Voice)
+University of Notre Dame                     (219)-631-9260 (FAX)
+Notre Dame, IN 46556                         axb@cse.nd.edu (E-mail)
+=============================================================================
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Development-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and comp.os.linux.development) via:
+
+    Internet: Linux-Development@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    sunsite.unc.edu				pub/Linux
+
+End of Linux-Development Digest
+******************************

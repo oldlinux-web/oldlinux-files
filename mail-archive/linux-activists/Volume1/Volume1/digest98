@@ -1,0 +1,944 @@
+From:     Digestifier <Linux-Activists-Request@news-digests.mit.edu>
+To:       Linux-Activists@news-digests.mit.edu
+Reply-To: Linux-Activists@news-digests.mit.edu
+Date:     Wed, 11 Mar 92 20:15:15 EST
+Subject:  Linux-Activists Digest #98
+
+Linux-Activists Digest #98, Volume #1            Wed, 11 Mar 92 20:15:15 EST
+
+Contents:
+  Re: 386 BSD (FREE!!!! - Jolitz version), ethernet, etc drivers (Pierre Honeyman)
+  Re: Linux 0.95 - booting problems. (Linus Benedict Torvalds)
+  patches for .95 (Michael K. Johnson)
+  rdev - query/set root device (Werner Almesberger)
+  Re: SCSI drivers (Drew Eckhardt)
+  Re: FFS? (Drew Eckhardt)
+  Latin-1 (Johan Myreen)
+
+----------------------------------------------------------------------------
+
+From: pierre@cs.UAlberta.CA (Pierre Honeyman)
+Subject: Re: 386 BSD (FREE!!!! - Jolitz version), ethernet, etc drivers
+Date: Wed, 11 Mar 1992 20:21:24 GMT
+
+drew@cs.colorado.edu (Drew Eckhardt) writes:
+
+>William Jolitz's 386 BSD port is out "for experimenters only"
+
+Want to tell us where?
+
+>We should probably look at this.
+
+I would like to, see above...
+
+Pierre
+
+------------------------------
+
+From: torvalds@klaava.Helsinki.FI (Linus Benedict Torvalds)
+Subject: Re: Linux 0.95 - booting problems.
+Date: 10 Mar 92 13:21:03 GMT
+
+It seems 0.95 has enough problems with some hardware that it may not be
+a good idea to upgrade right now: I'll have to find the bugs first.  The
+problems include things like not reading/writing the harddisk correctly,
+which can result in protection errors (the executables get read in
+incorrectly) and in the worst case in file-system damage.  This is not
+universal: on some machines linus-0.95 seems to work without problems,
+others see partial problems, while still others are virtually unable to
+run 0.95. 
+
+If someone will use 0.95 just to find out all the problems, I'd be
+happy, but otherwise I'll try to get a new version out the door in a
+week or so, which hopefully works better on more machines..  
+
+                Linus "eggface" Torvalds
+
+------------------------------
+
+From: johnsonm@stolaf.edu (Michael K. Johnson)
+Subject: patches for .95
+Reply-To: johnsonm@stolaf.edu (Michael K. Johnson)
+Date: Wed, 11 Mar 1992 23:27:53 GMT
+
+Hello,
+
+This is michaelkjohnson, your favorite patch administrator for Linux.
+
+I need some help.  Could someone who has applied the fixes for the
+hard drive please write me a note -- I want to put a patched kernel
+that won't trash hd's on tsx-11, and have been too busy to make the
+patches.  If no one gets to me, it will be a few days before I can
+make the patch available:  If someone has it around already done, it
+can be there by tonight.
+
+If you have fixed other kernel bugs, that's fine too. :-)
+
+thanks a lot,
+michaelkjohnson
+johnsonm@stolaf.edu
+I don't do .sig's.
+
+------------------------------
+
+From: almesber@nessie.cs.id.ethz.ch (Werner Almesberger)
+Subject: rdev - query/set root device
+Date: 11 Mar 92 21:37:37 GMT
+
+With all that socket, X11, disk driver and FS hacking going on, apparently
+nobody has found time to address one of the minor nuisances of life: set-
+ting the root FS device is still somewhat cumbersome. I've written a little
+utility which can read and set the root device in boot images:
+
+    rdev /dev/at0  (or rdev /linux, etc.) displays the current root device
+    rdev /dev/at0 /dev/hda2         sets it to /dev/hda2
+
+rdev accepts an optional offset argument, just in case the address should
+ever move from 508. If called without arguments, rdev outputs an mtab line
+for the current root FS, just like /etc/rootdev does.
+
+- Werner
+
+================================== cut here ==================================
+
+/* rdev.c  -  query/set root device. */
+
+/* usage: rdev [ boot-image ] [ root-device ] [ offset ] */
+
+#include <stdio.h>
+#include <string.h>
+#include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <dirent.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+
+
+#define DEFAULT_OFFSET 508
+
+
+static void die(char *msg)
+{
+    perror(msg);
+    exit(1);
+}
+
+
+static char *find_dev(int number)
+{
+    DIR *dp;
+    struct dirent *dir;
+    static char name[PATH_MAX+1];
+    struct stat s;
+
+    if (!number) return "Boot device";
+    if ((dp = opendir("/dev")) == NULL) die("opendir /dev");
+    strcpy(name,"/dev/");
+    while (dir = readdir(dp)) {
+        strcpy(name+5,dir->d_name);
+        if (stat(name,&s) < 0) die(name);
+        if ((s.st_mode & S_IFMT) == S_IFBLK && s.st_rdev == number) return name;
+    }
+    sprintf(name,"0x%04x",number);
+    return name;
+}
+
+
+main(int argc,char **argv)
+{
+    int image,offset,dev_nr;
+    char *device;
+    struct stat s;
+
+    offset = DEFAULT_OFFSET;
+    device = NULL;
+    if (argc == 1 || argc > 4) {
+        if (stat("/",&s) < 0) die("/");
+        printf("%s /\n",find_dev(s.st_dev));
+        exit(0);
+    }
+    if (argc == 4) {
+        device = argv[2];
+        offset = atoi(argv[3]);
+    }
+    else {
+        if (argc == 3) {
+            if (isdigit(*argv[2])) offset = atoi(argv[2]);
+            else device = argv[2];
+        }
+    }
+    if (device) {
+        if (stat(device,&s) < 0) die(device);
+        if ((image = open(argv[1],O_WRONLY)) < 0) die(argv[1]);
+        if (lseek(image,offset,0) < 0) die("lseek");
+        if (write(image,&s.st_rdev,2) != 2) die(argv[1]);
+        if (close(image) < 0) die("close");
+    }
+    else {
+        if ((image = open(argv[1],O_RDONLY)) < 0) die(argv[1]);
+        if (lseek(image,offset,0) < 0) die("lseek");
+        dev_nr = 0;
+        if (read(image,&dev_nr,2) != 2) die(argv[1]);
+        if (close(image) < 0) die("close");
+        printf("Root device: %s\n",find_dev(dev_nr));
+    }
+    return 0;
+}
+-- 
+   _________________________________________________________________________
+  / Werner Almesberger, ETH Zuerich, CH      almesber@nessie.cs.id.ethz.ch /
+ / IFW A44  Tel. +41 1 254 7213                 almesberger@rzvax.ethz.ch /
+/_BITNET:_ALMESBER@CZHETH5A__HEPNET/CHADNET:_[20579::]57414::ALMESBERGER_/
+
+------------------------------
+
+From: drew@cs.colorado.edu (Drew Eckhardt)
+Subject: Re: SCSI drivers
+Date: 11 Mar 92 22:57:53 GMT
+
+In article <1992Mar11.173724.12593@bernina.ethz.ch> almesber@nessie.cs.id.ethz.ch (Werner Almesberger) writes:
+>In article <1992Mar11.103210.23707@colorado.edu> drew@quandry.cs.colorado.edu (Drew Eckhardt) writes:
+>> Right now, they work for most people with Seagate ST01/02's, and 
+>> most harddisks.
+>
+>Do they work with large disks (e.g. ST4766N, ST41200N, ...) too ?
+
+Using 6 byte read / writes, 512 byte block size, disks of up to
+1 gigabyte can be  supported, using 10 byte read / writes, 512 byte block
+size, disks of up to 2048 GB can be supported.  
+
+Of course, the drivers currently work with Linux .12, which allows 4 partitions
+per drive, and  64M per file system.  That's a limit of 256MB - but 
+that will change after the drivers are patched to use the .95 
+extended partitioning scheme.
+
+>I've heard that the ST01/02 has some limitations which cause problems
+>when used with certain disks, but I don't know whether they are caused
+>by the driver software (on MS-DOS) or by the hardware.
+>
+>- Werner
+
+Well, the BIOS has certain limitations, and the ST01/02 add their own 
+limitations.
+
+The ST01/ST02 don't do synchronous.
+
+The ST01/ST02 don't do DMA, and are VERY uninteligent.  Reading 
+and writing from the memory mapped registers will work the correct 
+signals on the SCSI bus for you (ACK, etc), but that's about it.  you
+will also be examining the status register, to keep track 
+of which phase you're in.  Very slow.  If the disk is not track
+buffered, and it has been formatted at a low interleave, 
+performance will be piss poor.
+
+Performance is lousy.  Period.  Also, the firmware has problems 
+with some disks.  
+
+------------------------------
+
+From: drew@cs.colorado.edu (Drew Eckhardt)
+Subject: Re: FFS?
+Date: 11 Mar 92 22:33:09 GMT
+
+In article <9203110906.16@rmkhome.UUCP> rmk@rmkhome.UUCP (Rick Kelly) writes:
+>In article <1992Mar11.061114.16379@athena.mit.edu> 
+>     entropy@ee.WPI.EDU (Lawrence C. Foard) writes:
+>
+>
+>Once you start filling in all the features of BSD/SYSV, Linux will bloat
+>up to match their size.  The best thing to do may be to decide which
+>features Linux doesn't need,
+>
+
+Not necessarilly.  Linux can get away with some things that portable versions
+of Unix can't, in relying on 386 features.  Smaller code can be used 
+that provides the same functionality - for example, the Linux device 
+drivers are far simpler than in other Unixes.  Neat programming tricks or 
+simplifications give you that funcitonality, but with reduced memory
+overhead.  For example, having shared libraries 
+that aren't dynamically linked gives you the reduced memory useage of 
+shared libraries, without the linker code in the kernel, or added 
+time for an exec().   Linux isn't tied down to what the design philosophy
+was X years ago - if there is a newer, simpler way to implement something,
+we will use it.
+
+Once a decent kernel configuration system is set up (as with "real" Unixes)
+it will be possible to configure out what you don't want, and 
+configure in what you do want.  On some of my systems, the kernel 
+configured for local use is half the size of the generic kernel
+with everything enabled.
+
+------------------------------
+
+From: jem@niksula.hut.fi (Johan Myreen)
+Subject: Latin-1
+Date: 11 Mar 92 22:00:59 GMT
+
+
+Anybody interested in using the Latin-1 character set?
+
+The diff below is a first attempt at introducing 8 bit characters to
+Linux. The character set used is ISO 8859/1 Latin-1, also known as the
+ANSI character set. This character set is a superset of the ASCII
+character set, using character codes 160-255 for representing various
+national characters. Some special characters like +-, 1/2, and the
+pound sign are also provided. This is the character set used by X and
+by Microsoft Windows.
+
+There are some problems still:
+
+- The PC character set does not include all the characters defined in
+  ISO 8859/1. The missing characters are displayed as a small filled
+  rectangle (PC character 254). This could probably be solved with
+  downloadable fonts in EGA/VGA cards.
+
+- Some application programs don't support 8 bit characters. Most
+  notably, Emacs and Bash fall into this category, but I hope it will
+  not be too difficult to patch these programs to handle the extended
+  character set.
+
+Features:
+
++ The Meta key still works in Emacs and in Bash. Instead of setting
+  the high bit it now prepends an escape character, which gives the
+  same result. (Well, to be honest, almost the same result. One place
+  you will notice the difference is when you terminate an incremental
+  search in Emacs with Alt-f. The escape character terminates the
+  search, and you'll get an 'f' character in your buffer. Situations
+  like this are very rare, however.)
+
++ The accent keys on the keyboard are now so called "dead keys", that
+  is, they don't produce a character by themselves, but the keyboard
+  handler waits for a second keypress. This way you can also produce
+  accented characters which aren't available directly on your
+  keyboard. For example, pressing the backquote key and then the A key
+  together produce the character "a accent grave". To get a backquote
+  character you press the backquote key twice.
+
+  Now I hear you yelling "I don't need that stinking mis-feature! I
+  want my backquote key to function normally." Well, for you there is
+  a compile time option in keyboard.S to disable the dead keys. RTFS.
+
++ It is possible to enter any character, even those which can't be
+  found on the keyboard, by using the Alt-numpad trick familiar from
+  MSDOS. That is, while pressing the Alt key you enter the ordinal
+  number (in decimal) of the character you want using the numeric
+  keypad. Releasing the Alt key produces the character.
+
++ Compatibility. If you use only ASCII characters you should not be
+  able to tell the difference between the old and the new keyboard.
+  Well, depending on how the keyboard works right now this might not
+  be exactly true. For instance, the Finnish keyboard makes use of a
+  toy character set we have here, which substitutes {[]}\| for our
+  national characters. By the way, this patch also fixes a bug
+  (actually a feature) with the caps lock key.  Right now the caps
+  lock key also changes { to [, } to ] and | to \, beacuse these are
+  letters in our character set. This is hard coded in the keyboard
+  handler.
+
+The changes here adapt to different keyboards without changing
+anything but the tables key_map, shift_map and alt_map. As usual,
+these must be changed to match what'a printed on the keycaps on
+different keyboards. For the supported keyboards the job is mainly
+done, but the the codes for the accents should be added and possible
+anomalies like umlauted characters producing brackets should be
+fixed. It is hard to give any details without knowing what the
+keyboards look like. The change has already been done for the Finnish
+keyboard in this patch. (It should work in Sweden too, since the
+Swedes use Finnish keyboards too. (I think. Perhaps I should put a
+smiley here, not to upset the Swedes...))
+
+All the changes have been #ifdefed LATIN_1, to give diehard ASCII
+purists something to #undef.
+
+One more thing about the Makefile: as ususal, comment or uncomment
+GCC_OPT = -fcombine-regs, depending on which compiler you use (1.40 or
+2.00).
+
+The diffs are from the linux/kernel/chr_drv directory.
+
+
+Johan Myreen
+jem@cs.hut.fi
+
+-- Cut -- -- Cut -- -- Cut -- -- Cut -- -- Cut -- -- Cut -- -- Cut --
+
+*** Makefile.orig       Thu Mar  5 21:37:01 1992
+--- Makefile    Wed Mar 11 00:59:36 1992
+***************
+*** 7,13 ****
+  #
+  
+  # gcc2 doesn't understand this option:
+! #GCC_OPT = -fcombine-regs
+  
+  AR    =ar
+  AS    =as
+--- 7,13 ----
+  #
+  
+  # gcc2 doesn't understand this option:
+! GCC_OPT = -fcombine-regs
+  
+  AR    =ar
+  AS    =as
+***************
+*** 14,22 ****
+  LD    =ld
+  LDFLAGS       =-s -x
+  CC    =gcc
+! CFLAGS        =-Wall -O -fstrength-reduce -fomit-frame-pointer $(GCC_OPT) \
+        -finline-functions -nostdinc -I../../include
+! CPP   =gcc -E -nostdinc -I../../include
+  
+  .c.s:
+        $(CC) $(CFLAGS) \
+--- 14,24 ----
+  LD    =ld
+  LDFLAGS       =-s -x
+  CC    =gcc
+! #LAT  =
+! LAT   =-DLATIN_1
+! CFLAGS        =-Wall -O $(LAT) -fstrength-reduce -fomit-frame-pointer $(GCC_OPT) \
+        -finline-functions -nostdinc -I../../include
+! CPP   =gcc -E $(LAT) -nostdinc -I../../include
+  
+  .c.s:
+        $(CC) $(CFLAGS) \
+*** keyboard.S.org      Thu Mar  5 00:58:09 1992
+--- keyboard.S  Wed Mar 11 10:25:01 1992
+***************
+*** 21,26 ****
+--- 21,47 ----
+   */
+  #define KBD_FINNISH
+  
++ /* Define the following as 0 or 1.
++  *
++  * If defined as 1, the corresponding key does not produce
++  * a character immediately, but waits for a second keypress,
++  * resulting in an accented character. To get the character
++  * itself you will have to press the key twice. For instance,
++  * pressing backquote and then the E key produces the character
++  * 'e accent grave'. Pressing the backquote key twice results
++  * in a backquote character. If the character on the second key
++  * cannot be accented, the backquote is discarded.
++  * 
++  * On the other hand, you might not be interested in all this
++  * nonsense. That is, when you press the backquote key you want
++  * your backquote right there, and dont want to get involved in
++  * some hassle concerning stupid foreign characters. In that
++  * case, define BACKQUOTE_DEAD as 0.
++  */
++ #define BACKQUOTE_DEAD 1
++ #define UPARROW_DEAD 1
++ #define TILDE_DEAD 1
++ 
+  .text
+  .globl _hard_reset_now
+  .globl _keyboard_interrupt
+***************
+*** 43,48 ****
+--- 64,73 ----
+  _kmode:       .byte 0         /* caps, alt, ctrl and shift mode */
+  _kleds:       .byte 2         /* num-lock, caps, scroll-lock mode (nom-lock on) */
+  e0:   .byte 0
++ #if defined LATIN_1
++ diacr:        .byte 0         /* diacritical mark */
++ kpadch:       .byte 0         /* number entered with Alt */
++ #endif
+  
+  /*
+   *  con_int is the real interrupt routine that reads the
+***************
+*** 105,110 ****
+--- 130,138 ----
+   * order %al,%ah,%eal,%eah,%bl,%bh ... until %eax is zero.
+   */
+  put_queue:
++ #if defined LATIN_1
++       movb $0,diacr
++ #endif
+        pushl %ecx
+        pushl %edx
+        movl _table_list,%edx           # read-queue for console
+***************
+*** 143,148 ****
+--- 171,188 ----
+        addb %al,%al
+  2:    notb %al
+        andb %al,_kmode
++ #if defined LATIN_1
++       andb $0x10,%al                  /* alt */
++       jne 1f
++       testb $0xff,kpadch
++       je 1f
++       xorl %ebx,%ebx
++       xorl %eax,%eax
++       movb kpadch,%al
++       movb $0,kpadch
++       jmp put_queue
++ 1:
++ #endif
+        ret
+  
+  lshift:
+***************
+*** 218,223 ****
+--- 258,277 ----
+        jne _ctrl_alt_del
+  cur2: cmpb $0x01,e0           /* e0 forces cursor movement */
+        je cur
++ #if defined LATIN_1
++       testb $0x10,_kmode
++       je notalt               /* not alt */
++       cmpb $0x0c,%al
++       je notalt               /* del */
++       movb pad_table(%eax),%bl
++       movb kpadch,%al
++       movb $10,%ah
++       mulb %ah
++       addb %bl,%al
++       movb %al,kpadch
++       ret
++ notalt:
++ #endif /* LATIN_1 */
+        testb $0x03,_kmode      /* shift forces cursor */
+        jne cur
+        cmpb $0x01,_kapplic
+***************
+*** 256,261 ****
+--- 310,320 ----
+  #endif
+  cur_table:
+        .ascii "HA5-DGC+YB623"
++ 
++ #if defined LATIN_1
++ pad_table:
++       .byte 7,8,9,0,4,5,6,0,1,2,3,0
++ #endif
+        
+  /*    
+      Keypad /                  35      B7      Q
+***************
+*** 316,321 ****
+--- 375,381 ----
+        .long 0x495b5b1b,0x4a5b5b1b,0x4b5b5b1b,0x4c5b5b1b
+  
+  #if   defined(KBD_FINNISH)
++ #if !defined LATIN_1
+  key_map:
+        .byte 0,27
+        .ascii "1234567890+'"
+***************
+*** 364,369 ****
+--- 424,487 ----
+        .byte '|
+        .fill 10,1,0
+  
++ #else /* LATIN_1 */
++ key_map:
++       .byte 0,27
++       .ascii "1234567890+"
++       .byte 180               /* 180 = accent acute */
++       .byte 127,9
++       .ascii "qwertyuiop"
++       .byte 229
++       .byte 168,13,0          /* 168 = dieresis */
++       .ascii "asdfghjkl"
++       .byte 246,228
++       .byte 167,0
++       .ascii "'zxcvbnm,.-"
++       .byte 0,'*,0,32         /* 36-39 */
++       .fill 16,1,0            /* 3A-49 */
++       .byte '-,0,0,0,'+       /* 4A-4E */
++       .byte 0,0,0,0,0,0,0     /* 4F-55 */
++       .byte '<
++       .fill 10,1,0
++ 
++ shift_map:
++       .byte 0,27
++       .ascii "!\"#$%&/()=?`"
++       .byte 127,9
++       .ascii "QWERTYUIOP"
++       .byte 197
++       .ascii "^"
++       .byte 13,0
++       .ascii "ASDFGHJKL"
++       .byte 214,196
++       .byte 189,0
++       .ascii "*ZXCVBNM;:_"
++       .byte 0,'*,0,32         /* 36-39 */
++       .fill 16,1,0            /* 3A-49 */
++       .byte '-,0,0,0,'+       /* 4A-4E */
++       .byte 0,0,0,0,0,0,0     /* 4F-55 */
++       .byte '>
++       .fill 10,1,0
++ 
++ alt_map:
++       .byte 0,0
++       .ascii "\0@"
++       .byte 163
++       .ascii "$\0\0{[]}\\\0"
++       .byte 0,0
++       .byte 0,0,0,0,0,0,0,0,0,0,0
++       .byte '~,13,0
++       .byte 0,0,0,0,0,0,0,0,0,0,0
++       .byte 0,0
++       .byte 0,0,0,0,0,0,0,0,0,0,0
++       .byte 0,0,0,0           /* 36-39 */
++       .fill 16,1,0            /* 3A-49 */
++       .byte 0,0,0,0,0         /* 4A-4E */
++       .byte 0,0,0,0,0,0,0     /* 4F-55 */
++       .byte '|
++       .fill 10,1,0
++ #endif /* LATIN_1 */
++ 
+  #elif defined(KBD_US)
+  
+  key_map:
+***************
+*** 632,643 ****
+  1:    movb (%ebx,%eax),%al
+        orb %al,%al
+        je none
+!       testb $0x4c,_kmode              /* ctrl or caps */
+        je 2f
+        cmpb $'a,%al
+        jb 2f
+        cmpb $'},%al
+        ja 2f
+        subb $32,%al
+  2:    testb $0x0c,_kmode              /* ctrl */
+        je 3f
+--- 750,801 ----
+  1:    movb (%ebx,%eax),%al
+        orb %al,%al
+        je none
+! #if defined LATIN_1
+!       xorb %bl,%bl                    /* Check if character */
+!       incb %bl                        /*   is a diacritical mark */
+! #if BACKQUOTE_DEAD
+!       cmpb $'`,%al                    /* accent grave */
+!       je 6f
+! #endif
+!       incb %bl
+!       cmpb $180,%al                   /* accent acute */
+!       je 6f
+!       incb %bl
+! #if UPARROW_DEAD
+!       cmpb $'^,%al                    /* circumflex */
+!       je 6f
+! #endif
+!       incb %bl
+! #if TILDE_DEAD
+!       cmpb $'~,%al                    /* tilde */
+!       je 6f
+! #endif
+!       incb %bl
+!       cmpb $168,%al                   /* dieresis */
+!       jne 7f
+! 6:    cmpb diacr,%bl                  /* same diacritical pressed again? */
+!       je 8f                           /* yes: produce that charater */
+!       movb %bl,diacr                  /* no: save diacritical index and */
+!       jmp none                        /* exit */
+! 8:    movb $0,diacr
+!       jmp 4f
+! #endif /* LATIN_1 */
+! 7:    testb $0x4c,_kmode              /* ctrl or caps */
+        je 2f
+        cmpb $'a,%al
+        jb 2f
++ #if !defined LATIN_1
+        cmpb $'},%al
+        ja 2f
++ #else
++       cmpb $'z,%al                    /* <= 'z' ? */
++       jbe 6f                          /* yes, subtract 32 */
++       cmpb $224,%al                   /* >= a accent grave? */
++       jb 2f                           /* no */
++       cmpb $254,%al                   /* yes: <= thorn? */
++       ja 2f                           /* no */
++ 6:
++ #endif
+        subb $32,%al
+  2:    testb $0x0c,_kmode              /* ctrl */
+        je 3f
+***************
+*** 646,651 ****
+--- 804,810 ----
+        cmpb $64+32,%al
+        jae 3f
+        subb $64,%al
++ #if !defined LATIN_1
+  3:    testb $0x10,_kmode              /* left alt */
+        je 4f
+        orb $0x80,%al
+***************
+*** 653,658 ****
+--- 812,956 ----
+        xorl %ebx,%ebx
+        call put_queue
+  none: ret
++ #else /* LATIN_1 */
++ 3:    testb $0xff,diacr               /* previous was diacritical? */
++       je 9f                           /* no */
++       call handle_diacr               /* yes: conv to corresponding char */
++ 9:    testb $0x10,_kmode              /* left alt? */
++       je 4f
++       movb %al,%ah
++       movb $0x1b,%al                  /* ESC */
++       jmp 5f
++ 4:    andl $0xff,%eax
++ 5:    xorl %ebx,%ebx
++       call put_queue
++ none: ret
++ 
++ /* Combine diacritical mark in diacr and char in %al to one char.
++  * If the combination is impossible, i.e. there is no such accented
++  * character in the Latin-1 character set, just return the character.
++  */
++ 
++ handle_diacr:
++       movb %al,%cl
++       andb $0xc0,%al
++       cmpb $0x40,%al                  /* in the range 64-127? */
++       je 1f                           /* yes, may be an accented char */
++       movb %cl,%al
++       ret                             /* no, return the char as it is */
++ 1:    xorl %eax,%eax
++       movb diacr,%al
++       decl %eax
++       movb $64,%bl
++       mulb %bl
++       andl $0x3f,%ecx                 /* map char to range 0-63 */
++       addl %ecx,%eax
++       lea accent_table,%ebx
++       movb (%ebx,%eax),%al
++       movb $0,diacr
++       ret     
++ 
++ accent_table:
++       .byte '@,192                    /* accent grave */
++       .ascii "BCD"
++       .byte 200
++       .ascii "FGH"
++       .byte 204
++       .ascii "JKLMN"
++       .byte 210
++       .ascii "PQRST"
++       .byte 217
++       .ascii "VWXYZ[\\]^_"
++       .byte '`,224
++       .ascii "bcd"
++       .byte 232
++       .ascii "fgh"
++       .byte 236
++       .ascii "jklmn"
++       .byte 242
++       .ascii "pqrst"
++       .byte 249
++       .ascii "vwxyz{|}~"
++       .byte 127
++ 
++       .byte '@,193                    /* accent acute */
++       .ascii "BCD"
++       .byte 201
++       .ascii "FGH"
++       .byte 205
++       .ascii "JKLMN"
++       .byte 211
++       .ascii "PQRST"
++       .byte 217
++       .ascii "VWXYZ[\\]^_"
++       .byte '`,225
++       .ascii "bcd"
++       .byte 233
++       .ascii "fgh"
++       .byte 237
++       .ascii "jklmn"
++       .byte 243
++       .ascii "pqrst"
++       .byte 250
++       .ascii "vwxyz{|}~"
++       .byte 127
++ 
++       .byte '@,194                    /* circumflex */
++       .ascii "BCD"
++       .byte 202
++       .ascii "FGH"
++       .byte 206
++       .ascii "JKLMN"
++       .byte 212
++       .ascii "PQRST"
++       .byte 219
++       .ascii "VWXYZ[\\]^_"
++       .byte '`,226
++       .ascii "bcd"
++       .byte 234
++       .ascii "fgh"
++       .byte 238
++       .ascii "jklmn"
++       .byte 244
++       .ascii "pqrst"
++       .byte 251
++       .ascii "vwxyz{|}~"
++       .byte 127
++ 
++       .byte '@,195                            /* tilde */
++       .ascii "BCDEFGHIJKLM"
++       .byte 209,213
++       .ascii "PQRSTUVWXYZ[\\]^_"
++       .byte '`,227
++       .ascii "bcdefghijklm"
++       .byte 241,245
++       .ascii "pqrstuvwxyz{|}~"
++       .byte 127
++ 
++       .byte '@,196                            /* dieresis */
++       .ascii "BCDEFGH"
++       .byte 207
++       .ascii "JKLMN"
++       .byte 214
++       .ascii "PQRST"
++       .byte 220
++       .ascii "VWXYZ[\\]^_"
++       .byte '`,228
++       .ascii "bcd"
++       .byte 235
++       .ascii "fgh"
++       .byte 239
++       .ascii "jklmn"
++       .byte 246
++       .ascii "pqrst"
++       .byte 252
++       .ascii "vwx"
++       .byte 255
++       .ascii "z{|}~"
++       .byte 127
++ 
++ #endif /* LATIN_1 */
++ 
+  
+  /*
+   * slash and star have routines of their own, as a 'E0h' before
+*** console.c.orig      Thu Mar  5 15:03:53 1992
+--- console.c   Tue Mar 10 22:53:08 1992
+***************
+*** 166,171 ****
+--- 166,172 ----
+   */
+  #define RESPONSE "\033[?1;2c"
+  
++ #if !defined LATIN_1
+  static char * translations[] = {
+  /* normal 7-bit ascii */
+        " !\"#$%&'()*+,-./0123456789:;<=>?"
+***************
+*** 183,188 ****
+--- 184,220 ----
+          "\304\304\304\304\307\266\320\322\272\363\362\343\\007\234\007 " */
+  };
+  
++ #else  /* LATIN_1 */
++ 
++ static char * translations[] = {
++ /* 8-bit Latin-1 mapped to the PC charater set */
++       " !\"#$%&'()*+,-./0123456789:;<=>?"
++       "@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_"
++       "`abcdefghijklmnopqrstuvwxyz{|}~ "
++       "\376\376\376\376\376\376\376\376\376\376\376\376\376\376\376\376"
++       "\376\376\376\376\376\376\376\376\376\376\376\376\376\376\376\376"
++       " \376\233\234\376\235\376\025\376\376\246\256\252-\376\376"
++       "\370\361\375\376\376\346\024\371\376\376\247\257\254\253\376\250"
++       "\376\376\376\376\216\217\222\200\376\220\376\376\376\376\376\376"
++       "\376\245\376\376\376\376\231\376\376\376\376\376\232\376\376\341"
++       "\205\240\203\376\204\206\221\207\212\202\210\211\215\241\214\213"
++       "\376\244\225\242\223\376\224\366\376\227\243\226\201\376\376\230",
++ /* vt100 graphics */
++       " !\"#$%&'()*+,-./0123456789:;<=>?"
++       "@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^ "
++       "\004\261\007\007\007\007\370\361\007\007\275\267\326\323\327\304"
++       "\304\304\304\304\307\266\320\322\272\363\362\343\\007\234\007 "
++       "\376\376\376\376\376\376\376\376\376\376\376\376\376\376\376\376"
++       "\376\376\376\376\376\376\376\376\376\376\376\376\376\376\376\376"
++       " \376\233\234\376\235\376\025\376\376\246\256\252-\376\376"
++       "\370\361\375\376\376\346\024\371\376\376\247\257\254\253\376\250"
++       "\376\376\376\376\216\217\222\200\376\220\376\376\376\376\376\376"
++       "\376\245\376\376\376\376\231\376\376\376\376\376\232\376\376\341"
++       "\205\240\203\376\204\206\221\207\212\202\210\211\215\241\214\213"
++       "\376\244\225\242\223\376\224\366\376\227\243\226\201\376\376\230"
++ };
++ #endif /* LATIN_1 */
++ 
+  #define NORM_TRANS (translations[0])
+  #define GRAF_TRANS (translations[1])
+  
+***************
+*** 622,627 ****
+--- 654,662 ----
+  void con_write(struct tty_struct * tty)
+  {
+        int nr;
++ #if defined LATIN_1
++       unsigned
++ #endif
+        char c;
+        int currcons;
+  
+***************
+*** 640,646 ****
+--- 675,685 ----
+                        state = ESnormal;
+                switch(state) {
+                        case ESnormal:
++ #if !defined LATIN_1
+                                if (c>31 && c<127) {
++ #else
++                               if (c>31 && c != 127) {
++ #endif
+                                        if (x>=video_num_columns) {
+                                                x -= video_num_columns;
+                                                pos -= video_size_row;
+*** tty_io.c.orig       Wed Mar  4 11:22:40 1992
+--- tty_io.c    Tue Mar 10 22:54:49 1992
+***************
+*** 120,126 ****
+--- 120,130 ----
+  
+  void copy_to_cooked(struct tty_struct * tty)
+  {
++ #if !defined LATIN_1
++       signed char c;
++ #else
+        unsigned char c;
++ #endif
+  
+        if (!(tty->read_q || tty->write_q || tty->secondary)) {
+                printk("copy_to_cooked: missing queues\n\r");
+ 
+
+------------------------------
+
+
+** FOR YOUR REFERENCE **
+
+The service address, to which questions about the list itself and requests
+to be added to or deleted from it should be directed, is:
+
+    Internet: Linux-Activists-Request@NEWS-DIGESTS.MIT.EDU
+
+You can send mail to the entire list (and alt.os.linux) via:
+
+    Internet: Linux-Activists@NEWS-DIGESTS.MIT.EDU
+
+Linux may be obtained via one of these FTP sites:
+    nic.funet.fi				pub/OS/Linux
+    tsx-11.mit.edu				pub/linux
+    tupac-amaru.informatik.rwth-aachen.de	pub/msdos/replace
+
+The current version of Linux is 0.12, released on Jan 14, 1992
+
+End of Linux-Activists Digest
+******************************
