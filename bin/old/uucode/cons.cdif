@@ -1,0 +1,195 @@
+*** cons.11	Tue Dec 24 09:16:31 1991
+--- console.c	Tue Dec 24 08:20:11 1991
+***************
+*** 76,81 ****
+--- 76,82 ----
+    unsigned char	vc_def_attr;
+    unsigned long	vc_ques;
+    unsigned long	vc_state;
++   unsigned long	vc_restate;
+    unsigned long	vc_origin;		/* Used for EGA/VGA fast scroll	*/
+    unsigned long	vc_scr_end;	/* Used for EGA/VGA fast scroll	*/
+    unsigned long	vc_pos;
+***************
+*** 101,106 ****
+--- 102,108 ----
+  #define x	(vc_cons[currcons].vc_x)
+  #define y	(vc_cons[currcons].vc_y)
+  #define state	(vc_cons[currcons].vc_state)
++ #define restate	(vc_cons[currcons].vc_restate)
+  #define npar	(vc_cons[currcons].vc_npar)
+  #define par	(vc_cons[currcons].vc_par)
+  #define ques	(vc_cons[currcons].vc_ques)
+***************
+*** 370,375 ****
+--- 372,387 ----
+  		}
+  }
+  
++ static char csi_graph(int currcons, char ch )
++ {
++   char *val, *ac=
++ "0\333a\261h\040I\017`\004f\370g\361j\331k\277l\332m\300n\305q\304t\303u\264v\301w\302x\263~\025";
++   if (val = strchr(ac,ch))
++     return(*(val+1));
++   return(0); 
++ 
++ }
++ 
+  static inline void set_cursor(int currcons)
+  {
+  	if (currcons != fg_console)
+***************
+*** 505,511 ****
+  void con_write(struct tty_struct * tty)
+  {
+  	int nr;
+! 	char c;
+  
+  	int currcons;
+       
+--- 517,523 ----
+  void con_write(struct tty_struct * tty)
+  {
+  	int nr;
+! 	char c, ch = 0;
+  
+  	int currcons;
+       
+***************
+*** 564,570 ****
+  					sysbeep();
+  				break;
+  			case 1:
+! 				state=0;
+  				if (c=='[')
+  					state=2;
+  				else if (c=='E')
+--- 576,582 ----
+  					sysbeep();
+  				break;
+  			case 1:
+! 				state=restate;
+  				if (c=='[')
+  					state=2;
+  				else if (c=='E')
+***************
+*** 575,584 ****
+  					lf(currcons);
+  				else if (c=='Z')
+  					respond(currcons,tty);
+! 				else if (x=='7')
+  					save_cur(currcons);
+! 				else if (x=='8')
+  					restore_cur(currcons);
+  				break;
+  			case 2:
+  				for(npar=0;npar<NPAR;npar++)
+--- 587,598 ----
+  					lf(currcons);
+  				else if (c=='Z')
+  					respond(currcons,tty);
+! 				else if (c=='7')
+  					save_cur(currcons);
+! 				else if (c=='8')
+  					restore_cur(currcons);
++ 				else if (c == '(' || c == ')')
++ 				  state = 6;		
+  				break;
+  			case 2:
+  				for(npar=0;npar<NPAR;npar++)
+***************
+*** 600,606 ****
+  					break;
+  				} else state=4;
+  			case 4:
+! 				state=0;
+  				switch(c) {
+  					case 'G': case '`':
+  						if (par[0]) par[0]--;
+--- 614,620 ----
+  					break;
+  				} else state=4;
+  			case 4:
+! 				state=restate;
+  				switch(c) {
+  					case 'G': case '`':
+  						if (par[0]) par[0]--;
+***************
+*** 680,685 ****
+--- 694,751 ----
+  			case 5:
+  			   /* Function Key */
+  			  break;
++ 			case 6:
++ 			  if (c == '0')
++ 			  { state = 
++ 			    restate = 7;
++ 			  }
++ 			  else
++ 			  if (c == 'B')
++ 			  { state = 
++ 			    restate = 0;
++ 			  }
++ 			  break;
++ 			case 7:
++ 			  if (c == 15)
++ 			  { state = 
++ 			    restate = 9;
++ 			    break;
++ 			  }  
++ 			  else
++ 			    ch = csi_graph(currcons,c);  
++ 			case 9:    
++ 			  if (c == 14)
++ 			  { state = 
++ 			    restate = 7;
++ 			    break;
++ 			  }
++ 			  else if (c == 27)
++ 			  { state = 1;
++ 			    break;
++ 			  }
++ 			  else  
++ 			  if (state == 9)
++ 			  { if (c>31 && c<127) 
++ 			      ch = c;
++ 			    else
++ 			      break;
++ 			  }  
++ 			case 10:
++ 			  if (ch)
++ 				if (x>=video_num_columns) {
++ 					x -= video_num_columns;
++ 					pos -= video_size_row;
++ 					lf(currcons);
++ 				}
++ 				__asm__("movb _myattr,%%ah\n\t"
++ 					"movw %%ax,%1\n\t"
++ 					::"a" (ch),"m" (*(short *)pos)
++ 					:"ax");
++ 				pos += 2;
++ 				x++;
++ 			  break;
++ 			      
++ 			  
+  		}
+  	}
+  	set_cursor(currcons);
+***************
+*** 765,771 ****
+  	bottom	= video_num_lines;
+    	attr=0x07;
+    	def_attr=0x07;
+!         state=0;
+  	ques = 0;
+  	iscolor = 0;
+  
+--- 831,837 ----
+  	bottom	= video_num_lines;
+    	attr=0x07;
+    	def_attr=0x07;
+!         restate = state=0;
+  	ques = 0;
+  	iscolor = 0;
+  

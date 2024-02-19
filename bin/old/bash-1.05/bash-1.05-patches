@@ -1,0 +1,1794 @@
+diff -c dist-1.05/ChangeLog bash-1.05/ChangeLog
+*** dist-1.05/ChangeLog	Sat Feb 24 10:41:24 1990
+--- bash-1.05/ChangeLog	Sun Mar 11 01:29:19 1990
+***************
+*** 1,3 ****
+--- 1,47 ----
++ Sun Mar 11 04:28:30 1990  Brian Fox  (bfox at gnuwest.fsf.org)
++ 
++ 	* parse.y: handle_eof_unit () now alls reset_parser () before
++ 	calling logout_or_exit () to prevent incorrect parsing of the
++ 	.logout file.
++ 
++ Sat Mar 10 16:40:10 1990  Brian Fox  (bfox at gnuwest.fsf.org)
++ 
++ 	* execute_cmd.c: execute_command_internal ().  Fixed bug of
++ 	backgrounded shell control structures not being in the background.
++ 
++ 	* subst.c: expand_word_internal (); If a command substitution
++ 	string was not closed properly, the shell could walk off of the
++ 	end of a string.  Fixed with simple test.
++ 
++ 	* parse.y: shell_getc ();  now takes argument saying how to handle
++ 	backslash-newline.  All calls to shell_getc () adjusted.
++ 	read_token () adjusted to handle new scheme; it has to know when
++ 	to allow backslash newline, and when to ignore.	
++ 
++ 	* builtins.c: echo_builtin ();  Words ending in `\' handled
++ 	incorrectly, allowing a reference past the end of the string.
++ 	Fixed.
++ 
++ 	* execute_cmd.c: find_user_command_in_path ();
++ 	if PATH ended with a `:', then that didn't mean to search
++ 	`.' for a file.  Now it does.
++ 
++ 	* builtins.c: added hack to history_builtin ().  Let
++ 	history -s args produce output the way that ARGS would if typed
++ 	interactively.  Thus "history -s "!?ema" might produce
++ 	"ls -l emacs-18.55.tar.Z".
++ 
++ 	* Added sun-cmd.termcap to the examples directory.
++ 
++ 	* POSIX`fied jobs.c: new define tcsetpgrp () takes place of
++ 	ioctl TIOCSPGRP; order of setting pgrp and terminal pgrp now
++ 	pgrp first, then terminal next.
++ 
++ Fri Mar  9 00:04:53 1990  Brian Fox  (bfox at gnuwest)
++ 
++ 	* subst.c: new function unquote_bang () removes backslashed `!'
++ 	from single-quoted strings after extracting them.
++ 
+  Sat Feb 24 13:40:12 1990  Brian Fox  (bfox at gnuwest.gnu.org)
+  
+  	* parse.y:read_token (); backslash doesn't quote inside
+diff -c dist-1.05/FEATURES bash-1.05/FEATURES
+*** dist-1.05/FEATURES	Sun Feb 25 09:01:41 1990
+--- bash-1.05/FEATURES	Sun Mar  4 14:58:57 1990
+***************
+*** 37,43 ****
+  
+  Non-interactive shells:
+    On startup:
+! 	if the environment variable "ENV" in non-null, source the file
+  	mentioned there.
+  
+  So, typically, your ~/.bash_profile file contains the line
+--- 37,43 ----
+  
+  Non-interactive shells:
+    On startup:
+! 	if the environment variable "ENV" is non-null, source the file
+  	mentioned there.
+  
+  So, typically, your ~/.bash_profile file contains the line
+***************
+*** 47,53 ****
+  after (or before) any login specific initializations.
+  
+  You can tell if a shell is interactive or not from within your ~/.bashrc
+! file by examining $PS1; it is unset in non-interactive shell, and set in
+  interactive shells.  Thus:
+  
+  	if [ "$PS1" = "" ]; then
+--- 47,53 ----
+  after (or before) any login specific initializations.
+  
+  You can tell if a shell is interactive or not from within your ~/.bashrc
+! file by examining $PS1; it is unset in non-interactive shells, and set in
+  interactive shells.  Thus:
+  
+  	if [ "$PS1" = "" ]; then
+***************
+*** 55,60 ****
+--- 55,65 ----
+  	else
+  	   echo This shell is interactive
+  	fi
++ 
++ You can ask an interactive bash to not run your .bashrc file, with the
++ -norc flag.  You can change the name of the .bashrc file to any other
++ file with -rcfile FILENAME.  You can ask bash to not run your
++ .bash_profile file with -noprofile.
+  
+  alias: alias [ name [=value] ...]
+  	Alias with no arguments prints the list of aliases in the form
+diff -c dist-1.05/Makefile bash-1.05/Makefile
+*** dist-1.05/Makefile	Thu Mar  1 10:37:56 1990
+--- bash-1.05/Makefile	Sun Mar 11 01:34:09 1990
+***************
+*** 12,18 ****
+  
+  DESTDIR = /usr/gnu/bin
+  MAKE = make
+! #CPP_DEFINES = -DHAVE_GCC -DHAVE_FIXED_INCLUDES
+  
+  CPP = /lib/cpp $(CPPFLAGS)
+  #CPP = $(CC) -E
+--- 12,18 ----
+  
+  DESTDIR = /usr/gnu/bin
+  MAKE = make
+! #CPP_DEFINES = -DHAVE_GCC -DHAVE_FIXED_INCLUDES -DHAVE_BISON
+  
+  CPP = /lib/cpp $(CPPFLAGS)
+  #CPP = $(CC) -E
+Common subdirectories: dist-1.05/alloc-files and bash-1.05/alloc-files
+diff -c dist-1.05/builtins.c bash-1.05/builtins.c
+*** dist-1.05/builtins.c	Sun Feb 25 08:27:08 1990
+--- bash-1.05/builtins.c	Sun Mar 11 01:23:57 1990
+***************
+*** 211,223 ****
+  	matching PATTERN, otherwise a list of the builtins is\n\
+  	printed" },
+  
+!   { "history", history_builtin, 1, "history [n] [ [-w | -r] [filename]]",
+        "	Display the history list with line numbers.  Lines listed with\n\
+  	with a `*' have been modified.  Argument of N says to list only\n\
+  	the last N lines.  Argument `-w' means write out the current\n\
+  	history file.  `-r' means to read it instead.  If FILENAME is\n\
+  	given, then use that file, else if $HISTFILE has a value, use\n\
+! 	that, else use ~/.bash_history" },
+  
+  #ifdef JOB_CONTROL
+    { "jobs", jobs_builtin, 1, "jobs [-l]",
+--- 211,224 ----
+  	matching PATTERN, otherwise a list of the builtins is\n\
+  	printed" },
+  
+!   { "history", history_builtin, 1, "history [n] [-s] [ [-w | -r] [filename]]",
+        "	Display the history list with line numbers.  Lines listed with\n\
+  	with a `*' have been modified.  Argument of N says to list only\n\
+  	the last N lines.  Argument `-w' means write out the current\n\
+  	history file.  `-r' means to read it instead.  If FILENAME is\n\
+  	given, then use that file, else if $HISTFILE has a value, use\n\
+! 	that, else use ~/.bash_history.  Argument -s oerforms history\n\
+! 	substitution on the following args" },
+  
+  #ifdef JOB_CONTROL
+    { "jobs", jobs_builtin, 1, "jobs [-l]",
+***************
+*** 1149,1155 ****
+  
+  	      while (c = *s++)
+  		{
+! 		  if (c == '\\')
+  		    {
+  		      switch (c = *s++)
+  			{
+--- 1150,1156 ----
+  
+  	      while (c = *s++)
+  		{
+! 		  if (c == '\\' && *s)
+  		    {
+  		      switch (c = *s++)
+  			{
+***************
+*** 1277,1283 ****
+    extern int login_shell;
+  
+    if (interactive && login_shell)
+!     fprintf (stderr, "logout\n");
+  
+    exit_or_logout (list);
+  }
+--- 1278,1287 ----
+    extern int login_shell;
+  
+    if (interactive && login_shell)
+!     {
+!       fprintf (stderr, "logout\n");
+!       fflush (stderr);
+!     }
+  
+    exit_or_logout (list);
+  }
+***************
+*** 1697,1706 ****
+        }
+      }
+  
+    limit = get_numeric_arg (list);
+    if (limit < 0)
+      limit = -limit;
+! 
+    if (!limited)
+      i = 0;
+    else
+--- 1701,1733 ----
+        }
+      }
+  
++   if (strcmp (list->word->word, "-s") == 0)
++     {
++       extern int history_expand ();
++       char *expanded;
++       int rval;
++ 
++       list = list->next;
++ 
++       while (list)
++ 	{
++ 	  rval = history_expand (list->word->word, &expanded);
++ 	  printf ("%s", expanded);
++ 	  fflush (stdout);
++ 
++ 	  if (rval == -1)
++ 	    return (EXECUTION_FAILURE);
++ 
++ 	  free (expanded);
++ 
++ 	  list = list->next;
++ 	}
++     }
++   
+    limit = get_numeric_arg (list);
+    if (limit < 0)
+      limit = -limit;
+!   
+    if (!limited)
+      i = 0;
+    else
+***************
+*** 1925,1930 ****
+--- 1952,1958 ----
+    while (list)
+      {
+        char *string = list->word->word;
++ #if defined (NEVER)
+        if (strcmp (string, "-") == 0)
+  	{
+  	  WORD_LIST *t =
+***************
+*** 1933,1938 ****
+--- 1961,1967 ----
+  	  dispose_words (t);
+  	  return (EXECUTION_SUCCESS);
+  	}
++ #endif /* NEVER */
+  
+        /* If the argument is `--' then signal the end of the list and
+  	 remember the remaining arguments. */
+***************
+*** 2492,2499 ****
+  	      free (full_path);
+  	    }
+  	  else
+! 	    while (full_path = 
+! 		   user_command_matches (command, 1, found_file))
+  	      {
+  		found_something++;
+  		found_file++;
+--- 2521,2527 ----
+  	      free (full_path);
+  	    }
+  	  else
+! 	    while (full_path = user_command_matches (command, 1, found_file))
+  	      {
+  		found_something++;
+  		found_file++;
+***************
+*** 2508,2514 ****
+  		free (full_path);
+  	      }
+  	  
+! 	  if (!found_something)
+  	    printf ("%s not found\n", command);
+  
+  	  goto next_item;
+--- 2536,2542 ----
+  		free (full_path);
+  	      }
+  	  
+! 	  if (!found_something && !path_only)
+  	    printf ("%s not found\n", command);
+  
+  	  goto next_item;
+diff -c dist-1.05/cpp-Makefile bash-1.05/cpp-Makefile
+*** dist-1.05/cpp-Makefile	Thu Mar  1 10:41:26 1990
+--- bash-1.05/cpp-Makefile	Sat Mar 10 15:42:03 1990
+***************
+*** 59,65 ****
+  
+  #if defined (HAVE_GCC)
+  #if !defined (HAVE_FIXED_INCLUDES)
+! CC = gcc -traditional
+  #else
+  CC = gcc
+  #endif /* !HAVE_FIXED_INCLUDES */
+--- 59,68 ----
+  
+  #if defined (HAVE_GCC)
+  #if !defined (HAVE_FIXED_INCLUDES)
+! /* This is gauranteed to work, even if you have the fixed includes!
+!    (Unless, of course, you have the fixed include files installed in
+!    /usr/include.  Then it will break. ) */
+! CC = gcc -traditional -I/usr/include
+  #else
+  CC = gcc
+  #endif /* !HAVE_FIXED_INCLUDES */
+***************
+*** 71,77 ****
+--- 74,84 ----
+  /**/#SHELL=/usr/gnu/bin/bash
+  SHELL=/bin/sh
+  
++ #if defined (BASH_MAINTAINER)
++ MAINTAINER = BASH_MAINTAINER
++ #else
+  MAINTAINER = CPP_MAINTAINER
++ #endif /* BASH_MAINTAINER */
+  
+  MACHINE = M_MACHINE
+  OS = M_OS
+***************
+*** 91,105 ****
+  /**/# with gprof, or nothing (the default).
+  PROFILE_FLAGS=
+  
+! #ifdef HAVE_SETLINEBUF
+  LINEBUF = -D"HAVE_SETLINEBUF"
+  #endif
+  
+! #ifdef HAVE_VPRINTF
+  VPRINTF = -D"HAVE_VPRINTF"
+! #endif
+  
+! SYSTEM_FLAGS = $(LINEBUF) $(VPRINTF) -D$(MACHINE) -D$(OS) $(SYSDEP_CFLAGS)
+  DEBUG_FLAGS = $(PROFILE_FLAGS) -g
+  LDFLAGS	= $(DEBUG_FLAGS)
+  CFLAGS	= $(DEBUG_FLAGS) $(SYSTEM_FLAGS)
+--- 98,116 ----
+  /**/# with gprof, or nothing (the default).
+  PROFILE_FLAGS=
+  
+! #if defined (HAVE_SETLINEBUF)
+  LINEBUF = -D"HAVE_SETLINEBUF"
+  #endif
+  
+! #if defined (HAVE_VPRINTF)
+  VPRINTF = -D"HAVE_VPRINTF"
+! #endif /* HAVE_VPRINTF */
+  
+! #if defined (SYSDEP_CFLAGS)
+! SYSDEP = SYSDEP_CFLAGS
+! #endif /* SYSDEP_CFLAGS */
+! 
+! SYSTEM_FLAGS = $(LINEBUF) $(VPRINTF) -D$(MACHINE) -D$(OS) $(SYSDEP)
+  DEBUG_FLAGS = $(PROFILE_FLAGS) -g
+  LDFLAGS	= $(DEBUG_FLAGS)
+  CFLAGS	= $(DEBUG_FLAGS) $(SYSTEM_FLAGS)
+***************
+*** 121,127 ****
+  
+  /**/# The group of configuration flags.  These are for shell.c
+  CFG_FLAGS = -DMAINTAINER='"$(MAINTAINER)"' -DPPROMPT=$(PPROMPT)\
+! 	    -DSPROMPT=$(SPROMPT) -DOS_NAME='$(OS_NAME)' \
+  	    -DSYSTEM_NAME='$(SYSTEM_NAME)' $(SIGLIST_FLAG)
+  
+  /**/# The directory which contains the source for malloc.  The name must
+--- 132,138 ----
+  
+  /**/# The group of configuration flags.  These are for shell.c
+  CFG_FLAGS = -DMAINTAINER='"$(MAINTAINER)"' -DPPROMPT=$(PPROMPT)\
+! 	    -DSPROMPT=$(SPROMPT) -DOS_NAME='"$(OS_NAME)"' \
+  	    -DSYSTEM_NAME='$(SYSTEM_NAME)' $(SIGLIST_FLAG)
+  
+  /**/# The directory which contains the source for malloc.  The name must
+***************
+*** 164,169 ****
+--- 175,181 ----
+  /**/# Support libraries required.  Termcap and Readline.
+  /**/# We would like to use the GNU termcap library.
+  #if defined (USE_GNU_TERMCAP)
++ #define TERMSRC_DEP
+  TERMCAP = $(TLIBSRC)/libtermcap.a
+  TERMLIB = -L$(TLIBSRC) -ltermcap
+  #else
+***************
+*** 204,209 ****
+--- 216,226 ----
+  
+  /**/# The order is important.  Most dependent first.
+  LIBRARIES = $(READLINE) $(TERMLIB)
++ #ifdef TERMSRC_DEP
++ LIBDEP = $(READLINE) $(TERMLIB)
++ #else
++ LIBDEP = $(READLINE)
++ #endif
+  
+  CSOURCES = shell.c parse.y general.c make_cmd.c print_cmd.c\
+  	   dispose_cmd.c execute_cmd.c variables.c builtins.c\
+***************
+*** 245,251 ****
+  /**/# Things that maintainers need, but no one else.
+  MAINTAINENCE = shell-mail bash-distribution-list
+  
+! $(PROGRAM):	.build $(OBJECTS) $(LIBRARIES) bash-Makefile
+  	$(CC) $(LDFLAGS) -o $(PROGRAM) $(OBJECTS) \
+  		$(LIBRARIES) $(LOCAL_LIBS) $(TERMLIB)
+  	$(RM) -f .make
+--- 262,268 ----
+  /**/# Things that maintainers need, but no one else.
+  MAINTAINENCE = shell-mail bash-distribution-list
+  
+! $(PROGRAM):	.build $(OBJECTS) $(LIBDEP) bash-Makefile
+  	$(CC) $(LDFLAGS) -o $(PROGRAM) $(OBJECTS) \
+  		$(LIBRARIES) $(LOCAL_LIBS) $(TERMLIB)
+  	$(RM) -f .make
+***************
+*** 302,311 ****
+  #endif /* USE_GNU_MALLOC */
+  
+  #if !defined (HAVE_ALLOCA)
+  $(ALLOCA):	$(ALLOCA_SOURCE)
+  		$(CC) -I$(ALLOC_DIR) $(CFLAGS) -o $(ALLOCA) -c $(ALLOCA_SOURCE)
+- #if !defined (__GNUC__)
+- 		@-mv `basename $*`.o $(ALLOCA) 2>/dev/null
+  #endif
+  #endif /* HAVE_ALLOCA */
+  
+--- 319,331 ----
+  #endif /* USE_GNU_MALLOC */
+  
+  #if !defined (HAVE_ALLOCA)
++ #if !defined (__GNUC__)
++ $(ALLOCA):	$(ALLOCA_SOURCE)
++ 		$(CC) -I$(ALLOC_DIR) $(CFLAGS) -c $(ALLOCA_SOURCE)
++ 		@-mv `basename $*`.o $(ALLOCA) 2>&1 >/dev/null
++ #else /* GCC */
+  $(ALLOCA):	$(ALLOCA_SOURCE)
+  		$(CC) -I$(ALLOC_DIR) $(CFLAGS) -o $(ALLOCA) -c $(ALLOCA_SOURCE)
+  #endif
+  #endif /* HAVE_ALLOCA */
+  
+***************
+*** 360,371 ****
+  	  done)
+  
+  /**/# Make "backup" be a link to a directory on another device.
+- backup:		$(PROGRAM).tar.Z
+  #if defined (sony)
+! 		if [ ! -d /fd/lost+found ]; then mount /dev/fd0 /fd; fi
+! #endif /* sony */
+  		if [ ! -f backup ]; then ln -s $(BACKUP_DIR) backup; fi
+  		cp $(PROGRAM).tar.Z backup/$(PROGRAM).tar.Z
+  
+  install:	$(PROGRAM)
+  		if [ -f $(DESTDIR)/$(PROGRAM) ]; \
+--- 380,393 ----
+  	  done)
+  
+  /**/# Make "backup" be a link to a directory on another device.
+  #if defined (sony)
+! backup:		$(PROGRAM).tar.Z
+! 		tar -cf /dev/rfd0a $(PROGRAM).tar.Z
+! #else
+! backup:		$(PROGRAM).tar.Z
+  		if [ ! -f backup ]; then ln -s $(BACKUP_DIR) backup; fi
+  		cp $(PROGRAM).tar.Z backup/$(PROGRAM).tar.Z
++ #endif /* sony */
+  
+  install:	$(PROGRAM)
+  		if [ -f $(DESTDIR)/$(PROGRAM) ]; \
+Common subdirectories: dist-1.05/documentation and bash-1.05/documentation
+Common subdirectories: dist-1.05/examples and bash-1.05/examples
+diff -c dist-1.05/execute_cmd.c bash-1.05/execute_cmd.c
+*** dist-1.05/execute_cmd.c	Tue Feb 27 07:54:07 1990
+--- bash-1.05/execute_cmd.c	Sun Mar 11 04:06:42 1990
+***************
+*** 116,122 ****
+  
+    if (command->subshell ||
+        (shell_control_structure (command->type) &&
+!        (pipe_out != NO_PIPE || pipe_in != NO_PIPE)))
+      {
+        int paren_pid;
+  
+--- 116,122 ----
+  
+    if (command->subshell ||
+        (shell_control_structure (command->type) &&
+!        (pipe_out != NO_PIPE || pipe_in != NO_PIPE || asynchronous)))
+      {
+        int paren_pid;
+  
+***************
+*** 1018,1024 ****
+  	 redirections that are specified.  The user expects the side
+  	 effects to take place. */
+        if (do_redirections (simple_command->redirects, 0, 0) == 0)
+! 	return (EXECUTION_SUCCESS);
+        else
+  	return (EXECUTION_FAILURE);
+      }
+--- 1018,1024 ----
+  	 redirections that are specified.  The user expects the side
+  	 effects to take place. */
+        if (do_redirections (simple_command->redirects, 0, 0) == 0)
+! 	return (last_command_exit_value);
+        else
+  	return (EXECUTION_FAILURE);
+      }
+***************
+*** 1592,1598 ****
+    while (path_list && path_list[path_index])
+      {
+        path = extract_colon_unit (path_list, &path_index);
+!       if (!*path)
+  	{
+  	  free (path);
+  	  path = savestring ("."); /* by definition. */
+--- 1592,1598 ----
+    while (path_list && path_list[path_index])
+      {
+        path = extract_colon_unit (path_list, &path_index);
+!       if (!*path || !*path)
+  	{
+  	  free (path);
+  	  path = savestring ("."); /* by definition. */
+diff -c dist-1.05/general.c bash-1.05/general.c
+*** dist-1.05/general.c	Sun Feb 25 08:58:56 1990
+--- bash-1.05/general.c	Fri Mar  9 12:37:41 1990
+***************
+*** 33,38 ****
+--- 33,42 ----
+  #endif
+  
+  
++ #if !defined (rindex)
++ extern char *rindex ();
++ #endif
++ 
+  /* **************************************************************** */
+  /*								    */
+  /*		   Memory Allocation and Deallocation.		    */
+***************
+*** 348,354 ****
+  base_pathname (string)
+       char *string;
+  {
+-   extern char *rindex();
+    char *p = rindex (string, '/');
+  
+    if (*string != '/')
+--- 352,357 ----
+diff -c dist-1.05/glob.c bash-1.05/glob.c
+*** dist-1.05/glob.c	Sat Feb 24 16:12:12 1990
+--- bash-1.05/glob.c	Fri Mar  9 12:47:36 1990
+***************
+*** 44,49 ****
+--- 44,52 ----
+  #  endif
+  #endif	/* SYSVr3 or DIRENT.  */
+  
++ #if defined (NeXT)
++ #include <string.h>
++ #else
+  #if defined (SYSV)
+  #include <memory.h>
+  #include <string.h>
+***************
+*** 55,70 ****
+  
+  extern void bcopy ();
+  #endif /* not SYSV */
+! 
+! #ifdef	__GNUC__
+! #define	alloca(n)	__builtin_alloca (n)
+! #else	/* Not GCC.  */
+! #if defined (sparc)
+! #include <alloca.h>
+! #else	/* Not sparc.  */
+! extern char *alloca ();
+! #endif	/* sparc.  */
+! #endif	/* GCC.  */
+  
+  extern char *malloc (), *realloc ();
+  extern void free ();
+--- 58,64 ----
+  
+  extern void bcopy ();
+  #endif /* not SYSV */
+! #endif /* not NeXT */
+  
+  extern char *malloc (), *realloc ();
+  extern void free ();
+diff -c dist-1.05/jobs.c bash-1.05/jobs.c
+*** dist-1.05/jobs.c	Thu Feb 22 10:52:01 1990
+--- bash-1.05/jobs.c	Sun Mar 11 01:09:57 1990
+***************
+*** 139,144 ****
+--- 139,163 ----
+  /* Call this when you start making children. */
+  int already_making_children = 0;
+  
++ /* These are definitions to map POSIX 1003.1 functions onto existing BSD
++    library functions and system calls. */
++ 
++ #define setpgid(pid, pgrp)	setpgrp (pid, pgrp)
++ #define tcsetpgrp(fd, pgrp)	ioctl ((fd), TIOCSPGRP, &(pgrp))
++ 
++ tcgetpgrp (fd)
++      int fd;
++ {
++   int pgrp;
++ 
++   /* ioctl will handle setting errno correctly. */
++   if (ioctl (fd, TIOCGPGRP, &pgrp) < 0)
++     return (-1);
++   return (pgrp);
++ }
++ 
++ /* END of POISX 1003.1 definitions. */
++ 
+  making_children ()
+  {
+    if (already_making_children)
+***************
+*** 200,207 ****
+    /* Do we need more room? */
+    if (i == job_slots)
+      {
+!       jobs =
+! 	(JOB **)realloc (jobs, (1 + (job_slots += JOB_SLOTS)) * sizeof (JOB *));
+  
+        for (j = i; j < job_slots; j++)
+  	jobs[j] = (JOB *)NULL;
+--- 219,226 ----
+    /* Do we need more room? */
+    if (i == job_slots)
+      {
+!       jobs = (JOB **)realloc
+! 	(jobs, (1 + (job_slots += JOB_SLOTS)) * sizeof (JOB *));
+  
+        for (j = i; j < job_slots; j++)
+  	jobs[j] = (JOB *)NULL;
+***************
+*** 271,277 ****
+        newjob->deferred = deferred;
+  
+        jobs[i] = newjob;
+- /*      set_current_job (i); */
+      }
+  
+    if (async)
+--- 290,295 ----
+***************
+*** 286,292 ****
+  	{
+  	  newjob->foreground = 1;
+  	  /*
+- 	   * ???
+  	   *            !!!!! NOTE !!!!!  (chet@ins.cwru.edu)
+  	   *
+  	   * The currently-accepted job control wisdom says to set the
+--- 304,309 ----
+***************
+*** 677,688 ****
+  	  if (!pipeline_pgrp)	/* Then this is the first child. */
+  	    pipeline_pgrp = getpid ();
+  
+- 	  /* You must give the tty away before you set the process group,
+- 	     and you must do these things only in the child.  Otherwise,
+- 	     race conditions can occur. */
+- 	  if (!async_p)
+- 	    give_terminal_to (pipeline_pgrp);
+- 
+  	  /* Check for running command in backquotes. */
+  	  if (pipeline_pgrp == shell_pgrp)
+  	    {
+--- 694,699 ----
+***************
+*** 697,702 ****
+--- 708,716 ----
+  	      signal (SIGTTIN, SIG_DFL);
+  	    }
+  	
++ 	  if (!async_p)
++ 	    give_terminal_to (pipeline_pgrp);
++ 
+  	  setpgrp (0, pipeline_pgrp);
+  	}
+        else			/* Without job control... */
+***************
+*** 728,740 ****
+  	  if (!pipeline_pgrp)
+  	    {
+  	      pipeline_pgrp = pid;
+! 	      /* Don't twiddle pgrps in the parent!  This is the bug,
+  		 not the good thing of twiddling them in the child! */
+  	      /* give_terminal_to (pipeline_pgrp); */
+  	    }
+  	}
+  
+!       /* Place all procesess into the jobs array regardless of the
+  	 state of job_control.  */
+        add_process (command, pid);
+  
+--- 742,760 ----
+  	  if (!pipeline_pgrp)
+  	    {
+  	      pipeline_pgrp = pid;
+! 	      /* Don't twiddle terminal pgrps in the parent!  This is the bug,
+  		 not the good thing of twiddling them in the child! */
+  	      /* give_terminal_to (pipeline_pgrp); */
+  	    }
++ 	  setpgid (pid, pipeline_pgrp);
++ 	}
++       else
++ 	{
++ 	  if (!pipeline_pgrp)
++ 	    pipeline_pgrp = shell_pgrp;
+  	}
+  
+!       /* Place all processes into the jobs array regardless of the
+  	 state of job_control.  */
+        add_process (command, pid);
+  
+***************
+*** 1534,1541 ****
+  	  }
+        }
+  
+!       while ((ioctl (shell_tty, TIOCGPGRP, &terminal_pgrp) == 0) &&
+! 	     terminal_pgrp != -1)
+  	{
+  	  if (shell_pgrp != terminal_pgrp)
+  	    {
+--- 1554,1560 ----
+  	  }
+        }
+  
+!       while ((terminal_pgrp = tcgetpgrp (shell_tty)) != -1)
+  	{
+  	  if (shell_pgrp != terminal_pgrp)
+  	    {
+***************
+*** 1568,1574 ****
+        original_pgrp = shell_pgrp;
+        shell_pgrp = getpid ();
+        give_terminal_to (shell_pgrp);
+!       setpgrp (0, shell_pgrp);
+  
+  #ifndef FD_CLOEXEC
+  #define FD_CLOEXEC 1
+--- 1587,1593 ----
+        original_pgrp = shell_pgrp;
+        shell_pgrp = getpid ();
+        give_terminal_to (shell_pgrp);
+!       setpgid (0, shell_pgrp);
+  
+  #ifndef FD_CLOEXEC
+  #define FD_CLOEXEC 1
+***************
+*** 1664,1670 ****
+  			  sigmask (SIGCHLD));
+  
+        terminal_pgrp = pgrp;
+!       ioctl (shell_tty, TIOCSPGRP, &terminal_pgrp);
+        sigsetmask (oldmask);
+      }
+  }
+--- 1683,1689 ----
+  			  sigmask (SIGCHLD));
+  
+        terminal_pgrp = pgrp;
+!       tcsetpgrp (shell_tty, terminal_pgrp);
+        sigsetmask (oldmask);
+      }
+  }
+diff -c dist-1.05/machines.h bash-1.05/machines.h
+*** dist-1.05/machines.h	Sat Feb 24 03:36:44 1990
+--- bash-1.05/machines.h	Fri Mar  9 10:36:00 1990
+***************
+*** 3,10 ****
+     tells which machines have what features based on the unique machine
+     identifier present in Cpp. */
+  
+- 
+- 
+  /* **************************************************************** */
+  /*								    */
+  /*			Sun Miscrosystems Machines      	    */
+--- 3,8 ----
+***************
+*** 39,45 ****
+  /* ************************ */
+  #if defined (sun2)
+  #define M_MACHINE "sun2"
+- #define REQUIRED_LIBRARIES
+  #define HAVE_SIGLIST
+  #define USE_GNU_MALLOC
+  #define HAVE_SETLINEBUF
+--- 37,42 ----
+***************
+*** 56,62 ****
+  /* ************************ */
+  #if defined (sun3)
+  #define M_MACHINE "sun3"
+- #define REQUIRED_LIBRARIES
+  #define HAVE_SIGLIST
+  #define USE_GNU_MALLOC
+  #define HAVE_SETLINEBUF
+--- 53,58 ----
+***************
+*** 73,79 ****
+  /* ************************ */
+  #if defined (sun4)
+  #define M_MACHINE "sparc"
+- #define REQUIRED_LIBRARIES
+  #define HAVE_SIGLIST
+  #define HAVE_SETLINEBUF
+  #define HAVE_VPRINTF
+--- 69,74 ----
+***************
+*** 90,96 ****
+  /* ************************ */
+  #if defined (Sun386i)
+  #define M_MACHINE "Sun386i"
+- #define REQUIRED_LIBRARIES
+  #define HAVE_SIGLIST
+  #define USE_GNU_MALLOC
+  #define HAVE_SETLINEBUF
+--- 85,90 ----
+***************
+*** 120,126 ****
+  #  define M_OS Bsd
+  #endif /* ultrix */
+  #define HAVE_SETLINEBUF
+- #define REQUIRED_LIBRARIES
+  #define HAVE_SIGLIST
+  #define USE_GNU_MALLOC
+  #endif /* vax */
+--- 114,119 ----
+***************
+*** 137,143 ****
+  #else
+  #  define M_OS Bsd
+  #endif
+- #define REQUIRED_LIBRARIES
+  #define HAVE_SIGLIST
+  #define USE_GNU_MALLOC
+  #define HAVE_SETLINEBUF
+--- 130,135 ----
+***************
+*** 148,153 ****
+--- 140,163 ----
+  #endif /* MIPSEL */
+  
+  /* ************************ */
++ /*			    */
++ /*	    MIPSEB	    */
++ /*			    */
++ /* ************************ */
++ #if defined (MIPSEB)
++ #define M_MACHINE "MIPSEB"
++ #define M_OS Bsd
++ #define HAVE_SIGLIST
++ #define USE_GNU_MALLOC
++ #define HAVE_SETLINEBUF
++ #define HAVE_VPRINTF
++ #ifndef HAVE_GCC
++ #define HAVE_ALLOCA
++ #endif
++ #define SYSDEP_CFLAGS -systype bsd43
++ #endif /* MIPSEB */
++ 
++ /* ************************ */
+  /*                          */
+  /*          Pyramid         */
+  /*                          */
+***************
+*** 155,161 ****
+  #if defined (pyr)
+  #define M_MACHINE "Pyramid"
+  #define M_OS Bsd
+- #define REQUIRED_LIBRARIES
+  #define HAVE_SIGLIST
+  #define USE_GNU_MALLOC
+  #define HAVE_SETLINEBUF
+--- 165,170 ----
+***************
+*** 175,187 ****
+  #if defined (ibm032)
+  #define M_MACHINE "IBMRT"
+  #define M_OS Bsd
+- #define REQUIRED_LIBRARIES
+  #define HAVE_SIGLIST
+  #define HAVE_SETLINEBUF
+  #define USE_GNU_MALLOC
+! #define SYSDEP_CFLAGS "-ma"
+! #endif /* ibm032
+!  */
+  
+  /* ************************ */
+  /*			    */
+--- 184,194 ----
+  #if defined (ibm032)
+  #define M_MACHINE "IBMRT"
+  #define M_OS Bsd
+  #define HAVE_SIGLIST
+  #define HAVE_SETLINEBUF
+  #define USE_GNU_MALLOC
+! #define SYSDEP_CFLAGS -ma
+! #endif /* ibm032 */
+  
+  /* ************************ */
+  /*			    */
+***************
+*** 191,202 ****
+  #if defined (i386)
+  #undef i386
+  #define M_MACHINE "i386"
+! #define M_OS Bsd
+! #define REQUIRED_LIBRARIES
+! #define HAVE_SIGLIST
+! #define HAVE_SETLINEBUF
+  #define USE_GNU_MALLOC
+- #define ALLOCA_ASM i386-alloca.s
+  #endif /* i386 */
+  
+  /* ************************ */
+--- 198,210 ----
+  #if defined (i386)
+  #undef i386
+  #define M_MACHINE "i386"
+! #define M_OS SYSV
+! #define SYSDEP_CFLAGS -DNO_WAIT_H
+! #if !defined (HAVE_GCC)
+! #  define HAVE_ALLOCA
+! #  define REQUIRED_LIBRARIES -lPW
+! #endif /* !HAVE_GCC */
+  #define USE_GNU_MALLOC
+  #endif /* i386 */
+  
+  /* ************************ */
+***************
+*** 209,215 ****
+  #define M_OS Bsd
+  #define HAVE_ALLOCA
+  #define HAVE_VPRINTF
+- #define REQUIRED_LIBRARIES
+  #define HAVE_SIGLIST
+  #endif
+  
+--- 217,222 ----
+***************
+*** 247,252 ****
+--- 254,260 ----
+  #if defined (Xenix286)
+  #define M_MACHINE "i286"
+  #define M_OS "Xenix"
++ #define USE_GNU_MALLOC
+  #define REQUIRED_LIBRARIES -lx
+  #endif
+  
+***************
+*** 259,264 ****
+--- 267,273 ----
+  #define M_MACHINE "i386"
+  #define M_OS "Xenix"
+  #define ALLOCA_ASM x386-alloca.s
++ #define USE_GNU_MALLOC
+  #define REQUIRED_LIBRARIES -lx
+  #endif
+  
+***************
+*** 270,276 ****
+  #if defined (convex)
+  #define M_MACHINE "convex"
+  #define M_OS SYSV
+- #define REQUIRED_LIBRARIES
+  #define HAVE_VPRINTF
+  #define HAVE_SIGLIST
+  #define USE_GNU_MALLOC
+--- 279,284 ----
+***************
+*** 284,290 ****
+  #if defined (sony)
+  #define M_MACHINE "sony"
+  #define M_OS Bsd
+- #define REQUIRED_LIBRARIES
+  #define HAVE_SIGLIST
+  #define HAVE_SETLINEBUF
+  #define USE_GNU_MALLOC
+--- 292,297 ----
+***************
+*** 298,304 ****
+  #if defined (aix)
+  #define M_MACHINE "aix"
+  #define M_OS Bsd
+- #define REQUIRED_LIBRARIES
+  #define HAVE_VPRINTF
+  #define HAVE_SIGLIST
+  #define USE_GNU_MALLOC
+--- 305,310 ----
+***************
+*** 312,318 ****
+  #if defined (att3b)
+  #define M_MACHINE "att3b"
+  #define M_OS SYSV
+- #define REQUIRED_LIBRARIES
+  #define HAVE_SIGLIST
+  #define USE_GNU_MALLOC
+  #endif /* att3b */
+--- 318,323 ----
+***************
+*** 332,337 ****
+--- 337,380 ----
+  #define HAVE_SIGLIST
+  #define USE_GNU_MALLOC
+  #endif /* att386 */
++ 
++ /* ************************ */
++ /*			    */
++ /*	    Encore	    */
++ /*			    */
++ /* ************************ */
++ #if defined (MULTIMAX)
++ #if defined (n16)
++ #define M_MACHINE "Multimax32k"
++ #else
++ #define M_MACHINE "Multimax"
++ #endif /* n16 */
++ #if defined (CMU)
++ #define M_OS Mach
++ #else
++ #define M_OS Bsd
++ #endif
++ #define HAVE_SIGLIST
++ #ifndef HAVE_GCC
++ #define HAVE_ALLOCA
++ #endif
++ #define USE_GNU_MALLOC
++ #define HAVE_SETLINEBUF
++ #endif  /* MULTIMAX */
++ 
++ /* ************************ */
++ /*			    */
++ /*	    clipper	    */
++ /*			    */
++ /* ************************ */
++ /* This is for the Orion 1/05 (A BSD 4.2 box based on a Clipper processor */
++ #if defined (clipper)
++ #define M_MACHINE "clipper"
++ #define M_OS Bsd
++ #define HAVE_ALLOCA
++ #define USE_GNU_MALLOC
++ #define HAVE_SETLINEBUF
++ #endif  /* clipper */
+  
+  /* **************************************************************** */
+  /*								    */
+diff -c dist-1.05/mail-shell bash-1.05/mail-shell
+*** dist-1.05/mail-shell	Sat Jul  1 17:59:21 1989
+--- bash-1.05/mail-shell	Mon Mar  5 00:56:13 1990
+***************
+*** 18,24 ****
+  fi
+  
+  count () { echo $#; }
+! files_to_send=`count $UUENCODED_DIR/*.uu.*`
+  files_sent=1
+  
+  if [ ! -f $UUENCODED_DIR/inform ]; then
+--- 18,24 ----
+  fi
+  
+  count () { echo $#; }
+! files_to_send=$(count $UUENCODED_DIR/*.uu.*)
+  files_sent=1
+  
+  if [ ! -f $UUENCODED_DIR/inform ]; then
+***************
+*** 39,45 ****
+  done
+  
+  for i in $UUENCODED_DIR/*.uu.*; do
+!   mailfile=`basename $i`
+    for recipient in $*; do
+       echo -n "Mailing $mailfile to $recipient..."
+       cat $i |
+--- 39,45 ----
+  done
+  
+  for i in $UUENCODED_DIR/*.uu.*; do
+!   mailfile=$(basename $i)
+    for recipient in $*; do
+       echo -n "Mailing $mailfile to $recipient..."
+       cat $i |
+***************
+*** 48,54 ****
+  	$recipient
+       echo "done."
+    done
+!   files_sent=`expr $files_sent + 1`
+  done
+  
+  echo "Done mailing the shell to $*."
+--- 48,54 ----
+  	$recipient
+       echo "done."
+    done
+!   files_sent=(expr $files_sent + 1)
+  done
+  
+  echo "Done mailing the shell to $*."
+diff -c dist-1.05/make_cmd.c bash-1.05/make_cmd.c
+*** dist-1.05/make_cmd.c	Mon Feb 12 00:41:39 1990
+--- bash-1.05/make_cmd.c	Sat Mar 10 22:06:13 1990
+***************
+*** 322,336 ****
+  	  if (!line)
+  	    goto document_done;
+  
+! 	  if (kill_leading) {
+! 	    register int i;
+  
+! 	    for (i = 0; whitespace (line[i]); i++)
+! 	      ;
+  
+! 	    if (i)
+! 	      strcpy (&line[0], &line[i]);
+! 	  }
+  
+  	  if ((strncmp (line, redirectee_word, len) == 0) && line[len] == '\n')
+  	    goto document_done;
+--- 322,344 ----
+  	  if (!line)
+  	    goto document_done;
+  
+! 	  if (kill_leading)
+! 	    {
+! 	      register int i;
+  
+! 	      /* Hack:  To be compatible with some Bourne shells, we check
+! 		 the word before stripping the whitespace.  This is a hack
+! 		 though. */
+! 	      if ((strncmp (line, redirectee_word, len) == 0) &&
+! 		  line[len] == '\n')
+! 		goto document_done;
+  
+! 	      for (i = 0; whitespace (line[i]); i++)
+! 		;
+! 
+! 	      if (i)
+! 		strcpy (&line[0], &line[i]);
+! 	    }
+  
+  	  if ((strncmp (line, redirectee_word, len) == 0) && line[len] == '\n')
+  	    goto document_done;
+diff -c dist-1.05/makeargs.sh bash-1.05/makeargs.sh
+*** dist-1.05/makeargs.sh	Sat Feb 24 03:38:52 1990
+--- bash-1.05/makeargs.sh	Sun Mar  4 14:55:38 1990
+***************
+*** 14,19 ****
+--- 14,28 ----
+    WHOAMI=`who am i | awk '{ print $1; }'`
+  fi
+  
++ if [ "$WHOAMI" = "" ]; then 
++   WHOAMI=`id | sed 's/uid=[01-9]*(//' | sed 's/) [) A-Za-z01-9(=,]*//'`
++   if test -f /bin/hostname; then
++     WHOAMI=$WHOAMI@`/bin/hostname`
++   elif test -f /usr/bin/uuname; then
++     WHOAMI=`uuname`!$WHOAMI
++   fi
++ fi
++ 
+  #
+  # Is this a Xenix system?
+  #
+diff -c dist-1.05/nojobs.c bash-1.05/nojobs.c
+*** dist-1.05/nojobs.c	Thu Feb 22 09:36:51 1990
+--- bash-1.05/nojobs.c	Sun Mar  4 15:23:11 1990
+***************
+*** 129,135 ****
+  
+        /* Set the resource limits for this child. (In ulimit.c). */
+        set_process_resource_limits ();
+!     }i
+    else
+      {
+        /*
+--- 129,135 ----
+  
+        /* Set the resource limits for this child. (In ulimit.c). */
+        set_process_resource_limits ();
+!     }
+    else
+      {
+        /*
+diff -c dist-1.05/parse.y bash-1.05/parse.y
+*** dist-1.05/parse.y	Sat Feb 24 10:34:54 1990
+--- bash-1.05/parse.y	Sun Mar 11 01:24:09 1990
+***************
+*** 725,740 ****
+     from shell_input_line; when that line is exhausted, it is time to
+     read the next line. */
+  int
+! shell_getc ()
+  {
+    extern int login_shell;
+!   int c, peek_char = 0;
+  
+    if (!shell_input_line || !shell_input_line[shell_input_line_index])
+      {
+!       register int i, l, quoted = 0;
+        char *pre_process_line (), *expansions;
+  
+        line_number++;
+  
+      restart_read:
+--- 725,743 ----
+     from shell_input_line; when that line is exhausted, it is time to
+     read the next line. */
+  int
+! shell_getc (remove_quoted_newline)
+!      int remove_quoted_newline;
+  {
+    extern int login_shell;
+!   int c;
+  
+    if (!shell_input_line || !shell_input_line[shell_input_line_index])
+      {
+!       register int i, l;
+        char *pre_process_line (), *expansions;
+  
++       restart_read_next_line:
++ 
+        line_number++;
+  
+      restart_read:
+***************
+*** 747,771 ****
+  #endif
+  
+        clearerr (stdin);
+!       while (c = (peek_char ? peek_char : yy_getc ()))
+  	{
+- 	  if (c == '\'')
+- 	    quoted = ~quoted;
+- 
+- 	  if (peek_char)
+- 	    peek_char = 0;
+- 	  else
+- 	    if (!quoted && c == '\\')
+- 	      {
+- 		peek_char = yy_getc ();
+- 		if (peek_char == '\n')
+- 		  {
+- 		    prompt_again ();
+- 		    peek_char = 0;
+- 		    continue;
+- 		  }
+- 	      }
+- 	    
+  	  if (i + 2 > shell_input_line_size)
+  	    if (!shell_input_line)
+  	      shell_input_line = (char *)xmalloc (shell_input_line_size = 256);
+--- 750,757 ----
+  #endif
+  
+        clearerr (stdin);
+!       while (c = yy_getc ())
+  	{
+  	  if (i + 2 > shell_input_line_size)
+  	    if (!shell_input_line)
+  	      shell_input_line = (char *)xmalloc (shell_input_line_size = 256);
+***************
+*** 788,800 ****
+  
+  	  if (c == '\n')
+  	    {
+! 	      if (!quoted)
+! 		{
+! 		  shell_input_line[--i] = '\0';
+! 		  break;
+! 		}
+! 	      else
+! 		prompt_again ();
+  	    }
+  	}
+        shell_input_line_index = 0;
+--- 774,781 ----
+  
+  	  if (c == '\n')
+  	    {
+! 	      shell_input_line[--i] = '\0';
+! 	      break;
+  	    }
+  	}
+        shell_input_line_index = 0;
+***************
+*** 842,847 ****
+--- 823,835 ----
+    if (c)
+      shell_input_line_index++;
+  
++   if (c == '\\' && remove_quoted_newline &&
++       shell_input_line[shell_input_line_index] == '\n')
++     {
++       prompt_again ();
++       goto restart_read_next_line;
++     }
++ 
+    if (!c && shell_input_line_terminator == EOF)
+      {
+        if (shell_input_line_index != 0)
+***************
+*** 866,872 ****
+       int character;
+  {
+    int c;
+!   while ((c = shell_getc ()) != EOF && c != character)
+      ;
+    if (c != EOF )
+      shell_ungetc (c);
+--- 854,860 ----
+       int character;
+  {
+    int c;
+!   while ((c = shell_getc (0)) != EOF && c != character)
+      ;
+    if (c != EOF )
+      shell_ungetc (c);
+***************
+*** 1140,1146 ****
+      }
+  
+    /* Read a single word from input.  Start by skipping blanks. */
+!   while ((character = shell_getc ()) != EOF && whitespace (character));
+  
+    if (character == EOF)
+      return (yacc_EOF);
+--- 1128,1134 ----
+      }
+  
+    /* Read a single word from input.  Start by skipping blanks. */
+!   while ((character = shell_getc (1)) != EOF && whitespace (character));
+  
+    if (character == EOF)
+      return (yacc_EOF);
+***************
+*** 1149,1155 ****
+      {
+        /* A comment.  Discard until EOL or EOF, and then return a newline. */
+        discard_until ('\n');
+!       shell_getc ();
+        return ('\n');
+      }
+  
+--- 1137,1143 ----
+      {
+        /* A comment.  Discard until EOL or EOF, and then return a newline. */
+        discard_until ('\n');
+!       shell_getc (0);
+        return ('\n');
+      }
+  
+***************
+*** 1162,1168 ****
+  	 appear in between tokens which are character pairs, such as
+  	 "<<" or ">>".  I believe this is the correct behaviour. */
+  
+!       if (character == (peek_char = shell_getc ()))
+  	{
+  	  switch (character)
+  	    {
+--- 1150,1156 ----
+  	 appear in between tokens which are character pairs, such as
+  	 "<<" or ">>".  I believe this is the correct behaviour. */
+  
+!       if (character == (peek_char = shell_getc (1)))
+  	{
+  	  switch (character)
+  	    {
+***************
+*** 1169,1175 ****
+  	      /* If '<' then we could be at "<<" or at "<<-".  We have to
+  		 look ahead one more character. */
+  	    case '<':
+! 	      peek_char = shell_getc ();
+  	      if (peek_char == '-')
+  		return (LESS_LESS_MINUS);
+  	      else
+--- 1157,1163 ----
+  	      /* If '<' then we could be at "<<" or at "<<-".  We have to
+  		 look ahead one more character. */
+  	    case '<':
+! 	      peek_char = shell_getc (1);
+  	      if (peek_char == '-')
+  		return (LESS_LESS_MINUS);
+  	      else
+***************
+*** 1260,1271 ****
+  	    goto got_character;
+  	  }
+  
+  	/* Handle backslashes.  Quote lots of things when not inside of
+  	   double-quotes, quote some things inside of double-quotes. */
+! 	   
+  	if (character == '\\' && delimiter != '\'')
+  	  {
+! 	    peek_char = shell_getc ();
+  
+  	    /* Backslash-newline is ignored in all other cases. */
+  	    if (peek_char == '\n')
+--- 1248,1275 ----
+  	    goto got_character;
+  	  }
+  
++ 	/* Handle double backslash.  These are always magic.  The
++ 	   second backslash does not cause a trailing newline to be
++ 	   eaten. */
++ 
++ 	if (character == '\\')
++ 	  {
++ 	    peek_char = shell_getc (0);
++ 	    if (peek_char != '\\')
++ 	      shell_ungetc (peek_char);
++ 	    else
++ 	      {
++ 		token[token_index++] = character;
++ 		goto got_character;
++ 	      }
++ 	  }
++ 
+  	/* Handle backslashes.  Quote lots of things when not inside of
+  	   double-quotes, quote some things inside of double-quotes. */
+! 
+  	if (character == '\\' && delimiter != '\'')
+  	  {
+! 	    peek_char = shell_getc (0);
+  
+  	    /* Backslash-newline is ignored in all other cases. */
+  	    if (peek_char == '\n')
+***************
+*** 1307,1313 ****
+  	  {
+  	    if (character == '$')
+  	      {
+! 		peek_char = shell_getc (character);
+  		shell_ungetc (peek_char);
+  		if (peek_char == '(')
+  		  {
+--- 1311,1317 ----
+  	  {
+  	    if (character == '$')
+  	      {
+! 		peek_char = shell_getc (1);
+  		shell_ungetc (peek_char);
+  		if (peek_char == '(')
+  		  {
+***************
+*** 1358,1364 ****
+  
+  	token[token_index++] = character;
+  
+! 	if (token_index == token_buffer_size)
+  	  token = (char *)xrealloc (token, (token_buffer_size
+  					    += TOKEN_DEFAULT_GROW_SIZE));
+  	{
+--- 1362,1368 ----
+  
+  	token[token_index++] = character;
+  
+! 	if (token_index == (token_buffer_size - 1))
+  	  token = (char *)xrealloc (token, (token_buffer_size
+  					    += TOKEN_DEFAULT_GROW_SIZE));
+  	{
+***************
+*** 1368,1374 ****
+  	  if (character == '\n' && interactive)
+  	    prompt_again ();
+  	}
+! 	character = shell_getc ();
+        }
+  
+  got_token:
+--- 1372,1378 ----
+  	  if (character == '\n' && interactive)
+  	    prompt_again ();
+  	}
+! 	character = shell_getc ((delimiter != '\''));
+        }
+  
+  got_token:
+***************
+*** 1894,1899 ****
+--- 1898,1904 ----
+  	}
+  
+        /* In this case EOF should exit the shell.  Do it now. */
++       reset_parser ();
+        exit_builtin ((WORD_LIST *)NULL);
+      }
+    else
+diff -c dist-1.05/print_cmd.c bash-1.05/print_cmd.c
+*** dist-1.05/print_cmd.c	Sun Feb 25 07:45:49 1990
+--- bash-1.05/print_cmd.c	Thu Mar  1 12:00:14 1990
+***************
+*** 421,433 ****
+    char *result;
+    int old_indent = indentation, old_amount = indentation_amount;
+    
+- 
+    command_string_index = 0;
+  
+    if (name && *name)
+      cprintf ("%s ", name);
+  
+!   cprintf ("()\n");
+  
+    if (!multi_line)
+      {
+--- 421,432 ----
+    char *result;
+    int old_indent = indentation, old_amount = indentation_amount;
+    
+    command_string_index = 0;
+  
+    if (name && *name)
+      cprintf ("%s ", name);
+  
+!   cprintf ("() \n");
+  
+    if (!multi_line)
+      {
+Common subdirectories: dist-1.05/readline and bash-1.05/readline
+diff -c dist-1.05/shell.c bash-1.05/shell.c
+*** dist-1.05/shell.c	Sun Feb 25 08:57:01 1990
+--- bash-1.05/shell.c	Mon Mar  5 11:57:57 1990
+***************
+*** 229,235 ****
+      job_control = 0;
+  #endif
+  
+!   dollar_vars[0] = savestring (shell_name);
+  
+    /* Parse argument flags from the input line. */
+  
+--- 229,235 ----
+      job_control = 0;
+  #endif
+  
+!   dollar_vars[0] = savestring (argv[0]);
+  
+    /* Parse argument flags from the input line. */
+  
+diff -c dist-1.05/subst.c bash-1.05/subst.c
+*** dist-1.05/subst.c	Sun Feb 25 05:36:58 1990
+--- bash-1.05/subst.c	Sun Mar 11 04:09:11 1990
+***************
+*** 117,127 ****
+    register int i, l = strlen (string);
+  
+    for (i = 0; i < l; i++)
+!     if (string[i] == '\\' && string[i + 1] == '`')
+        strcpy (&string[i], &string[i + 1]);
+    return (string);
+  }
+  
+  /* Extract the $( construct in STRING, and return a new string.
+     Start extracting at (SINDEX) as if we had just seen "$(".
+     Make (SINDEX) get the position just after the matching ")". */
+--- 117,146 ----
+    register int i, l = strlen (string);
+  
+    for (i = 0; i < l; i++)
+!     if (string[i] == '\\' && (string[i + 1] == '`' || string[i] == '\\'))
+        strcpy (&string[i], &string[i + 1]);
+    return (string);
+  }
+  
++ /* Remove instances of \! from a string. */
++ void
++ unquote_bang (string)
++      char *string;
++ {
++   register int i, j;
++   register char *temp = (char *)alloca (1 + strlen (string));
++ 
++   for (i = 0, j = 0; (temp[j] = string[i]); i++, j++)
++     {
++       if (string[i] == '\\' && string[i + 1] == '!')
++ 	{
++ 	  temp[j] = '!';
++ 	  i++;
++ 	}
++     }
++   strcpy (string, temp);
++ }
++ 
+  /* Extract the $( construct in STRING, and return a new string.
+     Start extracting at (SINDEX) as if we had just seen "$(".
+     Make (SINDEX) get the position just after the matching ")". */
+***************
+*** 521,530 ****
+    register char *end = param + len;
+    register char *p, *ret, c;
+  
+!   if (pattern == NULL || *pattern == NULL)	/* minor optimization */
+      return (savestring (param));
+  
+!   if (param == NULL || *param == NULL)
+      return (param);
+  
+    switch (op)
+--- 540,549 ----
+    register char *end = param + len;
+    register char *p, *ret, c;
+  
+!   if (pattern == NULL || *pattern == '\0')	/* minor optimization */
+      return (savestring (param));
+  
+!   if (param == NULL || *param == '\0')
+      return (param);
+  
+    switch (op)
+***************
+*** 607,612 ****
+--- 626,633 ----
+       WORD_DESC *word;
+       int quoted;
+  {
++   extern int last_command_exit_value;
++ 
+    /* The thing that we finally output. */
+    WORD_LIST *result = (WORD_LIST *)NULL;
+  
+***************
+*** 704,710 ****
+        
+        case '?':			/* $? -- return value of the last synchronous command. */
+  	{
+- 	  extern int last_command_exit_value;
+  	  number = last_command_exit_value;
+  	  goto add_number;
+  	}
+--- 725,730 ----
+***************
+*** 768,774 ****
+  	  /* If the name really consists of a special variable, then
+  	     make sure that we have the entire name. */
+  	  if (sindex == t_index &&
+! 	      (string[sindex] == '-' || string[sindex] == '?'))
+  	    {
+  	      char *tt;
+  	      t_index++;
+--- 788,796 ----
+  	  /* If the name really consists of a special variable, then
+  	     make sure that we have the entire name. */
+  	  if (sindex == t_index &&
+! 	      (string[sindex] == '-' ||
+! 	       string[sindex] == '?' ||
+! 	       string[sindex] == '#'))
+  	    {
+  	      char *tt;
+  	      t_index++;
+***************
+*** 810,815 ****
+--- 832,839 ----
+  		    number = 0;
+  		  goto add_number;
+  		}
++ 	      else
++ 		name[1] = '\0';	/* ${#@} is the same as $#. */
+  	    }
+  	  
+  	  if (var_is_special)
+***************
+*** 836,841 ****
+--- 860,867 ----
+  		  temp = savestring (temp);
+  		  var_is_set++;
+  		}
++ 	      else
++ 		temp = (char *)NULL;
+  	    }
+  
+  	  if (!var_is_set || !temp || !*temp)
+***************
+*** 1223,1229 ****
+  	      fclose (istream);
+  	      close (fildes[0]);
+  
+! 	      wait_for (pid);
+  	      last_made_pid = old_pid;
+  
+  	      if (temp)
+--- 1249,1255 ----
+  	      fclose (istream);
+  	      close (fildes[0]);
+  
+! 	      last_command_exit_value = wait_for (pid);
+  	      last_made_pid = old_pid;
+  
+  	      if (temp)
+***************
+*** 1241,1247 ****
+  		  strip_trailing (istring + start_index);
+  		  istring_index = strlen (istring);
+  		}
+! 	      goto next_character;
+  	    }
+  	}
+        }
+--- 1267,1276 ----
+  		  strip_trailing (istring + start_index);
+  		  istring_index = strlen (istring);
+  		}
+! 	      if (string[sindex])
+! 		goto next_character;
+! 	      else
+! 		continue;
+  	    }
+  	}
+        }
+***************
+*** 1336,1344 ****
+--- 1365,1382 ----
+  
+  	  t_index = sindex;
+  	  temp = string_extract_verbatim (string, &t_index, "'");
++ 	  if (history_expansion)
++ 	    unquote_bang (temp);
+  	  sindex = t_index;
+  
+  	  if (string[sindex]) sindex++;
++ 
++ 	  if (!*temp)
++ 	    {
++ 	      free (temp);
++ 	      temp = (char *)NULL;
++ 	    }
++ 
+  	  goto add_quoted_string;
+  	}
+        else
+diff -c dist-1.05/variables.c bash-1.05/variables.c
+*** dist-1.05/variables.c	Sun Feb 25 07:55:46 1990
+--- bash-1.05/variables.c	Sun Mar  4 09:44:20 1990
+***************
+*** 245,251 ****
+      char aval[10];
+  
+      sprintf (aval, "%d", getppid ());
+!     bind_variable (name, aval);
+    }
+  
+    non_unsettable ("PATH");
+--- 245,251 ----
+      char aval[10];
+  
+      sprintf (aval, "%d", getppid ());
+!     bind_variable ("PPID", aval);
+    }
+  
+    non_unsettable ("PATH");
+diff -c dist-1.05/version.h bash-1.05/version.h
+*** dist-1.05/version.h	Thu Mar  1 11:17:26 1990
+--- bash-1.05/version.h	Sun Mar 11 04:10:32 1990
+***************
+*** 5,8 ****
+  #define DISTVERSION "1.05"
+  
+  /* The last built version of this shell. */
+! #define BUILDVERSION 1
+--- 5,8 ----
+  #define DISTVERSION "1.05"
+  
+  /* The last built version of this shell. */
+! #define BUILDVERSION 14
