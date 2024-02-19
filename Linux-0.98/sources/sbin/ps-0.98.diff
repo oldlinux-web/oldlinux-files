@@ -1,0 +1,507 @@
+diff -c +recursive orig/ps-0.98/ps.c ps-0.98/ps.c
+*** orig/ps-0.98/ps.c	Tue Oct 20 13:38:26 1992
+--- ps-0.98/ps.c	Wed Nov  4 20:44:49 1992
+***************
+*** 178,184 ****
+  show_procs()
+  {
+      struct task_struct *taskp;
+!     union task_union task_buf;
+      int tty, i, uid;
+      off_t _task = k_addr("_task");
+  
+--- 178,185 ----
+  show_procs()
+  {
+      struct task_struct *taskp;
+!     struct task_struct task_buf;
+!     char stack_buf[PAGE_SIZE];
+      int tty, i, uid;
+      off_t _task = k_addr("_task");
+  
+***************
+*** 192,218 ****
+  	if (taskp) {
+  	    kmemread(&task_buf, taskp, sizeof(task_buf));
+  			/* check if valid, proc may have exited */
+! 	    if ((unsigned) task_buf.task.state > 4 ||
+! 		    task_buf.task.pid <= 0 && i != 0)
+  		continue;
+  
+  	    if (pid >= 0) {
+! 		if (task_buf.task.pid != pid)
+  		    continue;
+  	    } else if (ctty) {
+! 		if (task_buf.task.tty != tty)
+  		    continue;
+  	    } else
+! 		if (!all && task_buf.task.uid != uid ||
+! 		    !no_ctty && task_buf.task.tty == -1 ||
+! 		    run_only && task_buf.task.state != TASK_RUNNING &&
+! 			    task_buf.task.state != TASK_UNINTERRUPTIBLE)
+  			continue;
+  
+! 	    (fmt_fnc[fmt])(&task_buf);
+  	    if (fmt != PS_V && fmt != PS_M)
+! 		show_time(&task_buf);
+! 	    printf("%s\n", cmd_args(&task_buf));
+  	}
+      }
+  }
+--- 193,221 ----
+  	if (taskp) {
+  	    kmemread(&task_buf, taskp, sizeof(task_buf));
+  			/* check if valid, proc may have exited */
+! 	    if ((unsigned) task_buf.state > 4 ||
+! 		    (task_buf.pid <= 0 && i != 0) ||
+! 		    !task_buf.kernel_stack_page)
+  		continue;
+  
+  	    if (pid >= 0) {
+! 		if (task_buf.pid != pid)
+  		    continue;
+  	    } else if (ctty) {
+! 		if (task_buf.tty != tty)
+  		    continue;
+  	    } else
+! 		if (!all && task_buf.uid != uid ||
+! 		    !no_ctty && task_buf.tty == -1 ||
+! 		    run_only && task_buf.state != TASK_RUNNING &&
+! 			    task_buf.state != TASK_UNINTERRUPTIBLE)
+  			continue;
+  
+! 	    kmemread(&stack_buf, task_buf.kernel_stack_page, PAGE_SIZE);
+! 	    (fmt_fnc[fmt])(&task_buf,&stack_buf);
+  	    if (fmt != PS_V && fmt != PS_M)
+! 		show_time(&task_buf, &stack_buf);
+! 	    printf("%s\n", cmd_args(&task_buf, &stack_buf));
+  	}
+      }
+  }
+***************
+*** 219,226 ****
+  
+  
+  
+! show_short(task)
+  struct task_struct *task;
+  {
+      printf("%5d %s %s",
+  	task->pid,
+--- 222,230 ----
+  
+  
+  
+! show_short(task, stack)
+  struct task_struct *task;
++ reg_t * stack;
+  {
+      printf("%5d %s %s",
+  	task->pid,
+***************
+*** 228,235 ****
+  	status(task));
+  }
+  
+! show_long(task)
+  struct task_struct *task;
+  {
+      long ppid;
+  
+--- 232,240 ----
+  	status(task));
+  }
+  
+! show_long(task, stack)
+  struct task_struct *task;
++ reg_t * stack;
+  {
+      long ppid;
+  
+***************
+*** 242,259 ****
+  	ppid,
+  	2 * PZERO - task->counter,	/* sort of priority */
+  	PZERO - task->priority,		/* nice value */
+! 	VSIZE(task),
+  	task->rss * 4,
+  	(task->state == TASK_INTERRUPTIBLE ||
+  	 task->state == TASK_UNINTERRUPTIBLE ||
+  	 Debug > 1 && task->state == TASK_STOPPED ? 
+! 	    wchan(task->tss.ebp, task) : ""),
+  	status(task),
+  	dev_to_tty(task->tty));
+  }
+  
+! show_jobs(task)
+  struct task_struct *task;
+  {
+      long ppid, tpgid;
+      struct tty_struct *tt;
+--- 247,265 ----
+  	ppid,
+  	2 * PZERO - task->counter,	/* sort of priority */
+  	PZERO - task->priority,		/* nice value */
+! 	VSIZE(task,stack),
+  	task->rss * 4,
+  	(task->state == TASK_INTERRUPTIBLE ||
+  	 task->state == TASK_UNINTERRUPTIBLE ||
+  	 Debug > 1 && task->state == TASK_STOPPED ? 
+! 	    wchan(task->tss.ebp, stack) : ""),
+  	status(task),
+  	dev_to_tty(task->tty));
+  }
+  
+! show_jobs(task, stack)
+  struct task_struct *task;
++ reg_t * stack;
+  {
+      long ppid, tpgid;
+      struct tty_struct *tt;
+***************
+*** 284,291 ****
+  	task->euid);
+  }
+  
+! show_user(task)
+  struct task_struct *task;
+  {
+      time_t start;
+      int pcpu, pmem;
+--- 290,298 ----
+  	task->euid);
+  }
+  
+! show_user(task, stack)
+  struct task_struct *task;
++ reg_t * stack;
+  {
+      time_t start;
+      int pcpu, pmem;
+***************
+*** 309,315 ****
+  	task->pid,
+  	pcpu / 10, pcpu % 10,
+  	pmem / 10, pmem % 10,
+! 	VSIZE(task),
+  	task->rss * 4,
+  	dev_to_tty(task->tty),
+  	status(task),
+--- 316,322 ----
+  	task->pid,
+  	pcpu / 10, pcpu % 10,
+  	pmem / 10, pmem % 10,
+! 	VSIZE(task,stack),
+  	task->rss * 4,
+  	dev_to_tty(task->tty),
+  	status(task),
+***************
+*** 316,323 ****
+   	ctime(&start) + (time_now - start > 3600*24 ? 4 : 10));
+  }
+  
+! show_sig(task)
+  struct task_struct *task;
+  {
+      unsigned long sigignore=0, sigcatch=0, bit=1;
+      int i;
+--- 323,331 ----
+   	ctime(&start) + (time_now - start > 3600*24 ? 4 : 10));
+  }
+  
+! show_sig(task, stack)
+  struct task_struct *task;
++ reg_t * stack;
+  {
+      unsigned long sigignore=0, sigcatch=0, bit=1;
+      int i;
+***************
+*** 341,348 ****
+  	dev_to_tty(task->tty));
+  }
+  
+! show_vm(task)
+  struct task_struct *task;
+  {
+      int pmem;
+  
+--- 349,357 ----
+  	dev_to_tty(task->tty));
+  }
+  
+! show_vm(task, stack)
+  struct task_struct *task;
++ reg_t * stack;
+  {
+      int pmem;
+  
+***************
+*** 354,360 ****
+      printf(" %6d %4d %4d %4d ",
+  	task->maj_flt + (Sum ? task->cmaj_flt : 0),
+  	task->end_code / 1024,
+! 	SIZE(task), task->rss*4);
+      if (task->rlim[RLIMIT_RSS].rlim_cur == RLIM_INFINITY)
+  	printf("   xx ");
+      else
+--- 363,369 ----
+      printf(" %6d %4d %4d %4d ",
+  	task->maj_flt + (Sum ? task->cmaj_flt : 0),
+  	task->end_code / 1024,
+! 	SIZE(task, stack), task->rss*4);
+      if (task->rlim[RLIMIT_RSS].rlim_cur == RLIM_INFINITY)
+  	printf("   xx ");
+      else
+***************
+*** 364,371 ****
+  }
+  
+  
+! show_m(task)
+  struct task_struct *task;
+  {
+      int i;
+      unsigned long pagedir[0x300];
+--- 373,381 ----
+  }
+  
+  
+! show_m(task, stack)
+  struct task_struct *task;
++ reg_t * stack;
+  {
+      int i;
+      unsigned long pagedir[0x300];
+***************
+*** 431,438 ****
+  	dt << pg_shift);
+  }
+  
+! show_regs(task)
+  struct task_struct *task;
+  {
+      printf("%2d %5d %8x %8x %8x ",
+  	task->start_code >> 26,
+--- 441,449 ----
+  	dt << pg_shift);
+  }
+  
+! show_regs(task, stack)
+  struct task_struct *task;
++ reg_t * stack;
+  {
+      printf("%2d %5d %8x %8x %8x ",
+  	task->start_code >> 26,
+***************
+*** 441,448 ****
+  	task->start_code >> 16,
+  	**/
+  	task->start_stack,
+! 	KSTK_ESP(task),
+! 	KSTK_EIP(task));
+  
+      prtime(task->timeout, jiffies);
+      prtime(task->it_real_value, 0);
+--- 452,459 ----
+  	task->start_code >> 16,
+  	**/
+  	task->start_stack,
+! 	KSTK_ESP(stack),
+! 	KSTK_EIP(stack));
+  
+      prtime(task->timeout, jiffies);
+      prtime(task->it_real_value, 0);
+***************
+*** 487,494 ****
+  };
+  
+  
+! show_time(task)
+  struct task_struct *task;
+  {
+      unsigned t;
+  
+--- 498,506 ----
+  };
+  
+  
+! show_time(task, stack)
+  struct task_struct *task;
++ reg_t * stack;
+  {
+      unsigned t;
+  
+***************
+*** 500,507 ****
+  }
+  
+  char *
+! status(task)
+  struct task_struct *task;
+  {
+      static char buf[5] = "    ";
+  
+--- 512,520 ----
+  }
+  
+  char *
+! status(task, stack)
+  struct task_struct *task;
++ reg_t * stack;
+  {
+      static char buf[5] = "    ";
+  
+diff -c +recursive orig/ps-0.98/ps.h ps-0.98/ps.h
+*** orig/ps-0.98/ps.h	Tue Sep 22 22:06:56 1992
+--- ps-0.98/ps.h	Wed Nov  4 20:44:49 1992
+***************
+*** 21,42 ****
+  
+  #define	PAGE_MASK	0xfff
+  
+! #define	KSTK_EIP(task)	(*((unsigned long *)(task)+1019))
+! #define	KSTK_ESP(task)	(*((unsigned long *)(task)+1022))
+  
+! #define	_SSIZE(task)	(TASK_SIZE - KSTK_ESP(task))
+! #define	SSIZE(task)	(KSTK_ESP(task) ? _SSIZE(task) : 0)
+! #define	VSIZE(task)	(((task)->brk + 1023 + SSIZE(task)) / 1024)
+! #define	SIZE(task)	(((task)->brk - (task)->end_code + 1023 + \
+! 			  SSIZE(task)) / 1024)
+  
+! typedef unsigned reg_t;
+! 
+! union task_union {
+!     struct task_struct task;
+!     reg_t stack[PAGE_SIZE/4];
+! };
+  
+  
+  char *find_func();
+  unsigned long k_addr();
+--- 21,37 ----
+  
+  #define	PAGE_MASK	0xfff
+  
+! #define	KSTK_EIP(stack)	((stack)[1019])
+! #define	KSTK_ESP(stack)	((stack)[1022])
+  
+! #define	_SSIZE(stack)	(TASK_SIZE - KSTK_ESP(stack))
+! #define	SSIZE(stack)	(KSTK_ESP(stack) ? _SSIZE(stack) : 0)
+  
+! #define	VSIZE(task,stack) (((task)->brk + 1023 + SSIZE(stack)) / 1024)
+! #define	SIZE(task,stack)  (((task)->brk - (task)->end_code + 1023 + \
+! 			  SSIZE(stack)) / 1024)
+  
++ typedef unsigned reg_t;
+  
+  char *find_func();
+  unsigned long k_addr();
+diff -c +recursive orig/ps-0.98/top.c ps-0.98/top.c
+*** orig/ps-0.98/top.c	Fri Oct 16 19:55:57 1992
+--- ps-0.98/top.c	Thu Nov  5 22:04:24 1992
+***************
+*** 54,60 ****
+  char hdr[200];
+  char *title="TOP   by Roger Binns    Ps (c) 1992 Branko Lankester";
+  
+! void do_it(struct task_struct *task, int num);
+  void do_key(char c);
+  char *cm, *clrtobot, *cl, *so, *se, *clrtoeol, *mb, *md, *us, *ue;
+  char *outp;
+--- 54,60 ----
+  char hdr[200];
+  char *title="TOP   by Roger Binns    Ps (c) 1992 Branko Lankester";
+  
+! void do_it(struct task_struct *task, reg_t *stack, int num);
+  void do_key(char c);
+  char *cm, *clrtobot, *cl, *so, *se, *clrtoeol, *mb, *md, *us, *ue;
+  char *outp;
+***************
+*** 424,430 ****
+  show_procs()
+  {
+      struct task_struct *taskp;
+!     union task_union task_buf;
+      int tty, i, uid;
+      off_t _task = k_addr("_task");
+  
+--- 424,431 ----
+  show_procs()
+  {
+      struct task_struct *taskp;
+!     struct task_struct task_buf;
+!     char stack_buf[PAGE_SIZE];
+      int tty, i, uid;
+      off_t _task = k_addr("_task");
+  
+***************
+*** 436,450 ****
+  	if (taskp) {
+  	    kmemread(&task_buf, taskp, sizeof(task_buf));
+  			/* check if valid, proc may have exited */
+! 	    if ((unsigned) task_buf.task.state > 4 ||
+! 		    task_buf.task.pid <= 0 && i != 0)
+  		continue;
+! 	    do_it((struct task_struct *)&task_buf, i);
+  	}
+      }
+  }
+  
+! void do_it(struct task_struct *task, int num)
+  {
+  	unsigned t, i;
+      	time_t now, start;
+--- 437,453 ----
+  	if (taskp) {
+  	    kmemread(&task_buf, taskp, sizeof(task_buf));
+  			/* check if valid, proc may have exited */
+! 	    if ((unsigned) task_buf.state > 4 ||
+! 		    task_buf.pid <= 0 && i != 0 ||
+! 		    !task_buf.kernel_stack_page)
+  		continue;
+! 	    kmemread(&stack_buf, task_buf.kernel_stack_page, PAGE_SIZE);
+! 	    do_it(&task_buf, (reg_t *) &stack_buf, i);
+  	}
+      }
+  }
+  
+! void do_it(struct task_struct *task, reg_t *stack, int num)
+  {
+  	unsigned t, i;
+      	time_t now, start;
+***************
+*** 495,502 ****
+  		case P_NICE: sprintf(tmp, "%3d ", PZERO-task->priority); break;
+  		case P_PAGEIN: sprintf(tmp, "%6d ", task->maj_flt+(Sum ? task->cmaj_flt : 0)); break;
+  		case P_TSIZ: sprintf(tmp, "%5d ", task->end_code/1024); break;
+! 		case P_DSIZ: sprintf(tmp, "%5d ", SIZE(task)); break;
+! 		case P_SIZE: sprintf(tmp, "%5d ", VSIZE(task)); break;
+  		case P_TRS: sprintf(tmp, "%4d ", TRS); break;
+  		case P_SWAP: sprintf(tmp, "%4d ", SWAP); break;
+  		case P_SHARE: sprintf(tmp, "%5d ", SHARE); break;
+--- 498,505 ----
+  		case P_NICE: sprintf(tmp, "%3d ", PZERO-task->priority); break;
+  		case P_PAGEIN: sprintf(tmp, "%6d ", task->maj_flt+(Sum ? task->cmaj_flt : 0)); break;
+  		case P_TSIZ: sprintf(tmp, "%5d ", task->end_code/1024); break;
+! 		case P_DSIZ: sprintf(tmp, "%5d ", SIZE(task,stack)); break;
+! 		case P_SIZE: sprintf(tmp, "%5d ", VSIZE(task,stack)); break;
+  		case P_TRS: sprintf(tmp, "%4d ", TRS); break;
+  		case P_SWAP: sprintf(tmp, "%4d ", SWAP); break;
+  		case P_SHARE: sprintf(tmp, "%5d ", SHARE); break;
+***************
+*** 507,513 ****
+  		case P_WCHAN: sprintf(tmp, "%-9.9s ", 
+  					(task->state == TASK_INTERRUPTIBLE ||
+  	 				task->state == TASK_UNINTERRUPTIBLE ? 
+! 	    				wchan(task->tss.ebp, task) : "")); break; 
+  		case P_STAT: sprintf(tmp, "%-4.4s ", status(task)); break;
+  		case P_TIME: sprintf(tmp, "%3d:%02d ", t/60, t%60); break;
+  		case P_COMMAND: strcpy(tmp, cmd_args(task)); break; 
+--- 510,516 ----
+  		case P_WCHAN: sprintf(tmp, "%-9.9s ", 
+  					(task->state == TASK_INTERRUPTIBLE ||
+  	 				task->state == TASK_UNINTERRUPTIBLE ? 
+! 	    				wchan(task->tss.ebp, stack) : "")); break; 
+  		case P_STAT: sprintf(tmp, "%-4.4s ", status(task)); break;
+  		case P_TIME: sprintf(tmp, "%3d:%02d ", t/60, t%60); break;
+  		case P_COMMAND: strcpy(tmp, cmd_args(task)); break; 

@@ -1,0 +1,129 @@
+:
+# Guess values for system-dependant variables and create `Makefile'.
+# Copyright (C) 1991 Free Software Foundation, Inc.
+
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+
+trap 'rm -f defstest defstest.c Makefile; exit 1' 1 3 15
+
+set +u # Make sure unset variables are ok.
+
+# Make sure we don't find the System V /etc/install.
+PATH=`echo $PATH|sed 's,^:,|,
+s,:$,|,
+s,:/usr/etc,,g
+s,/usr/etc:,,g
+s,:/etc,,g
+s,/etc:,,g
+s,|,:,g'`
+
+if test "$RANDOM" = "$RANDOM"; then
+  # Plain old Bourne shell.
+  echo checking for gcc
+  test -z "$CC" -a -n "`gcc 2>&1`" && CC="gcc -O"
+
+  echo checking for install
+  if test -z "$INSTALL" -a -n "`install 2>&1`"; then
+    INSTALL="install -c"
+  fi
+else
+  # ksh, bash or zsh.
+  echo checking for gcc
+  test -z "$CC" && type gcc && CC="gcc -O"
+
+  echo checking for install
+  if test -z "$INSTALL" && type install; then
+    INSTALL="install -c"
+  fi
+fi
+
+CC=${CC-cc}
+INSTALL=${INSTALL-cp}
+INCLUDEDIR=${INCLUDEDIR-/usr/include}
+
+rm -f defstest defstest.c
+compile="$CC $DEFS defstest.c -o defstest $LIBS >/dev/null 2>&1"
+
+# Check for various header files.
+
+echo checking signal handler return type
+grep 'int[ 	]*(\*signal[ 	]*(' $INCLUDEDIR/signal.h >/dev/null 2>&1 &&
+  DEFS="$DEFS -DSIGTYPE=int"
+
+echo checking for ANSI C header files
+echo "#include <stdlib.h>
+#include <string.h>
+main () { exit(0); strerror(0); }" > defstest.c
+eval $compile
+if test -s defstest && ./defstest 2>/dev/null; then
+  DEFS="$DEFS -DSTDC_HEADERS"
+fi
+rm -f defstest defstest.c
+
+echo checking for BSD string and memory functions
+echo "#include <strings.h>
+main () { exit(0); rindex(0, 0); bzero(0, 0); }" > defstest.c
+eval $compile
+if test -s defstest && ./defstest 2>/dev/null; then :
+  else DEFS="$DEFS -DUSG"
+fi
+rm -f defstest defstest.c
+
+# Check whether various functions exist.
+
+# Functions we provide replacements for.
+for func in bsearch
+do
+  echo checking for $func
+  echo "main() { exit(0); ${func}(); }" > defstest.c
+  eval $compile
+  if test -s defstest && ./defstest 2>/dev/null; then :
+  else LIBOBJS="$LIBOBJS ${func}.o"
+  fi
+  rm -f defstest defstest.c
+done
+
+# Check other misc. things.
+
+echo checking how to get alloca
+echo '
+#ifdef __GNUC__
+#define alloca __builtin_alloca
+#else
+#ifdef sparc
+#include <alloca.h>
+#else
+#ifdef _AIX
+#pragma alloca
+#else
+char *alloca ();
+#endif
+#endif
+#endif
+main() { char *p = (char *) alloca(1); exit(0); }' > defstest.c
+eval $compile
+if test -s defstest && ./defstest 2>/dev/null; then :
+else LIBS="$LIBS -lPW"
+fi
+rm -f defstest defstest.c
+
+echo '# Generated automatically from Makefile.in by configure.' > Makefile
+sed -e "
+s,@CC@,$CC,
+s,@INSTALL@,$INSTALL,
+s,@DEFS@,$DEFS,
+s,@LIBS@,$LIBS,
+s,@LIBOBJS@,$LIBOBJS,
+" Makefile.in >> Makefile

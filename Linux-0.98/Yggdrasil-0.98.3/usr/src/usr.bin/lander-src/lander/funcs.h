@@ -1,0 +1,11 @@
+void UpdateScore();
+void ScWrite();
+void ScReadDisplay();
+void InitScore();
+void InitialiseScreen();
+void DrawScreen();
+void InitMoves();
+void GetMove();
+int MoveLander();
+void PressSpace();
+void DrawScreen();

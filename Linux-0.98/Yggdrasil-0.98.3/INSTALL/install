@@ -1,0 +1,479 @@
+#! /bin/sh -
+# Install v0.97 - getting better!
+
+install=`basename $0`
+partitioned=/usr/spool/install/partitioned
+default_root=/dev/hda1
+set_default_root=
+function prtc {
+	echo
+	echo -n [ press return to continue ]
+	read
+}
+clear
+echo "Welcome to the Linux v0.97 installation script."
+
+# skip this junk if the hard drive has been partitioned
+if [ ! -e $partitioned ]; then
+cat <<!!
+
+This script will guide you through installing Linux on your hard
+disk.  Doing so will require allocating a partition on your hard
+disk, making a filesystem on that partition, and installing the
+binaries from this disk on to that partition.  You will also have the
+option of making a swap partition, and a /var partition.
+
+When you are prompted for a response to a question, the default will
+appear within square brackets.
+
+!!
+
+echo -n "Do you wish to continue (y/n)? [y]: "
+read ans
+if [ .$ans = .n -o .$ans = .N ]; then
+	echo
+	echo Okay, goodbye.
+	exit 1
+fi
+cat <<!!
+
+
+The first step in installing Linux involves creating partitions on your
+hard drive(s).  To do this, you need to edit your hard disk(s)
+partition table using 'fdisk'.
+
+!!
+prtc
+clear
+cat <<!!
+If you are not installing /usr/src, you will need at least 70 megabytes
+for your root partition.  If you are installing /usr/src, you will need
+at least 176 megabytes.  If you are not creating a separate /var partition,
+then you should add approximately another 5 megabytes to these minimum
+requirements so that you'll have space for /tmp.
+
+If you want to be able to boot Linux from your hard disk, don't forget
+to mark the root partition as active with the "a" command in fdisk.
+Also note that you can ignore the warnings claiming that the partition
+is too big for Linux to use (which is false, because we're using the
+extended file system) or that you have an odd number of sectors (which
+only means that you're wasting 512 bytes of your multimegabyte disk).
+
+You must specify the hard drive to partition.  For standard hard disk,
+drive 1 is specified by /dev/hda, and drive 2 by /dev/hdb.  SCSI disk
+drives drives follow a similar nameing scheme: /dev/sda, /dev/sdb, and
+so on.  When you are done partitioning your hard disk, type 'done' at
+the prompt.  To skip the partitioning step (e.g., you are installing
+over an old Linux installation, or have already done this step), type
+'skip'. To abort this procedure completely, type 'abort' at the prompt.
+
+!!
+
+loop=true
+while [ $loop = true ]; do
+	echo -n "Drive to partition (/dev/hda|/dev/hdb|done|skip|abort): "
+	read ans
+	if [ .$ans = .done -o .$ans = .skip ]; then
+		loop=false
+	elif [ .$ans = .abort ]; then
+		echo "Process aborted."
+		exit 1
+	elif [ $ans ]; then
+		fdisk $ans
+	else
+		echo Sorry, there is no default.
+	fi
+done
+
+if [ .$ans = .done ]; then
+	clear
+	cat <<!!
+
+You must now reboot your computer so Linux can reread the partition
+tables.
+
+To continue the installation, login as 'install' again, and select
+'skip' when you are again prompted to partition the disk.
+
+!!
+	prtc
+	touch $partitioned
+	sync
+	reboot
+fi
+
+if [ .$ans = .skip ]; then
+	touch $partitioned
+fi
+
+fi #endif bit about partitioning
+
+clear
+cat <<!!
+
+We now return to the installation process after having partitioned
+the disk.
+
+The next step in installing Linux is to make filesystems on the
+partition(s) you created.
+
+Linux knows about the following partitions:
+
+!!
+showdisk -q /dev/hd
+showdisk -q /dev/sd
+echo
+prtc
+cat <<!!
+
+The following prompt accepts four commands:
+
+	mkefs -c /dev/hd* 		- make a filesystem of
+		or			  specified size on the
+	mkefs -c /dev/sd*		  specified partition.
+
+	list /dev/hd
+	    or				- list the partitions again.
+	list /dev/sd
+
+	done				- done with this step
+
+	abort				- abort out of this script
+!!
+
+loop=true
+while [ $loop = true ]; do
+
+	echo
+	echo -n "Action (mkefs|list|done|abort): "
+	read ans
+	set $ans
+	if [ $1 ]; then
+		if [ .$1 = .list ]; then
+			echo
+			showdisk $2
+		elif [ .$1 = .done ]; then
+			loop=false
+		elif [ .$1 = .abort ]; then
+			echo
+			echo Process aborted.
+			exit 1
+		elif [ .$1 = .mkefs ]; then
+			echo
+			if ( $* ) && [ ! $set_default_root ] ; then
+			    until [ $# = 1 ] ; do
+				shift
+			    done
+			    default_root=$1
+			    set_default_root=1
+			fi
+		else
+			echo "unsupported action."
+		fi
+	else
+		echo
+		echo "Sorry, there is no default action."
+	fi
+done
+
+cat <<!!
+
+Now we're ready to mount the new partition(s), and actually
+start copying Linux to your system.
+
+However, since I'm not very smart, I don't have the slightest idea
+what partitions I'm supposed to use, so you'll have to tell me.
+Please answer the following questions carefully:
+
+(For a reminder of the partitions available, type 'list' at any of the
+prompts.  If you don't wish to specify a partition, select 'none'. )
+!!
+
+# root partition
+
+loop=true
+while [ $loop = true ]; do
+
+	echo
+	echo -n "Root partition [$default_root]: "
+	read ans
+	if [ $ans ]; then
+		if [ $ans = none ]; then
+			echo
+			echo "You must specify a root partition."
+		elif [ $ans = list ]; then
+			echo
+			showdisk -q /dev/hd
+			showdisk -q /dev/sd
+			prtc
+		elif [ $ans = abort ]; then
+			echo Process aborted.
+			exit 1
+		elif [ ! -b $ans ]; then
+			echo
+			echo $ans is not a block device.
+		else
+			root=$ans
+			loop=false
+		fi
+	else
+		root=$default_root
+		loop=false
+	fi
+done
+root_disk=${root%%[0-9]}
+primary_disk=${root_disk%%[a-h]}
+
+# /var partition
+
+loop=true
+while [ $loop = true ]; do
+
+	echo
+	echo -n "/var partition [none]: "
+	read ans
+	if [ $ans ]; then
+		if [ $ans = none ]; then
+			var=
+			loop=false
+		elif [ $ans = list ]; then
+			echo
+			showdisk -q /dev/hd
+			showdisk -q /dev/sd
+			prtc
+		elif [ $ans = $root ]; then
+			echo
+			echo "You have already selected $ans as your root partition."
+		elif [ $ans = abort ]; then
+			echo Process aborted.
+			exit 1
+		elif [ ! -b $ans ]; then
+			echo
+			echo $ans is not a block device.
+		else
+			var=$ans
+			loop=false
+		fi
+	else
+		var=
+		loop=false
+	fi
+done
+
+# swap partition
+
+loop=true
+while [ $loop = true ]; do
+
+	echo
+	echo -n "swap partition [none]: "
+	read ans
+	if [ $ans ]; then
+		if [ $ans = none ]; then
+			swap=
+			loop=false
+		elif [ $ans = list ]; then
+			echo
+			showdisk -q /dev/hd
+			showdisk -q /dev/sd
+			prtc
+		elif [ $ans = $root ]; then
+			echo
+			echo "You have already selected $ans as your root partition."
+		elif [ $ans = $var ]; then
+			echo
+			echo "You have already selected $ans as your /var partition."
+		elif [ $ans = abort ]; then
+			echo Process aborted.
+			exit 1
+		elif [ ! -b $ans ]; then
+			echo
+			echo $ans is not a block device.
+		else
+			swap=$ans
+			loop=false
+		fi
+	else
+		swap=
+		loop=false
+	fi
+done
+
+if [ $swap ] ; then
+	echo "Preparing swap partition..."
+	mkswap -c $swap `blocks $swap`
+fi
+
+echo "Mounting root partition..."
+if [ ! -d /mnt ] ; then
+	mkdir /mnt
+fi
+if ! mount -t ext $root /mnt && ! mount $root /mnt ; then
+	echo
+	echo "Could not mount the root file system $root.  Giving up."
+	echo
+	prtc
+	exit
+fi
+
+if [ $var ]; then
+
+	echo "Mounting /var partition..."
+	if [ ! -d /mnt/var ]; then
+		mkdir /mnt/var
+	fi
+	mount $var /mnt/var
+fi
+
+cat <<!!
+
+Now we are ready to being installing the actual Linux binaries
+(programs) on your hard disk.  This will be done automatically, and
+without regard to anything that may currently be on those partitions.
+
+(This means if you are upgrading from a previous version of Linux, it
+is possible that a number of old, incorrect binaries may be left
+behind, and that any 'customized' binaries you have installed on top
+of the standard binaries may be overwritten.)
+
+!!
+
+echo -n "[ press return to continue, and type abort to stop here ]"
+read $ans
+if [ .$ans = .abort ]; then
+	echo
+	echo "Aborting installation."
+	umount $root
+	umount $var
+	exit 1
+fi
+
+echo
+echo "Installing files..."
+( cd / ; tar cfX - /INSTALL/exclude . ) | ( cd /mnt ; umask 0 ; tar xpfv - ) 
+mkdir -p /mnt/mnt /mnt/usr/src
+
+( cd /mnt/etc; for new in *.install; do mv -fv $new `basename $new .install`; done )
+
+echo
+echo -n "Do you want to install /usr/src (106 megabytes) right now (y/n)? [n]: "
+read ans
+if [ .$ans = .y -o .$ans = .Y ]; then
+	echo -n "Installing /usr/src..."
+	( cd / ; tar cf - usr/src ) | ( cd /mnt ; umask 0 ; tar xfv - ) 
+	echo "installation of /usr/src complete."
+fi
+
+echo
+echo -n "What would you like to name your system? [linux]: "
+read arg
+if [ ! $arg ]; then
+	name=linux
+else
+	name=$arg
+fi
+
+echo
+
+echo Generating /etc/rc.local...
+
+cat >/mnt/etc/rc.local <<!!
+hostname $name
+setterm -blank 10
+!!
+
+echo
+echo Generating /etc/fstab...
+echo $root	/	ext	defaults >> /mnt/etc/fstab
+if [ $var ]; then
+	echo $var	/var	ext	defaults >> /mnt/etc/fstab
+fi
+if [ $swap ]; then
+	echo $swap	none	swap	sw >> /mnt/etc/fstab
+fi
+
+echo Configuring kernel...
+cp /usr/src/linux/Image /mnt/vmlinux
+setroot $root /mnt/vmlinux
+lilo -c -i /mnt/etc/lilo/boot.b -b $root /mnt/vmlinux
+echo '#!/bin/sh' > /mnt/etc/lilo/install
+echo lilo -c -i /etc/lilo/boot.b -b $root \$\* /vmlinux >> /mnt/etc/lilo/install
+chmod u+rwx,go+rx,go-w /mnt/etc/lilo/install
+
+cat > /dev/null <<!!
+The kernel image lives in the file "/vmlinux" on your root partition.
+If you ever change /vmlinux, you MUST RUN THE SHELL SCRIPT
+/etc/lilo/install before rebooting or halting your system.  OTHERWISE,
+YOUR SYSTEM MAY NOT BE ABLE TO REBOOT FROM DISK.  You might want
+to have a look at /etc/lilo/install to see the commands that are
+being executed  to make a kernel image boot from your hard disk.
+
+The following question exists for the benefit of people who have
+another operating system coexisting with Linux and want that other
+operating system to control the boot process.  Unless you fall into
+that category, you want the Linux boot loader (LILO) to control the
+hard disk boot process (i.e., install itself in the master boot
+record), and you should should answer in the affirmative to the
+following question.
+
+!!
+echo -n "Should the Linux boot loader control the boot process (y/n)? [y]: "
+read ans
+if [ .$ans != .n -o .$ans != .N ]; then
+	lilo -c -i /mnt/etc/lilo/boot.b -b ${primary_disk}a /mnt/vmlinux
+	echo lilo -c -i /etc/lilo/boot.b -b ${primary_disk}a \$\* /vmlinux >> /mnt/etc/lilo/install
+fi
+rm -f $partitioned
+sync
+umount $root
+if [ $var ] ; then
+    umount $var
+fi
+
+echo
+echo "You should now have a useable filesystem on your disk."
+echo
+
+prtc
+clear
+
+cat <<!!
+You should probably write down the following information, in case have
+trouble rebooting your hard disk.  If you are unable to boot from your
+hard disk, reboot from the CDROM and the system floppy, mount your
+root partition (e.g., with the command "mount -t ext $root /mnt"), and
+then try one or both of the following.
+
+	1. Make a boot floppy by doing the following
+
+		mount -t ext $root /mnt
+		umount /dev/fd0
+				<--- REPLACE THE YGGDRASIL SYSTEM DISKETTE
+				<--- IN THE FLOPPY DRIVE WITH A BLANK
+				<--- FORMATTED DISKETTE AT THIS POINT
+		dd if=/mnt/vmlinux of=/dev/fd0
+
+	You will then have a floppy disk that will boot to your root
+partition (you can remove the floppy after booting, since it isn't
+used as a mounted file system).
+
+	2. Take a look at the /etc/lilo/install shell script to see
+if the Linux boot information is somehow screwed up.
+
+!!
+prtc
+clear
+cat <<!!
+That completes the installation.  If you want to try booting your
+system from the hard disk, shut down the system (log in as root,
+issue the "halt" command, and wait for the message that it's okay to
+turn the power off), remove the floppy disk if there is one in the
+drive and reset the computer.
+
+Good luck!
+
+!!
+prtc
+
+# clean up
+exit 0

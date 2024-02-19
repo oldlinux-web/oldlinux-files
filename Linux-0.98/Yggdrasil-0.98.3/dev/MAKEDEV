@@ -1,0 +1,267 @@
+#! /bin/sh -
+#
+# Device 'make' file.  Valid arguments:
+#
+# 	std	standard devices
+#	local	configuration specific devices (in MAKEDEV.local)
+#	generic	generic devices
+#
+#  Disks:
+#	fd*	floppy devices
+#	hd*	hard drive devices
+#	sd*	SCSI disks
+#
+#  Tapes:
+#	st*	SCSI tapes
+#
+#  Parallel ports:
+#	par*	parallel ports
+#
+#  Virtual Terminals:
+#	tty*	virtual consoles
+#
+#  Pseudo Terminals:
+#	pty	set of master and slave pseudo terminals
+#
+#  Serial devices:
+#	ttys*	serial ports
+#
+#  Bus Mice:
+#	bm	bus mouse
+#
+#----
+#
+# I wouldn't be so bold as to say this is perfect, but I think it does a
+# rather nice job creating devices.  Parts that could be improved is
+# support for other than the auto-detecting floppy devices, but I can't
+# think of a clean way to name the devices.  There should be support
+# for more pty groups, and also for SCSI tapes.  The SCSI device names
+# are also somewhat off from what Drew Eckhardt suggested, but they
+# follow the same format as the hd* names.
+#
+#	jwinstea@jarthur.Claremont.EDU, 4 July 1992
+#
+# I've added all the 'hard' floppy devices - the names are /dev/fd#D#, where
+# the first number is the drive number (0 or 1), the D designates the density of
+# the drive, and size (d = 5.25" 360K, h = 5.25" 1200k, D = 3.5" 720k, H = 3.5"
+# 1440k), and the final number represents the disk size, in kilobytes - this can
+# be 360, 720, 1200, or 1400.
+#
+#
+# Because SCSI devices should now support extended partitions, sd[ab][5-8] are
+# created in addition to those generated before - this matches up with hd*.  It
+# is possible to have (and create) higher numbered partitions, but it is
+# generally not done, so it is not done by default.
+#
+#
+# I've added par[0-3], which correspond to lp[0-3].  The par names are defined
+# by the latest Linux Standards draft, but the lp names are in common usage.
+#
+# ttys[1-4] were shifted down to ttys[0-3], as they should have been
+# originally.
+#
+# added bus mouse device (major 10, minor 0)
+#
+# Fixed some of the owners and permissions.
+#
+#	jwinstea@jarthur.Claremont.EDU, 3 August 1992
+#
+
+for arg in $@; do
+	case $arg in
+		generic)
+			sh $0 std
+			sh $0 fd0 fd1
+			sh $0 fd0d360 fd0h360 fd0h720 fd0h1200 fd0D360 fd0D720 fd0H360 fd0H720 fd0H1440
+			sh $0 fd1d360 fd1h360 fd1h720 fd1h1200 fd1D360 fd1D720 fd1H360 fd1H720 fd1H1440
+			# first eight partitions on each hard drive
+			sh $0 hda hda1 hda2 hda3 hda4 hda5 hda6 hda7 hda8
+			sh $0 hdb hdb1 hdb2 hdb3 hdb4 hdb5 hdb6 hdb7 hdb8
+			# SCSI drives now support extended partitions
+			sh $0 sda sda1 sda2 sda3 sda4 sda5 sda6 sda7 sda8
+			sh $0 sdb sdb1 sdb2 sdb3 sdb4 sdb5 sdb6 sdb7 sdb8
+			# makes the pty group
+			sh $0 pty
+			# first eight virtual terminals
+			sh $0 tty0 tty1 tty2 tty3 tty4 tty5 tty6 tty7 tty8
+			# all four serial ports
+			sh $0 ttys0 ttys1 ttys2 ttys3
+			sh $0 bm
+			# all three parallel ports
+			sh $0 lp0 lp1 lp2
+			sh $0 par0 par1 par2
+			;;
+
+		local)
+			sh $0.local
+			;;
+
+		std)
+			mknod mem c 1 1; chown root:mem mem; chmod 0660 mem
+			mknod kmem c 1 2; chown root:mem kmem; chmod 0640 kmem
+			mknod null c 1 3; chown root:mem null; chmod 0666 null
+			mknod port c 1 4; chown root:mem port; chmod 0660 port
+			mknod zero c 1 5; chown root:mem zero; chmod 0666 zero
+			mknod ram b 1 0; chown root:disk ram; chmod 0660 ram
+			mknod console c 4 1; chown root:tty console; chmod 0622 console
+			mknod tty c 5 0; chown root:tty tty; chmod 0666 tty
+			;;
+
+		fd*)
+			case $arg in
+				fd0)	mknod fd0 b 2 0; chown root:floppy fd0; chmod 0660 fd0 ;;
+				fd1)	mknod fd1 b 2 1; chown root:floppy fd1; chmod 0660 fd1 ;;
+
+				fd*)
+					base=`expr $arg : "fd\(.\).*"`
+					if [ $base != 0 -a $base != 1 ]; then
+						echo invalid disk number in: $arg;
+					else
+						density=`expr $arg : "fd.\(.\).*"`
+						kbytes=`expr $arg : "fd..\(.*\)"`
+						minor=0
+						case $density in
+							d)
+								case $kbytes in
+									360) minor=`expr 4 + $base`;;
+									*) echo invalid size in: $arg;;
+								esac
+								;;
+
+							h)
+								case $kbytes in
+									360) minor=`expr 20 + $base`;;
+									720) minor=`expr 24 + $base`;;
+									1200) minor=`expr 8 + $base`;;
+									*) echo invalid size in: $arg;;
+								esac
+								;;
+
+							D)
+								case $kbytes in
+									360) minor=`expr 12 + $base`;;
+									720) minor=`expr 16 + $base`;;
+									*) echo invalid size in $arg;;
+								esac
+								;;
+
+							H)
+								case $kbytes in
+									360) minor=`expr 12 + $base`;;
+									720) minor=`expr 16 + $base`;;
+									1440) minor=`expr 28 + $base`;;
+									*) echo invalid size in $arg;;
+								esac
+								;;
+
+							*)	echo invalid density in: $arg;;
+						esac
+						if [ $minor != 0 ]; then
+							mknod $arg b 2 $minor; chown root:floppy $arg; chmod 0660 $arg
+						fi
+					fi
+					;;
+
+				*)	echo invalid floppy disk in: $arg ;;
+			esac
+
+			;;
+		hd*)
+
+			case $arg in
+				hda)	mknod hda b 3 0; chown root:disk hda; chmod 0660 hda ;;
+				hdb)	mknod hdb b 3 64; chown root:disk hdb; chmod 0660 hdb ;;
+
+				hda*)	part=`expr $arg : "hd.\(.*\)"`
+					mknod $arg b 3 $part; chown root:disk $arg; chmod 0660 $arg ;;
+				hdb*)	part=`expr $arg : "hd.\(.*\)"`
+					mknod $arg b 3 `expr 64 + $part`; chown root:disk $arg; chmod 0660 $arg ;;
+
+				*)	echo invalid device in: $arg ;;
+			esac
+			;;
+
+		sd*)
+			case $arg in
+				sda)	mknod sda b 8 0; chown root:disk sda; chmod 0660 sda ;;
+				sdb)	mknod sdb b 8 16; chown root:disk sdb; chmod 0660 sdb ;;
+
+				sda*)	part=`expr $arg : "sd.\(.*\)"`
+					mknod $arg b 8 $part; chown root:disk $arg; chmod 0660 $arg ;;
+				sdb*)	part=`expr $arg : "sd.\(.*\)"`
+					mknod $arg b 8 `expr 16 + $part`; chown root:disk $arg; chmod 0660 $arg ;;
+
+				*)	echo invalid device in: $arg ;;
+			esac
+			;;
+
+		st*)
+			echo scsi tapes not supported yet: $arg
+			;;
+
+		par*)
+			port=`expr $arg : "par\(.*\)"`
+			case $port in
+				[0-2])	mknod par$port c 6 $port; chown root:daemon par$port; chmod 0660 par$port ;;
+				*)	echo invalid parallel port in: $arg ;;
+			esac
+			;;
+
+		lp*)
+			port=`expr $arg : "lp\(.*\)"`
+			case $port in
+				[0-2])	mknod lp$port c 6 $port; chown root:daemon lp$port; chmod 0660 lp$port;;
+				*)	echo invalid parallel port in: $arg ;;
+			esac
+			;;
+
+		pty)	# okay, this isn't as nice as the others, but pty's
+			# under Linux *are* limited.  :)
+
+			mknod ptyp0 c 4 128; mknod ptyp1 c 4 129
+			mknod ptyp2 c 4 130; mknod ptyp3 c 4 131
+			mknod ptyp4 c 4 132; mknod ptyp5 c 4 133
+			mknod ptyp6 c 4 134; mknod ptyp7 c 4 135
+			mknod ptyp8 c 4 136; mknod ptyp9 c 4 137
+			mknod ptypa c 4 138; mknod ptypb c 4 139
+			mknod ptypc c 4 140; mknod ptypd c 4 141
+			mknod ptype c 4 142; mknod ptypf c 4 143
+
+			mknod ttyp0 c 4 192; mknod ttyp1 c 4 193
+			mknod ttyp2 c 4 194; mknod ttyp3 c 4 195
+			mknod ttyp4 c 4 196; mknod ttyp5 c 4 197
+			mknod ttyp6 c 4 198; mknod ttyp7 c 4 199
+			mknod ttyp8 c 4 200; mknod ttyp9 c 4 201
+			mknod ttypa c 4 202; mknod ttypb c 4 203
+			mknod ttypc c 4 204; mknod ttypd c 4 205
+			mknod ttype c 4 206; mknod ttypf c 4 207
+
+			chown root:tty ptyp* ttyp*; chmod 0622 ptyp* ttyp*
+			;;
+
+		bm)
+			mknod bm c 10 0; chown root:tty bm; chmod a+rw bm
+			;;
+
+		ttys*)
+			com=`expr $arg : "ttys\(.*\)"`
+			case $com in
+				[0-3])  mknod ttys$com c 4 `expr $com + 64`; chown root:tty ttys$com; chmod a+rw ttys$com ;;
+				*)	echo invalid com port in: $arg ;;
+			esac
+			;;
+
+		tty*)
+			num=`expr $arg : "tty\(.*\)"`
+			case $num in
+				[0-8])	mknod tty$num c 4 $num; chown root:tty tty$num; chmod 0622 tty$num ;;
+				*)	echo invalid number in: $arg ;;
+			esac
+			;;
+		*)
+			echo invalid device: $arg
+			;;
+	esac
+done
+
+exit 0

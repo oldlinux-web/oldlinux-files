@@ -1,0 +1,656 @@
+diff -c +recursive 0.98.4/linux/fs/stat.c linux/fs/stat.c
+*** 0.98.4/linux/fs/stat.c	Fri Nov  6 00:50:09 1992
+--- linux/fs/stat.c	Tue Nov 10 12:54:53 1992
+***************
+*** 15,21 ****
+  {
+  	struct old_stat tmp;
+  
+! 	printk("Warning: using old stat() call. Recompile your binary.\n");
+  	verify_area(statbuf,sizeof (*statbuf));
+  	tmp.st_dev = inode->i_dev;
+  	tmp.st_ino = inode->i_ino;
+--- 15,22 ----
+  {
+  	struct old_stat tmp;
+  
+! 	printk("Warning: %s using old stat() call. Recompile your binary.\n",
+! 		current->comm);
+  	verify_area(statbuf,sizeof (*statbuf));
+  	tmp.st_dev = inode->i_dev;
+  	tmp.st_ino = inode->i_ino;
+diff -c +recursive 0.98.4/linux/include/linux/sched.h linux/include/linux/sched.h
+*** 0.98.4/linux/include/linux/sched.h	Sun Nov  8 22:20:54 1992
+--- linux/include/linux/sched.h	Tue Nov 10 22:00:09 1992
+***************
+*** 71,76 ****
+--- 71,77 ----
+  #define TASK_UNINTERRUPTIBLE	2
+  #define TASK_ZOMBIE		3
+  #define TASK_STOPPED		4
++ #define TASK_SWAPPING		5
+  
+  #ifndef NULL
+  #define NULL ((void *) 0)
+***************
+*** 270,276 ****
+  extern void sleep_on(struct wait_queue ** p);
+  extern void interruptible_sleep_on(struct wait_queue ** p);
+  extern void wake_up(struct wait_queue ** p);
+! extern void wake_one_task(struct task_struct * p);
+  
+  extern int send_sig(long sig,struct task_struct * p,int priv);
+  extern int in_group_p(gid_t grp);
+--- 271,277 ----
+  extern void sleep_on(struct wait_queue ** p);
+  extern void interruptible_sleep_on(struct wait_queue ** p);
+  extern void wake_up(struct wait_queue ** p);
+! extern void wake_up_interruptible(struct wait_queue ** p);
+  
+  extern int send_sig(long sig,struct task_struct * p,int priv);
+  extern int in_group_p(gid_t grp);
+diff -c +recursive 0.98.4/linux/kernel/blk_drv/ll_rw_blk.c linux/kernel/blk_drv/ll_rw_blk.c
+*** 0.98.4/linux/kernel/blk_drv/ll_rw_blk.c	Wed Nov  4 20:47:26 1992
+--- linux/kernel/blk_drv/ll_rw_blk.c	Tue Nov 10 21:54:23 1992
+***************
+*** 238,244 ****
+  	req->waiting = current;
+  	req->bh = NULL;
+  	req->next = NULL;
+! 	current->state = TASK_UNINTERRUPTIBLE;
+  	add_request(major+blk_dev,req);
+  	schedule();
+  }
+--- 238,244 ----
+  	req->waiting = current;
+  	req->bh = NULL;
+  	req->next = NULL;
+! 	current->state = TASK_SWAPPING;
+  	add_request(major+blk_dev,req);
+  	schedule();
+  }
+diff -c +recursive 0.98.4/linux/kernel/chr_drv/atixlmouse.c linux/kernel/chr_drv/atixlmouse.c
+*** 0.98.4/linux/kernel/chr_drv/atixlmouse.c	Sat Oct 17 13:47:35 1992
+--- linux/kernel/chr_drv/atixlmouse.c	Tue Nov 10 22:30:04 1992
+***************
+*** 73,79 ****
+  	mouse.latch_buttons |= inb( ATIXL_MSE_DATA_PORT);
+  	ATIXL_MSE_ENABLE_UPDATE();
+  	mouse.ready = 1;
+! 	wake_up(&mouse.wait);
+  }
+  
+  static void release_mouse(struct inode * inode, struct file * file)
+--- 73,79 ----
+  	mouse.latch_buttons |= inb( ATIXL_MSE_DATA_PORT);
+  	ATIXL_MSE_ENABLE_UPDATE();
+  	mouse.ready = 1;
+! 	wake_up_interruptible(&mouse.wait);
+  }
+  
+  static void release_mouse(struct inode * inode, struct file * file)
+diff -c +recursive 0.98.4/linux/kernel/chr_drv/busmouse.c linux/kernel/chr_drv/busmouse.c
+*** 0.98.4/linux/kernel/chr_drv/busmouse.c	Sat Oct 17 13:47:35 1992
+--- linux/kernel/chr_drv/busmouse.c	Tue Nov 10 22:30:04 1992
+***************
+*** 53,59 ****
+  	mouse.dx += dx;
+  	mouse.dy += dy;
+  	mouse.ready = 1;
+! 	wake_up(&mouse.wait);
+  	MSE_INT_ON();
+  }
+  
+--- 53,59 ----
+  	mouse.dx += dx;
+  	mouse.dy += dy;
+  	mouse.ready = 1;
+! 	wake_up_interruptible(&mouse.wait);
+  	MSE_INT_ON();
+  }
+  
+diff -c +recursive 0.98.4/linux/kernel/chr_drv/console.c linux/kernel/chr_drv/console.c
+*** 0.98.4/linux/kernel/chr_drv/console.c	Sat Sep 19 14:29:29 1992
+--- linux/kernel/chr_drv/console.c	Tue Nov 10 22:30:04 1992
+***************
+*** 905,911 ****
+  	int c;
+  	unsigned int currcons;
+  
+! 	wake_up(&tty->write_q.proc_list);
+  	currcons = tty->line - 1;
+  	if (currcons >= NR_CONSOLES) {
+  		printk("con_write: illegal tty (%d)\n", currcons);
+--- 905,911 ----
+  	int c;
+  	unsigned int currcons;
+  
+! 	wake_up_interruptible(&tty->write_q.proc_list);
+  	currcons = tty->line - 1;
+  	if (currcons >= NR_CONSOLES) {
+  		printk("con_write: illegal tty (%d)\n", currcons);
+diff -c +recursive 0.98.4/linux/kernel/chr_drv/keyboard.c linux/kernel/chr_drv/keyboard.c
+*** 0.98.4/linux/kernel/chr_drv/keyboard.c	Sun Nov  1 00:05:27 1992
+--- linux/kernel/chr_drv/keyboard.c	Tue Nov 10 22:30:05 1992
+***************
+*** 145,151 ****
+  	struct tty_struct *tty = TTY_TABLE(0);
+  	unsigned long new_head;
+  
+! 	wake_up(&keypress_wait);
+  	if (!tty)
+  		return;
+  	qp = &tty->read_q;
+--- 145,151 ----
+  	struct tty_struct *tty = TTY_TABLE(0);
+  	unsigned long new_head;
+  
+! 	wake_up_interruptible(&keypress_wait);
+  	if (!tty)
+  		return;
+  	qp = &tty->read_q;
+***************
+*** 153,159 ****
+  	qp->buf[qp->head]=ch;
+  	if ((new_head=(qp->head+1)&(TTY_BUF_SIZE-1)) != qp->tail)
+  		qp->head=new_head;
+! 	wake_up(&qp->proc_list);
+  }
+  
+  static void puts_queue(char *cp)
+--- 153,159 ----
+  	qp->buf[qp->head]=ch;
+  	if ((new_head=(qp->head+1)&(TTY_BUF_SIZE-1)) != qp->tail)
+  		qp->head=new_head;
+! 	wake_up_interruptible(&qp->proc_list);
+  }
+  
+  static void puts_queue(char *cp)
+***************
+*** 163,169 ****
+  	unsigned long new_head;
+  	char ch;
+  
+! 	wake_up(&keypress_wait);
+  	if (!tty)
+  		return;
+  	qp = &tty->read_q;
+--- 163,169 ----
+  	unsigned long new_head;
+  	char ch;
+  
+! 	wake_up_interruptible(&keypress_wait);
+  	if (!tty)
+  		return;
+  	qp = &tty->read_q;
+***************
+*** 174,180 ****
+  				 != qp->tail)
+  			qp->head=new_head;
+  	}
+! 	wake_up(&qp->proc_list);
+  }
+  
+  static void ctrl(int sc)
+--- 174,180 ----
+  				 != qp->tail)
+  			qp->head=new_head;
+  	}
+! 	wake_up_interruptible(&qp->proc_list);
+  }
+  
+  static void ctrl(int sc)
+diff -c +recursive 0.98.4/linux/kernel/chr_drv/msbusmouse.c linux/kernel/chr_drv/msbusmouse.c
+*** 0.98.4/linux/kernel/chr_drv/msbusmouse.c	Sat Oct 17 13:47:36 1992
+--- linux/kernel/chr_drv/msbusmouse.c	Tue Nov 10 22:30:05 1992
+***************
+*** 60,66 ****
+  	mouse.dx += dx;
+  	mouse.dy += dy;
+  	mouse.ready = 1;
+! 	wake_up(&mouse.wait);
+  }
+  
+  static void release_mouse(struct inode * inode, struct file * file)
+--- 60,66 ----
+  	mouse.dx += dx;
+  	mouse.dy += dy;
+  	mouse.ready = 1;
+! 	wake_up_interruptible(&mouse.wait);
+  }
+  
+  static void release_mouse(struct inode * inode, struct file * file)
+diff -c +recursive 0.98.4/linux/kernel/chr_drv/psaux.c linux/kernel/chr_drv/psaux.c
+*** 0.98.4/linux/kernel/chr_drv/psaux.c	Sun Nov  1 22:57:35 1992
+--- linux/kernel/chr_drv/psaux.c	Tue Nov 10 22:30:05 1992
+***************
+*** 155,161 ****
+  	}
+  	queue->head = head;
+  	aux_ready = 1;
+! 	wake_up(&queue->proc_list);
+  }
+  
+  
+--- 155,161 ----
+  	}
+  	queue->head = head;
+  	aux_ready = 1;
+! 	wake_up_interruptible(&queue->proc_list);
+  }
+  
+  
+***************
+*** 222,227 ****
+--- 222,228 ----
+  
+  static int read_aux(struct inode * inode, struct file * file, char * buffer, int count)
+  {
++ 	struct wait_queue wait = { current, NULL };
+  	int i = count;
+  	unsigned char c;
+  
+***************
+*** 228,236 ****
+  	if (queue_empty()) {
+  		if (file->f_flags & O_NONBLOCK)
+  			return -EAGAIN;
+! 		cli();
+! 		interruptible_sleep_on(&queue->proc_list);
+! 		sti();
+  	}		
+  	while (i > 0 && !queue_empty()) {
+  		c = get_from_queue();
+--- 229,243 ----
+  	if (queue_empty()) {
+  		if (file->f_flags & O_NONBLOCK)
+  			return -EAGAIN;
+! 		add_wait_queue(&queue->proc_list, &wait);
+! repeat:
+! 		current->state = TASK_INTERRUPTIBLE;
+! 		if (queue_empty() && !(current->signal & ~current->blocked)) {
+! 			schedule();
+! 			goto repeat;
+! 		}
+! 		current->state = TASK_RUNNING;
+! 			
+  	}		
+  	while (i > 0 && !queue_empty()) {
+  		c = get_from_queue();
+diff -c +recursive 0.98.4/linux/kernel/chr_drv/pty.c linux/kernel/chr_drv/pty.c
+*** 0.98.4/linux/kernel/chr_drv/pty.c	Sun Oct 11 21:22:25 1992
+--- linux/kernel/chr_drv/pty.c	Tue Nov 10 22:30:05 1992
+***************
+*** 24,33 ****
+  {
+  	if (!tty)
+  		return;
+! 	wake_up(&tty->read_q.proc_list);
+  	if (!tty->link)
+  		return;
+! 	wake_up(&tty->link->write_q.proc_list);
+  	if (IS_A_PTY_MASTER(tty->line)) {
+  		if (tty->link->pgrp > 0)
+  			kill_pg(tty->link->pgrp,SIGHUP,1);
+--- 24,33 ----
+  {
+  	if (!tty)
+  		return;
+! 	wake_up_interruptible(&tty->read_q.proc_list);
+  	if (!tty->link)
+  		return;
+! 	wake_up_interruptible(&tty->link->write_q.proc_list);
+  	if (IS_A_PTY_MASTER(tty->line)) {
+  		if (tty->link->pgrp > 0)
+  			kill_pg(tty->link->pgrp,SIGHUP,1);
+***************
+*** 51,57 ****
+  			break;
+  	}
+  	TTY_READ_FLUSH(to);
+! 	wake_up(&from->write_q.proc_list);
+  }
+  
+  /*
+--- 51,57 ----
+  			break;
+  	}
+  	TTY_READ_FLUSH(to);
+! 	wake_up_interruptible(&from->write_q.proc_list);
+  }
+  
+  /*
+***************
+*** 71,77 ****
+  		return -ENODEV;
+  	tty->write = tty->link->write = pty_write;
+  	tty->close = tty->link->close = pty_close;
+! 	wake_up(&tty->read_q.proc_list);
+  	if (filp->f_flags & O_NDELAY)
+  		return 0;
+  	while (!tty->link->count && !(current->signal & ~current->blocked))
+--- 71,77 ----
+  		return -ENODEV;
+  	tty->write = tty->link->write = pty_write;
+  	tty->close = tty->link->close = pty_close;
+! 	wake_up_interruptible(&tty->read_q.proc_list);
+  	if (filp->f_flags & O_NDELAY)
+  		return 0;
+  	while (!tty->link->count && !(current->signal & ~current->blocked))
+diff -c +recursive 0.98.4/linux/kernel/chr_drv/serial.c linux/kernel/chr_drv/serial.c
+*** 0.98.4/linux/kernel/chr_drv/serial.c	Thu Oct 29 18:17:27 1992
+--- linux/kernel/chr_drv/serial.c	Tue Nov 10 22:30:05 1992
+***************
+*** 342,348 ****
+  				TTY_READ_FLUSH(info->tty);
+  			}
+  			if (!clear_bit(RS_EVENT_WRITE_WAKEUP, &info->event)) {
+! 				wake_up(&info->tty->write_q.proc_list);
+  			}
+  			if (!clear_bit(RS_EVENT_HUP_PGRP, &info->event)) {
+  				if (info->tty->pgrp > 0)
+--- 342,348 ----
+  				TTY_READ_FLUSH(info->tty);
+  			}
+  			if (!clear_bit(RS_EVENT_WRITE_WAKEUP, &info->event)) {
+! 				wake_up_interruptible(&info->tty->write_q.proc_list);
+  			}
+  			if (!clear_bit(RS_EVENT_HUP_PGRP, &info->event)) {
+  				if (info->tty->pgrp > 0)
+***************
+*** 1051,1056 ****
+--- 1051,1057 ----
+  		if (irq_lines & (1 << i))
+  			free_irq(i);
+  	}
++ 	sti();
+  #endif
+  	return kmem_start;
+  }
+diff -c +recursive 0.98.4/linux/kernel/chr_drv/tty_io.c linux/kernel/chr_drv/tty_io.c
+*** 0.98.4/linux/kernel/chr_drv/tty_io.c	Thu Nov  5 20:24:39 1992
+--- linux/kernel/chr_drv/tty_io.c	Tue Nov 10 22:30:05 1992
+***************
+*** 253,261 ****
+  	}
+  	TTY_WRITE_FLUSH(tty);
+  	if (!EMPTY(&tty->secondary))
+! 		wake_up(&tty->secondary.proc_list);
+  	if (tty->write_q.proc_list && LEFT(&tty->write_q) > TTY_BUF_SIZE/2)
+! 		wake_up(&tty->write_q.proc_list);
+  	if (tty->throttle && (LEFT(&tty->read_q) >= RQ_THRESHOLD_HW)
+  	    && !clear_bit(TTY_RQ_THROTTLED, &tty->flags))
+  		tty->throttle(tty, TTY_THROTTLE_RQ_AVAIL);
+--- 253,261 ----
+  	}
+  	TTY_WRITE_FLUSH(tty);
+  	if (!EMPTY(&tty->secondary))
+! 		wake_up_interruptible(&tty->secondary.proc_list);
+  	if (tty->write_q.proc_list && LEFT(&tty->write_q) > TTY_BUF_SIZE/2)
+! 		wake_up_interruptible(&tty->write_q.proc_list);
+  	if (tty->throttle && (LEFT(&tty->read_q) >= RQ_THRESHOLD_HW)
+  	    && !clear_bit(TTY_RQ_THROTTLED, &tty->flags))
+  		tty->throttle(tty, TTY_THROTTLE_RQ_AVAIL);
+***************
+*** 366,372 ****
+  			if (c==10 && L_CANON(tty))
+  				break;
+  		};
+! 		wake_up(&tty->read_q.proc_list);
+  		/*
+  		 * If there is enough space in the secondary queue
+  		 * now, let the low-level driver know.
+--- 366,372 ----
+  			if (c==10 && L_CANON(tty))
+  				break;
+  		};
+! 		wake_up_interruptible(&tty->read_q.proc_list);
+  		/*
+  		 * If there is enough space in the secondary queue
+  		 * now, let the low-level driver know.
+diff -c +recursive 0.98.4/linux/kernel/chr_drv/tty_ioctl.c linux/kernel/chr_drv/tty_ioctl.c
+*** 0.98.4/linux/kernel/chr_drv/tty_ioctl.c	Tue Oct 27 00:37:38 1992
+--- linux/kernel/chr_drv/tty_ioctl.c	Tue Nov 10 22:30:05 1992
+***************
+*** 26,32 ****
+  		cli();
+  		queue->head = queue->tail;
+  		sti();
+! 		wake_up(&queue->proc_list);
+  	}
+  }
+  
+--- 26,32 ----
+  		cli();
+  		queue->head = queue->tail;
+  		sti();
+! 		wake_up_interruptible(&queue->proc_list);
+  	}
+  }
+  
+***************
+*** 35,47 ****
+          tty->status_changed = 1;
+  	tty->ctrl_status |= TIOCPKT_FLUSHREAD;
+  	flush(&tty->read_q);
+! 	wake_up(&tty->read_q.proc_list);
+  	flush(&tty->secondary);
+  	tty->secondary.data = 0;
+  
+  	if (tty = tty->link) {
+  		flush(&tty->write_q);
+! 		wake_up(&tty->write_q.proc_list);
+  	}
+  }
+  
+--- 35,47 ----
+          tty->status_changed = 1;
+  	tty->ctrl_status |= TIOCPKT_FLUSHREAD;
+  	flush(&tty->read_q);
+! 	wake_up_interruptible(&tty->read_q.proc_list);
+  	flush(&tty->secondary);
+  	tty->secondary.data = 0;
+  
+  	if (tty = tty->link) {
+  		flush(&tty->write_q);
+! 		wake_up_interruptible(&tty->write_q.proc_list);
+  	}
+  }
+  
+***************
+*** 50,59 ****
+     	tty->status_changed = 1;
+  	tty->ctrl_status |= TIOCPKT_FLUSHWRITE;
+  	flush(&tty->write_q);
+! 	wake_up(&tty->write_q.proc_list);
+  	if (tty = tty->link) {
+  		flush(&tty->read_q);
+! 		wake_up(&tty->read_q.proc_list);
+  		flush(&tty->secondary);
+  		tty->secondary.data = 0;
+  	}
+--- 50,59 ----
+     	tty->status_changed = 1;
+  	tty->ctrl_status |= TIOCPKT_FLUSHWRITE;
+  	flush(&tty->write_q);
+! 	wake_up_interruptible(&tty->write_q.proc_list);
+  	if (tty = tty->link) {
+  		flush(&tty->read_q);
+! 		wake_up_interruptible(&tty->read_q.proc_list);
+  		flush(&tty->secondary);
+  		tty->secondary.data = 0;
+  	}
+diff -c +recursive 0.98.4/linux/kernel/printk.c linux/kernel/printk.c
+*** 0.98.4/linux/kernel/printk.c	Sat Aug 15 18:36:16 1992
+--- linux/kernel/printk.c	Tue Nov 10 22:32:43 1992
+***************
+*** 35,41 ****
+  			i = log_page;
+  			log_page = 0;
+  			free_page(i);
+! 			wake_up(&log_wait);
+  			return 0;
+  		case 1:
+  			i = get_free_page(GFP_KERNEL);
+--- 35,41 ----
+  			i = log_page;
+  			log_page = 0;
+  			free_page(i);
+! 			wake_up_interruptible(&log_wait);
+  			return 0;
+  		case 1:
+  			i = get_free_page(GFP_KERNEL);
+***************
+*** 97,103 ****
+  			log_start++;
+  	}
+  	if (log_page)
+! 		wake_up(&log_wait);
+  	console_print(buf);
+  	return i;
+  }
+--- 97,103 ----
+  			log_start++;
+  	}
+  	if (log_page)
+! 		wake_up_interruptible(&log_wait);
+  	console_print(buf);
+  	return i;
+  }
+diff -c +recursive 0.98.4/linux/kernel/sched.c linux/kernel/sched.c
+*** 0.98.4/linux/kernel/sched.c	Sat Nov  7 12:07:41 1992
+--- linux/kernel/sched.c	Tue Nov 10 21:59:34 1992
+***************
+*** 103,119 ****
+  /* check alarm, wake up any interruptible tasks that have got a signal */
+  
+  	need_resched = 0;
+! 	for(p = &LAST_TASK ; p > &FIRST_TASK ; --p)
+! 		if (*p) {
+! 			if ((*p)->timeout && (*p)->timeout < jiffies)
+! 				if ((*p)->state == TASK_INTERRUPTIBLE) {
+! 					(*p)->timeout = 0;
+! 					wake_one_task(*p);
+! 				}
+! 			if (((*p)->signal & ~(*p)->blocked) &&
+! 			    (*p)->state==TASK_INTERRUPTIBLE)
+! 				wake_one_task(*p);
+! 		}
+  
+  /* this is the scheduler proper: */
+  
+--- 103,117 ----
+  /* check alarm, wake up any interruptible tasks that have got a signal */
+  
+  	need_resched = 0;
+! 	for(p = &LAST_TASK ; p > &FIRST_TASK ; --p) {
+! 		if (!*p || ((*p)->state != TASK_INTERRUPTIBLE))
+! 			continue;
+! 		if ((*p)->timeout && (*p)->timeout < jiffies) {
+! 			(*p)->timeout = 0;
+! 			(*p)->state = TASK_RUNNING;
+! 		} else if ((*p)->signal & ~(*p)->blocked)
+! 			(*p)->state = TASK_RUNNING;
+! 	}
+  
+  /* this is the scheduler proper: */
+  
+***************
+*** 155,167 ****
+  	return -EINTR;
+  }
+  
+- void wake_one_task(struct task_struct * p)
+- {
+- 	p->state = TASK_RUNNING;
+- 	if (p->counter > current->counter)
+- 		need_resched = 1;
+- }
+- 
+  /*
+   * wake_up doesn't wake up stopped processes - they have to be awakened
+   * with signals or similar.
+--- 153,158 ----
+***************
+*** 179,187 ****
+  		return;
+  	do {
+  		if (p = tmp->task) {
+! 			if (p->state == TASK_ZOMBIE)
+! 				printk("wake_up: TASK_ZOMBIE\n");
+! 			else if (p->state != TASK_STOPPED) {
+  				p->state = TASK_RUNNING;
+  				if (p->counter > current->counter)
+  					need_resched = 1;
+--- 170,203 ----
+  		return;
+  	do {
+  		if (p = tmp->task) {
+! 			if ((p->state == TASK_UNINTERRUPTIBLE) ||
+! 			    (p->state == TASK_INTERRUPTIBLE)) {
+! 				p->state = TASK_RUNNING;
+! 				if (p->counter > current->counter)
+! 					need_resched = 1;
+! 			}
+! 		}
+! 		if (!tmp->next) {
+! 			printk("wait_queue is bad (eip = %08x)\n",((unsigned long *) q)[-1]);
+! 			printk("        q = %08x\n",q);
+! 			printk("       *q = %08x\n",*q);
+! 			printk("      tmp = %08x\n",tmp);
+! 			break;
+! 		}
+! 		tmp = tmp->next;
+! 	} while (tmp != *q);
+! }
+! 
+! void wake_up_interruptible(struct wait_queue **q)
+! {
+! 	struct wait_queue *tmp;
+! 	struct task_struct * p;
+! 
+! 	if (!q || !(tmp = *q))
+! 		return;
+! 	do {
+! 		if (p = tmp->task) {
+! 			if (p->state == TASK_INTERRUPTIBLE) {
+  				p->state = TASK_RUNNING;
+  				if (p->counter > current->counter)
+  					need_resched = 1;
+diff -c +recursive 0.98.4/linux/net/unix.c linux/net/unix.c
+*** 0.98.4/linux/net/unix.c	Sat Aug 22 16:34:40 1992
+--- linux/net/unix.c	Tue Nov 10 12:54:56 1992
+***************
+*** 329,335 ****
+  	PRINTK("unix_proto_bind: socket 0x%x, len=%d\n", sock,
+  	       sockaddr_len);
+  	if (sockaddr_len <= UN_PATH_OFFSET ||
+! 	    sockaddr_len >= sizeof(struct sockaddr_un)) {
+  		PRINTK("unix_proto_bind: bad length %d\n", sockaddr_len);
+  		return -EINVAL;
+  	}
+--- 329,335 ----
+  	PRINTK("unix_proto_bind: socket 0x%x, len=%d\n", sock,
+  	       sockaddr_len);
+  	if (sockaddr_len <= UN_PATH_OFFSET ||
+! 	    sockaddr_len > sizeof(struct sockaddr_un)) {
+  		PRINTK("unix_proto_bind: bad length %d\n", sockaddr_len);
+  		return -EINVAL;
+  	}
+***************
+*** 381,387 ****
+  	PRINTK("unix_proto_connect: socket 0x%x, servlen=%d\n", sock,
+  	       sockaddr_len);
+  	if (sockaddr_len <= UN_PATH_OFFSET ||
+! 	    sockaddr_len >= sizeof(struct sockaddr_un)) {
+  		PRINTK("unix_proto_connect: bad length %d\n", sockaddr_len);
+  		return -EINVAL;
+  	}
+--- 381,387 ----
+  	PRINTK("unix_proto_connect: socket 0x%x, servlen=%d\n", sock,
+  	       sockaddr_len);
+  	if (sockaddr_len <= UN_PATH_OFFSET ||
+! 	    sockaddr_len > sizeof(struct sockaddr_un)) {
+  		PRINTK("unix_proto_connect: bad length %d\n", sockaddr_len);
+  		return -EINVAL;
+  	}

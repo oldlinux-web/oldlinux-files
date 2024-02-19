@@ -1,0 +1,81 @@
+# Generated automatically from Makefile.in by configure.
+# Makefile for GNU tput
+# Copyright (C) 1989-1991 Free Software Foundation, Inc.
+
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+
+SHELL = /bin/sh
+
+#### Start of system configuration section. ####
+
+CC = gcc
+INSTALL = install -c
+
+# Things you might add to DEFS:
+# -DSTDC_HEADERS	If you have ANSI C headers and libraries.
+# -DUSG			If you have System V/ANSI C string and
+#			memory functions and headers.
+# -DSIGTYPE=int		If your signal handlers return int, not void.
+
+DEFS =  -DSTDC_HEADERS
+
+CFLAGS = -I. -O $(DEFS)
+LDFLAGS = -O
+LIBS = 
+
+# Where to install the executable.
+bindir = /usr/bin
+
+#### End of system configuration section. ####
+
+SRCS = tput.c conversions.c getopt.c getopt1.c termcap.c tparam.c bsearch.c
+OBJS = tput.o conversions.o getopt.o getopt1.o termcap.o tparam.o 
+DISTFILES = COPYING COPYING.LIB ChangeLog Makefile.in configure README \
+tput.texinfo tput.h getopt.h termcap.h $(SRCS)
+VERSION = 1.0
+
+all: tput
+.PHONY: all
+
+tput: $(OBJS)
+	$(CC) -o $@ $(LDFLAGS) $(OBJS) $(LIBS)
+
+install: all
+	$(INSTALL) tput $(bindir)
+.PHONY: install
+
+tput.o conversions.o: tput.h
+getopt1.o tput.o: getopt.h
+
+clean:
+	rm -f tput *.o a.out tags TAGS core
+.PHONY: clean
+
+realclean: clean
+	rm -f Makefile
+.PHONY: realclean
+
+distclean: realclean
+	rm -f *.tar.Z
+.PHONY: distclean
+
+dist: $(DISTFILES)
+	echo tput-$(VERSION) > .fname
+	rm -rf `cat .fname`
+	mkdir `cat .fname`
+	ln $(DISTFILES) `cat .fname`
+	tar chZf `cat .fname`.tar.Z `cat .fname`
+	rm -rf `cat .fname` .fname
+.PHONY: dist

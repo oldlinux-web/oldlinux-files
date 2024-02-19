@@ -1,0 +1,490 @@
+I am calling this version of fdisk 0.92, in the hopes of its being
+nearly done!  This fdisk will work only with Linux 0.95c or above.
+
+The binary version included in this tar file was compiled with gcc 2.1,
+and it will run only with versions of Linux compiled with the new
+a.out.h, which appeared recently.
+
+I understand that Dr. DOS 5.0 and 6.0 has several problems with Linux
+and with this version of fdisk.  For more information, see the section
+WARNINGS.
+
+Please let me know of any problems you have or changes you would like
+to see.  Meanwhile I shall be working on improving the documentation.
+
+     -- Owen
+     LeBlanc@mcc.ac.uk
+
+
+TABLE OF CONTENTS:
+
+     WARNINGS
+     Introduction
+     Disks and how they are described
+     Dividing up your disk
+     Running fdisk
+     Deleting and adding partitions
+     Active flags and system types
+     Extra commands for experts
+     Messages, errors, and warnings
+
+
+WARNINGS:
+
+  In general, you should not use this 'fdisk' program to create
+  partitions for other operating systems, only for Linux.
+
+  Dr. DOS 5.0 and 6.0 has been reported to have problems cooperating
+  with Linux, and with this version of fdisk in particular.  This fdisk
+  sets the system type to hexadecimal 81.  Dr. DOS seems to confuse
+  this with hexadecimal 1, a DOS code.  If you use Dr. DOS, use the
+  fdisk command 't' to change the system code of any Linux partitions
+  to some number less than hexadecimal 80; I suggest 41 and 42 for
+  the moment.
+
+  PARTITIONING a hard disk may DESTROY data which is on that disk
+  if you are not careful.  Go slowly, write down a description of
+  what you started out with, and always verify before you write.
+  See the explanations below for more more information.
+
+
+INTRODUCTION
+
+In this document we look at the utility 'fdisk', and we try to cover
+enough of its general background to help anyone use it.  'fdisk' is
+Linux's partition table editor.
+
+
+DISKS AND HOW THEY ARE DESCRIBED
+
+A typical disk consists physically of one or more circular objects
+called 'platters', which rotate about a central axis.  Devices
+called 'heads' move to specified places on the disk surface to
+read or write information.  There is typically one head on each side
+of every platter, and all of these heads are attached to a comb-like
+controller arm which moves all of them at the same time, either
+closer to the centre of the disk, or closer to the outer edge.
+
+Suppose the arm is in one position, putting an area of the disk
+surface within reach of one or another of the heads.  This total
+area, everything that is accessible without moving the arm, is
+called a 'cylinder'.  A cylinder is a barrel-shaped cross section
+of a disk, consisting of a circular strip from each side of each
+platter.  Each of these strips is the part of a cylinder that one
+head can read or write without moving, and it is called a 'track'.
+
+Each track is divided into a number of pie-shaped slices called
+'sectors', which are the smallest parts of the disk which can
+be read or written at a time.  The sectors on one disk are usually
+all the same size.
+
+(If you want to be accurate, there are not always two heads to
+every platter, there are some disks which do not have the same
+amount of data in every cylinder, and there may be disks which
+do not have the same amount of data in every sector.  I hope you
+are not dealing with such disks, for both our sakes.)
+
+The numbers which describe the 'geometry' of a disk are
+
+     (a) the number of cylinders it contains,
+     (b) the number of tracks per cylinder, which is the number of heads,
+     (c) the number of sectors per track, and
+     (d) the size of each sector.
+
+Some of these numbers will vary, but a typical PC disk might have
+about 1000 cylinders, about half a dozen heads, and 15 or 20 sectors
+per track, with each sector containing 512 bytes or characters;
+such a disk contains 40 to 60 megabytes of data.  A 'double density'
+floppy disk contains 40 cylinders, with 2 heads (2 tracks per cylinder),
+and with 9 sectors per track; such a disk contains 360 kilobytes, or
+360 * 1024 characters.  A 'high density' 3.5 inch floppy contains
+80 cylinders, with 2 heads and 18 sectors per track, or 1.44 megabytes,
+or 1440 * 1024 characters.
+
+The exact size of a track or cylinder in bytes varies from one disk
+to another.  This fdisk for Linux, at least in its present form,
+deals mainly with 'sectors', which are 512 bytes each.  fdisk also
+reports partition sizes in 'blocks' of 1024 bytes, or 2 sectors, since
+you need the size in blocks in order to make a file system using mkfs.
+A block is the smallest amount of space which can be set aside for
+a file in the current file system.
+
+An operating system, such as Linux or MS-DOS or OS/2, may use a disk
+in any way that it wishes, but if two operating systems share the
+same disk, they must agree on who owns what, or else one will
+interfere with the other (that is, by damaging the other's files).
+A 'partition' is a section of a hard disk which is handled as a unit
+by all operating systems which can access the disk.  The standard way
+to define partitions (for the moment) is the 'partition table',
+a list of information which is stored in parts of the disk that don't
+belong to any of the systems using the disk.  The beginning of the
+partition table is stored in the disk's primary boot sector, and the
+rest is stored in a chain of sectors scattered throughout the disk.
+
+The first sector on the disk is called the 'primary boot block' or
+'primary boot sector' because (1) it comes first, before other,
+similar sectors; (2) it tells where the other, similar sectors are
+found, so that it is logically 'prior' to them; and (3) it usually
+contains code which is executed when the system boots up.  This
+sector contains a table describing at most four partitions.  These
+areas are called 'primary partitions'.
+
+The partition table in the primary boot sector may also describe
+at most one 'extended partition'.  This is a large area of the disk,
+usually containing all the space which is not in any primary partition.
+Within this space we can set aside other areas which are called
+'logical partitions', because they look almost exactly like
+primary partitions.  In fact, the main difference between them is
+that we can boot from primary partitions, while we cannot boot from
+logical partitions.  This happens because the address of primary
+partitions is in a fixed place, whereas the address of secondary
+partitions is not, and so we require a more complicated process to
+discover it, one which is too difficult for most primary boot programs.
+
+
+DIVIDING UP YOUR DISK
+
+It is a good idea to plan ahead before you start creating partitions
+on your disk.  If you set aside a partition for some purpose, it is
+not easy to change its size: you've got to copy all the data off of
+the partition, whether to floppies, to another partition, to another
+hard disk, or somewhere else; then you must edit the table which
+describes this partition, so changing its size; then you must reboot
+and initialise the new partition, formatting it, for example,
+under MS-DOS, or running 'mkfs' under Linux; finally you can copy
+all of the data back.  It is possible, if you have several partitions,
+to copy data back and forth between them while you change their sizes,
+but this is a bit risky and time consuming.  It is better to plan well
+what you will need, since it is hard to change it afterwards.
+
+Many people with large disks and recent versions of MS-DOS have their
+entire file system on one large partition.  They always ask, 'Isn't
+there any way I can reformat my disk without copying everything off?'
+There is no way to do it using standard DOS utilities, and there is
+no truly safe way to do it using commercial software, because if you
+make a mistake, you will lose the entire contents of your disk.
+So if you are going to back up your disk anyway, you might as well
+copy the data back safely.
+
+MS-DOS and Linux both allow you to access several partitions on a
+single disk; on MS-DOS these are treated as if they were separate
+disks or drives, and under Linux they are treated as different
+'devices'.  You can have up to 60 partitions on a single disk,
+at least as far as Linux is concerned; in practice you will rarely
+want so many.  The maximum size of a Linux file system on a single
+partition is presently 64 megabytes.  You may, in other words,
+have all of your Linux files in a single partition, or you may
+have two, three, or more Linux file systems, and similarly with
+MS-DOS.  If you have several small partitions, you run much less
+risk of losing all your files if your disk gets corrupted.  On the
+other hand, you may run out of space on a small partition more easily.
+Under MS-DOS, you must refer to each partition by a separate drive
+letter, but all partitions are automatically accessible.  Under Linux
+only the root partition is automatically accessible, but once we
+'mount' another partition, it is indistinguishable from the rest of
+the file system.  Disks are usually mounted by a command in one of
+the system startup files, /etc/rc, so that you need not worry about
+having to do it yourself whenever you boot the system.
+
+Linux requires at least one partition, which is the 'root' of the
+file system.  You may prefer to have a separate partition for /usr,
+which contains most of the executable files, or for /home, which
+contains most of your private files.  You may also wish to set aside
+a partition to use for swap space, depending on the amount of memory
+your PC has.  You will certainly need swap space if you have less
+than 4 megabytes of RAM and wish to compile anything substantial.
+You can reserve swap space in a file, but you need a partition big
+enough to hold it, and this will probably be less efficient than
+having a partition devoted to swap.
+
+If you wish to play with Linux, without compiling C programs or using
+any large packages (like Emacs, TeX, or the X window system), you need
+4 to 5 megabytes of disk space, plus 2 megabytes of RAM.  If you install
+the C and C++ compilers, you will need 8 to 10 megabytes of disk space,
+plus at least 4 megabytes of RAM: you can compile with 2 megabytes of
+RAM plus some swap space, but performance will be poor.  Also, remember
+that /tmp, which many programs (compilers and editors) use for scratch
+files: you'll need to have a couple of free megabytes on the partition
+containing this directory.  No matter how much space you have, it is
+never enough.
+
+Are you going to boot Linux up from the hard disk, or will you boot
+from a floppy?  If you boot Linux from a hard disk, then the root
+of the file system must be one of the four primary partitions.  If you
+have an extended partition with logical partitions in it, you can have
+only three primary partitions containing data.
+
+
+RUNNING fdisk
+
+Every operating system, whether MS-DOS, OS/2, or Linux, should provide
+its own utility for editing hard disk partition tables.  At least four
+of these utilities have been called 'fdisk', for 'Fixed DISK setup
+program', where 'fixed' means 'not removable'.  I believe the first
+program named fdisk came from Microsoft in about 1985; before that time
+disks were to small to divide into separate sections.
+
+Every operating system has its own peculiarities.  Normally you should
+set up a partition for the use of one operating system by using its
+own fdisk program.  Do not use the Linux fdisk to create partitions for
+MS-DOS or for any system besides Linux.  Otherwise you may have problems.
+
+An fdisk program performs two functions: it reports how the disk is
+configured, and it changes that configuration by adding or deleting
+partitions.  Most fdisks can also change other information in partition
+tables.
+
+This fdisk for Linux operates on one hard disk at a time.  If you give
+the command
+
+     fdisk
+
+it reports on, and is able to change, /dev/hda, the first hard disk.
+To look at or change the second hard disk, /dev/hdb, give the command
+
+     fdisk /dev/hdb
+
+To look at or change the first SCSI disk, give the command
+
+     fdisk /dev/sda
+
+fdisk responds by asking for a command:
+
+     Command (m for help): _
+
+Each fdisk command consists of a single letter, which must be followed
+by <RETURN> before it is obeyed.  Upper and lower case are not
+distinguished.  Anything you type after the first character is ignored.
+Give the command 'm', and you should see this menu:
+
+     Command action
+        a   toggle a bootable flag
+        d   delete a partition
+        l   list known partition types
+        m   print this menu
+        n   add a new partition
+        p   print the partition table
+        q   quit without saving changes
+        t   change a partition's system id
+        v   verify the partition table
+        w   write table to disk and exit
+        x   extra functionality
+
+The simplest commands are Print, Verify, and Quit.  On a small disk, the
+Print command might produce a display like this one:
+
+     Disk /dev/hda: 5 heads, 17 sectors, 977 cylinders
+        Device Boot  Begin   Start     End  Blocks   Id  System
+     /dev/hda1   *       1      17   20059   10021+   1  DOS 12-bit FAT
+     /dev/hda2       71060   71060   83044    5992+   5  Extended
+     /dev/hda3   *   20060   20060   71059   25500   81  Linux/MINIX
+     /dev/hda5       71061   71061   79559    4249+  82  Linux swap
+     /dev/hda6       80002   80018   83044    1734    1  DOS 12-bit FAT
+
+There are 5 partitions reported; /dev/hda4 does not appear because it is
+not allocated.  Partitions 1 and 3 are flagged as bootable.  Note that
+the start of data in both DOS partitions is 16 sectors after the
+beginning of the partition: this is one reason why you should use DOS's
+own fdisk to create DOS partitions.  The size of each partition is reported
+in 1 kilobyte blocks; hence the primary Linux partition, partition 3, is
+25 1/2 megabytes in size.  The '+' after three of the sizes warns that
+these partitions contain an odd number of sectors: Linux normally allocates
+filespace in 1 kilobyte blocks, so the extra sector in partition 5 is
+wasted.  Id numbers are reported in hexadecimal and explained in English.
+
+The Verify command is useful because
+
+(1)  It warns you if anything is wrong.  ALWAYS give a Verify command
+     before writing any changes to disk.  See the section on Messages,
+     Errors, and Warnings.
+
+(2)  It reports how many unallocated sectors there are on the disk.
+
+The Quit command is also useful.  fdisk does not actually change any
+data on your disk unless you give a Write command.  If you are unhappy
+about any changes you may have made, give the Quit command, and your
+disk will remain as it was before you ran fdisk.  You can also interrupt
+fdisk with CTRL-C.
+
+
+DELETING AND ADDING PARTITIONS
+
+Deleting a partition is simple.  Give the Delete command.  fdisk asks:
+
+     Partition number (1-6): _
+
+Once you get this far, you must either delete a partition or interrupt
+the program with CTRL-C (or whatever your current interrupt character is).
+Note:
+
+     (1)  You may delete a nonexistent partition.  You will get a warning
+          message.
+     (2)  You may delete an extended partition.  This has the side effect
+          of deleting all partitions greater than or equal to 5.
+     (3)  You may delete a logical partition.  In that case, all partitions
+          above it are renumbered at once.  For example, if you delete
+          partition 5, then partition 6 becomes known as partition 5, and
+          partition 7 as partition 6.
+
+Adding a partition is just a bit more complicated.  Give the New command.
+fdisk allows you to
+
+     (1)  create a primary partition, if there is a free slot in the
+          primary partition table;
+     (2)  create an extended partition if there is a free slot in the
+          primary partition table, and if there is no extended partition;
+     (3)  create a logical partition if an extended partition exists.
+
+If more than one of these actions is possible, you will be asked to
+select Primary, Extended, or Logical, depending on what is currently
+permissible.  Before you create a primary or an extended partition,
+you are asked what slot it is to have in the table (1-4).
+
+You may not add a primary or an extended partition if the selected slot
+in the primary partition table is already occupied: in that case you
+simply return to the main menu.  You are not allowed to add a new
+primary partition unless there are sectors available outside of the
+extended partition.  You are not allowed to add a new logical partition
+unless there are sectors available inside the extended partition.
+
+If space is available, you are prompted for the first sector:
+
+     First sector (20060-71059): _
+
+The limits are the lowest and the highest free sectors available in
+the appropriate part of the disk.  Not all numbers in this range are
+necessarily available: they may fall inside an existing partition.
+If you select a sector which is already in use, you are told off
+and prompted again for the first sector.  After selecting the
+first sector, you are prompted again:
+
+     Last sector (20060-71059): _
+
+The limits are the sector you have chosen as the first sector, and the
+highest available sector which is legitimate as the other boundary of
+the partition.  In other words, all numbers in the given range are
+legitimate, unlike those in the first sector range.
+
+Adding or deleting partitions has no effect unless you subsequently
+give the Write command.  Please remember to give the Verify command
+first, just before giving the Write command: this is a safety
+precaution.  After giving the Write command, you will see this
+message:
+
+     The partition table has been altered.
+     Please reboot before doing anything else.
+
+Here are some important things to note:
+
+(1)  Before you reboot, you MAY run fdisk again, either to manage another
+     disk, or to make additional changes to the same disk, or just to
+     check that the changes have been made as you expected.
+
+(2)  NEVER run any of the programs mkfs, mkswap, mount, or swapon before
+     you reboot.  It is dangerous to run any programs, but these in
+     particular may cause serious damage to any data on your disk,
+     including the partition tables themselves.
+
+
+ACTIVE FLAGS AND SYSTEM TYPES
+
+The active flag is a bit in the partition table entry which marks a
+partition as bootable.   This is important to some primary boot
+sector programs, which will not boot from an unflagged partition.
+Other such programs do not allow more than one partition to be flagged.
+Some, like shoelace, ignore the flags completely.  I prefer to flag
+all bootable partitions as active so that they stand out on the
+menu shoelace displays.  Fdisk prints a star after the name of a
+partition's device file if its active flag is set.
+
+The Active command changes, or toggles, a partitions active flag.
+Give the Active command, and select a partition by number.  If it
+was marked inactive, it will be flagged as active; if it was
+flagged as active, it will be marked inactive.  You may not set
+the active flag on an extended partition, but you may set it on
+a logical partition, though the meaning of such a flag is
+by no means clear.
+
+The Type command changes the ID number which describes what type
+a partition is.  fdisk currently recognises 24 system ID's, in the
+sense that it prints a string for each of them, but it allows you
+to change any system ID to any other, with the following exceptions:
+you may not change any partition to or from the type Extended, and
+you may not change a partition whose type is Empty (0) to any other
+type.  You may, however, change the type of any data partition to
+0, which is equivalent to deleting it.
+
+The new system ID or type code is a hexadecimal number.  There are
+two ways of listing the numbers which fdisk recognises: use the
+List command, which prints the list, or use the Type command, which,
+when it prompts you for the code, says
+
+     Hex code (type L to list codes): _
+
+where the upper case 'L' is used for clarity.  The codes printed are
+
+     1 DOS 12-bit FAT    7 OS/2 HPFS    51 Novell?   81 Linux/MINIX
+     2 XENIX             8 AIX          52 CP/M?     82 Linux swap
+     3 Old XENIX         9 AIX bootable 63 386/IX    93 Amoeba
+     4 DOS 16-bit <32mb  a OPUS?        64 Novell    94 Amoeba BBT
+     5 Extended         10 OPUS?        75 PCIX      db CP/M
+     6 DOS 16-b >=32mb  40 Venix        80 Old MINIX ff BBT
+
+Some of these numbers are a trifle uncertain.  By default (for the
+moment) fdisk uses a type of 81, the type used by the present
+MINIX fdisk.  When our new file system is introduced, I shall
+change the default to a new value.  The number 81 in any case gives
+problems to Dr. DOS 5.0 and 6.0; if you use this software, change the
+81 to any other value (except 0, 5, 80, or 85).
+
+The value of 82 for Linux swap partitions is my own invention, and
+is intended to give some recognisable distinctiveness to the
+partitions when the values are displayed in hexadecimal, as they
+are by shoelace.
+
+New active flags and new system type codes are not written to the
+disk until you exit from fdisk with the Write command, as described
+above, in the section on deleting and adding partitions.
+
+
+EXTRA COMMANDS FOR EXPERTS
+
+The eXtra command 'x' puts fdisk into 'expert' mode, in which a
+slightly different set of commands is available.  The Active, Delete,
+List, New, Type, Verify, and 'eXpert' commands are not available in
+expert mode.  The commands Write and Quit are available as in
+ordinary mode, the Print command is available, but produces output
+in a slightly different format, and of course the Menu command prints
+the expert menu.  There are several new commands.
+
+(1)  The Return command brings you back to the main menu.
+
+(2)  The Extended command prints the list of table entries which
+     point to other tables.  Ordinary users do not need this
+     information.  The data is shown as it is stored.  The same
+     format is used for the expert Print command.
+
+(3)  The dangerous Begin command allows you to move the start of
+     data in a partition away from its beginning.  I believe
+     shoelace has difficulties with partitions changed in this
+     way.  But other systems create partitions with this format,
+     and it is sometimes useful to be able to reproduce it.
+
+(4)  The slightly dangerous Cylinders command allows you to change
+     the available number of cylinders.  This will allow you to end
+     a partition at the end of a cylinder, if you wish.
+
+(5)  The extremely dangerous Heads and Sectors commands allow you
+     to change the number of heads and sectors.  It should not be
+     necessary to use these commands, but I understand that there
+     are disks whose geometry generic Linux is unable to determine,
+     so I have provided the ability to cope with such cases.
+     WARNING: If you set either of these numbers to a false value,
+     you may lose all data on your disk.
+
+Always, after giving any of the commands Begin, Cylinder, Heads, or
+Sectors, you should Return to the main menu and give the Verify
+command.
+
+
+MESSAGES, ERRORS, AND WARNINGS

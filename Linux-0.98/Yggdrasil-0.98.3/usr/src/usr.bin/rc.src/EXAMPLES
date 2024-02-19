@@ -1,0 +1,268 @@
+There is no repository for useful rc code snippets as yet, so I'm including
+a (short) file in the distribution with some helpful/intriguing pieces of
+rc code.
+
+A sample .rcrc
+--------------
+Here is the .rcrc I use on archone:
+
+umask 022 
+path=(/bin /usr/bin /usr/ucb)
+ht=`/usr/arch/bin/hosttype
+h=$home
+history=$h/.history
+bin=$h/bin/$ht
+lib=$h/lib/$ht
+sh=$h/bin/sh
+include=$h/lib/include
+
+switch ($ht) {
+case sun*
+	OBERON='. '$h/other/oberon
+	p=/usr/ucb
+	compiler='gcc -Wall -O -g'
+	MANPATH=$h/man:/usr/arch/man:/usr/man
+	if (! ~ $TERM ()) {
+		stty dec
+		/usr/arch/bin/msgs -q
+	}
+case next
+	p=(/usr/ucb /usr/bin /NextApps)
+	compiler='cc -Wall -O -g -DNODIRENT'
+	MANPATH=$h/man:/usr/arch/man:/usr/man
+	if (! ~ $TERM ())
+		stty dec
+case sgi
+	p=(/usr/ucb /usr/sbin /usr/bin)
+	compiler='gcc -Wall -O -g -DNOSIGCLD'
+	MANPATH=$h/man:/usr/arch/man:/usr/catman
+	if (!{~ $TERM () || ~ $TERM *iris*})
+		stty line 1 intr '' erase '' kill ''
+case *
+	echo .rcrc not configured for this machine
+}
+
+path=(. $sh $bin /usr/arch/bin $p /bin /usr/bin/X11 /etc /usr/etc)
+cdpath=(. .. $h $h/src $h/misc $h/other $h/adm)
+RNINIT=-d$h' -t -M -2400-h -2400+hfrom'; DOTDIR=$h/misc/news
+PRINTER=lw
+
+fn s {
+	echo $status
+}
+fn cd {
+	builtin cd $1 && \
+	switch ($1) {
+	case ()
+		dir=$home
+	case *
+		dir=()
+	}
+}
+fn pwd {
+	if (~ $dir ())
+		dir=`/bin/pwd
+	echo $dir
+}
+fn x {
+	if (~ `tty /dev/console)
+		clear_colormap
+	clear
+	exit
+}
+fn p {
+	if (~ $history ()) {
+		echo '$history not set' >[1=2]
+		return 1
+	}
+
+	if (! ~ $#* 0 1 2) {
+		echo usage: $0 '[egrep pattern] [sed command]' >[1=2]
+		return 1
+	}
+
+	command=`{
+		egrep -v '^[ 	]*p([	 ]+|$)' $history | switch ($#*) {
+		case 0
+			cat
+		case 1
+			egrep $1
+		case 2
+			egrep $1 | sed $2
+		} | tail -1
+	}
+
+	echo $command
+	eval $command
+}
+
+if (~ $TERM dialup network) {
+	TERM=vt100
+	biff y
+}
+
+A front-end to NeXT's "openfile"
+--------------------------------
+
+Named after the sam "B" command for opening a file, this script was written
+by Paul Haahr. (Assumes the "pick" command from Kernighan and Pike is also
+in your path.)
+
+#!/bin/rc
+if (~ $#* 0)
+        exec openfile
+create = ()
+files = ()
+for (i in $*)
+        if (test -f $i) {
+                files = ($files $i)
+        } else {
+                create = ($create $i)
+	}
+create = `{ pick $create }
+files = ($files $create)
+for (i in $create)
+        > $i
+if (! ~ $#files 0)
+	openfile $files
+
+A read function
+---------------
+
+Unlike sh, rc doesn't have a read. This clever alternative returns an
+exit status as well as fetch a variable. Use as
+
+	read foo
+
+to set $foo to a single line from the terminal.
+
+(due to John Mackin <john@syd.dit.csiro.au>)
+
+fn read {
+        x=() {
+                x = `` ($nl) { awk '{print; print 0; exit}' ^ $nl ^ \
+                                   'END {print 1; print 1}' }
+                $1 = $x(1)
+                return $x(2)
+        }
+}
+
+From cs.wisc.edu!dws Fri Aug  2 18:16:14 1991
+
+#-------
+# ls front end
+#-------
+fn ls	\
+{
+	test -t 1 && * = (-FCb $*)
+	builtin ls $*
+}
+#-------
+# nl - holds a newline, useful in certain command substitutions
+#-------
+nl='
+'
+#-------
+# show - tell me about a name
+#
+# Runs possibly dangerous things through cat -v in order to protect
+# me from the effects of control characters I might have in the
+# environment.
+#-------
+fn show	\
+{
+	* = `` $nl {whatis -- $*}
+	for(itis)
+	{
+		switch($^itis)
+		{
+		case 'fn '*	; echo $itis | cat -v -t
+		case builtin*	; echo $itis
+		case /*		; file $itis; ls -ld $itis
+		case *'='*	; echo $itis | cat -v -t
+		case *		; echo $itis: UNKNOWN: update show
+		}
+	}
+	itis = ()
+}
+#-------
+# Tell me automatically when a command has a nonzero status.
+#-------
+fn prompt	\
+{
+	Status = $status
+	~ $Status 0 || echo '[status '$Status']'
+}
+
+#-------
+# chop - echo the given list, less its final member
+#
+# e.g. chop (a b c) -> (a b)
+#-------
+fn chop {
+	~ $#* 0 1 && return 0
+	ans = '' {	# local variable
+		ans = ()
+		while(! ~ $#* 1)
+		{
+			ans = ($ans $1)
+			shift
+		}
+		echo $ans
+	}
+}
+
+From arnold@audiofax.com Thu May 30 08:49:51 1991
+
+# cd.rc --- souped up version of cd
+
+# this is designed to emulate the fancy version of cd in ksh,
+# so if you're a purist, feel free to gag
+
+_cwd=$home
+_oldcwd=$home
+
+fn cd {
+	if (~ $#* 0) {
+		if (~ $_cwd $home) {	# do nothing
+		} else {
+			builtin cd && { _oldcwd=$_cwd ; _cwd=$home }
+		}
+	} else if (~ $#* 1) {
+		if (~ $1 -) {
+			_t=$_cwd
+			builtin cd $_oldcwd && {
+				_cwd=$_oldcwd
+				_oldcwd=$_t
+				echo $_cwd
+			}
+			_t=()
+		} else {
+			# if a cd happens through the cdpath, rc echos
+			# the directory on its own.  all we have to do
+			# is track where we end up
+			_dopwd = 1
+			{ ~ $1 /* } && _dopwd = 0	# absolute path
+			builtin cd $1 && {
+				_oldcwd=$_cwd
+				_cwd=$1
+				{ ~ $_dopwd 1 } && _cwd=`/bin/pwd
+			}
+			_dopwd=()
+		}
+	} else if (~ $#* 2) {
+		_t=`{ echo $_cwd | sed 's<'$1'<'$2'<' }
+		builtin cd $_t && {
+			_oldcwd=$_cwd
+			_cwd=$_t
+			echo $_cwd
+		}
+		_t=()
+	} else {
+		echo cd: takes 0, 1, or 2 arguments >[1=2]
+		builtin cd $1 && { _oldcwd=$_cwd ; _cwd=`/bin/pwd ; echo $_cwd }
+	}
+}
+
+fn pwd { echo $_cwd }
+

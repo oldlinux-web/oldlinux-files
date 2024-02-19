@@ -1,0 +1,216 @@
+#define NAME_C
+/*{{{  #includes*/
+#include <ctype.h>
+#include <stdlib.h>
+#include <stdio.h>
+ 
+#include <local/bool.h>
+
+#include "../common/keys.h"
+#include "keybind.h"
+/*}}}  */
+ 
+/*{{{  keybinding table type and declaration*/
+KEYNAME bindings[]=
+{
+  /*{{{  moving cursor*/
+  "backward-character", O_LEFT,  "O_LEFT", O_LEFT,
+  "forward-character", O_RIGHT,  "O_RIGHT", O_RIGHT,
+  "previous-line", O_UP,  "O_UP", O_UP,
+  "next-line", O_DOWN,  "O_DOWN", O_DOWN,
+  "beginning-of-line", O_START_OF_LINE,  "O_START_OF_LINE", O_START_OF_LINE,
+  "end-of-line", O_END_OF_LINE,  "O_END_OF_LINE", O_END_OF_LINE,
+  "previous-word", O_WORD_LEFT,  "O_WORD_LEFT", O_WORD_LEFT,
+  "next-word", O_WORD_RIGHT,  "O_WORD_RIGHT", O_WORD_RIGHT,
+  "previous-page", O_PAGE_UP,  "O_PAGE_UP", O_PAGE_UP,
+  "next-page", O_PAGE_DOWN,  "O_PAGE_DOWN", O_PAGE_DOWN,
+  "beginning-of-fold", O_TOP_OF_FOLD,  "O_TOP_OF_FOLD", O_TOP_OF_FOLD,
+  "end-of-fold", O_BOT_OF_FOLD,  "O_BOT_OF_FOLD", O_BOT_OF_FOLD,
+  "goto-line", O_GOTO_LINE,  "O_GOTO_LINE", O_GOTO_LINE,
+  /*}}}  */
+  /*{{{  folding*/
+  "open-fold", O_OPEN_FOLD,  "O_OPEN_FOLD", O_OPEN_FOLD,
+  "close-fold", O_CLOSE_FOLD,  "O_CLOSE_FOLD", O_CLOSE_FOLD,
+  "enter-fold", O_ENTER_FOLD,  "O_ENTER_FOLD", O_ENTER_FOLD,
+  "exit-fold", O_EXIT_FOLD,  "O_EXIT_FOLD", O_EXIT_FOLD,
+  "unfold-fold", O_REMOVE_FOLD,  "O_REMOVE_FOLD", O_REMOVE_FOLD,
+  "create-fold", O_CREATE_FOLD,  "O_CREATE_FOLD", O_CREATE_FOLD,
+  "create-auto-fold", O_AUTO_FOLD,  "O_AUTO_FOLD", O_AUTO_FOLD,
+  "auto-header", O_FIRST_LINE_TO_FOLD_HEADER,
+       "O_FIRST_LINE_TO_FOLD_HEADER", O_FIRST_LINE_TO_FOLD_HEADER,
+  "toggle-create-file-fold", O_FILE_FOLD,  "O_FILE_FOLD", O_FILE_FOLD,
+  "open-file-fold", O_ATTACH_FILE,  "O_ATTACH_FILE", O_ATTACH_FILE,
+  /*}}}  */
+  /*{{{  editing*/
+  "delete-to-end-of-line", O_DELTO_EOL,  "O_DEL_TO_EOL", O_DELTO_EOL,
+  "delete-line", O_DEL_LINE,  "O_DEL_LINE", O_DEL_LINE,
+  "undo-delete-line", O_UNDEL_LINE,  "O_UNDEL_LINE", O_UNDEL_LINE,
+  "delete-character", O_DEL_CHAR_R,  "O_DEL_CHAR_RIGHT", O_DEL_CHAR_R,
+  "delete-previous-character", O_DELETE,  "O_DELETE", O_DELETE,
+  "undo-delete-character", O_UNDEL_CHAR,  "O_UNDEL_CHAR", O_UNDEL_CHAR,
+  "transpose-characters", O_TRANSPOSE_CHARACTERS,
+  "case-word-capitalize", O_CAPITALIZE_WORD,
+  "case-word-upper", O_UPPERCASE_WORD,
+  "case-word-lower", O_LOWERCASE_WORD,
+  "newline-and-indent", O_RETURN,  "O_RETURN", O_RETURN,
+  "kill-line", O_PICK,  "O_PICK", O_PICK,
+  "copy-to-kill-buffer", O_COPY_PICK,  "O_COPY_PICK", O_COPY_PICK,
+  "fold-kill-buffer", O_PUT_PICK,  "O_PUT_PICK", O_PUT_PICK,
+  "move-line", O_MOVE,  "O_MOVE", O_MOVE,
+  "double-line", O_COPY,  "O_COPY", O_COPY,
+  /*}}}  */
+  /*{{{  search & replace*/
+  "search-forward", O_FIND,  "O_FIND", O_FIND,
+  "search-reverse", O_FIND_REVERSE, "O_FIND_REVERSE", O_FIND_REVERSE,
+  "replace-string", O_REPLACE,
+  "query-replace-string", O_QUERY_REPLACE,
+  "incremental-search", O_ITS_SEARCH,
+  "reverse-incremental-search", O_ITS_REVERSE,
+  /*}}}  */
+  /*{{{  files*/
+  "read-file", O_OPEN_NEW_FILE,  "O_OPEN_NEW_FILE", O_OPEN_NEW_FILE,
+  "save-file", O_SAVE_FILE,  "O_SAVE_FILE", O_SAVE_FILE,
+  "write-file", O_WRITE_FILE,
+  "insert-file", O_INSERT_FILE,  "O_INSERT_FILE", O_INSERT_FILE,
+  "next-file", O_NEXT_FILE,
+  "previous-file", O_PREV_FILE,
+  /*}}}  */
+  /*{{{  modes and arguments*/
+  "set-argument-0", O_REP_0,
+  "set-argument-1", O_REP_1,
+  "set-argument-2", O_REP_2,
+  "set-argument-3", O_REP_3,
+  "set-argument-4", O_REP_4,
+  "set-argument-5", O_REP_5,
+  "set-argument-6", O_REP_6,
+  "set-argument-7", O_REP_7,
+  "set-argument-8", O_REP_8,
+  "set-argument-9", O_REP_9,
+  "add-mode-overwrite", O_A_OVER,
+  "delete-mode-overwrite", O_D_OVER,
+  "add-mode-view", O_A_VIEW,
+  "delete-mode-view", O_D_VIEW,
+  "add-mode-echo", O_A_ECHO,
+  "delete-mode-echo", O_D_ECHO,
+  "add-mode-autosave", O_A_AUTO_SAVE,
+  "delete-mode-autosave", O_D_AUTO_SAVE,
+  /*}}}  */
+  /*{{{  macros*/
+  "define-macro", O_DEF_MACRO, "O_DEFINE_MACRO", O_DEF_MACRO,
+  "execute-macro-32", O_CALL_FIX_32,
+  "execute-macro-31", O_CALL_FIX_31,
+  "execute-macro-30", O_CALL_FIX_30,
+  "execute-macro-29", O_CALL_FIX_29,
+  "execute-macro-28", O_CALL_FIX_28,
+  "execute-macro-27", O_CALL_FIX_27,
+  "execute-macro-26", O_CALL_FIX_26,
+  "execute-macro-25", O_CALL_FIX_25,
+  "execute-macro-24", O_CALL_FIX_24,
+  "execute-macro-23", O_CALL_FIX_23,
+  "execute-macro-22", O_CALL_FIX_22,
+  "execute-macro-21", O_CALL_FIX_21,
+  "execute-macro-20", O_CALL_FIX_20,
+  "execute-macro-19", O_CALL_FIX_19,
+  "execute-macro-18", O_CALL_FIX_18,
+  "execute-macro-17", O_CALL_FIX_17,
+  "execute-macro-16", O_CALL_FIX_16,
+  "execute-macro-15", O_CALL_FIX_15,
+  "execute-macro-14", O_CALL_FIX_14,
+  "execute-macro-13", O_CALL_FIX_13,
+  "execute-macro-12", O_CALL_FIX_12,
+  "execute-macro-11", O_CALL_FIX_11,
+  "execute-macro-10", O_CALL_FIX_10,
+  "execute-macro-9", O_CALL_FIX_9,
+  "execute-macro-8", O_CALL_FIX_8,
+  "execute-macro-7", O_CALL_FIX_7,
+  "execute-macro-6", O_CALL_FIX_6,
+  "execute-macro-5", O_CALL_FIX_5,
+  "execute-macro-4", O_CALL_FIX_4,
+  "execute-macro-3", O_CALL_FIX_3,
+  "execute-macro-2", O_CALL_FIX_2,
+  "execute-macro-1", O_CALL_FIX_1,
+  "execute-macro", O_EXE_MACRO,  "O_EXECUTE_MACRO", O_EXE_MACRO,
+  "O_DEFINE_FIX", O_DEF_FIX,
+  /*}}}  */
+  /*{{{  shell commands*/
+  "i-shell", O_SHELL,  "O_SHELL", O_SHELL,
+  "shell-command", O_SHELL_COMMAND,
+  "suspend-origami", O_SUSPEND,
+  /*}}}  */
+  /*{{{  special commands*/
+  "redraw-display", O_REFRESH,  "O_REFRESH", O_REFRESH,
+  "help", O_HELP,  "O_HELP", O_HELP,
+  "describe-bindings", O_DESCRIBE_BINDINGS,
+  "set-language", O_LANGUAGE,  "O_LANGUAGE", O_LANGUAGE,
+  "describe-fold", O_FOLD_INFO,  "O_FOLD_INFO", O_FOLD_INFO,
+  "set-user-mode",O_SET_USER_MODE,
+  "reset-user-mode",O_RESET_USER_MODE,
+  "abort",O_BREAK,
+  "filter-buffer",O_FILTER_BUFFER,
+  "pipe-from-command", O_PIPE_FROM_COMMAND,
+  "pipe-to-command", O_PIPE_TO_COMMAND,
+  /*}}}  */
+  /*{{{  how to get out*/
+  "quick-exit", O_FINISH,  "O_FINISH", O_FINISH,
+  "exit-origami", O_QUIT,  "O_QUIT", O_QUIT,
+  /*}}}  */
+  "", O_NOP
+};
+/*}}}  */
+/*{{{  keywords*/
+keywords keytab[]={
+  ":::F",       INCLUDE,
+  "defbinding", BINDNAME,
+  "automacro",  DEFAUTO,
+  "keybind",    KEYDEF,
+  "alias",      KEYALIAS,
+  "deffun",     DEFMACRO,
+  "initfun",    INITMACRO,
+  "defmark",    DEFMARK,
+  "forward",    FORWARD,
+  "defmac",     DEFOP,
+  "repeat",     REPEAT,
+  "case",       CASE,
+  "esac",       ESAC,
+  "default",    DEFAULT,
+  "do",         DO,
+  "while",      WHILE,
+  "if",         IF,
+  "else",       ELSE,
+  "fi",         FI,
+  "and",        AND,
+  "or",         OR,
+  "not",        NOT,
+  "counter",    COUNTER,
+  "test-filed", TEST_FILED,
+  "test-file-changed", TEST_CHANGED,
+  "test-fold-line",  TEST_FOLD_LINE,
+  "test-begin-fold", TEST_BEGIN_FOLD,
+  "test-end-fold",   TEST_END_FOLD,
+  "test-text",  TEST_TEXT,
+  "test-top",   TEST_TOP,
+  "test-bottom",TEST_BOTTOM,
+  "test-char",  TEST_CHAR,
+  "test-language",   TEST_LANG,
+  "counter-0",  COUNTER_NULL,
+  "counter>0",  C_POSITIV,
+  "test-begin-line", TEST_BEGIN_LINE,
+  "test-end-line",   TEST_END_LINE,
+  "read-repeat",     READ_REPEAT,
+  "set-counter",     SET_COUNTER,
+  "add-counter",     ADD_COUNTER,
+  "sum-counter",     SUM_COUNTER,
+  "inv-counter",     INV_COUNTER,
+  "test-behind-counter",TEST_BEHIND_COUNTER,
+  "goto",            GOTO_X,
+  "goto-counter",    GOTO_COUNTER,
+  "store-pos",       STORE_X,
+  "store-line",      STORE_Y,
+  "goto-line-counter",GOTO_Y,
+  "exit",            EXIT,
+  "message-exit",    MES_EXIT,
+  "prompt",          PROMPT,
+  "prompt-counter",  PROMPT_COUNTER,
+  NULL, ERROR,
+};
+/*}}}  */

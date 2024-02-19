@@ -1,0 +1,880 @@
+\chapter{Foreign Language Interface}
+
+\newlength{\tableft}
+\settowidth{\tableft}{\tt PL_QUERY_ORGSYMBOLFILE}
+
+SWI-Prolog offers a powerful interface to C \cite{Kernighan:78}.  The
+main design objectives of the foreign language interface are flexibility
+and performance.  Most Prolog foreign language interfaces allow the
+user only to pass primitive data via the interface.  The user should
+normally specify for each argument whether it is an input or output
+argument as well as the type of the argument.  Because type checking and
+conversion to/from C data types is done by Prolog the actual foreign
+code is usually short if something simple is wanted.  The SWI-Prolog
+interface does not offer these primitives.  Instead Prolog terms in
+their internal representation are passed via the interface.  This allows
+the user to write `logical' predicates and pass arbitrary Prolog data
+over the interface.  As a trade-off the user is responsible for type
+checking and should be careful not to violate consistency rules as
+Prolog provides access to its internal data structures.
+
+\section{Portability of the Foreign Interface}
+
+The foreign language interface is highly system dependent.  It can
+easily be ported to machines for which the C linker allows you to link
+an object file using the symbol table of a (running) executable and
+use BSD Unix format a.out files.  On many Unix systems such an object
+file can be created using the \tty{-A} option of ld(1).  See the
+introduction section for a list of systems to which the foreign
+interface is available.
+
+\section{Overview of the Interface}
+
+A special include file called ``SWI-prolog.h'' should be included with
+each C-source file that is to be loaded via the foreign interface. This
+C-header file defines various data types, macros and functions that can
+be used to communicate with SWI-Prolog. Functions and macros can be
+divided into the following categories:
+
+\begin{shortlist}
+\setlength{\itemsep}{-2pt}
+    \item Analysing arbitrary Prolog terms
+    \item Constructing new terms or instantiating existing ones
+    \item Returning control information to Prolog
+    \item Registering foreign predicates with Prolog
+    \item Calling Prolog from C
+    \item Communicating about modules
+    \item Printing standard Prolog warning/error messages
+    \item Global actions on Prolog (halt, break, abort, etc.)
+    \item Querying the status of Prolog
+\end{shortlist}
+
+A C-file to be included normally defines a number of functions that
+implement foreign language Prolog predicates, private support
+functions and an installation function. The user should compile this
+file into a `\tty{.o}' file using `cc -c file ...', after which Prolog
+can be asked to load the file using the simplified load_foreign/2
+predicate or the more flexible load_foreign/5 predicate. Prolog will
+call the Unix loader ld(1) to create an executable. It will then
+determine the actual size of the executable, allocate memory for it and
+call the loader again to create an executable that can be loaded in the
+allocated memory. After the executable is loaded the entry point of the
+new executable is called. This function should register all defined
+foreign predicates with Prolog.
+
+\section{Loading Foreign Modules}
+
+.BD
+.C load_foreign 2 +File, +Entry
+Load a foreign file or list of files specified by {\em File}.  The files
+are searched for similar to consult/1.  Except that the `\tty{.o}'
+extension is used rather than `\tty{.pl}'.  Thus `\tty{test}' is a valid
+specification for `\tty{test.o}' in the current directory, `\tty{[test,
+library(basics)]}' specifies `\tty{test.o}' in the current directory and
+`\tty{basics.o}' in one of the library directories.  To simplify
+maintenance of packages in heterogeneous networks the system first
+tries whether the object file is available from a subdirectory whose
+name depends on the system used.  The names of the subdirectories is
+shown below.
+
+\begin{center}
+\begin{tabular}{|l|l|}
+\hline
+\bf Directory	& \bf Machine \\
+\hline
+\tt sun4	& Sparc Station 1 and SUN-4 \\
+\tt sun3	& SUN-3 \\
+\tt hpux	& HP9000 running HPUX \\
+\hline
+\end{tabular}
+\end{center}
+
+{\em Entry} defines the entry point of the resulting executable.  The
+entry point will be called by Prolog to install the foreign predicates.
+.C load_foreign 2 +File, +Entry, +Options, +Libraries, +Size
+The first two arguments are identical to those of load_foreign/2. {\em
+Options} is (a list of) additional option to be given to the loader.
+The default command is:
+
+\begin{code}
+ld -N -A <symbolfile> -T <offset> -e <entry> -o <executable>
+   <files> -lc
+\end{code}
+
+The options are inserted just before the files. {\em Libraries} is (a
+list of) libraries to be passed to the loader. They are inserted just
+after the files.
+
+If {\em Size} is specified Prolog first assumes that the resulting
+executable will fit in {\em Size} bytes and do the loading in one pass.
+If the executable turns out to be larger than {\em Size} bytes the
+loading sequence is started again, using the calculated size.  To
+determine the size of an executable specify a size that is too small.
+Prolog will then print the actual size on the current output stream.
+.C foreign_file 1 ?File
+Is true if {\em File} is the absolute path name of a file loaded as
+foreign file.
+.ED
+
+\section{Interface Data types}
+
+The interface functions can be divided into two groups. The first group
+are functions to obtain data from Prolog or pass data to Prolog. These
+functions use Prolog internal data types. The second group consists of
+type conversion functions convert between Prolog internal data and
+C primitive types. Below is a description of the Prolog data types used
+in the interface.
+
+\begin{description}
+    \item[term]
+Terms represent arbitrary Prolog data (variables, atoms, integers,
+floats and compound terms). As SWI-Prolog has no garbage collection
+(yet) terms live until backtracking takes us back to a point before the
+term was created.
+    \item[atomic]
+Atomics are Prologs primitive data types (integers, atoms and floats).
+They can be transformed to C data types (int, char * resp.\ float).
+The Prolog representation for an integer is a tagged version of that
+integer. The mapping between C ints and Prolog integers can only be
+different over different releases of SWI-Prolog. Atoms are represented
+by a pointer to a data structure on the Prolog heap. Each such data
+structure is a unique representation of a string (e.g. to verify that
+two atoms represent the same string comparing the atoms suffices). The
+mapping between atoms and string are likely to vary over different
+sessions of Prolog. Floats are represented as (tagged) pointers to a
+float living on the global stack. For their life time the same rules
+apply as for terms. Whether two floats represent the same number can
+only be discovered by transforming both to C floats and then comparing
+them. Strings are represented as a tagged pointer to a char * on the
+global stack or heap. The rules for their lifetime and comparison equal
+those for floats.
+    \item[functor]
+A functor is the internal representation of a name/arity pair.  They are
+used to find the name and arity of a compound term as well as to
+construct new compound terms.  Like atoms they live for the whole Prolog
+session and are unique.
+    \item[module]
+A module is a unique handle to a Prolog module. Modules are used only
+to call predicates in a specific module.
+\end{description}
+
+\section{The Foreign Include File}
+
+\subsection*{Argument Passing and Control}
+
+If Prolog encounters a foreign predicate at run time it will call a
+function specified in the predicate definition of the foreign predicate.
+The arguments (1, ..., arity) pass the Prolog arguments to the goal as
+Prolog terms.  Foreign functions should be declared of type {\tt
+foreign_t}.  Deterministic foreign functions have two alternatives to
+return control back to Prolog:
+
+.BF
+.M void PL_succeed 0
+Succeed deterministically. PL_succeed is defined as ``return TRUE''.
+.M void PL_fail 0
+Fail and start Prolog backtracking.  PL_fail is defined as ``return
+FALSE''.
+.EF
+
+\subsubsection*{Non-deterministic Foreign Predicates}
+
+By default foreign predicates are deterministic.  Using the {\tt
+PL_FA_NONDETERMINISTIC} attribute (see PL_register_foreign()) it is
+possible to register a predicate as a non-deterministic predicate.
+Writing non-deterministic foreign predicates is slightly more
+complicated as the foreign function needs context information for
+generating the next solution.  Note that the same foreign function
+should be prepared to be simultaneously active in more than one goal.
+Suppose the natural_number_below_n/2 is a non-deterministic foreign
+predicate, backtracking over all natural numbers lower than the first
+argument.  Now consider the following predicate:
+
+\begin{boxed}\begin{code}
+quotient_below_n(Q, N) :-
+	natural_number_below_n(N, N1),
+	natural_number_below_n(N, N2),
+	Q =:= N1 / N2, !.
+\end{code}\end{boxed}
+
+In this predicate the function natural_number_below_n/2 simultaneously
+generates solutions for both its invocations.
+
+Non-deterministic foreign functions should be prepared to handle three
+different calls from Prolog:
+
+\begin{description}
+    \item[Initial call (\tt PL_FIRST_CALL)]\mbox{}\\
+Prolog has just created a frame for the foreign function and asks it to
+produce the first answer.
+    \item[Redo call (\tt PL_REDO)]\mbox{}\\
+The previous invocation of the foreign function associated with the
+current goal indicated it was possible to backtrack.  The foreign
+function should produce the next solution.
+    \item[Terminate call (\tt PL_CUTTED)]\mbox{}\\
+The choice point left by the foreign function has been destroyed by
+a cut.  The foreign function is given the opportunity to clean the
+environment.
+\end{description}
+
+Both the context information and the type of call is provided by an
+argument of type {\tt foreign_t} appended to the argument list for
+deterministic foreign functions.  The macro PL_foreign_control()
+extracts the type of call from the control argument.  The foreign
+function can pass a context handle using the PL_retry() macro and
+extract the handle from the extra argument using the
+PL_foreign_context() macro.
+
+.BF
+.M void PL_retry 1 handle
+The foreign function succeeds while leaving a choice point. On
+backtracking over this goal the foreign function will be called again,
+but the control argument now indicates it is a `Redo' call and the
+macro PL_foreign_context() will return the handle passed via
+PL_retry(). This handle is a 30 bits signed value (two bits are used
+for status indication).
+.M int PL_foreign_control 1 control_argument
+Extracts the type of call from the control argument.  The return values
+are described above.  Note that the function should be prepared to
+handle the {\tt PL_CUTTED} case and should be aware that the other
+arguments are not valid in this case.
+.M long PL_foreign_context 1 control_argument
+Extracts the context from the context argument.  In the call type is
+{\tt PL_FIRST_CALL} the context value is 0L.  Otherwise it is the value
+returned by the last PL_retry() associated with this goal (both if the
+call type is {\tt PL_REDO} as {\tt PL_CUTTED}).
+.EF
+
+Note: If a non-deterministic foreign function returns using PL_succeed
+or PL_fail,  Prolog assumes the foreign function has cleaned its
+environment. {\bf No} call with control argument {\tt PL_CUTTED} will follow.
+
+The code of figure~\ref{fig:nondetermf} shows a skeleton for a
+non-deterministic foreign predicate definition.
+
+\begin{figure}
+\begin{boxed}\begin{code}
+typedef struct			/* define a context structure */
+{ ...
+} context;
+
+foreign_t
+my_function(a0, a1, handle)
+term a0, a1;
+foreign_t handle;
+{ struct context * ctxt;
+
+  switch( PL_foreign_control(handle) )
+  { case PL_FIRST_CALL:
+        ctxt = (struct context *) malloc(sizeof(struct context));
+	...
+	PL_retry(ctxt);
+    case PL_REDO:
+	ctxt = (struct context *) PL_foreign_context(handle);
+	...
+	PL_retry(ctxt);
+    case PL_CUTTED:
+	free(ctxt);
+	PL_succeed;
+  }
+}
+\end{code}\end{boxed}
+    \caption{Skeleton for non-deterministic foreign functions}
+    \label{fig:nondetermf}
+\end{figure}
+
+\subsection*{Analysing Terms via the Foreign Interface}
+
+Each argument of a foreign function (except for the control argument)
+is of type {\em term}.  To analyse a term one should first obtain the
+type of the term. Primitive terms can then be transformed into {\em
+atomic} data in internal Prolog representation. This atomic data can be
+transformed into C-data types. Complex terms are analysed in terms on
+their functor and arguments. The arguments themselves are terms,
+allowing the same procedure to be repeated recursively.
+
+.BF
+.F int PL_type 1 term
+Obtain the type of {\em term}, which should be a term returned by one
+of the other interface predicates or passed as an argument. The
+function returns the type of the Prolog term. The type identifiers are
+listed below.
+
+\begin{center}\begin{tabular}{|p{\tableft}|p{3.5in}|}
+\hline
+\tt PL_VARIABLE & An unbound variable. The value of term as such is a unique
+	          identifier for the variable. \\
+\tt PL_ATOM	& A Prolog atom. \\
+\tt PL_STRING	& A Prolog string. \\
+\tt PL_INTEGER  & A Prolog integer. \\
+\tt PL_FLOAT    & A Prolog floating point number. \\
+\tt PL_TERM	& A compound term. Note that a list is a compound term with
+	          name `.' and arity 2. \\
+\hline
+\end{tabular}\end{center}
+
+.F atomic PL_atomic 1 term
+Return the atomic value of {\em term} in Prolog internal
+representation. {\em Term} should be atomic (e.g. atom, integer,
+float or string).
+.F long PL_integer_value 1 atomic
+Transforms an integer from Prolog internal representation into a C
+long.
+.F float PL_float_value 1 atomic
+Transforms a float from Prolog internal representation into a C
+float.
+.F char * PL_atom_value 1 atomic
+Transforms an atom from Prolog internal representation into a 0-terminated
+C char *. The pointer points directly into the Prolog heap and can
+assumed to be static. The contents of the character string however
+should under NO circumstances be modified.
+.F char * PL_string_value 1 string
+Transform a string from Prolog internal representation into a C char *.
+The pointer points directly into the Prolog data area. Unlike the
+pointer returned by PL_atom_value() the C user should copy the value to
+a private data area if its value should survive the current foreign
+language call.  Like PL_atom_value() changing the contents of the
+character string is NOT allowed.
+.F functor PL_functor 1 term
+{\em term} should be a complex term. The return value is a unique
+identifier of the term's name and arity. The following example
+demonstrates this:
+
+\begin{boxed}
+\begin{code}
+pl_same_functor(t1, t2)
+term t1, t2;
+{ if ( PL_type(t1) != PL_TERM || PL_type(t2) != PL_TERM )
+    PL_fail;
+  if ( PL_functor(t1) == PL_functor(t2) )
+    PL_succeed;
+  PL_fail;
+}
+\end{code}
+\end{boxed}
+.F atomic PL_functor_name 1 functor
+Return an atom representing the name of {\em functor}. To get the
+functor name as char * of a term which is known to be compound:
+
+\mbox{\tt \#define functor_name(term) PL_atom_value(PL_functor_name(PL_functor(term)))}
+
+.F int PL_functor_arity 1 functor
+Return a C integer representing the arity of {\em functor}.
+.F term PL_arg 2 term, int
+Return the {\em int}-th argument of {\em term}.  Argument counting
+starts at 1 and is valid up to and including the arity of {\em term}.  No
+checks on these boundaries are performed.
+.EF
+
+Figure~\ref{fig:pl-display} shows a definition of display/1 to
+illustrate the described functions.
+
+\begin{figure}
+\begin{boxed}
+\begin{code}
+pl_display(t)
+term t;
+{ functor functor;
+  int arity, n;
+
+  switch( PL_type(t) )
+  { case PL_VARIABLE:
+	printf("_%d", t);
+	break;
+    case PL_ATOM:
+	printf("%s", PL_atom_value(PL_atomic(t)));
+	break;
+    case PL_STRING:
+	printf("\"%s\"", PL_string_value(PL_atomic(t)));
+	break;
+    case PL_INTEGER:
+	printf("%d", PL_integer_value(PL_atomic(t)));
+	break;
+    case PL_FLOAT:
+	printf("%f", PL_float_value(PL_atomic(t)));
+	break;
+    case PL_TERM:
+	functor = PL_functor(t);
+	arity = PL_functor_arity(functor);
+	printf("%s", PL_atom_value(PL_functor_name(functor)));
+	printf("(");
+	pl_display(PL_arg(t, 1));
+	for( n = 2; n <= arity; n++)
+	{ printf(", ");
+	  pl_display(PL_arg(t, n));
+	}
+	printf(")");
+	break;
+    default:
+	PL_fatal_error("Illegal type in pl_display(): %d",
+						PL_type(t));
+  }
+
+  PL_succeed;
+}
+\end{code}
+\end{boxed}
+    \caption{Foreign definition of display/1}
+    \label{fig:pl-display}
+\end{figure}
+
+\subsection*{Instantiating and Constructing Terms}
+
+Terms are instantiated as in Prolog itself by unification.  Variables
+can be unified with atomic data, with a functor and with other terms.
+New terms are first constructed as a single unbound variable.
+
+.BF
+.F term PL_new_term 0
+Create a new term. The term is an unbound variable living on the global
+stack. In the current implementation it lives until Prolog backtracks
+to before this call. Garbage collection might change this in the
+future.
+.F atomic PL_new_atom 1 char *
+Create a Prolog atom from a C char *. The contents of the char * are
+copied to the Prolog heap.
+.F atomic PL_new_string 1 char *
+Create a Prolog string, living on the global stack. The contents of the
+char * are copied into Prolog's data area.
+.F atomic PL_new_integer 1 long
+Create a Prolog integer from a C long. Note that the integer is
+truncated to 28 bits. No checks on this are performed.
+.F atomic PL_new_float 1 float
+Create a Prolog float living on the global stack from {\em float}.
+.F functor PL_new_functor 2 atomic, int
+Create a Prolog functor identifier form {\em atomic} (which should be
+an atom) and {int}, the arity. {\em Arity} is valid for
+any $arity \ge 0$. $Arity = 0$ is used internally, but none of the
+interface functions use it.
+.F bool PL_unify 2 term, term
+Unify two terms. Return value is \tty{TRUE} or \tty{FALSE}.
+.F bool PL_unify_atomic 2 term, atomic
+Unify a term with an atomic value.
+.F bool PL_unify_functor 2 term, functor
+Unify a term with a functor. The unification simply succeeds if {\em
+term} is already instantiated to a term with functor {\em functor}. If
+{\em term} is instantiated to a variable it will be instantiated to the
+most general term of {\em functor} (e.g. a term with all arguments
+unbound variables). Otherwise \tty{FALSE} is returned.
+
+If this call succeeds the arguments can be further instantiated by
+calling PL_arg() and recursively unifying the returned terms.
+.EF
+
+An example of using these functions is shown in
+figure~\ref{fig:calling}.
+
+\subsection*{Calling Prolog from C}
+
+The Prolog system can be called back from C. This is done by
+constructing a term with the functions described above and then calling
+PL_call(). PL_call() executes the goal and returns TRUE or FALSE
+depending on success or failure of the called predicate. There are no
+means to backtrack over the Prolog predicate. If alternatives are
+wanted call findall/3 and read the result from the third argument.
+
+.BF
+.F bool PL_call 2 term, module
+Call term just like the Prolog predicate once/1. {\em Term} is called
+in the specified module, or in the context module if module = NULL.
+Returns \tty{TRUE} if the call succeeds, \tty{FALSE} otherwise.
+Figure~\ref{fig:calling} shows an example to obtain the number of
+defined atoms. All checks are omitted to improve readability.
+.EF
+
+\subsection*{Discarding Data}
+
+The Prolog data created during setting up the call and calling Prolog can in
+most cases be discarded right after the call.  See figure~\ref{fig:calling}
+for an example.
+
+.BF
+.F void PL_mark 1 bktrk_buf
+Mark the global and trail stacks in {\em bktrk_buf}.
+.F void PL_bktrk 1 bktrk_buf
+Undo all changes in the runtime stacks since a snapshot has been made
+in buffer using PL_mark(). Changes to the heap are not affected.
+.EF
+
+It is not necessary to call PL_bktrk() for each PL_mark(). The user
+should ensure that PL_bktrk() is never called with a buffer that is
+created after a buffer to which PL_bktrk() has been called. Thus
+PL_mark(b1) ... PL_mark(b2) ... PL_bktrk(b1) is valid, but it is not
+allowed to call PL_bktrk(b2) after this sequence.
+
+\begin{figure}
+\begin{boxed}
+\begin{code}
+int
+count_atoms()
+{ term t;
+  int atoms;
+  bktrk_buf buf;
+  
+  PL_mark(&buf);	    /* mark the global stack */
+
+  t = PL_new_term();        /* create `statistics(atoms, Var)' */
+  PL_unify_functor(t, PL_new_functor(PL_new_atom("statistics"), 2));
+  PL_unify_atomic(PL_arg(t,1), PL_new_atom("atoms"));
+  
+  PL_call(t);               /* call it */
+  
+			    /* extract the value from the 2nd arg */
+  atoms = PL_integer_value(PL_atomic(PL_arg(t, 2)));
+  
+  PL_bktrk(&buf);    	    /* discard global stack data created */
+  
+  return atoms;
+}
+\end{code}
+\end{boxed}
+     \caption{Calling Prolog}
+     \label{fig:calling}
+\end{figure}
+
+\subsection*{Foreign Code and Modules}
+
+Modules are identified via a unique handle.  The following functions
+are available to query and manipulate modules.
+
+.BF
+.F module PL_context 0
+Return the module identifier of the context module of the currently
+active foreign predicate.
+.F term PL_strip_module 2 term, module *
+Utility function. If {\em term} is a term, possibly holding the module
+construct {\em module:rest} this function will return {\em rest} and
+fill {\em module *} with {\em module}. For further nested module
+constructs the inner most module is returned via {\em module *}. If
+{\em term} is not a module construct {\em term} will simply be returned.
+If {\em module *} is \tty{NULL} it will be set to the context module.
+Otherwise it will be left untouched. The following example shows how to
+obtain the plain term and module if the default module is the user
+module:
+
+\begin{boxed}
+\begin{code}
+{ module m = PL_new_module(PL_new_atom("user"));
+
+  if ( (term = PL_strip_module(term, &m)) == NULL )
+    return PL_warning("Illegal module specification");
+
+  ...
+\end{code}
+\end{boxed}
+
+.F atomic PL_module_name 1 module
+Return the name of {\em module} as an atom.
+.F module PL_new_module 1 atomic
+Find an existing or create a new module with name specified by the atom
+{\em atomic}.
+.EF
+
+\subsection*{Catching Unix Signals}
+
+SWI-Prolog catches the Unix signals SIGINT, SIGFPE and SIGSEGV.  To
+avoid problems with foreign code attempting to catch these signals
+foreign code should call PL_signal() to install signal handlers rather
+than the Unix library function signal().  SWI-Prolog will always handle
+SIGINT itself.  SIGFPE and SIGSEGV are passed to the foreign code
+handlers if Prolog did not expect that signal.
+
+.BF
+.F void (*PL_signal({\it{sig,~func}})) 0
+This function should be used to install signal handlers rather than the
+Unix library function signal().  It ensures consistent signal handling
+between SWI-Prolog and the foreign code and reinstalls signal handlers
+if a state created with save_program/1 is restarted.
+.EF
+
+
+\subsection*{Errors and warnings}
+
+Two standard functions are available to print standard Prolog errors to
+the standard error stream.
+
+.BF
+.F bool PL_warning 1 format, a1, ...
+Print an error message starting with `\tty{[WARNING: }', followed by
+the output from {\em format}, followed by a `\tty{]}' and a newline.
+Then start the tracer. {\em format} and the arguments are the same as
+for printf(2). No more than 10 arguments can be provided.
+.F void PL_fatal_error 1 format, a1, ...
+Print a message like PL_warning(), but starting with `\tty{FATAL ERROR: }'
+and then exits Prolog.
+.EF
+
+\subsection*{Environment Control from Foreign Code}
+.BF
+.F bool PL_action 2 int, C_type
+Perform some action on the Prolog system. {\em int} describes the
+action, {\em C_type} provides the argument if necessary. The actions
+are listed in table~\ref{tab:action}.
+
+\begin{table}
+\begin{quote}\begin{tabular}{|p{\tableft}|p{3.5in}|}
+\hline
+\tt PL_ACTION_TRACE	& Start Prolog tracer \\
+\tt PL_ACTION_DEBUG	& Switch on Prolog debug mode \\
+\tt PL_ACTION_BACKTRACE	& Print backtrace on current output stream \\
+\tt PL_ACTION_HALT	& Halt Prolog execution. This action should be
+			  called rather than Unix exit() to give Prolog
+			  the opportunity to clean up. This call does
+			  not return. \\
+\tt PL_ACTION_ABORT	& Generate a Prolog abort. This call does not
+			  return. \\
+\tt PL_ACTION_BREAK	& Create a standard Prolog break environment. Returns
+			  after the user types control-D. \\
+\tt PL_ACTION_SYMBOLFILE& The argument (a char *) is considered to be
+			  hold the symbolfile for further incremental
+			  loading. Should be called by user applications
+			  that perform incremental loading as well and
+			  want to inform Prolog of the new symbol table. \\
+\hline
+\end{tabular}\end{quote}
+
+    \caption{PL_action() options}
+    \label{tab:action}
+\end{table}
+.EF
+
+\subsection*{Querying Prolog}
+.BF
+.F C_type PL_query 1 int
+Obtain status information on the Prolog system. The actual argument
+type depends on the information required. {\em int} describes what
+information is wanted. The  options are given in table~\ref{tab:query}.
+
+
+\begin{table}
+\begin{quote}\begin{tabular}{|p{\tableft}|p{3.5in}|}
+\hline
+\tt PL_QUERY_ARGC	& Return an integer holding the number of
+			  arguments given to Prolog from Unix. \\
+\tt PL_QUERY_ARGV	& Return a char ** holding the argument vector
+			  given to Prolog from Unix. \\
+\tt PL_QUERY_SYMBOLFILE & Return a char * holding the current symbol
+			  file of the running process. \\
+\tt PL_QUERY_ORGSYMBOLFILE& Return the initial symbol file (before
+			  loading) of Prolog. By setting the symbol file
+			  to this value no name clashes can occur with
+			  previously loaded foreign files (but no symbols
+			  can be shared with earlier loaded modules as well). \\
+\hline
+\end{tabular}\end{quote}
+
+    \caption{PL_query() options}
+    \label{tab:query}
+\end{table}
+.EF
+
+\subsection*{Registering Foreign Predicates}
+.BF
+.F bool PL_register_foreign 3 name, arity, function, [...option...] 0
+Register a C-function to implement a Prolog predicate. After this call
+returns successfully a predicate with name {\em name} (a char *) and
+arity {\em arity} (a C int) is created. When called in Prolog, Prolog
+will call {\em function}. {\em [...option...]} forms a 0-terminated list of
+options for the installation. These are:
+
+\begin{quote}
+\begin{tabular}{|p{\tableft}|p{3in}|}
+\hline
+\tt PL_FA_NOTRACE	& Predicate cannot be seen in the tracer \\
+\tt PL_FA_TRANSPARENT	& Predicate is module transparent \\
+\tt PL_FA_NONDETERMINISTIC & Predicate is non-deterministic. This
+			  attribute is currently ignored, but will probably
+			  be used in future versions. \\
+\hline
+\end{tabular}
+\end{quote}
+.EF
+
+%\subsection*{Foreign Code Hooks}
+%
+%For various specific applications some hooks that take the form of function
+%pointers are implemented.
+%
+%.BF
+%.V int (*PL_dispatch_events)()
+%If this function pointer is not NULL, this function is called when reading
+%from the terminal.  It is supposed to dispatch events when
+%SWI-Prolog is conected to a window environment.  It can return two values:
+%{\tt PL_DISPATCH_INPUT} indicates Prolog input is available on file
+%descriptor 0.
+%.EF
+
+
+\vfil
+\pagebreak
+\section{Example of Using the Foreign Interface}
+
+Below is an example showing all stages of the declaration of a foreign
+predicate that transforms atoms possibly holding uppercase letters
+into an atom only holding lower case letters.
+Figure~\ref{fig:lowercase-c} shows the C-source file.
+
+\subsection*{C-Source file (lowercase.c)}
+
+\begin{figure}
+\begin{boxed}
+\begin{code}
+/*  Include file depends on local installation */
+#include "/usr/local/lib/pl1.5/library/SWI-prolog.h"
+#include <ctype.h>
+
+long
+pl_lowercase(u, l)
+term u, l;
+{ char *copy;
+  char *s, *q;
+  atomic la;
+
+  if ( PL_type(u) != PL_ATOM )
+    return PL_warning("lowercase/2: instantiation fault");
+  s = PL_atom_value(PL_atomic(u));
+  copy = (char *) malloc(strlen(s)+1);
+
+  for( q=copy; *s; q++, s++)
+    *q = (isupper(*s) ? tolower(*s) : *s);
+  *q = '\0';
+
+  la = PL_new_atom(copy);
+  free(copy);
+
+  return PL_unify_atomic(l, la);
+}
+
+init_lowercase()
+{ PL_register_foreign("lowercase", 2, pl_lowercase, 0);
+}
+\end{code}
+\end{boxed}
+    \caption{Lowercase source file}
+    \label{fig:lowercase-c}
+\end{figure}
+
+\subsection*{Compiling and Loading Foreign Code}
+
+\begin{boxed}
+\begin{code}
+sun% cc -O -c lowercase.c
+sun% pl
+/staff/jan/.plrc consulted, 0.166667 seconds, 2256 bytes.
+\version
+Copyright (c) 1990, University of Amsterdam
+
+1 ?- load_foreign(lowercase, init_lowercase).
+foreign file(s) lowercase loaded, 0.016667 seconds, 464 bytes. 
+
+Yes
+2 ?- lowercase('Hello World!', L).
+
+L = 'hello world!' 
+
+Yes
+\end{code}
+\end{boxed}
+
+\section{Notes on Using Foreign Code}
+
+\subsection{Garbage Collection and Foreign Code}
+
+Currently no interface between foreign code and the garbage collector
+has been defined.  The garbage collector is disabled during execution of
+foreign code.  Future versions might define such an interface.  This
+probably will introduce incompatible changes to the current interface
+definition.
+
+\subsection{Memory Allocation}
+
+SWI-Prolog's memory allocation is based on the malloc() library
+routines.  Foreign applications can savely use malloc(), realloc() and
+free(). Memory allocation using brk() or sbrk() is not allowed as these
+calls conflict with malloc().
+
+\subsection{Debugging Foreign Code}
+
+NOTE: this section is highly machine dependent. The tricks described
+here are tested on SUN-3 and SUN-4. They might work on other
+BSD variants of Unix.
+
+Debugging incrementally loaded executables is a bit more difficult than
+debugging normal executables. The oldest way of debugging (putting
+print statements in your code at critical points) of course still
+works. `Post-crash' debugging however is not possible. For adb/dbx to
+work they need (besides the core) the text segment and the symbol
+table. The symbol table lives somewhere on /tmp (called
+`\tty{/tmp/pl_ld_..._.}', where `...' is the process id and `.' is an
+additional number to make sure the temporary file is unique. The text
+segment lives partly in the core (the incremental loaded bit) and
+partly in the SWI-Prolog executable.
+
+The only way to debug foreign language code using a debugger is by
+starting the debugger on the running core image. Dbx(1) can do this. First
+compile the source files to be debugged with the `\tty{-g}' option to
+include dbx debugging information. Then load them into SWI-Prolog. Now
+obtain the name of the current symbol table and the process id of
+Prolog. Then start dbx (or dbxtool) using
+\begin{code}
+sun% dbx[tool] <symbol file> <pid>
+\end{code}
+
+Should this be done often then the following foreign predicate
+definition might help:
+
+\begin{boxed}
+\begin{code}
+pl_dbx()
+{ char *symbolfile = PL_query(PL_QUERY_SYMBOLFILE);
+  char cmd[256];
+
+  sprintf(cmd, "dbxtool %s %d &", symbolfile, getpid());
+  if ( system(cmd) == 0 )
+    PL_succeed;
+  else
+    PL_fail;
+}
+\end{code}
+\end{boxed}
+
+Register this predicate as dbx/0 using the following call in your
+initialisation function:
+
+\begin{code}
+PL_register_foreign("dbx", 0, pl_dbx, 0);
+\end{code}
+
+\subsection{Name Conflicts in C modules}
+
+In the current version of the system all public C functions of
+SWI-Prolog are in the symbol table.  This can lead to name clashes with
+foreign code.  Someday I should write a program to strip all these
+symbols from the symbol table (why does Unix not have that?).  For now
+I can only suggest to give your function another name.  You can do this
+using the C preprocessor.  If --for example-- your foreign package uses
+a function warning(), which happens to exist in SWI-Prolog as well, the
+following macro should fix the problem.
+
+\begin{code}
+#define warning warning_
+\end{code}
+
+\subsection{Compatibility of the Foreign Interface}
+
+As far as I known there is no standard for foreign language interfaces
+in Prolog.  The SWI-Prolog interface is no attempt to propose such a
+standard.  It is (in part) tailored to the possibilities of the
+SWI-Prolog machinery.  BIM-Prolog has a similar interface to analyse and
+construct terms.  The major difference is that they have garbage
+collection and calls are made available to lock and unlock terms for
+garbage collection.  I built a similar interface to Edinburgh C-Prolog
+(although less clean).  This at least tells us that  the  interface  can
+work for various forms of the WAM as well as a structure sharing
+Prolog.
+
+As no standard exists nor emerges users of the foreign language
+interface should carefully design the interface if the C-code should be
+portable to other Prolog implementation. The best advice to give is to
+define a small interface layer around the C-application and interface
+this to Prolog.

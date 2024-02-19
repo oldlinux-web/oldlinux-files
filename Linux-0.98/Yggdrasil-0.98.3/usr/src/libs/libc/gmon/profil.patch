@@ -1,0 +1,104 @@
+diff -rc linux-0.96a/fs/exec.c linux/fs/exec.c
+*** linux-0.96a/fs/exec.c	Mon Jun  8 21:26:10 1992
+--- linux/fs/exec.c	Sat Jun 13 16:57:18 1992
+***************
+*** 520,525 ****
+--- 520,527 ----
+  		if ((current->close_on_exec>>i)&1)
+  			sys_close(i);
+  	current->close_on_exec = 0;
++ 	current->prof_buf = 0;
++ 	current->prof_bufsiz = current->prof_offset = current->prof_scale = 0;
+  	free_page_tables(get_base(current->ldt[1]),get_limit(0x0f));
+  	free_page_tables(get_base(current->ldt[2]),get_limit(0x17));
+  	if (last_task_used_math == current)
+diff -rc linux-0.96a/include/linux/sched.h linux/include/linux/sched.h
+*** linux-0.96a/include/linux/sched.h	Mon Jun  8 21:26:42 1992
+--- linux/include/linux/sched.h	Sat Jun 13 18:49:05 1992
+***************
+*** 138,143 ****
+--- 138,145 ----
+  	unsigned long timeout;
+  	unsigned long it_real_value, it_prof_value, it_virt_value;
+  	unsigned long it_real_incr, it_prof_incr, it_virt_incr;
++ 	unsigned long prof_buf;
++ 	int prof_bufsiz, prof_offset, prof_scale;
+  	long utime,stime,cutime,cstime,start_time;
+  	unsigned long min_flt, maj_flt;
+  	unsigned long cmin_flt, cmaj_flt;
+***************
+*** 190,195 ****
+--- 192,198 ----
+  /* proc links*/ &init_task.task,NULL,NULL,NULL,NULL, \
+  /* uid etc */	0,0,0,0,0,0, \
+  /* timeout */	0,0,0,0,0,0,0,0,0,0,0,0, \
++ /* profil */	0,0,0,0, \
+  /* min_flt */	0,0,0,0, \
+  /* rlimits */   { {0x7fffffff, 0x7fffffff}, {0x7fffffff, 0x7fffffff},  \
+  		  {0x7fffffff, 0x7fffffff}, {0x7fffffff, 0x7fffffff}, \
+diff -rc linux-0.96a/include/unistd.h linux/include/unistd.h
+*** linux-0.96a/include/unistd.h	Sat May  2 19:25:44 1992
+--- linux/include/unistd.h	Sat Jun 13 18:49:02 1992
+***************
+*** 152,155 ****
+--- 152,156 ----
+  int select(int width, fd_set * readfds, fd_set * writefds,
+  	fd_set * exceptfds, struct timeval * timeout);
+  int swapon(const char * specialfile);
++ int profil(char *buf, int bufsiz, int offset, int scale);
+  #endif
+diff -rc linux-0.96a/kernel/sched.c linux/kernel/sched.c
+*** linux-0.96a/kernel/sched.c	Mon Jun  8 21:26:12 1992
+--- linux/kernel/sched.c	Sat Jun 13 22:20:42 1992
+***************
+*** 406,412 ****
+--- 406,426 ----
+  		current->it_virt_value = current->it_virt_incr;
+  		current->signal |= (1<<(SIGVTALRM-1));
+  	}
++ 	if (current->prof_scale >= 2 && current->prof_buf) {
++ 		unsigned long pc, spot, scale;
+  
++ 		pc = *(1019 + (unsigned long *) current);
++ 		pc -= current->prof_offset;
++ 		scale = current->prof_scale;
++ 		spot = scale*(pc >> 16) + ((scale*(pc & (0x10000 - 1))) >> 16);
++ 		spot &= ~1;
++ 		if (spot < current->prof_bufsiz) {
++ 			spot += current->prof_buf;
++ 			verify_area((void *) spot, 2);
++ 			put_fs_word(get_fs_word((unsigned short *) spot) + 1,
++ 				(unsigned short *) spot);
++ 		}
++ 	}
+  	if (cpl)
+  		current->utime++;
+  	else
+diff -rc linux-0.96a/kernel/sys.c linux/kernel/sys.c
+*** linux-0.96a/kernel/sys.c	Mon Jun  8 21:26:13 1992
+--- linux/kernel/sys.c	Sat Jun 13 22:21:07 1992
+***************
+*** 98,106 ****
+  	return(max_prio ? max_prio : -ESRCH);
+  }
+  
+! int sys_profil()
+  {
+! 	return -ENOSYS;
+  }
+  
+  int sys_ftime()
+--- 98,110 ----
+  	return(max_prio ? max_prio : -ESRCH);
+  }
+  
+! int sys_profil(char *buf, int bufsiz, int offset, int scale)
+  {
+! 	current->prof_buf = (unsigned long) buf;
+! 	current->prof_bufsiz = bufsiz & ~1;
+! 	current->prof_offset = offset;
+! 	current->prof_scale = scale;
+! 	return 0;
+  }
+  
+  int sys_ftime()

@@ -1,0 +1,562 @@
+/*
+	FILE: unix.c
+
+	Routines: This file contains the following routines:
+		fileinit()
+		eihalt()
+		kbread()
+		clksec()
+		tmpfile()
+		restore()
+		stxrdy()
+		disable()
+		memstat()
+		filedir()
+		sysreset()
+
+	Written by Mikel Matthews, N9DVG
+	SYS5 stuff added by Jere Sandidge, K4FUM
+*/
+
+#include <stdio.h>
+#include <signal.h>
+#include <termios.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/times.h>
+#include <time.h>
+#include <string.h>
+#include <ctype.h>
+#undef	toupper
+#undef	tolower
+
+#include "global.h"
+#include "config.h"
+#include "cmdparse.h"
+#include "iface.h"
+#include "unix.h"
+#include <dirent.h>
+
+#define	MAXCMD	1024
+
+int asy_attach();
+#ifdef	SUNOS4
+char *sprintf();
+#endif
+
+extern struct cmds attab[];
+extern struct termios savecon;
+
+unsigned long selmask = 0;
+unsigned long xmask = 0;
+unsigned long mainmask = 0;
+
+unsigned nasy;
+
+fileinit(argv0)
+char *argv0;
+{
+	int el;
+	char *ep, *cp, *malloc(), *getenv(), *getcwd();
+	char tmp[MAXCMD];
+	extern char *startup, *config, *userfile, *Dfile, *hosts, *mailspool;
+	extern char *mailqdir, *mailqueue, *routeqdir, *alias, *netexe;
+#ifdef	_FINGER
+	extern char *fingerpath;
+#endif
+#ifdef	XOBBS
+	extern char *bbsexe;
+#endif
+
+	/* Get the name of the currently executing program */
+	if ((cp = malloc((unsigned)(strlen(argv0) + 1))) == NULL)
+		perror("malloc");
+	else {
+		sprintf(cp, "%s", argv0);
+		netexe = cp;
+	}
+
+#ifdef	XOBBS
+	/* Get the path to the W2XO BBS executable. */
+	if ((ep = getenv("XOBBS")) == NULLCHAR) {
+		bbsexe = "xobbs";
+	} else {
+		if ((cp = malloc((unsigned)(strlen(ep) + 2))) == NULL)
+			perror("malloc");
+		else {
+			sprintf(cp, "%s", ep);
+			bbsexe = cp;
+		}
+	}
+#endif
+	/* Try to get home directory name */
+	if ((ep = getenv("NETHOME")) == NULLCHAR) {
+		if ((ep = getenv("HOME")) == NULLCHAR) {
+			ep = ".";
+		}
+	}
+	el = strlen(ep);
+	/* Replace each of the file name strings with the complete path */
+	if (*startup != '/') {
+		if ((cp = malloc((unsigned)(el + strlen(startup) + 2))) == NULL)
+			perror("malloc");
+		else {
+			sprintf(cp, "%s/%s", ep, startup);
+			startup = cp;
+		}
+	}
+
+	if (*config != '/') {
+		if ((cp = malloc((unsigned)(el + strlen(config) + 2))) == NULL)
+			perror("malloc");
+		else {
+			sprintf(cp, "%s/%s", ep, config);
+			config = cp;
+		}
+	}
+
+	if (*userfile != '/') {
+		if ((cp = malloc((unsigned)(el + strlen(userfile) + 2))) == NULL)
+			perror("malloc");
+		else {
+			sprintf(cp, "%s/%s", ep, userfile);
+			userfile = cp;
+		}
+	}
+
+	if (*Dfile != '/') {
+		if ((cp = malloc((unsigned)(el + strlen(Dfile) + 2))) == NULL)
+			perror("malloc");
+		else {
+			sprintf(cp, "%s/%s", ep, Dfile);
+			Dfile = cp;
+		}
+	}
+
+	if (*hosts != '/') {
+		if ((cp = malloc((unsigned)(el + strlen(hosts) + 2))) == NULL)
+			perror("malloc");
+		else {
+			sprintf(cp, "%s/%s", ep, hosts);
+			hosts = cp;
+		}
+	}
+
+	if (*alias != '/') {
+		if ((cp = malloc((unsigned)(el + strlen(alias) + 2))) == NULL)
+			perror("malloc");
+		else {
+			sprintf(cp, "%s/%s", ep, alias);
+			alias = cp;
+		}
+	}
+
+#ifdef		_FINGER
+	if (*fingerpath != '/') {
+		if ((cp = malloc((unsigned)(el + strlen(fingerpath) + 2))) == NULL)
+			perror("malloc");
+		else {
+			sprintf(cp, "%s/%s", ep, fingerpath);
+			fingerpath = cp;
+		}
+	}
+#endif
+
+	/* Try to get home directory name */
+	if ((ep = getenv("NETSPOOL")) == NULLCHAR)
+		ep = "/usr/spool";
+	el = strlen(ep);
+
+	if (*mailspool != '/') {
+		if ((cp = malloc((unsigned)(el + strlen(mailspool) + 2))) == NULL)
+			perror("malloc");
+		else {
+			sprintf(cp, "%s/%s", ep, mailspool);
+			mailspool = cp;
+		}
+	}
+
+	if (*mailqdir != '/') {
+		if ((cp = malloc((unsigned)(el + strlen(mailqdir) + 2))) == NULL)
+			perror("malloc");
+		else {
+			sprintf(cp, "%s/%s", ep, mailqdir);
+			mailqdir = cp;
+		}
+	}
+
+	if (*mailqueue != '/') {
+		if ((cp = malloc((unsigned)(el + strlen(mailqueue) + 2))) == NULL)
+			perror("malloc");
+		else {
+			sprintf(cp, "%s/%s", ep, mailqueue);
+			mailqueue = cp;
+		}
+	}
+
+	if (*routeqdir != '/') {
+		if ((cp = malloc((unsigned)(el + strlen(routeqdir) + 2))) == NULL)
+			perror("malloc");
+		else {
+			sprintf(cp, "%s/%s", ep, routeqdir);
+			routeqdir = cp;
+		}
+	}
+}
+
+/* action routine for remote reset */
+sysreset()
+{
+	extern char *netexe;
+
+	execlp(netexe,netexe,0);
+	execlp("net","net",0);
+	printf("reset failed: exiting\n");
+	exit(1);
+}
+
+long waittime = 100;
+
+dowait(argc,argv)
+int argc;
+char *argv[];
+{
+  if (argc < 2)  {
+    printf("Wait in main select is %d msec\n", waittime);
+    return;
+  }
+  waittime = atoi(argv[1]);
+}
+
+eihalt()
+{
+	void tnix_scan();
+	struct timeval {
+		long	tv_sec;		/* seconds */
+		long	tv_usec;	/* microseconds */
+	} tv;
+
+	tnix_scan();
+
+	if (waittime) {
+	  tv.tv_sec = waittime / 1000;
+	  tv.tv_usec = (waittime % 1000) * 1000;
+	  mainmask = selmask | 1;
+	  select(20,&mainmask,0,0,&tv);
+	  if (mainmask & xmask) 
+	    send_x (mainmask & xmask);
+	}
+}
+
+
+kbread()
+{
+	unsigned char c;
+
+	if (((mainmask & 1) == 0) && waittime)
+		return -1;
+	if (read(fileno(stdin), &c, 1) <= 0)
+		return -1;
+
+	return ((int) c);
+}
+
+
+clksec()
+{
+	time_t tim, time();
+
+	(void) time(&tim);
+
+	return ((int) tim);
+}
+
+
+/*ARGSUSED*/
+restore(state)
+char state;
+{
+}
+
+
+/*ARGSUSED*/
+stxrdy(dev)
+int16 dev;
+{
+	return 1;
+}
+
+
+disable()
+{
+}
+
+
+memstat()
+{
+	return 0;
+}
+
+
+/* wildcard filename lookup */
+filedir(name, times, ret_str)
+char	*name;
+int	times;
+char	*ret_str;
+{
+	static char	dname[1024], fname[256];
+	static DIR *dirp = NULL;
+	struct dirent *dp;
+	struct stat sbuf;
+	char	*cp, temp[1024];
+
+	/*
+	 * Make sure that the NULL is there in case we don't find anything
+	 */
+	ret_str[0] = '\0';
+
+	if (times == 0) {
+		/* default a null name to *.* */
+		if (name == NULL || *name == '\0')
+			name = "*.*";
+		/* split path into directory and filename */
+		if ((cp = strrchr(name, '/')) == NULL) {
+			strcpy(dname, ".");
+			strcpy(fname, name);
+		} else {
+			strcpy(dname, name);
+			dname[cp - name] = '\0';
+			strcpy(fname, cp + 1);
+			/* root directory */
+			if (dname[0] == '\0')
+				strcpy(dname, "/");
+			/* trailing '/' */
+			if (fname[0] == '\0')
+				strcpy(fname, "*.*");
+		}
+		/* close directory left over from another call */
+		if (dirp != NULL)
+			closedir(dirp);
+		/* open directory */
+		if ((dirp = opendir(dname)) == NULL) {
+			printf("Could not open DIR (%s)\n", dname);
+			return;
+		}
+	} else {
+		/* for people who don't check return values */
+		if (dirp == NULL)
+			return;
+	}
+
+	/* scan directory */
+	while ((dp = readdir(dirp)) != NULL) {
+		/* test for name match */
+		if (wildmat(dp->d_name, fname)) {
+			/* test for regular file */
+			sprintf(temp, "%s/%s", dname, dp->d_name);
+			if (stat(temp, &sbuf) < 0)
+				continue;
+			if ((sbuf.st_mode & S_IFMT) != S_IFREG)
+				continue;
+			strcpy(ret_str, dp->d_name);
+			break;
+		}
+	}
+
+	/* close directory if we hit the end */
+	if (dp == NULL) {
+		closedir(dirp);
+		dirp = NULL;
+	}
+}
+
+
+/* checks the time then ticks and updates ISS */
+void
+check_time()
+{
+	int32 iss();
+	long times();
+
+	struct tms tb;
+	static long clkval;
+	long ntime, offset;
+
+	/* read elapsed real time (typ. 60 Hz) */
+	ntime = times(&tb);
+
+	/* resynchronize if the error is large (10 seconds or more) */
+	offset = ntime - clkval;
+	if (offset > (10000/MSPTICK) || offset < 0)
+		clkval = ntime;
+
+	/* Handle possibility of several missed ticks */
+	while (ntime != clkval) {
+		++clkval;
+		icmpclk();
+		tick();
+		(void) iss();
+	}
+}
+
+
+getds()
+{
+	return 0;
+}
+
+
+audit()
+{
+}
+
+
+doshell(argc, argv)
+char	**argv;
+{
+	int	i, stat, pid, pid1, (*savi)();
+	char	*cp, str[MAXCMD], *getenv();
+	struct termios tt_config;
+
+	str[0] = '\0';
+	for (i = 1; i < argc; i++) {
+		strcat(str, argv[i]);
+		strcat(str, " ");
+	}
+
+	ioctl(0, TCGETS, &tt_config);
+	ioctl(0, TCSETSW, &savecon);
+
+	if ((cp = getenv("SHELL")) == NULL || *cp != '\0')
+		cp = "/bin/sh";
+
+	if ((pid = fork()) == 0) {
+		if (argc > 1)
+			(void)execl("/bin/sh", "sh", "-c", str, 0);
+		else
+			(void)execl(cp, cp, (char *)0, (char *)0, 0);
+		perror("execl");
+		exit(1);
+	} else if (pid == -1) {
+		perror("fork");
+		stat = -1;
+	} else {
+		savi = signal(SIGINT, SIG_IGN);
+		while ((pid1 = wait(&stat)) != pid && pid1 != -1)
+			;
+		signal(SIGINT, savi);
+	}
+
+	ioctl(0, TCSETSW, &tt_config);
+
+	return stat;
+}
+
+
+dodir(argc, argv)
+int	argc;
+char	**argv;
+{
+	int	i, stat;
+	char	str[MAXCMD];
+	struct termios tt_config;
+
+	strcpy(str, "ls -l ");
+	for (i = 1; i < argc; i++) {
+		strcat(str, argv[i]);
+		strcat(str, " ");
+	}
+
+	ioctl(0, TCGETS, &tt_config);
+	ioctl(0, TCSETSW, &savecon);
+
+	stat = system(str);
+
+	ioctl(0, TCSETSW, &tt_config);
+
+	return stat;
+}
+
+
+rename(s1, s2)
+const char *s1; const char *s2;
+{
+	char tmp[MAXCMD];
+
+	(void) sprintf(tmp, "mv %s %s", s1, s2);
+	(void) system(tmp);
+}
+
+
+int
+docd(argc, argv)
+int argc;
+char **argv;
+{
+	char tmp[MAXCMD];
+	char *getcwd();
+
+	if (argc > 1) {
+		if (chdir(argv[1]) == -1) {
+			printf("Can't change directory\n");
+			return 1;
+		}
+	}
+	if (getcwd(tmp, sizeof(tmp)) != NULL)
+		printf("%s\n", tmp);
+
+	return 0;
+}
+
+
+xmkdir(s, m)
+char	*s;
+int	m;
+{
+	char tmp[MAXCMD];
+
+	sprintf(tmp, "mkdir %s", s);
+	if (system(tmp))
+		return -1;
+	if (chmod(s, m) < 0)
+		return -1;
+
+	return 0;
+}
+
+
+rmdir(s)
+char	*s;
+{
+	char tmp[MAXCMD];
+
+	sprintf(tmp, "rmdir %s", s);
+	if (system(tmp))
+		return -1;
+
+	return 0;
+}
+
+/*
+ * These are here to prevent chars that are already lower or upper
+ * case from being turned into gibberish.
+ */
+int
+tolower(c)
+char c;
+{
+	if (isupper(c))
+		return(c - 'A' + 'a');
+	else
+		return(c);
+}
+
+int
+toupper(c)
+char c;
+{
+	if (islower(c))
+		return(c - 'a' + 'A');
+	else
+		return(c);
+}

@@ -1,0 +1,5 @@
+#define UTS_RELEASE "0.98.pl3-23"
+#define UTS_VERSION "10/27/92"
+#define LINUX_COMPILE_TIME "09:34:14"
+#define LINUX_COMPILE_BY "root"
+#define LINUX_COMPILE_HOST "yggdrasil.com"

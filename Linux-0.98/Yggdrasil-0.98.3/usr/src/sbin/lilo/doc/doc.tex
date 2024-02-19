@@ -1,0 +1,1188 @@
+\documentstyle{article}
+
+\parindent=0pt
+\parskip=4pt
+
+% Okay, what follows is more TeX than LaTeX ...
+
+\def\hditem#1{\hbox to 1.2in{#1\hfil}}
+\def\boottwo#1{$$
+  \bf
+  \begin{tabular}{|ll|}
+    \hline
+    \hditem{\rm Master Boot Record} & \hditem{\rm Operating system} \\
+    \hline
+    #1 \\
+    \hline
+  \end{tabular}
+  $$}
+
+\def\bootthree#1{$$
+  \bf
+  \begin{tabular}{|lll|}
+    \hline
+    \hditem{\rm Master Boot Record} & \hditem{\rm Boot sector} &
+      \hditem{\rm Operating system} \\
+    \hline
+    #1 \\
+    \hline
+  \end{tabular}
+  $$}
+
+\def\bootfour#1{$$
+  \bf
+  \begin{tabular}{|llll|}
+    \hline
+    \hditem{\rm Master Boot Record} & \hbox to 1.1in{\rm Boot sector\hfil} &
+      \hditem{\rm Operating systems} & \hbox to 0.4in{\hfil} \\
+    \hline
+    #1 \\
+    \hline
+  \end{tabular}
+  $$}
+\def\sep{\rightarrowfill &}
+\def\empty{&}
+\def\branch{\hfill$\longrightarrow$ &}
+\def\cont{---\,$\cdots$}
+\def\key#1{#1}
+
+\begin{document}
+
+\title{LILO \\
+  Generic boot loader for Linux}
+\author{Werner Almesberger \\
+  {\tt almesber@nessie.cs.id.ethz.ch}}
+
+\maketitle
+\setcounter{tocdepth}{1}
+%\tableofcontents
+
+LILO is a versatile boot loader for Linux. It does not depend on a specfic
+file system, can boot Linux boot images and unstripped Linux kernels from
+floppy disks and from hard disks and can even boot other operating
+systems\footnote{MS-DOS, DR DOS, OS/2, 386BSD, $\ldots$}.
+
+Up to sixteen different boot images can be selected at boot time. The root and
+swap device can be set independently for each of them. LILO can even be
+used as the master boot record.
+
+This document introduces the basics of disk organization and booting,
+continues with an overview of common boot techniques and finally describes
+installation and use of LILO in greater detail.
+
+
+\section{Disk organization}
+
+When designing a boot concept, it is important to understand all the
+subtleties of how MS-DOS organizes disks. The most simple case are
+floppy disks. They consist of a boot sector, some administrative
+data (FAT or super block, etc.) and the data area. Because that
+administrative data is irrelevant as far as booting is concerned, it is
+added to the data area for simplicity.
+
+$$
+\begin{tabular}{|c|c|}
+  \hline
+  Boot sector & \hbox to 1.5in{\hfil} \\
+  \cline{1-1}
+  \multicolumn{2}{|c|}{} \\
+  \multicolumn{2}{|c|}{Data area} \\
+  \multicolumn{2}{|c|}{} \\
+  \hline
+  \end{tabular}
+$$
+
+The entire disk appears as one device (i.e. {\tt /dev/fd0}) on Linux.
+
+The MS-DOS boot sector has the following structure:
+
+$$
+\begin{tabular}{r|c|}
+  \cline{2-2}
+  \tt 0x000 & Jump to the program code\\
+  \cline{2-2}
+  \tt 0x003 & \\
+  & Disk parameters \\
+  & \\
+  \cline{2-2}
+  \tt 0x02C/0x03E & \\
+  & Program code \\
+  & \\
+  & \\
+  \cline{2-2}
+  \tt 0x1FE & Magic number (0xAA55)\\
+  \cline{2-2}
+\end{tabular}
+$$
+
+LILO uses a similar boot sector, but it does not contain the disk
+parameters part. This is no problem for Minix or EXT file systems, because
+they don't look at the boot sector, but putting a LILO boot sector on an
+MS-DOS file system makes it inaccessible for MS-DOS.
+
+Hard disks are organized in a more complex way than floppy disks. They
+contain several data areas called partitions. Up to four so-called
+primary partitions can exist on an MS-DOS hard disk. If more partitions
+are needed, a primary partition is used as an extended partition that
+contains several logical partitions.
+
+The first sector of each hard disk contains a partition table and an
+extended partition and {\bf each} logical partition contains a partition
+table too.\footnote{Is it legal to have more than one extended partition ?
+Linux appears to be able to handle this, but is DOS ?}
+
+$$
+\begin{tabular}{|l|l|l|}
+  \hline
+  \multicolumn{3}{|l|}{Partition table\hbox to 2in{\hfil\tt /dev/hda~}} \\
+  \cline{2-3}
+  & \multicolumn{2}{l|}{Partition 1\hfill {\tt /dev/hda1}} \\
+  & \multicolumn{2}{l|}{} \\
+  \cline{2-3}
+  & \multicolumn{2}{l|}{Partition 2\hfill {\tt /dev/hda2}} \\
+  & \multicolumn{2}{l|}{} \\
+  \hline
+\end{tabular}
+$$
+
+The entire disk can be accessed as {\tt /dev/hda}, {\tt /dev/hdb},
+{\tt /dev/sda}, etc. The primary partitions are {\tt /dev/hda1 $\ldots$
+/dev/hda4}.
+
+$$
+\begin{tabular}{|l|l|l|}
+  \hline
+  \multicolumn{3}{|l|}{Partition table\hbox to 2in{\hfil\tt /dev/hda~}} \\
+  \cline{2-3}
+  & \multicolumn{2}{l|}{Partition 1\hfill {\tt /dev/hda1}} \\
+  & \multicolumn{2}{l|}{} \\
+  \cline{2-3}
+  & \multicolumn{2}{l|}{Partition 2\hfill {\tt /dev/hda2}} \\
+  & \multicolumn{2}{l|}{} \\
+  \cline{2-3}
+  & \multicolumn{2}{l|}{Extended partition\hfill {\tt /dev/hda3}} \\
+  \cline{3-3}
+  & & Extended partition table \\
+  \cline{3-3}
+  & & Partition 3\hfill {\tt /dev/hda5}\\
+  & & \\
+  \cline{3-3}
+  & & Extended partition table \\
+  \cline{3-3}
+& & Partition 4\hfill {\tt /dev/hda6}\\
+  & & \\
+  \hline
+\end{tabular}
+$$
+
+This hard disk has two primary partitions and an extended partition
+that contains two logical partitions. They are accessed as
+{\tt /dev/hda5 $\ldots$}
+
+Note that the partition tables of logical partitions are not accessible
+as the first blocks of some devices, while the main partition table,
+all boot sectors and the partition tables of extended partitions are.
+
+Partition tables are stored in partition boot sectors. Only the partition
+boot sector of the entire disk is usually used as a boot sector. It is
+also frequently called the master boot record (MBR).
+
+$$
+\begin{tabular}{r|c|}
+  \cline{2-2}
+  \tt 0x000 & \\
+  & Program code \\
+  & \\
+  & \\
+  \cline{2-2}
+  \tt 0x1BE & Partition table \\
+  & \\
+  \cline{2-2}
+  \tt 0x1FE & Magic number (0xAA55) \\
+  \cline{2-2}
+\end{tabular}
+$$
+
+The LILO boot sector is designed to be usable as a partition boot sector.
+Therefore, the LILO boot sector can be stored at the following locations:
+
+\begin{itemize}
+  \item boot sector of a Linux floppy disk. ({\tt /dev/fd0}, $\ldots$)
+  \item MBR of the first hard disk. ({\tt /dev/hda}, $\ldots$)
+  \item boot sector of a Linux primary partition on the first hard
+    disk. ({\tt /dev/hda1}, $\ldots$)
+  \item partition boot sector of an extended partition on the first hard disk.
+    ({\tt /dev/hda1}, $\ldots$)\footnote{Most FDISK-type programs don't
+      believe in booting from an extended partition and refuse to
+      activate it. LILO is accompanied by a simple program that doesn't
+      have this restriction.}
+\end{itemize}
+
+It {\bf can't} be stored at any of the following locations:
+
+\begin{itemize}
+  \item boot sector of a non-Linux floppy disk of primary partition.
+  \item a Linux swap partition.
+  \item boot sector of a logical partition in an extended partition.
+  \item on the second hard disk. (Unless for backup installations or
+    if the current first disk will be removed or disabled.)
+\end{itemize}
+
+
+\section{Booting basics}
+
+When booting from a floppy disk, the first sector of the disk, the so-called
+boot sector, is loaded. That boot sector contains a small program that loads
+the respective operating system. MS-DOS boot sectors also contain 
+a data area, where the disk parameters (number of sectors, number of
+heads, etc.) are stored.
+
+When booting from a hard disk, the very first sector of that disk, the
+so-called Master boot record (MBR) is loaded. This sector contains a
+loader program and the partition table of the disk. The loader program
+usually loads the boot sector, as if the system was booting from a floppy.
+
+Note that there is no functional difference between the MBR and the boot
+sector other than that the MBR contains the partition information but
+doesn't contain any (MS-DOS) disk parameter information.
+
+The first 446 (0x1BE) bytes of the MBR are used by the loader program.
+They are followed by the partition table, with a length of 64 (0x40)
+bytes. The last two bytes contain a magic number that is sometimes used to
+verify that a given sector really is a boot sector.
+
+There is a large number of possible boot configurations. The most common
+ones are described in the following sections.
+
+
+\subsection{MS-DOS alone}
+
+\bootthree{DOS-MBR \sep MS-DOS \sep COMMAND.COM}
+
+This is what usually happens when MS-DOS boots from a hard disk: the DOS-MBR
+determines the active partition and loads the MS-DOS boot sector. This boot
+sector loads MS-DOS and finally passes control to {\tt COMMAND.COM}. (This is
+greatly simplified.)
+
+
+\subsection{BOOTLIN}
+
+\bootfour{DOS-MBR \sep MS-DOS \sep COMMAND.COM \empty \\
+  \empty \branch BOOTLIN \sep Linux}
+
+A typical BOOTLIN setup: everything happens like when booting MS-DOS, but in
+{\tt CONFIG.SYS},
+BOOTLIN is invoked. This approach has the pleasent property that no boot
+sectors have to be altered.
+
+Installation:
+\begin{itemize}
+  \item boot Linux.
+  \item copy a bootable kernel image to your MS-DOS partition.\footnote{%
+    With Mtools or the MS-DOS FS.}
+  \item install {\tt BOOT.SYS} and {\tt BOOTLIN.SYS} on your MS-DOS
+    partition and add them to your {\tt CONFIG.SYS}.
+    (The READMEs describe how this is done.)
+  \item reboot.
+\end{itemize}
+
+Deinstallation:
+\begin{itemize}
+  \item remove {\tt BOOT.SYS} and {\tt BOOTLIN.SYS} from your {\tt CONFIG.SYS}.
+\end{itemize}
+
+
+\subsection{LILO started by DOS-MBR}
+
+\bootthree{DOS-MBR \sep LILO \sep Linux \\
+  \branch {\rm other OS} \empty}
+
+This is a ``safe'' LILO setup: LILO is booted by the DOS-MBR. No other boot
+sectors have to be touched. If the other OS (or one of them, if there are
+several of them) should be booted, the other partition has to be marked
+``active'' with (e)fdisk.
+
+Installation:
+\begin{itemize}
+  \item install LILO with its boot sector on the Linux partition.
+  \item use (e)fdisk to mark that partition active.
+  \item reboot.
+\end{itemize}
+
+Deinstallation:
+\begin{itemize}
+  \item mark a different partition active.
+  \item install whatever should replace LILO or Linux.
+\end{itemize}
+
+
+\subsection{Several alternate branches}
+
+\bootfour{DOS-MBR \sep MS-DOS \sep COMMAND.COM \empty \\
+  \empty \branch BOOTLIN \sep Linux \\
+  \branch LILO \sep Linux \empty \\
+  \empty \branch MS-DOS \cont \empty}
+
+An extended form of the above setup: the MBR is not changed and both branches
+can either boot Linux or MS-DOS. (LILO could also boot any other
+operating system.)
+
+
+\subsection{LILO started by BOOTACTV}
+
+\bootthree{BOOTACTV \sep LILO \sep Linux \\
+  \branch {\rm other OS} \empty}
+
+Here, the MBR is replaced by BOOTACTV (or any other interactive boot
+partition selector) and the choice between Linux and the
+other operating system can be made at boot time. This approach should be
+used if LILO fails to boot the other operating system(s).\footnote{%
+And the author would like to be notified if booting the other operating
+system(s) doesn't work with LILO, but if it works with an other boot partition
+selector.}
+
+Installation:
+\begin{itemize}
+  \item boot Linux.
+  \item make a backup copy of your MBR on a floppy disk, e.g. \\
+    \verb"dd if=/dev/hda of=/fd/MBR bs=512 count=1"
+  \item install LILO with the boot sector on the Linux partition.
+  \item install BOOTACTV as the MBR, e.g. \\
+    \verb"dd if=bootactv.bin of=/dev/hda bs=446 count=1"
+  \item reboot.
+\end{itemize}
+
+Deinstallation:
+\begin{itemize}
+  \item boot Linux.
+  \item restore the old MBR, e.g. \\
+    \verb"dd if=/MBR of=/dev/hda bs=446 count=1"
+\end{itemize}
+
+If replacing the MBR appears undesirable and if a second Linux partition
+exists (e.g. {\tt /usr}, {\bf not} a swap partition), BOOTACTV can be merged
+with
+the partition table and stored as the ``boot sector'' of that partition.
+Then, the partition can be marked active to be booted by the DOS-MBR.
+
+Example:
+\begin{verbatim}
+# dd if=/dev/hda of=/dev/hda3 bs=512 count=1
+# dd if=bootactv.bin of=/dev/hda3 bs=446 count=1
+\end{verbatim}
+
+Warning: whenever the disk is re-partitioned, the merged boot sector on that
+``spare'' Linux partition has to be updated too.
+
+
+\subsection{Shoelace started by BOOTACTV}
+
+\bootthree{BOOTACTV \sep Shoelace \sep Linux \\
+  \branch {\rm other OS} \empty}
+
+Shoelace, LILO's predecessor, can be started by BOOTACTV as well, of course.
+The same indirection as outlined above is possible. There are probably many
+other ways to install Shoelace.
+
+
+\subsection{LILO alone}
+
+\boottwo{LILO \sep Linux \\
+  \branch {\rm other OS}}
+
+LILO can also take over the entire boot procedure. If installed as the MBR,
+LILO is responsible for either booting Linux or any other OS. This approach
+has the disadvantage, that the old MBR is overwritten and has to be restored
+(either from a backup copy, with \verb"FDISK /MBR" on MS-DOS 5.0 or by
+overwriting
+it with BOOTACTV) if Linux should ever be removed from the system.
+
+You should verify that LILO is able to boot your other operating system(s)
+before relying on this method.
+
+Installation:
+\begin{itemize}
+  \item boot Linux.
+  \item make a backup copy of your MBR on a floppy disk, e.g. \\
+    \verb"dd if=/dev/hda of=/fd/MBR bs=512 count=1"
+  \item install LILO with its boot sector as the MBR.
+  \item reboot.
+\end{itemize}
+
+Deinstallation:
+\begin{itemize}
+  \item boot Linux.
+  \item restore the old MBR, e.g. \\
+    \verb"dd if=/fd/MBR of=/dev/hda bs=446 count=1"
+\end{itemize}
+
+If you've installed LILO to be the master boot record, you have to
+explicitly specify the boot sector when updating the map. Otherwise, it
+will try to use the boot sector of your current root partition, which
+may even work, but will leave your system unbootable.
+
+
+\subsection{Special names}
+
+The following names have been used to describe boot sectors or parts of
+operating systems:
+
+\begin{description}
+  \item[\bf DOS-MBR] is the original MS-DOS MBR. It scans the partition
+    table for a partition that is marked ``active'' and loads the boot
+    sector of that partition. Programs like MS-DOS' fdisk, Owen Le Blanc's
+    fdisk for Linux (on MCC-interim or 0.97 rootimage, or named efdisk on
+    the 0.96 rootimage) or activate (accompanies LILO)
+    can change the active marker in the partition table.
+  \item[\bf MS-DOS] denotes the MS-DOS boot sector that loads the other parts
+    of the system ({\tt IO.SYS}, etc.).
+  \item[\bf COMMAND.COM] is the standard command interpreter of MS-DOS.
+  \item[\bf BOOTLIN] is a program that loads a Linux boot image from an
+    MS-DOS partition into memory and executes it. It is usually invoked
+    from {\tt CONFIG.SYS} and used in conjunction with a {\tt CONFIG.SYS}
+    configuration switcher, like BOOT.SYS.\footnote{BOOTLIN is
+      available for anonymous FTP from \\
+      {\tt tsx-11.mit.edu:/pub/linux/INSTALL/bootlin4.zip} or \\
+      {\tt nic.funet.fi:/pub/OS/Linux/tools/bootlin.zip}, BOOT.SYS is
+      available for anonymous FTP from
+      {\tt nic.funet.fi:/pub/OS/Linux/tools/boot142.zip} or \\
+      {\tt wuarchive.wustl.edu:/mirrors/msdos/sysutl/boot142.zip}.}
+  \item[\bf LILO] can either load a Linux kernel or the boot sector of any
+    other operating system. It consists of a first stage boot sector that
+    loads the remaining parts of LILO from various locations.
+  \item[\bf BOOTACTV] permits interactive selection of the partition from
+    which the boot sector should be read. If no key is pressed within a
+    given interval, the partition marked active is booted. BOOTACTV is
+    included in the pfdisk package. There are also several similar
+    programs, like PBOOT and OS-BS.\footnote{pfdisk is available for
+      anonymous FTP from \\
+      {\tt tsx-11.mit.edu:/pub/linux/INSTALL/pfdisktc.zip} or \\
+      {\tt nic.funet.fi:/pub/OS/Linux/tools/pfdisk.tar.Z}. PBOOT can be
+      found at the same sites in the same directories.}
+  \item[\bf Shoelace] is a different boot loader for Linux. It is
+    functionally similar to LILO, but it can only use the Minix file system.
+\end{description}
+
+
+\section{Choosing the ``right'' boot concept}
+
+Although LILO can be installed in many different ways, the choice is
+usually limited by the present setup and therefore there is
+typically only a small number of configurations which fit naturally
+into an existing system.
+
+In all examples, the names of the AT-type hard disk devices
+({\tt /dev/hda$\ldots$}) are used. Everything applies to SCSI disks
+({\tt /dev/sda$\ldots$}) too.
+
+
+\subsection{One disk, Linux on a primary partition}
+
+If at least one primary partition of the first hard disk is used as a
+Linux file system ({\tt /}, {\tt /usr}, etc. but {\bf not} for a swap
+partition), the LILO boot sector should be stored on that partition
+and it should be booted by the original master boot record or by a
+program like BOOTACTV.
+
+$$
+  \begin{tabular}{r|c|c|}
+    \cline{2-3}
+    & \multicolumn{2}{|l|}{MBR\hbox to 1.3in{\hfill\tt /dev/hda~}} \\
+    \cline{3-3}
+    & & MS-DOS\hfill\tt /dev/hda1 \\
+    \cline{3-3}
+    $\rightarrow$ & & Linux {\tt /}\hfill\tt /dev/hda2 \\
+    \cline{2-3}
+  \end{tabular}
+$$
+
+A typical {\tt /etc/lilo/install} file would look like this:
+\begin{verbatim}
+/etc/lilo/lilo -c -i /etc/lilo/boot.b \
+    /linux \
+    /linux.backup \
+    msdos=/etc/lilo/chain.b+/dev/hda1@/dev/hda
+\end{verbatim}
+
+
+\subsection{One disk, Linux on an extended partition}
+
+If no primary partition is available for Linux, but at least one logical
+partition of an extended partition on the first hard disk contains a
+Linux file system, the LILO boot sector should be stored in the partition
+sector of the extended partition and it should be booted by the original
+master boot record or by a program like BOOTACTV.
+
+$$
+  \begin{tabular}{r|c|c|c|}
+    \cline{2-4}
+    & \multicolumn{3}{|l|}{MBR\hbox to 1.3in{\hfill\tt /dev/hda~}} \\
+    \cline{3-4}
+    & & \multicolumn{2}{|l|}{MS-DOS\hfill\tt /dev/hda1} \\
+    \cline{3-4}
+    $\rightarrow$ & & \multicolumn{2}{|l|}{Extended\hfill\tt /dev/hda2} \\
+    \cline{4-4}
+    & & & Linux\hfill\tt /dev/hda5 \\
+    \cline{4-4}
+    & & & $\ldots$\hfill\tt /dev/hda6 \\
+    \cline{2-4}
+  \end{tabular}
+$$
+
+A typical {\tt /etc/lilo/install} file for this configuration would look
+like this:
+\begin{verbatim}
+/etc/lilo/lilo -b /dev/hda2 -c -i /etc/lilo/boot.b \
+    /linux \
+    /linux.backup \
+    msdos=/etc/lilo/chain.b+/dev/hda1@/dev/hda
+\end{verbatim}
+
+
+\subsection{Two disks, Linux (at least partially) on the first disk}
+
+This case is equivalent to the configurations, where only one disk
+is in the system. The Linux boot sector resides on the first hard
+disk and the second disk is used later.
+
+Only the location of the boot sector matters -- everything
+else ({\tt /etc/lilo/boot.b},
+{\tt /etc/lilo/map}, the root file system, a swap partition, other
+Linux file systems, etc.) can be located anywhere on the second disk.
+
+
+\subsection{Two disks, Linux on the second disk, the first disk has an
+  extended partition}
+
+If there is no Linux partition on the first disk, but there is an
+extended partition, the LILO boot sector can be stored in the partition
+sector of the extended partition and it should be booted by the original
+master boot record or by a program like BOOTACTV.
+
+$$
+  \begin{tabular}{r|c|c|c|c|c|c|}
+    \multicolumn{1}{r}{}
+    & \multicolumn{3}{c}{\bf First disk} &
+      \multicolumn{1}{r}{\qquad}
+      & \multicolumn{2}{c}{\bf Second disk} \\
+    \cline{2-4}\cline{6-7}
+    & \multicolumn{3}{|l|}{MBR\hbox to 1.3in{\hfill\tt /dev/hda~}} &
+      & \multicolumn{2}{|l|}{MBR\hbox to 1.3in{\hfill\tt /dev/hdb~}} \\
+    \cline{3-4}\cline{7-7}
+    & & \multicolumn{2}{|l|}{MS-DOS\hfill\tt /dev/hda1} &
+      & & Linux\hfill\tt /dev/hdb1 \\
+    \cline{3-4}\cline{7-7}
+    $\rightarrow$ & & \multicolumn{2}{|l|}{Extended\hfill\tt /dev/hda2} &
+      & & $\ldots$\hfill\tt /dev/hdb2 \\
+    \cline{4-4}
+    & & & $\ldots$\hfill\tt /dev/hda5 & & & \\
+    \cline{4-4}
+    & & & $\ldots$\hfill\tt /dev/hda6 & & & \\
+    \cline{2-4}\cline{6-7}
+  \end{tabular}
+$$
+
+A typical {\tt /etc/lilo/install} file for this configuration would look
+like this:
+\begin{verbatim}
+/etc/lilo/lilo -b /dev/hda2 -c -i /etc/lilo/boot.b \
+    /linux \
+    /linux.backup \
+    msdos=/etc/lilo/chain.b+/dev/hda1@/dev/hda
+\end{verbatim}
+
+The program activate, that accompanies LILO, has to be used to set the
+active marker on an extended partition, because MS-DOS' fdisk and (e)fdisk
+refuse to do that. (Which is generally a good idea.)
+
+
+\subsection{Two disks, Linux on the second disk, the first disk has no
+  extended partition}
+
+If there is neither a Linux partition nor an extended partition on the first
+disk, where a LILO boot sector could be stored, then there's only one place
+left: the master boot record.
+
+In this configuration, LILO boots all other operating systems too.
+
+$$
+  \begin{tabular}{r|c|c|c|c|c|}
+    \multicolumn{1}{r}{}
+    & \multicolumn{2}{c}{\bf First disk} &
+      \multicolumn{1}{r}{\qquad}
+      & \multicolumn{2}{c}{\bf Second disk} \\
+    \cline{2-3}\cline{5-6}
+    $\rightarrow$ & \multicolumn{2}{|l|}{MBR\hbox to 1.3in{
+      \hfill\tt /dev/hda~}} &
+      & \multicolumn{2}{|l|}{MBR\hbox to 1.3in{\hfill\tt /dev/hdb~}} \\
+    \cline{3-3}\cline{6-6}
+    & & MS-DOS\hfill\tt /dev/hda1 &
+      & & Linux\hfill\tt /dev/hdb1 \\
+    \cline{3-3}\cline{6-6}
+    & & $\ldots$\hfill\tt /dev/hda2 &
+      & & $\ldots$\hfill\tt /dev/hdb2 \\
+    \cline{2-3}\cline{5-6}
+  \end{tabular}
+$$
+
+You should back up your old MBR before installing LILO and verify that
+LILO is able to boot your other operating system(s) before relying on
+this approach.
+
+A typical {\tt /etc/lilo/install} file for this configuration would look
+like this:
+\begin{verbatim}
+/etc/lilo/lilo -b /dev/hda -c -i /etc/lilo/boot.b \
+    /linux \
+    /linux.backup \
+    msdos=/etc/lilo/chain.b+/dev/hda1@/dev/hda
+\end{verbatim}
+
+
+\section{Technical overview}
+
+This section contains a description of several internals of LILO. It is
+not necessary to understand them in order to install LILO.
+
+
+\subsection{Load sequence}
+
+The boot sector is loaded by the ROM-BIOS at address 0x07C00. It moves
+itself to address 0x90000, sets up the stack (growing downwards from
+0x92000 to 0x91000), loads the secondary boot loader at address
+0x92000 and transfers control to it. It displays an ``L'' after moving
+itself and an ``I'' before starting the secondary boot loader.
+
+The secondary boot loader loads the descriptor table at 0x92E00 and checks
+for user input. If either the default is used or if the user has specified
+an alternate image, the setup part of that image is loaded at 0x90200 and
+the kernel part is loaded at 0x10000. During that load operation, the sectors
+of the map file are loaded at 0x93000.
+
+If the loaded image is a traditional boot image, control is transferred to
+its setup code. If it is an unstripped kernel, its BSS is zeroed first.
+If a different operating system is booted, things are a bit more difficult:
+the chain loader is loaded at 0x90200 and the boot sector of the other OS
+is loaded at 0x90400. The chain loader moves the partition table (loaded at
+0x903BE as part of the chain loader) to 0x00600 and the boot sector to
+0x07C00. After that, it passes control to the boot sector.
+
+The secondary boot loader displays an ``L'' after being started and an ``O''
+after loading the descriptor table.
+
+$$
+\begin{tabular}{l|c|l}
+  \cline{2-2}
+  \tt 0x00000 & & \\
+  \cline{2-2}
+  \tt 0x00600 & Partition table & 64 bytes \\
+  \cline{2-2}
+  \tt 0x00640 & & \\
+  \cline{2-2}
+  \tt 0x07C00 & Boot load area & 512 bytes \\
+  \cline{2-2}
+  \tt 0x07E00 & & \\
+  \cline{2-2}
+  & & \\
+  \tt 0x10000 & Kernel & 320 kB \\
+  & & \\
+  & & \\
+  \cline{2-2}
+  \tt 0x60000 & & \\
+  & & \\
+  & & \\
+  \cline{2-2}
+  \tt 0x90000 & Primary boot loader & 512 bytes \\
+  \cline{2-2}
+  \tt 0x90200 & Setup (kernel) & 2 kB \\
+  \cline{2-2}
+  \tt 0x90A00 & & \\
+  \cline{2-2}
+  \tt 0x91000 & Stack & 4 kB \\
+  \cline{2-2}
+  \tt 0x92000 & Secondary boot loader & 3.5 kB \\
+  \cline{2-2}
+  \tt 0x92E00 & Descriptor table & 512 bytes \\
+  \cline{2-2}
+  \tt 0x93000 & Map load area & 512 bytes \\
+  \cline{2-2}
+  \tt 0x93200 & Scratch space & 51.5 kB \\
+  & & \\
+  \cline{2-2}
+  \multicolumn{3}{l}{\tt 0xA0000} \\
+\end{tabular}
+$$
+
+
+\subsection{File references}
+
+This section describes the references among files involved in the boot
+procedures.
+
+$$
+  \input bootloader
+$$
+
+The boot sector contains the primary boot loader, the address of the
+descriptor table sector and the addresses of the sectors of the secondary
+boot loader. The boot sector is copied from {\tt boot.b}.
+
+The primary boot loader can store up to four sector addresses of the
+secondary boot loader.
+
+$$
+  \input map
+$$
+
+The map file consists of sections and of special data sectors. Each section
+spans an integral number of disk sectors and contains addresses of sectors
+of other files.\footnote{There are two exceptions: 1. If a ``hole'' is being
+covered, the address of the zero sector is used. This sector is part of the
+map file. 2. When booting a different operating system, the first sector is
+the merged chain loader that has been written to the map file before that
+section.} The last address slot of each sector is either unused (if the map
+ends in this sector) or contains the address of the next sector in the
+section.
+
+The two sectors at the beginning of the map file are special: the first
+sector contains the boot image descriptor table and the second sector
+is filled with zero bytes. This sector is mapped whenever a file contains
+a ``hole''.
+
+$$
+  \input image
+$$
+
+A traditional boot image consists simply of a sequence of sectors that are
+loaded. Images that are loaded from a device are treated exactly the same
+way as images that are loaded from a file.
+
+The first sector of the boot image contains the floppy boot sector
+and is not mapped.
+
+$$
+  \input unstripped
+$$
+
+Unstripped kernels consist of the setup part and of the kernel file. The
+descriptor also contains information about the start and the size of the
+BSS segment. The boot loader clears BSS before starting the kernel.
+
+$$
+  \input other
+$$
+
+When booting another operating system, the chain loader ({\tt chain.b}) is
+merged with the partition table\footnote{If the partition table is omitted,
+that area is filled with zero bytes.} and written into the map file. The
+map section of this boot image starts after that sector and contains only
+the address of the loader sector and of the boot sector of the other
+operating system.
+
+
+\section{The boot prompt}
+
+Immediately after it's loaded, LILO checks, whether one of the following
+is happening:
+
+\begin{itemize}
+  \item any of the \key{Shift}, \key{Control} or \key{Alt} keys is being
+    pressed.
+  \item \key{CapsLock} or \key{ScrollLock} is set.
+\end{itemize}
+
+If this is the case, LILO displays the \verb"boot:" prompt and waits for
+the name of a boot image. Otherwise, it boots the default boot image\footnote{%
+The default boot image is either the first boot image or the image that
+has been selected at the boot prompt.}
+or -- if a
+delay has been specified -- waits for one of the listed activities
+until that amount of time has passed.
+
+At the boot prompt, the name of the image to boot can be entered. Typing
+errors can be corrected with the keys \key{BackSpace}, \key{Delete},
+\key{Ctrl U} and \key{Ctrl X}. A list of known images can be obtained by
+pressing \key{?} (on the US keyboard) or \key{Tab}.
+
+If \key{Enter} is pressed and no file name has been entered, the default
+image is booted.
+
+
+\section{Map installer}
+
+The map installer program {\tt /etc/lilo/lilo} updates the boot sector
+and creates the map file. It is usually run from the shell script
+{\tt /etc/lilo/install}. If the map installer detects an error, it
+terminates immediately and does not touch the boot sector and the map
+file.
+
+Whenever LILO updates a boot sector, the original boot sector is copied
+to {\tt /etc/lilo/boot.{\it number\/}}, where {\it number\/} is the
+hexadecimal device number. If such a file already exists, no backup
+copy is made.
+
+LILO may create some device special files in your {\tt /tmp} directory that
+are not removed if an error occurs. They are named
+{\tt /tmp/dev.{\it number}}.
+
+
+\subsection{Command-line arguments}
+
+The LILO map installer accepts the following command-line options:
+
+\begin{description}
+  \item[\tt -b \it boot\_device]~ \\
+    Sets the name of the device that contains the boot sector. If {\tt -b}
+    is omitted, the boot sector is read from (and possibly written to) the
+    device that is currently mounted as root. A BIOS device code can be
+    specified.
+  \item[\tt -c]~ \\
+    Tries to merge read requests for adjacent sectors into a single read
+    request. This drastically reduces load time and keeps the map
+    smaller. Using {\tt -c} is especially recommended when booting from
+    a floppy disk.
+  \item[\tt -i \it boot\_sector]~ \\
+    Install the specified file as the new boot sector. If {\tt -i} is omitted,
+    the old boot sector is modified. A BIOS device code can be specified.
+    {\tt -i} is usually a permanent part of the invocation of the map installer
+    in {\tt /etc/lilo/install}.
+  \item[\tt -m \it map\_file]~ \\
+    Specifies the location of the map file. If {\tt -m} is omitted, a file
+    {\tt /etc/lilo/map} is used. A BIOS device code can be specified.
+  \item[\tt -r \it root\_directory]~ \\
+    Chroot to the specified directory before doing anything else. This is
+    useful when running the map installer while the normal root file system
+    is mounted somewhere else, e.g. when recovering from an installation
+    failure with a bootimage/rootimage.\footnote{I.e. if your root partition
+      is mounted on {\tt /mnt}, you can update the map by simply running
+      {\tt /mnt/etc/lilo/install} with the argument {\tt -r /mnt}. If you're
+      normally using the default boot sector, you have to specify it
+      explicitly in this case: {\tt -b /dev/{\it device\_name}}. So the
+      complete command may be something like this: \\
+      \verb"/mnt/etc/lilo/install -r /mnt -b /dev/hda1" \\
+      You also have to set the environment variable {\tt ROOT} before running
+      the update script, e.g.: \\
+      \verb"export ROOT=/mnt"}
+  \item[\tt -s \it backup\_file]~ \\
+    Copy the original boot sector to {\it backup\_file\/} (which may also be
+    a device, e.g. {\tt /dev/null}) instead of
+    {\tt /etc/lilo/boot.{\it number}}
+  \item[\tt -S \it backup\_file]~ \\
+    Like {\tt -S}, but overwrite an old backup copy if it exists.
+  \item[\tt -t]~ \\
+    Test only. This performs the entire installation procedure except
+    replacing the map file and writing the modified boot sector. This
+    can be used in conjunction with the {\tt -v} option to verify that LILO
+    will use sane values.
+  \item[\tt -v]~ \\
+    Turns on lots of progress reporting. Repeating {\tt -v} will turn on more
+    reporting. ({\tt -v -v -v -v} is the highest verbosity level and displays
+    all mappings.)
+\end{description}
+
+If no image files are specified, the currently mapped files are listed. Only
+the options {\tt -m}, {\tt -v} and {\tt -r} can be used in this mode.
+
+If at least one file name is specified, a new map is created for those files
+and they are registered in the boot sector. If root or swap devices have been
+set in the images, they are copied into the descriptors in the boot sector.
+If no root device has been set\footnote{Or if this is not a traditional
+boot image.}, the current root device is used. The root and
+swap devices can be overridden by appending them to the image specification,
+e.g.
+
+$$
+  \verb"lilo "\underbrace{\strut\verb"foo"}_{\rm image}\verb","%
+\underbrace{\strut\verb"/dev/hda1"}_{\rm root}\verb","%
+\underbrace{\strut\verb"0x302"}_{\rm swap}
+$$
+
+Either numbers or device names can be used.
+
+It is perfectly valid to use different root/swap settings for the same
+image, because LILO stores them in the image descriptors and not in the
+images themselves. Example:
+
+\begin{verbatim}
+    lin-hd=/linux,/dev/hda2
+    lin-fd=/linux,/dev/fd0
+\end{verbatim}
+
+The image files can reside on any media that is accessible at boot time.
+There's no need to put them on the root device, although this certainly
+doesn't hurt.
+
+If LILO doesn't guess the correct BIOS device code, it can be specified by
+appending a colon and the code to the file name, e.g. \verb"/linux:0x80"%
+\footnote{This is typically used to install LILO on a second disk that
+will be usd as the first disk later.}
+
+LILO uses the first file name (without its path) of each image specification
+to identify that image. A different name can be used by prefixing the
+specification with {\it label\/}{\tt =}, e.g.
+
+\begin{verbatim}
+    msdos=/etc/lilo/chain.b+/dev/sda1@/dev/sda
+\end{verbatim}
+
+
+\subsection{Boot image types}
+
+LILO can boot the following types of images:
+\begin{itemize}
+  \item ``traditional'' boot images from a file.
+  \item ``traditional'' boot images from a block device. (I.e. a floppy
+    disk.)
+  \item unstripped kernel executables.
+  \item the boot sector of some other OS.
+\end{itemize}
+
+The image type is determined by the syntax that is used for the image
+specification.
+
+
+\subsubsection{Booting ``traditional'' boot images from a file}
+
+If defined, root and swap definitions are taken from the boot image.
+The image is specified as follows:
+
+$$\hbox{{\it file\_name}\big[\verb":"{\it BIOS\_code}\big]}$$
+
+Example: \verb"/linux"
+
+
+\subsubsection{Booting ``traditional'' boot images from a device}
+
+Root and swap settings in the image are ignored. The range of sectors
+that should be mapped, has to be specified. Either a range
+({\it start\/\tt -\it end\/}) or a start and a distance
+({\it start\/\tt +\it number\/}) have to be specified. If only
+the start if specified, only that sector is mapped.
+
+$$\hbox{{\it device\_name}\big[\verb":"{\it BIOS\_code}\big]\verb"#"%
+{\it start}\big[\verb"-"{\it end}\big\vert\verb"+"{\it number}\big]}$$
+
+Example: \verb"/dev/fd0#1+512"
+
+
+\subsubsection{Booting unstripped kernel executables}
+
+Unstripped kernel executables contain no root or swap device information.
+The setup code of the kernel has also to be added to the kernel. First,
+it has to be copied to a suitable place and its header has to be removed,
+e.g.
+\begin{verbatim}
+    dd if=/usr/src/linux/boot/setup of=/etc/lilo/setup.b \
+      bs=32 skip=1
+\end{verbatim}
+If this command is placed at the beginning of {\tt /etc/lilo/install},
+{\tt setup.b} is automatically updated whenever that script is run
+because anything else changes.
+
+The image specification looks like this:
+
+$$\hbox{{\it setup\_name}\big[\verb":"{\it BIOS\_code}\big]\verb"+"%
+{\it kernel\_name}\big[\verb":"{\it BIOS\_code}\big]}$$
+
+Example: \verb"/etc/lilo/setup.b+/usr/src/linux/tools/system"
+
+
+\subsubsection{Booting a foreign OS}
+
+LILO can even boot other operating systems, i.e. MS-DOS. This feature
+is new and may not yet work totally reliably. (Reported to work with
+PC-DOS 4.0, MS-DOS 5.0, DR-DOS 6.0, OS/2 2.0 and 386BSD.) To boot an other
+operating
+system, the name of a loader program, the device that contains the boot
+sector and the device that contains the partition table have to be
+specified:
+
+$$\hbox{{\it loader}\verb"+"{\it boot\_dev}\big[\verb":"{\it BIOS\_code}\big]%
+\verb"@"\big[{\it part\_dev}\big]}$$
+
+Example: \verb"/etc/lilo/chain.b+/dev/hda2@/dev/hda"
+
+The name of the device that contains the partition table can be omitted if
+the respective operating system has other means to determine from which
+partition it has been booted.
+(E.g. MS-DOS stores the geometry of the boot disk or partition in its boot
+sector.)
+
+The boot sector is merged with the partition table and stored in the map file.
+
+Currently, only the loader {\tt chain.b} exists. {\tt chain.b} simply
+starts the specified boot sector.\footnote{The boot sector is loaded by
+LILO's second boot loader before control is passed to the code of
+{\tt chain.b}.}
+
+
+\subsection{Disk parameter table}
+\label{disktab}
+
+For floppies and IDE disks (or MFM, RLL, ESDI, etc.), LILO can obtain the
+disk geometry information from the kernel. Unfortunately, this is not
+possible with SCSI disks. The file {\tt /etc/lilo/disktab} is used to describe
+such disks. For each device ({\tt /dev/sda} $\rightarrow$ 0x800,
+{\tt /dev/sda1} $\rightarrow$ 0x801, etc.),
+the BIOS code, the disk geometry and the offset of the first sector of
+that partition (measured in sectors) have to be specified, e.g.
+
+\begin{verbatim}
+# /etc/lilo/disktab  -  LILO disk parameter table
+#
+# This table contains disk parameters for SCSI disks and non-
+# standard parameters of IDE disks. Parameters in disktab
+# _always_ override auto-detected disk parameters.
+
+# Dev.  BIOS    Secs/   Heads/  Cylin-  Part.
+# num.  code    track   cylin.  ders    offset
+
+0x800   0x80    32      64      631     0       # /dev/sda
+0x801   0x80    32      64      631     32      # /dev/sda1
+0x802   0x80    32      64      631     204800  # /dev/sda2
+\end{verbatim}
+
+(Those parameters are just a random example from my system. However, many
+SCSI controllers
+re-map the drives to 32 sectors and 64 heads. The number of cylinders
+does not have to be exact, but it shouldn't be lower than the number of
+effectively available cylinders.)
+
+Note that the device number and the BIOS code have to specified as
+hexadecimal numbers with the ``0x'' prefix.
+
+The disk geometry parameters can be obtained by booting MS-DOS and
+running the program {\tt DPARAM.COM} with the hexadecimal BIOS code of
+the drive as its argument, e.g. \verb"dparam 0x80" for the first hard
+disk. It displays the number of sectors per
+track, the number of heads per cylinder and the number of cylinders.
+
+The partition offset is printed by the Linux kernel when the SCSI disk
+is detected at boot time. Example:
+
+\begin{verbatim}
+sd0 :
+ part 1 start 32 size 204768 end 204799
+ part 2 start 204800 size 1087488 end 1292287
+\end{verbatim}
+
+The first partition has an offset of 32 sectors, the second has an
+offset of 204800 sectors.
+
+Because many SCSI controllers don't support more than 1 GB when using
+the BIOS interface, LILO can't access files that are located beyond the
+1 GB limit of large SCSI disks and reports errors in these cases.
+
+
+\section{Installation}
+
+\subsection{First-time installation}
+
+You have to run the 0.96c-pl1 kernel or any newer release. First, you
+have to install the LILO files:
+
+\begin{itemize}
+  \item extract all files from {\tt lilo.{\it version}.tar.Z}
+  \item run\quad{\tt make}\quad to compile and assemble all parts.
+  \item run\quad{\tt make install}\quad to copy all LILO files to
+     {\tt /etc/lilo}.
+     {\tt /etc/lilo} should now contain the following files: {\tt boot.b},
+     {\tt chain.b}, {\tt disktab} and {\tt lilo}.
+\end{itemize}
+
+If you want to use LILO on a SCSI disk, you have to determine the
+parameters of your SCSI disk(s) and put them into the file
+{\tt /etc/lilo/disktab}. See section \ref{disktab} for details.
+
+The next step is to test LILO with the boot sector on a floppy disk:
+
+\begin{itemize}
+  \item insert a blank (but formatted) floppy disk into {\tt /dev/fd0}.
+  \item chdir to {\tt /etc/lilo}.
+  \item run {\tt ./lilo -b /dev/fd0 -i boot.b -v -v -v {\it kernel\_image(s)}}%
+\footnote{If you've already installed LILO on your system, you might not want
+  to overwrite your old map file.
+  Use the {\tt -m} option to specify an alternate map file name.}
+  \item reboot. LILO should now load its boot loaders from the floppy disk
+    and then continue loading the kernel from the hard disk.
+\end{itemize}
+
+Now, your have to decide, which boot concept you want to use. Let's assume
+you have a Linux partition on {\tt /dev/hda2} and you want to install your
+LILO boot sector there. The DOS-MBR loads the LILO boot sector.
+
+\begin{itemize}
+  \item get a working bootimage and a rootimage. Verify that you can boot
+    with this setup and that you can mount your Linux partition(s) with it.
+  \item if the boot sector you want to overwrite with LILO is of any value
+    (e.g. it's the MBR or it contains a boot loader you might want to use
+    if you encounter problems with LILO), you should mount your rootimage
+    and make a backup copy of your boot sector to a file on that floppy,
+    e.g. \verb"dd if=/dev/hda of=/fd/boot_sector bs=512 count=1"
+  \item create a shell script {\tt /etc/lilo/install} that installs and
+    updates LILO on your hard disk, e.g.\\
+\verb"#!/bin/sh" \\
+\verb"$ROOT/etc/lilo/lilo "{\it all\_necessary\_options\/}%
+\verb" -i /etc/lilo/boot.b $* \" \\
+\verb"  "{\it kernel\_images}
+  \item Now, you can check what LILO would do if you were about to install
+    it on your hard disk: \\
+\verb"/etc/lilo/install -v -v -v -t"
+  \item If you need some additional boot utility (i.e. BOOTACTV), you should
+    install that now.
+  \item Run {\tt /etc/lilo/install} to install LILO on your hard disk.
+  \item If you have to change the active partition, use (e)fdisk or
+    activate to do that.
+  \item Reboot.
+\end{itemize}
+
+
+\subsection{LILO update}
+
+When updating to a new version of LILO, the initial steps are the same as
+for a first time installation: extract all files, run {\tt make} to build
+the executables and run {\tt make install} to move the files to
+{\tt /etc/lilo}.
+
+The old versions of {\tt boot.b} and {\tt chain.b} are automatically
+renamed to {\tt boot.old} and {\tt chain.old}. This is done to ensure
+that you can boot even if the installation procedure is not finished.
+{\tt boot.old} and {\tt chain.old} can be deleted after the map file
+is rebuilt.
+
+Because the locations of {\tt boot.b} and {\tt chain.b} have changed
+and because the map file format may be different too, you have to update
+the boot sector and the map file. Run {\tt /etc/lilo/install} to do this.
+
+
+\subsection{Kernel update}
+
+Whenever any of the kernel files that are accessed by LILO is moved or
+overwritten, the map has to be be re-built.\footnote{It is advisable to
+keep a secondary, stable, boot image that can be booted if you forget
+to update the map after a change to your usual boot image.} Run
+{\tt /etc/lilo/install} to do this.
+
+If the setup code has changed and if you're booting unstripped kernels,
+you also have to update {\tt setup.b}. This should be done in
+{\tt /etc/lilo/install}.
+
+If you're frequently re-compiling the kernel, you should put an invocation of
+{\tt /etc/lilo/install} into the kernel's top Makefile.
+
+Example ({\tt $\ldots$/linux/Makefile}):
+
+\begin{verbatim}
+...
+Image: boot/bootsect boot/setup tools/system tools/build
+       cp tools/system system.tmp
+       strip system.tmp
+       tools/build boot/bootsect boot/setup system.tmp \
+            $(ROOT_DEV) >/linux
+       /etc/lilo/install
+       rm system.tmp
+       sync
+...
+\end{verbatim}
+
+\end{document}

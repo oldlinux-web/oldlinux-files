@@ -1,0 +1,296 @@
+MS-DOS FS, ALPHA test version 8
+===============================
+
+
+*****  This is an ALPHA test version. It almost certainly contains  *****
+*****  bugs that will make an MS-DOS FS unusable. Use it only on    *****
+*****  copies of your disks. Never work on original data with it !  *****
+
+
+FILES
+=====
+
+    README	    This file.
+    CHANGES	    Change history.
+    Makefile	    Makefile for fromdos and rename.
+    dosfs.patch	    Patch from alpha.6 (as in the 0.97-pl2 kernel) to
+		    alpha.8.
+    dosfs.tar       MS-DOS FS for the 0.97-pl2 kernel.
+    fromdos.c	    CRLF->NL / NL->CRLF converter.
+    test.pl	    Regression test script in Perl.
+    rename.c	    Interface to the rename system call. Used by test.pl
+    smount.c	    Very simple mount program.
+
+
+INSTALLATION
+============
+
+This update of the MS-DOS FS can only be added to a 0.97pl2 kernel. You
+can either overwrite the old sources by extracting dosfs.tar or patch the
+sources from dosfs.patch. Patching is preferred, but many people find it
+more convenient to replace the sources from a TAR archive.
+
+Kernel versions that are newer than 0.97-pl2 will probably already
+include this patch.
+
+Step 1: Kernel
+
+    Update the kernel sources if needed and delete all old *.o files that
+    may be in fs/msdos. Then run make and boot the resulting image.
+
+Step 2: Basic utilities
+
+    Run make to compile smount.c and fromdos.c. Move the resulting
+    executables to an appropriate place and create a link from 'todos'
+    to 'fromdos'.
+
+Step 3: Other programs
+
+    If you have the source of the GNU fileutils, tar and your shell,
+    you should recompile them and use the new executables if you
+    notice problems with directory accesses in the MS-DOS FS.
+    (Filename completion/expansion fails, du returns strange values
+    and such.) If you don't have the sources, you have to get the
+    0.96 rootimage (or something newer).
+
+Now you're ready to use the MS-DOS FS. If you have Perl, you should
+run the regression test now. (See below.)
+
+
+MOUNTING
+========
+
+An MS-DOS FS is mounted by specifying the FS type "msdos" with the
+-t option:
+
+    mount -t msdos /dev/whatever /wherever
+
+The following mount options are recognized:
+
+    conv=binary|text|auto		(default is "binary")
+    check=relaxed|normal|strict		(default is "normal")
+
+The MS-DOS FS can perform CRLF<-->NL (MS-DOS text format to UNIX text
+format) conversion in the kernel. The following conversion modes are
+available:
+
+  binary	no translation is performed.
+  text		CRLF<-->NL translation is performed on all files.
+  auto		CRLF<-->NL translation is performed on all files that
+		don't have a "well-known binary" extension. The list
+		of known extensions can be found at the beginning of
+		fs/msdos/misc.c
+
+The conversion mode is chosen with the conv=<mode> mount option, e.g.
+mount -t msdos -o conv=auto ...
+
+Programs that do computed lseeks won't like in-kernel text conversion.
+
+For FS' mounted in binary mode, a conversion tool (fromdos/todos) is
+provided.
+
+The kernel displays format information at mount time. Please include a
+verbatim copy of those numbers in your bug report if the FS should
+refuse to mount a valid MS-DOS disk.
+
+When translating a name to MS-DOS conventions, three different levels
+of pickyness can be chosen:
+
+  relaxed	Upper and lower case are accepted and equivalent, long
+		name parts are truncated (e.g. verlongname.foobar
+		becomes verylong.foo), leading and embedded spaces are
+		accepted in each name part (name and extension).
+  normal	Like "relaxed", but many special characters (*, ?, <,
+		spaces, etc.) are rejected.
+  strict	Like "normal", but names may not contain long parts and
+		special characters that are sometimes used on Linux,
+		but are not accepted by MS-DOS are rejected. (+, =,
+		etc.)
+
+The check is chosen by specifying the check=<level> mount option,
+e.g. mount -t msdos -o check=strict ...
+Default is "normal".
+
+Until the MS-DOS FS and the normal mount program agree on mount option
+processing, smount should be used in order to pass mount options. It's
+a very simple interface to the mount system call, that doesn't know
+about /etc/fstab and doesn't update /etc/mtab.
+
+
+REGRESSION TEST
+===============
+
+A regression test script is included that can be used to verify basic
+file system operation. It currently only analyzes the static behaviour
+of the FS. No attempt is made to detect race conditions.
+
+To perform the regression test, do the following:
+
+Step 1: rename utility
+
+    Because at least some versions of Perl on Linux implement rename by
+    using link and unlink, a separate C program is used as an interface
+    to the rename system call. Run  make rename  to build it. The rename
+    executable must be in the directory from which test.pl is started.
+
+Step 2: Test location
+
+    Insert an empty MS-DOS floppy disk into /dev/fd0 or /dev/fd1. If you
+    don't have an empty MS-DOS floppy, you can create one with fdformat
+    and/or mformat. Mount the floppy as MS-DOS FS, e.g.
+    mount -t msdos /dev/fd0 /fd
+
+Step 3: Running the script
+
+    Run test.pl with the mount point and the name check mode as
+    arguments, e.g.
+    ./test.pl /fd normal
+    The regression test only works on an MS-DOS FS, because it tests
+    special behaviour of that FS type.
+
+Step 4: Checking what's left
+
+    The test should not leave any directories or files on the test disk.
+    The number of free blocks that is reported by df should also be the
+    same as before the test. Finally, you should be able to umount the
+    MS-DOS disk.
+
+If any of the above fails, please don't hesitate to report it to
+almesber@nessie.cs.id.ethz.ch
+
+Contribution of new tests that verify yet untested parts of the code or
+tests that exhibit bugs will be thankfully accepted.
+
+
+ACCESS PERMISSIONS
+==================
+
+All files in an MS-DOS FS are owned by the real uid/real gid that are
+in effect for the mount system call. File modes are 0666 (0777 for
+directories) minus the current umask at mount time.
+
+Read-only and hidden attributes are translated into appropriate mode
+settings. If file modes are changed, an attempt is made to find
+sensible attributes based on the mode bits of the owner.
+
+
+FROMDOS/TODOS
+=============
+
+fromdos removes all CRs from a file and truncates it at the first ^Z.
+todos converts NLs to CRLFs.
+
+Both tools are either invoked as filters, e.g. fromdos <foo.doc | more
+or with one or more file names. Those files are converted in place,
+e.g. todos foo.c bar.c gna.c
+
+
+INCOMPATIBILITIES
+=================
+
+Any program that does any of the following things may exhibit problems
+when used on the MS-DOS FS:
+
+  - uses the old readdir library function that isn't based on the
+    kernel readdir. (Most old programs do that.) (*)
+  - tries to use links. (Perl)
+  - tries to read super blocks and bitmaps to determine the disk
+    usage. (old df)
+  - assumes that statfs returns block counts for 1 kB blocks.
+
+There are some more restrictions listed in the known problems section.
+
+(*) A warning message ("COMPATIBILITY WARNING ...") is printed on the
+    console when a programs tries to read a directory file. Programs
+    that use the old readdir do that. The warning message is repeated
+    at most every ten seconds.
+
+
+KNOWN PROBLEMS
+==============
+
+rename(2) doesn't extend directories.
+    This will be fixed in the next release.
+
+Adaptive text conversion fails for CONFIG.SYS.
+    The extension .SYS usually indicates that a file is binary. There is
+    one very prominent exception: CONFIG.SYS ...
+
+Non-root file accesses may yield unexpected errors.
+    If the "file system owner" is not equal to the user who is accessing
+    the file system, some programs may generate unusual errors when
+    modifying or creating files. This happens because all files that are
+    created on the MS-DOS FS are implicitly chowned to the file system
+    owner. Work-around: only the user who owns the file system should
+    have write permission for it.
+
+Neither hard or soft links are supported.
+    MS-DOS does not know about symbolic links and "hard links" are only
+    used for directories. They can't be used for files because there is
+    no inode level.
+
+Performance may still be poor.
+    Sometimes, data is read in from the disk just to be overwritten a
+    few cycles later. May be improved in a later release.
+
+bmap is not supported on certain formats.
+    MS-DOS formats that have odd cluster sizes have no block to block
+    mapping. Therefore, bmap is disabled on such file systems. This
+    currently only means that you certainly can't swap on them.
+
+File access times may be inconsistent.
+    I may have forgotten to update the modification times at some
+    places. I'll have a closer look at that.
+
+Error codes may not conform to POSIX.
+    At least, some are different from what I get on IRIX, that claims
+    to be POSIX. Will be corrected in a later version.
+
+Filename expansion in bash fails, du returns nonsense, tar fails, etc.
+    Old versions of many program attempt to read directories directly.
+    The MS-DOS FS returns EOF for any such read attempt, which lets
+    them usually fail quietly. Until the transition to new programs is
+    completed, the MS-DOS FS also displays a warning message when such
+    read accesses are attempted. The 0.96 rootimage (or a 0.97 version
+    of the rootimage or MCC-interim contains up to date versions of
+    many programs.
+
+File creation fails unexpectedly.
+    The MS-DOS FS is picky about file names. Usually, only lower case
+    letters may be used and MS-DOS device names ("con", "nul", etc.)
+    are not accepted.
+
+readdir returns incorrect inode numbers for files that have been
+renamed accross directories while being open.
+    This can't be fixed without scanning the inode tables for each
+    entry returned by readdir. Very few programs should notice that
+    anyway. The inode number is correct ("jumps") as soon as the file
+    is closed.
+
+Files change their inode numbers when being renamed accross
+directories.
+    This is a design limitation for which no easy fix exists. (See
+    above.)
+
+
+CREDITS
+=======
+
+Although the code has been heavily modified, it is based on the
+original Minix FS by Linus Torvalds and has a certain structural
+resemblance to it. Much of the detail know-how about how MS-DOS
+manages its disks has been taken from the Mtools package by Emmet P.
+Gray.
+
+I'd also like to thank all the alpha testers, especially (in alpha-
+betic order) H. Peter Anvin, Wayne Davison, David Engel, Andrew
+Haylett, Zane H. Healy, Mika P. Liljeberg, Fabian Mueller, Andreas
+Priebe, Asbjorn Riedel and Eric Youngdale for reporting problems or
+success and making valuable suggestions, and last but not least
+Hongjiu Lu for quick help on a GCC problem I hit.
+
+
+BUG REPORTS AND SUCH
+====================
+
+Please send all bug reports to almesber@nessie.cs.id.ethz.ch

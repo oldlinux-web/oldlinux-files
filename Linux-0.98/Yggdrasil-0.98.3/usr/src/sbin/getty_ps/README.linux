@@ -1,0 +1,244 @@
+
+                     Paul Sutcliffe's Getty for Linux
+
+
+This is getty_ps for linux version 2.0.2: my second release of Mr. Sutcliffe's
+version 2.0 kit.
+
+This kit came from volume 11 of the comp.sources.misc archives.
+
+This file exists to point out the idiosyncrasies and pitfalls of the linux
+version.  The second part details the modifications, bug fixes and changes
+I made to the source.
+
+Steve Robbins
+steve@nyongwa.cam.org
+19 July 1992
+
+
+		Recipe for Installing Getty
+
+NOTE:  The *only* difference between getty and uugetty is that the latter
+creates and checks lockfiles.  So whatever I say about 'getty' applies to
+uugetty, and vice versa (except for lockfiles).
+
+1.  Compile
+You can compile everything as is (with gcc 2.1 or better).  Just do a make.
+If you don't have 'm4', then the manual pages will fail, but don't worry about
+that.  This gives you getty and uugetty, which you can copy into /bin.  But
+before you do the copy, I strongly suggest you save the old getty as
+/bin/getty.old or something.
+
+2.  Make /etc/gettydefs
+Put the following into /etc/gettydefs:
+--------------
+# default entry:
+#
+9600# B9600 CS8 # B9600 SANE -ISTRIP CLOCAL ECHO #login: #9600
+
+# to toggle between 300, 1200 and 2400 baud on a modem line:
+#	- SANE sets CS8 and ISTRIP (which I don't want)
+#	- the blank lines are important
+#
+2400# B2400 ISTRIP CS8 # B2400 SANE -ISTRIP HUPCL #login: #1200
+
+1200# B1200 ISTRIP CS8 # B1200 SANE -ISTRIP HUPCL #login: #300
+
+300# B300 ISTRIP CS8 CR1 # B300 HUPCL SANE CR1 #login: #2400
+--------------
+
+3.  Edit /etc/inittab
+At the very least you have to swap the two arguments given to getty.  The 
+device comes first, and the gettydefs label (the first entry on a line in 
+/etc/gettydefs) second.  For the modem ports that you want to be able to call 
+out on, use 'uugetty' instead of getty.  Also note that some root disks use 
+ttys1 for DOS' COM1, and some use ttys0 (do 'ls -l /dev/ttys? and check the 
+second number before the date -- 64 is COM1, 65 is COM2, etc).
+
+Here's my /etc/inittab:
+-----------------
+tty1:vt100:/bin/getty tty1 9600
+[ ... etc. tty1 through tty8 are identical ... ]
+tty8:vt100:/bin/getty tty8 9600
+ttys3:vt100:/bin/uugetty ttys3 2400
+-----------------
+
+I strongly recommend you change one of your virtual consoles to use the
+old getty (/bin/getty.old -- remember not to change the arguments for this
+one!) until you are content that this new getty is working.
+
+
+3.  Set up the /etc/default directory
+The files in this directory are used to set some variables for getty at
+runtime.  The way it works is that when getty starts up on line ttys3:
+	if /etc/default/getty.ttys3 exists, we use it
+	else if /etc/default/getty exists, we use it
+If uugetty starts up, it looks for /etc/default/uugetty[.ttys3] in the same
+order.
+
+There are four categories of tty lines for getty purposes:
+- virtual consoles (tty1..tty8)
+- smart modems which talk to the computer at the same speed as the
+  incoming calls
+- smart modems with the serial port baudrate locked
+- dumb modems and terminals
+
+Virtual consoles:
+
+You don't need any special setup.
+
+
+Smartmodems at variable baud rates:
+
+I use the following file in /etc/default/uugetty.ttys3; if all your modems
+are of this type, then you can put this in /etc/default/uugetty:
+----------------------------
+#  This line is a hayes-type modem
+#
+# time in seconds it will wait for a username at the 'login:' prompt
+TIMEOUT=60
+
+#  Initialization
+#	M0	- speaker off
+#	S0=0	- answer on zero rings (i.e. don't answer)
+#
+#  NOTE:  be sure to have trailing \r\n on the INIT sequence
+#	  in fact, all the \r\n's appear to be necessary 
+#
+INIT="" \r+++\dAT\r OK\r\n-\r+++\dAT\r-OK\r\n ATM0S0=0\r OK\r\n
+
+WAITFOR=RING
+CONNECT="" ATA\r CONNECT\s\A
+----------------------------
+The general form of this file is a bunch of lines like VARIABLE=value.  There
+are a number of variables that can be set (see man/getty.m4 for full 
+explanations).  This is probably the minimum set useful for modems.
+
+Here's what's going on:  (TIMEOUT is explained in a comment)
+The variables INIT and CONNECT are chat strings (just like uucp uses), which
+are of the form 'expect send expect send...', meaning at the appropriate time,
+getty will wait until it reads the first 'expect string' from the modem, then 
+it will write the first 'send string', and wait for the second expect...
+A bunch of quoted characters are used (see getty.m4 for full list) among which
+are \r=return \n=newline \s=space \d=delay for a bit, and '""' means nothing.
+
+To make things more flexible, you are allowed alternate-send/expects.  Normally,
+if getty times in expect mode, the chat fails.  If the expect string is like
+'expect-altsend-altexpect send' (i.e. separated by '-') then if getty finds
+'expect', it continues on with 'send'; but if it times out, it sends 'altsend',
+and looks for 'altexpect', before continuing on with 'send' (if sucessful) or
+failing.  You can use as many multiple send/expect alternates as you patience
+allows.
+
+Decoding the INIT string, then what happens is that getty waits for nothing,
+sends out "+++[delay]AT<RETURN>", and waits for the modem to say "OK".  (If it
+doesn't work, it will try the sequence again before giving up)  Then it sends
+out "ATM0S0=0" and waits for acknowledgement.  As you see, you can use this
+string to reset any modem parameters you want.
+
+Now, when does getty use these strings?  
+
+When getty starts up, it runs the INIT chat.  A failure here means that getty 
+dies, and will be restarted by init.  This has always worked for me whenever 
+my modem gets into a weird state.  You may want to put 'ATZ' at the beginning 
+of the INIT chat to make sure the modem is in a known state.  However, this 
+means that if someone unplugs your modem power or it gets some hardware fault
+somehow, getty will be continuously respawning.  A check should be made for
+the number of chat failures to stop this, but I haven't had any trouble yet.
+
+If INIT succeeds, getty listens at the port for the WAITFOR string (not a
+chat -- just a plain string).  When it sees this, it runs the CONNECT chat.
+As you see, the one I use sends ATA to pick up the phone and then waits for
+a CONNECT message from the modem.  The special quoted character \A stands for
+the autobauding digits.  If for example the call comes in at 2400 bps, my
+modems sends "CONNECT 2400", which getty detects and sets the port to 2400.
+If the call came in at 1200, getty would set the port to that speed.
+
+
+Smartmodems at fixed baudrate:
+
+Everything in the preceeding section applies.  The small but CRUCIAL difference
+is that since your modem's port rate is fixed, you don't care what the incoming
+speed is, and you certainly don't want getty resetting the port rate to match
+the line rate!  Thus, simply omit the autobauding special character \A:
+----------------------------
+CONNECT="" ATA\r CONNECT
+----------------------------
+Getty flushes the line after the connect chat, so you don't have to worry about
+the speed messing up the username entry.
+
+
+Dumb modems and dedicated terminals:
+
+For the terminals, you could do the same as for virtual consoles, i.e. nothing,
+or you could use dumb modem settings.
+
+For dumb modems, obviously INIT, WAITFOR, and CONNECT are useless.  Instead,
+set WAITCHAR=YES, and getty will wait for one character before locking the
+line (uugetty) and giving the login: prompt.  Getty will cycle through the
+baud rates specified in the gettydefs when the user logging in sends a 
+break character (or maybe carriage return?).
+
+
+			Changing the settings
+
+If you want to tinker a bit with the settings, you shouldn't have to do 
+anything more drastic than edit three files: tune.h, config.h, and mytermio.h.
+Read Paul's README through for details on the first two.  The latter has a
+few defines for default characters for KILL, QUIT, START etc.
+
+You can run Configure yourself if you like, but I don't think its necessary.  
+If you do, you can either ignore the message about 'Cppsym' not found, or 
+apply the patch in pat.Configure which allegedly fixes this.  I tried it, but 
+then I get in even more trouble with 'tr', so I took it out again -- its not 
+very important in any case.
+
+For the tune.h file I would recommend leaving SETTERM undefined.  If you don't,
+you have to specify the terminal type on the command line, or it will be set 
+to 'unknown', which screws up anything that uses termcap.  All you should want
+to change is the Telebit stuff, should you possess such a beast.
+
+
+			What I did to the source code
+
+Changes required to make it work under linux:
+
+- changed Configure to be able to find gcc's libraries
+- stuck in #ifndef __STDC__ around some declarations of stuff in header files
+- cast AUTOBD definition to (char), because gcc's are signed
+- sets the VMIN entry in struct termio to 1 after login, because I found
+  that things like 'more' didn't work otherwise
+- fflush(stdout) after "login:" - this isn't needed with 0.96a, but it was in
+  0.95, so I left it in
+- created 'mytermio.h' to hold all the CKILL, CNULL, etc definitions,
+  included by 'getty.h'
+- removed the code to check for an INIT_PROCESS in the wtmp file, because
+  linux's init doesn't put one there
+
+
+There were also a bunch of bugs which I fixed.  Very briefly they are:
+
+- escaped a bunch of '$' signs in Makefile.SH
+- changed the handling of gettdefs so that it would ignore comment lines
+  properly
+- fixed a debug output, so that the username is printed, rather than the
+  pointer
+- moved a line so that one-character WAITFOR strings work
+- fixed default file reading so that it handled comment lines properly
+- escaped the '\'s in DEF_CONNECT string
+- multiple expect/send strings didn't work
+- moved the utmp/wtmp update ahead of WAITFOR stuff
+
+
+A few behaviours that I changed:
+
+- changed the @D date style from '28/5/92' to '28 May 92'
+- removed the code to display the system name if no default file is present
+  (this made no sense to me whatsoever -- if the issue file was missing, then
+  displaying the hostname might be appropriate, but the default file???)
+- the hostname is displayed before the "login: " prompt, as the original
+  linux getty did (thus removing any shred of reason for the above)
+- if BOTHPID is defined, a binary read of lockfiles is attempted after an
+  ascii read fails
+- added option of turning off stty bits in /etc/gettydefs, by using '-',
+  so SANE -ISTRIP turns on the SANE things, but then turns off ISTRIP

@@ -1,0 +1,150 @@
+From hlu@yoda.eecs.wsu.edu Sun May 10 01:21:25 1992
+Return-Path: <hlu@yoda.eecs.wsu.edu>
+Received: from yoda.eecs.wsu.edu by phys2.physics.wsu.edu (5.59/25-eef)
+	id AA14120; Sun, 10 May 92 01:21:24 PDT
+Received: by yoda.eecs.wsu.edu (16.6/1.34)
+	id AA22555; Sun, 10 May 92 00:07:15 -0700
+From: hlu@yoda.eecs.wsu.edu (H.J. Lu)
+Message-Id: <9205100707.AA22555@yoda.eecs.wsu.edu>
+Subject: Re:  diffs for gdbm and CFLAGS for X386 (fwd)
+>To: hlu@phys2.physics.wsu.edu (H.J. Lu)
+Date: Sun, 10 May 92 0:07:14 PDT
+X-Mailer: ELM [version 2.3 PL11]
+Status: O
+
+Forwarded message:
+>From obz@sisd.Kodak.COM Sat May  9 23:52 PDT 1992
+Reply-To: obz@sisd.Kodak.COM
+Date: Sat, 9 May 92 23:15:25 EDT
+From: obz@sisd.Kodak.COM (Orest Zborowski)
+Message-Id: <9205100315.AA16433@flash.acorn>
+>To: hlu@yoda.eecs.wsu.edu
+Subject: Re:  diffs for gdbm and CFLAGS for X386 (fwd)
+
+>Hi,
+>
+>Could you please send me the diffs for gdbm 1.5? What CFLAGS are you
+>using for X386? I may need those for gdbm/libc.a.
+>
+>Thanks.
+>
+>H.J.
+>-- 
+>School of EECS				Internet: hlu@eecs.wsu.edu
+>Washington State University		BITNET:   60935893@WSUVM1.BITNET
+>Pullman, WA 99164			Phone:    (509) 335-6470 (O)
+>USA						  (509) 334-6315 (H)
+>
+
+here are the diffs i made for gdbm-1.5. sorry about being so out of touch
+for a while. it was mailer problems and a desire to relax (some people
+getting engaged, etc, tough life, eh?)
+
+zorst
+---cut---
+*** Makefile.0	Sat Mar 14 11:46:43 1992
+--- Makefile	Wed Mar 18 07:56:22 1992
+***************
+*** 7,14 ****
+  #
+  # for gcc, uncomment the CC = gcc line.
+  
+! #CC = gcc
+! CFLAGS = -g #-O -DSYSV
+  LDFLAGS =
+  LIBS = # -lPW
+  DBM = -ldbm
+--- 7,14 ----
+  #
+  # for gcc, uncomment the CC = gcc line.
+  
+! CC = gcc
+! CFLAGS = #-g -O -DSYSV
+  LDFLAGS =
+  LIBS = # -lPW
+  DBM = -ldbm
+***************
+*** 69,75 ****
+  gdbm.a:	$(DBM_OF) $(NDBM_OF) $(GDBM_OF) gdbm.h
+  	rm -f gdbm.a
+  	ar q gdbm.a $(DBM_OF) $(NDBM_OF) $(GDBM_OF)
+! 	if [ -f /usr/bin/ranlib -o -f /bin/ranlib ]; \
+  		then ranlib gdbm.a; fi
+  
+  gdbm.h:	gdbm.proto gdbmerrno.h
+--- 69,75 ----
+  gdbm.a:	$(DBM_OF) $(NDBM_OF) $(GDBM_OF) gdbm.h
+  	rm -f gdbm.a
+  	ar q gdbm.a $(DBM_OF) $(NDBM_OF) $(GDBM_OF)
+! 	if [ -f /usr/bin/ranlib -o -f /bin/ranlib -o -f /usr/local/bin/ranlib ]; \
+  		then ranlib gdbm.a; fi
+  
+  gdbm.h:	gdbm.proto gdbmerrno.h
+*** systems.h.0	Sat Mar 14 11:41:51 1992
+--- systems.h	Sat Mar 14 12:23:41 1992
+***************
+*** 32,37 ****
+--- 32,86 ----
+  /*         System V changes and defines.          */
+  /**************************************************/
+  
++ #ifdef linux
++ 
++ /* !!NOTE: linux doesn't do file locking, so we fake the retval! */
++ 
++ #include <unistd.h>
++ 
++ /* Some files need fcntl.h for locking. */
++ #include <fcntl.h>
++ #define UNLOCK_FILE(dbf) \
++ 	{					\
++ 	  struct flock flock;			\
++ 	  flock.l_type = F_UNLCK;		\
++ 	  flock.l_whence = 0;			\
++ 	  flock.l_start = flock.l_len = 0L;	\
++ 	  fcntl (dbf->desc, F_SETLK, &flock);	\
++ 	}
++ #define READLOCK_FILE(dbf) \
++ 	{					\
++ 	  struct flock flock;			\
++ 	  flock.l_type = F_RDLCK;		\
++ 	  flock.l_whence = 0;			\
++ 	  flock.l_start = flock.l_len = 0L;	\
++ 	  lock_val = fcntl (dbf->desc, F_SETLK, &flock);	\
++ 	  lock_val = 0; 			\
++ 	}
++ #define WRITELOCK_FILE(dbf) \
++ 	{					\
++ 	  struct flock flock;			\
++ 	  flock.l_type = F_WRLCK;		\
++ 	  flock.l_whence = 0;			\
++ 	  flock.l_start = flock.l_len = 0L;	\
++ 	  lock_val = fcntl (dbf->desc, F_SETLK, &flock);	\
++ 	  lock_val = 0; 			\
++ 	}
++ 
++ #include <blocksize.h>
++ #define STATBLKSIZE BLOCK_SIZE
++ 
++ #include <string.h>
++ #define _HAVE_STRING
++ 
++ #define bcmp(d1, d2, n)	memcmp(d1, d2, n)
++ #define bcopy(d1, d2, n) memcpy(d2, d1, n)
++ 
++ /* linux does not have fsync. */
++ #define fsync(f) sync(); sync()
++ 
++ #endif /* linux */
++ 
+  #ifdef SYSV
+  
+  /* File seeking needs L_SET defined .*/
+
+
+-- 
+School of EECS				Internet: hlu@eecs.wsu.edu
+Washington State University		BITNET:   60935893@WSUVM1.BITNET
+Pullman, WA 99164			Phone:    (509) 335-6470 (O)
+USA						  (509) 334-6315 (H)
+

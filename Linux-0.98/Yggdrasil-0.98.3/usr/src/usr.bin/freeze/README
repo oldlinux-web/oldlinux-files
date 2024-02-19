@@ -1,0 +1,203 @@
+		FREEZE / MELT COMPRESSION PROGRAM
+
+This is Alpha version. It is tested under ISC 2.2, Xenix, SunOS.
+
+The following preprocessor symbols control the compilation of Freeze
+package:
+
+	o BITS                  The size of hash table (default is 16,
+				reducing to 14 gives some speeddown).
+	o COMPAT                Turns on backwards compatibility
+				with Freeze 1.0
+	o M_XENIX & !M_I386     Makes arrays < 65536 bytes each
+	o BSD                   Allow long filenames ( > 14 characters) &
+				Call setlinebuf(stderr)
+	o INT_SIG               signal is int (*)() unstead of void
+	o MSDOS                 Turns off some UNIX-dependencies
+				and MSDOS' ones - vice versa
+				!!! It's important !!!
+				If your MSDOS' C compiler does support
+				inline functions, define DO_INLINE.
+				This will cause the main loop to be
+				replaced with a call of memcmp, which
+				will be represented as 'repz cmpsb'.
+	o FAST                  Forces the Get_Next_Match routine
+				to be inline. This gives additional
+				percents of speedup.
+	o __TURBOC__            For compiling under TURBO C
+	o __i386__              When compiling under GNU C causes
+				some fixed register allocations,
+				which give better code.
+	o TEXT_DEFAULT          (For MS-DOS only!) Define, if you
+				freeze text files more often than binary
+				ones. In this case don't forget to use "-i"
+				to freeze binary files!!
+        o UTIMES		For using the utimes() function
+				instead of utime(), which is obsolete
+				on some systems (most notably BSD
+				4.3).
+
+Please! If your computer supports the string operations, try to write
+"asm" instructions (GNU style) which realize the right-to-left memory
+comparison (s1, s2, length) in minimum number of clock cycles.
+If a noticeable (5% or more) speedup is gained, please send me a message.
+
+Other preprocessor symbols (DEBUG, GATHER_STAT) are for internal use
+only.
+
+The format of frozen (2.X) file is incompatible with that of frozen (1.0),
+but if this package is compiled with -DCOMPAT switch, you will able to
+unpack frozen (1.0) files, if you have them.
+
+----
+
+	The format of a frozen file is as follows:
+	(version 1.0 had only 2-bytes header)
+
+offset    type      value    comment
+  0       byte       037     2 byte magic header
+  1       byte       0237    (version 1.0 - 0236)
+  2       short       X      (little endian)
+  4       byte        Y
+
+X = 0 e e e e e d d d d c c c b b a   \
+				       > [a-f] are binary digits
+Y = 0 0 f f f f f f                   /
+
+a - number of 1-bit static Huffman codes in the `matching positions'
+table (see freeze.1)
+bb - number of 2-bit codes,
+	etc.
+
+The numbers of 7- and 8-bits codes are evaluated from the
+conditions: sum(codes) = 62(dec), max code = 1111111(bin).
+
+The default values are: 0 1 1 1 4 10 27 18, what means:
+no 1-bit codes,
+one 2-bit, 3-bit and 4-bit codes, etc., so Huffman codes are:
+00, 010, 0110, 01110, 01111, 10000, .... , 11111111.
+
+------------------- !!!!!!!!!! -----------------
+
+(If you do not deal with compression algorithms, you may skip
+until asterisks.)
+
+General format of frozen file is:
+
+magic header - table description - stream of bits
+
+The stream of bits is considered as a sequence of variable length dynamic
+Huffman codes (if their values are in the range of 0-255, they mean single
+bytes, special value of 256 means EOF, and further values mean the lengths
+of matched string.) If we have the value greater than 256, we get a static
+Huffman code from the stream (his value is 6 higher bits of matched
+string's position in the buffer), and then we get 7 bits literally.
+
+Because buffer length is 8192 bytes and maximum match length is 256 bytes,
+the position of matched string cannot be greater than 8192-256, that's why
+there is only (8192-256)/2^7 = 62 static codes.
+
+			*        *       *
+
+The default table is tuned for both C texts and executable files (as in
+LHARC). If you freeze any other files (databases, images, fonts,
+etc.) you can calculate the matching positions distribution using the
+`statist' program, which calculates and displays the mentioned
+distribution for the given file. It is useful for large (100K or more)
+files.
+
+Though the built-in position table is polyvalent, the tuning can increase
+the compression rate up to one additional percent.  (Or even more, if the
+matching strings distribution is very bizarre!)
+
+Usage: statist < sample_file ; you can also see the intermediate values
+and watch their changes by pressing INTR key when you wish.
+
+Note: If you use "gensample | statist", remember that INTR influence BOTH
+processes !!
+
+You may create the /etc/default/freeze file (if you don't like
+/etc/default/ directory, choose another - in MS-DOS it is FREEZE.CNF in
+the directory of FREEZE.EXE), which has the following format:  name =
+``statist's output (8 numbers)'', f.ex.:
+
+---------- cut here -----------
+# This is freeze's defaults file
+gif =   0 0 0 0 2 60 0 0        # This is NOT! optimal data
+				# for GIF files
+doc=0 0 1 2 7 16 36 0           # The sample was gcc.lp
+# End of file
+---------- cut here -----------
+
+If you find values which are better THAN DEFAULT both for text (C
+programs) and binary (executable) files, please send them to me.
+
+Important note: statist.c is NOT a part of freeze package, it is an
+additional feature.
+
+------------------- LINT ----------------------------
+
+Some lint's complaints about `used/declared inconsistently' are (in my
+case) due to inconsistencies of /usr/include/* and /usr/lib/llib*ln. It
+isn't dangerous.
+
+------------------- BUGS ----------------------------
+
+Please send descriptions of found bugs, incompatibilities, etc.  to
+leo@s514.ipmce.su.  MS-DOS version will not be supported in future
+versions !!  (If they will be :-) )
+
+------------ SPEED & COMPRESSION RATE ---------------
+
+When using 18 bits table (about 600K) and gcc, the speed of freeze is more
+than the same of ARJ 1.00, but is less than of LHA 2.05.
+On SPARCs freeze works faster than ZIP 1.0.
+
+Note: the percents mean 'relatively to compressed size', if you want
+to have them relatively to original size, divide them to 2-2.5.
+
+Compression rate is *INDEPENDENT* of the hash table size, but may vary
+with different static Huffman tables.  It is about 2% worse than the same
+of ARJ 1.00 and LHA 2.05, but ARJ 2.00 beats Freeze on 8%.
+
+Note: if you see Compress works nearly as Freeze (on some files), this
+means the maximum is gained, so LHA and ARJ won't better more than
+1-1.5%. There are some files (I have one) that freeze compresses better
+than ARJ 2.20.
+
+--------------- POSSIBLE IMPROVEMENTS ---------------
+
+The high-level routines (freeze, melt) are almost independent from
+low-level routines (Get_Next_Match, Insert/Delete_Node,
+Encode/Decode_Char/Position), so if you want the speed and/or compression
+rate `a la vogue' you may replace the low-level routines with the homebrew
+(f. ex.) ones and enjoy the results.
+
+(I tried to implement splay trees instead of Huffman ones and instead of
+static table for position information, but this gives nothing, alas.)
+
+--------- CALGARY COMPRESSION CORPUS RESULTS --------
+
+total 2308
+   41515 May  9  1990 bib.F
+  344793 May  9  1990 book1.F
+  230861 May  9  1990 book2.F
+   68626 May  9  1990 geo.F
+  155783 May  9  1990 news.F
+   10453 May  9  1990 obj1.F
+   85500 May  9  1990 obj2.F
+   20021 May  9  1990 paper1.F
+   32693 May  9  1990 paper2.F
+   19430 May  9  1990 paper3.F
+    5771 May  9  1990 paper4.F
+    5170 May  9  1990 paper5.F
+   14091 May  9  1990 paper6.F
+   53291 May  9  1990 pic.F
+   14143 May  9  1990 progc.F
+   17064 May  9  1990 progl.F
+   11686 May  9  1990 progp.F
+   22861 May  9  1990 trans.F
+
+Average bits/byte on the standard set (except paper3-6) =
+	1109290 * 8 / 3141622 = 2.825
+	(With the "-g" flag = 2.892)

@@ -1,0 +1,27 @@
+.\" +----------
+.\" | local GETTY configurations
+.\"
+.\" define(`_cmd_section_', 1)
+.\" define(`_mcmd_section_', 1m)
+.\" define(`_system_section_', 2)
+.\" define(`_library_section_', 3)
+.\" define(`_file_section_', 4)
+.\" define(`_misc_section_', 7)
+.\" define(`_console_', /dev/console)
+.\" define(`_defaults_', /etc/default)
+.\" define(`_gettytab_', /etc/gettydefs)
+.\" define(`_gtab_', gettydefs)
+.\" define(`_issue_', /etc/issue)
+.\" define(`_login_', /bin/login)
+.\" define(`_utmp_', /etc/utmp)
+.\" define(`_wtmp_', /etc/wtmp)
+.\" define(`_systems_', Systems)
+.\" define(`_connect_', CONNECT\\s\\A\\r\\n)
+.\" define(`RELEASE', 2.0)
+.\" define(`DATE', 19-Sep-90)
+.\"
+.\" define(`logutmp')
+.\" define(`termcap')
+.\" define(`trymail')
+.\" define(`_notify_', root)
+.\" define(`warncase')

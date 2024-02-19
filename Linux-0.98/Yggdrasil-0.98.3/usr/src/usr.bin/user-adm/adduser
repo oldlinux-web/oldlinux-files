@@ -1,0 +1,115 @@
+#!/bin/tcsh
+#
+# usage: adduser -i		Interactive mode
+#	 adduser uname uid -g groups -n full name -s shell dir
+#
+# List of allowed shells...
+#
+set STDSHELLS = (sh tcsh)
+set TMPF = /tmp/AU.$$.`whoami`
+set GROUPF = /etc/group
+set PWORDF = /etc/passwd
+set LIBDIR = /usr/etc/lib
+#
+if (`whoami` != root) then
+  echo 'ADDUSER must only be run as root!'
+  exit 1
+endif
+#
+if ( "x$1" == x-i ) then
+  echo Adduser Interactive mode
+  echo ''
+  echo -n 'Username: ' ;   set USERNAME = ($<)
+  if (x"$USERNAME" == x) exit
+  echo -n 'Fullname: ' ;   set FNAME = ($<)
+  echo -n 'UserID:   ' ;   set UID = ($<)
+  if (x"$UID" == x) exit 
+  echo -n 'Group(s): ' ;   set GROUPS = ($<);
+  if (x"$GROUPS" == x) set GROUPS = user
+  echo -n 'Shell:    ' ;   set SHELL = ($< $STDSHELLS[1] ) ; set SHELL = $SHELL[1]
+  echo -n 'Home dir: ' ;   set HDIR = ($< / )  ; set HDIR = $HDIR[1]
+  echo -n 'Assign password? (Y/n) ' ; set PWORD = ($< y); set PWORD = $PWORD[1]
+  if ( x$PWORD == xn || x$PWORD == xN || x$PWORD == no || x$PWORD == No || \
+	x$PWORD == 'NO' ) then 
+	set PWORD = ''
+  else
+	set PWORD = `getpass`
+  endif
+  echo ''
+  $0 "$USERNAME" "$UID" "$GROUPS" "$FNAME" "$SHELL" "$HDIR" "$PWORD"
+else
+#  if ($# != 6) then
+#    echo "Usage:"
+#    echo "	adduser uname uid group name shell dir"
+#    exit 1
+#  endif
+  set USERNAME = $1 ;  set UID = $2 ;  set GROUPS = ($3)
+  set FNAME = ($4) ;  set SHELL = $5 ;  set HDIR = $6 ; set PWORD = ($7)
+  if (x$USERNAME  == x) $0 -i
+  if (x$UID == x) exit 1
+  if (x"$GROUPS" == x) exit 1
+  if (x$SHELL == x) set SHELL = $STDSHELLS[1]
+  if (x$HDIR == x) set HDIR = /
+#
+# Check if it is a valid shell
+#
+  set VALIDSHELL = no
+  foreach TSHELL ( $STDSHELLS )
+    if ( x$TSHELL == x$SHELL ) then
+      set SHELL = /bin/$SHELL
+      set VALIDSHELL = yes
+    else if ( x/bin/$TSHELL == x$SHELL ) then
+      set VALIDSHELL = yes
+    endif
+  end
+  if ($VALIDSHELL == "no") then
+    echo "$SHELL is not a valid shell."
+    echo "Valid shells are:	$STDSHELLS"
+    exit 1
+  endif
+  if (x`pwget -n $USERNAME -f '%n'` != x) then
+    echo "name $USERNAME is already in use"
+    pwget -n $USERNAME
+    exit 1
+  endif
+  if (x`pwget -u $UID -f '%n'` != x) then
+    echo "id $UID is already in use"
+    pwget -u $UID
+    exit 1
+  endif
+  foreach GRP ( $GROUPS )
+    if (x`grget -n $GRP -f '%n'` == x) then
+      echo "group $GRP does not exits"
+      exit 1
+    endif
+  end
+  set GID = `grget -n $GROUPS[1] -f '%g'`
+#
+# Create a new passwd entry
+#
+  echo "${USERNAME}:${PWORD}:${UID}:${GID}:${FNAME}:${HDIR}:${SHELL}" >> $PWORDF
+#
+# Update groups...
+#
+  foreach GROUP ($GROUPS)
+    grget -x -n $GROUP > $TMPF
+    set NEWLINE = `grget -n $GROUP`
+    set OLD=`grget -n $GROUP -f '%m'`
+    if (x"$OLD" == x) then
+      set NEWLINE = "${NEWLINE}${USERNAME}"
+    else
+      set NEWLINE = "${NEWLINE},${USERNAME}"
+    endif
+    echo $NEWLINE >> $TMPF
+    cp $TMPF $GROUPF
+  end
+  if (-f $TMPF) rm -f $TMPF
+  if (! -d $HDIR) then
+    echo Creating home directory.
+    mkdir $HDIR
+    echo Initializing user enviroment.
+    cp ${LIBDIR}/`basename $SHELL`/.??* $HDIR
+    cp ${LIBDIR}/generic/.??* $HDIR
+    find $HDIR -exec chown $USERNAME \{\} \; -exec chgrp $GROUPS[1] \{\} \;
+  endif
+endif

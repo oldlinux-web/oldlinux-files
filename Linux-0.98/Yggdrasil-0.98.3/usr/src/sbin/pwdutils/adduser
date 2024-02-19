@@ -1,0 +1,92 @@
+#! /bin/sh
+#
+#  adduser -- add a user, creating directories and stuff
+#
+#  usage: adduser name [options]
+#	options are:
+#	-p (read password on stdin -- not encrypted if it starts with '*')
+#	-u userid (numeric, +, or +gid)
+#	-g groupid (numeric or symbolic)
+#	-n real name (gecos field)
+#	-d home directory (checked iff it exists)
+#	-s login shell (must exist and be executable)
+#	-f force it (no checks are done)
+#
+#  Written by Steven Robbins
+#
+#PWDUTIL=./pwdutil			# for testing
+PWDUTIL=/usr/adm/pwdutil
+DOT=/usr/adm/dot
+MAIL_DIR=/usr/spool/mail
+
+
+if [ $# -eq 0 ]; then echo "Usage: $0 <user> [options]"; exit 1; fi
+
+#  Set up the defaults
+#
+PW_USER=$1
+PW_PASS=$PW_USER
+PW_UID="+user"
+PW_GID="user"
+PW_GCOS=$PW_USER
+PW_DIR="/home/"$PW_USER
+PW_SHELL="/bin/sh"
+
+#  Deal with overriding options
+#
+shift
+badcase=0
+while getopts "pu:g:n:d:s:" OPT; do
+	case $OPT in
+		f) FORCE="-f";;
+		p) echo -n "Enter Password: "; read -r PW_PASS;;
+		u) PW_UID=$OPTARG;;
+		g) PW_GID=$OPTARG; PW_UID="+"$OPTARG;;
+		n) PW_GCOS=$OPTARG;;
+		d) PW_DIR=$OPTARG;;
+		s) PW_SHELL=$OPTARG;;
+		?) badcase=1
+		esac
+	done
+
+if [ $badcase -eq 1 ]; then exit 1; fi
+
+#  Now, put the entry into /etc/passwd, and do all the other admin chores
+#
+PWENT="$PW_USER $PW_UID $PW_GID \"$PW_GCOS\" $PW_DIR $PW_SHELL"
+MAIL_FILE=$MAIL_DIR/$PW_USER
+
+if echo $PW_PASS | eval $PWDUTIL a $FORCE $PWENT >/dev/null; then
+#
+#  Setup the home directory, and related things
+#
+	echo Setting up account $PW_USER.
+	if [ -d $PW_DIR ]; then
+		echo $PW_DIR exists ... skipping.
+	else
+		echo Creating $PW_DIR.
+		mkdir $PW_DIR 
+		mkdir $PW_DIR/bin 
+		cp $DOT/bashrc       $PW_DIR/.bashrc 
+		cp $DOT/bash_logout  $PW_DIR/.bash_logout 
+
+		chown -R $PW_USER:$PW_GID $PW_DIR
+		fi
+
+	echo Creating mailbox $MAIL_FILE.
+	touch $MAIL_FILE
+	chmod 600 $MAIL_FILE
+	chown $PW_USER:$PW_GID $MAIL_FILE
+
+	echo Done!  Mailing welcome message.
+	cat <<-!G!R!O!K! | mail $PW_USER
+Welcome, $PW_GCOS!
+
+You have been given a default password.  
+Please change it now using the command 'passwd' from the shell prompt.
+
+The Management
+!G!R!O!K!
+
+else	echo Adduser failed: nothing changed.
+	fi

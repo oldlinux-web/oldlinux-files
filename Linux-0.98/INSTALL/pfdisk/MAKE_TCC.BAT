@@ -1,0 +1,3 @@
+@echo This batch file uses Turbo C to build pfdisk.exe
+@echo Note that only SMALL model has been tested...
+tcc -v- -epfdisk.exe pfdiskaz.c syscodes.c s_msdos.c

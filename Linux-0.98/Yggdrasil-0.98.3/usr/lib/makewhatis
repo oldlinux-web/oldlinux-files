@@ -1,0 +1,82 @@
+#!/bin/sh
+# makewhatis: create the whatis database
+# Created: Sun Jun 14 10:49:37 1992
+# Revised: Sun Jun 14 10:51:54 1992 by faith
+# Copyright 1992 Rickard E. Faith (faith@cs.unc.edu)
+# May be freely distributed and modified as long as copyright is retained.
+#
+mandir=${1-/usr/man}
+cd $mandir
+for i in 1 2 3 4 5 6 7 8 n l
+do
+    if [ -d man$i ]
+    then
+        cd man$i
+        section=$i
+        export section
+        for j in `find . -name '*' -print`
+        do
+            cat $j |\
+            gawk 'BEGIN {after = 0; insh = 0; section = ENVIRON["section"]} {
+                if ($1 ~ /^\.[Ss][Hh]/ && $2 ~ /NAME/) {
+                    if (!insh)
+                        insh = 1
+                    else {
+                        printf "\n"
+                        exit
+                    }
+                } else if (insh) {
+                    if ($1 ~ /^\.[Ss][HhYS]/) {
+                        printf "\n"
+                        exit
+                    } else { # Substitutions after Tom Christiansen perl script
+                        gsub(/	/, " ")             # Translate tabs to spaces
+                        gsub(/  /, " ")             # Collapse spaces
+                        sub(/^.[IB] /, "")          # Kill bold and italics
+                        gsub(/\\f[PRIB0123]/, "")   # Kill font changes
+                        gsub(/\\s[-+0-9]*/, "")     # Kill size changes
+                        gsub(/\\&/, "")             # Kill \&
+                        gsub(/\\\((ru|ul)/, "_")    # Translate
+                        gsub(/\\\((mi|hy|em)/, "-") # Translate
+                        gsub(/\\\*\(../, "")        # Kill troff strings
+                        sub(/^\.\\\"/, "")          # Kill comments
+                        gsub(/\\/, "")              # Kill all backslashes
+                        if ($0 !~ / - / && $0 !~ / -$/ && $0 !~ /^- /) {
+                            if (after) {
+                                if ($1 !~ /^\.../ && $1 != "")
+                                    printf " %s", $0
+                                else {
+                                    printf "\n"
+                                    after = 0
+                                }
+                            } else {
+                                if ($1 !~ /^\.../ && $1 != "")
+                                    printf "%s ", $0
+                                else
+                                    printf "\n"
+                            }
+                        } else {
+                            after = 1
+                            if ($0 ~ / - /) {
+                                printf "%-20s", sprintf( "%s (%s)",
+                                    substr( $0, 0, match( $0, / - / )-1 ),
+                                        section )
+                                printf "%s", substr( $0, match( $0, / - / ) )
+                            } else if ($0 ~ / -$/) {
+                                printf "%-20s", sprintf( "%s (%s) -",
+                                    substr( $0, 0, match( $0, / -$/ )-1 ),
+                                        section )
+                            } else {
+                                printf "(%s) %s", section, $0
+                            }
+                        }
+                    }
+                }
+            }'
+            done
+        cd ..
+    fi
+done > /tmp/whatis$$
+sed '/^$/d' < /tmp/whatis$$ | sort | uniq > ${mandir}/whatis
+chmod 644 ${mandir}/whatis
+rm /tmp/whatis$$

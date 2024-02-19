@@ -1,0 +1,177 @@
+/* TTY input driver */
+#include <stdio.h>
+#include <ctype.h>
+#include "config.h"
+
+#define	NULLCHAR	(char *)0;
+int ttymode;
+#define	TTY_LIT	0		/* Send next char literally */
+#define	TTY_RAW	1
+#define TTY_COOKED	2
+
+int ttyecho=1;
+#define	TTY_NOECHO	0
+#define	TTY_ECHO	1
+
+#ifdef	FLOW
+int ttyflow=1;
+#endif
+
+#define	LINESIZE	256
+
+#define CTLR	18
+#define	CTLU	21
+#define	CTLV	22
+#define	CTLW	23
+#define	CTLZ	26
+#define	RUBOUT	127
+
+raw()
+{
+	ttymode = TTY_RAW;
+#ifdef	ATARI_ST
+	set_stdout(ttymode);	/* CR/LF vs LF madness...  -- hyc */
+#endif
+}
+
+cooked()
+{
+	ttymode = TTY_COOKED;
+#ifdef	ATARI_ST
+	set_stdout(ttymode);
+#endif
+}
+
+void
+echo()
+{
+	ttyecho = TTY_ECHO;
+}
+
+void
+noecho()
+{
+	ttyecho = TTY_NOECHO;
+}
+ 
+/* Accept characters from the incoming tty buffer and process them
+ * (if in cooked mode) or just pass them directly (if in raw mode).
+ * Returns the number of characters available for use; if non-zero,
+ * also stashes a pointer to the character(s) in the "buf" argument.
+ */
+ /*Control-R added by df for retype of lines - useful in Telnet */
+ /*Then df got impatient and added Control-W for erasing words  */
+ /* Control-V for the literal-next function, slightly improved
+  * flow control, local echo stuff -- hyc */
+int
+ttydriv(c,buf)
+char c;
+char **buf;
+{
+	static char linebuf[LINESIZE];
+	static char *cp = linebuf;
+	char *rp ;
+	int cnt;
+	int seenprint;
+
+	if(buf == (char **)NULL)
+		return 0;	/* paranoia check */
+
+	cnt = 0;
+	switch(ttymode){
+	case TTY_LIT:
+		ttymode = TTY_COOKED;	/* Reset to cooked mode */
+	case TTY_RAW:
+		*cp++ = c;
+		cnt = cp - linebuf;
+		cp = linebuf;
+		break;
+	case TTY_COOKED:
+		/* Perform cooked-mode line editing */
+#ifdef PC9801
+		switch(c){
+#else
+		switch(c & 0x7f){
+#endif
+		case '\r':	/* CR and LF are equivalent */
+		case '\n':
+			*cp++ = '\r';
+			*cp++ = '\n';
+			printf("\n");
+			cnt = cp - linebuf;
+			cp = linebuf;
+			break;
+		case RUBOUT:
+		case '\b':		/* Backspace */
+			if(cp != linebuf){
+				cp--;
+				if (ttyecho)
+					printf("\b \b");
+			}
+			break;
+		case CTLR:	/* print line buffer */
+			if(ttyecho)
+				printf("^R");
+			printf("\n");
+			if(ttyecho) {
+				rp = linebuf ;
+				while (rp < cp)
+					putchar(*rp++) ;
+			}
+			break ;
+		case CTLU:	/* Line kill */
+			if(ttyecho) {
+				while(cp != linebuf){
+					cp--;
+					printf("\b \b");
+				}
+			} else
+				cp = linebuf;
+			break;
+		case CTLV:
+			ttymode = TTY_LIT;
+			break;
+		case CTLW:	/* erase word */
+			seenprint = 0 ;	/* we haven't seen a printable char yet */
+			while (cp != linebuf) {
+				cp--;
+				if(ttyecho)
+					printf("\b \b") ;
+				if (isspace(*cp)) {
+					if (seenprint)
+						break ;
+				}
+				else
+					seenprint = 1 ;
+			}
+			break ;
+		default:	/* Ordinary character */
+			*cp++ = c;
+#ifndef	AMIGA
+			/* ^Z apparently hangs the terminal emulators under
+			 * DoubleDos and Desqview. I REALLY HATE having to patch
+			 * around other people's bugslike this!!!
+			 */
+			if (ttyecho && (c != CTLZ))
+				putchar(c);
+#endif
+			if(cp >= &linebuf[LINESIZE]){
+				cnt = cp - linebuf;
+				cp = linebuf;
+			}
+			break;
+		}
+	}
+	if(cnt > 0)
+		*buf = linebuf;
+	else
+		*buf = NULLCHAR;
+#ifdef	FLOW
+	if(cp > linebuf)
+		ttyflow = 0;
+	else
+		ttyflow = 1;
+#endif
+	fflush(stdout);
+	return cnt;
+}

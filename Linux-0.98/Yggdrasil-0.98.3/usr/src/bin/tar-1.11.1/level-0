@@ -1,0 +1,143 @@
+#!/bin/sh
+#
+# Run this script as root on the machine that has the tape drive, to make a
+# full dump.
+#
+# If you give `now' as an argument, the dump is done immediately.
+# Otherwise, it waits until 1am, or until the hour given as argument.
+# Specify the hour as a number from 0 to 23.
+#
+# You must edit the file `backup-specs' to set the parameters for your site.
+
+if [ ! -w / ]; then
+   echo The backup must be run as root,
+   echo or else some files will fail to be dumped.
+   exit 1
+else
+   false
+fi
+
+# This is undesirable -- rms.
+# rsh albert /usr/local/adm/motd-backup-start
+
+# Get the values of BACKUP_DIRS and BACKUP_FILES, and other variables.
+. ./backup-specs
+
+# Maybe sleep until around specified or default hour.
+#
+if [ "$1" != "now" ]; then
+   if [ "$1"x != x ]; then
+      spec=$1
+   else
+      spec=$BACKUP_HOUR
+   fi
+   pausetime=`date | awk '{hr=substr($4,1,2);\\
+      mn=substr($4,4,2);\\
+      if((hr+0)<(spec+0))\\
+         print 3600*(spec-hr)-60*mn;\\
+      else\\
+         print 3600*(spec+(24-hr))-60*mn; }' spec=$spec`
+   clear
+   cat ./dont_touch
+   sleep $pausetime
+fi
+
+# start doing things
+
+here=`pwd`
+LOGFILE=log-`date | awk '{print $2 "-" $3 "-" $6}'`-full
+HOST=`hostname | sed 's/\..*//'`
+TAR_PART1="/usr/local/bin/tar -c --multi-volume --one-file-system --block=$BLOCKING --sparse --volno-file=$VOLNO_FILE --atime-preserve"
+
+# Make sure the log file did not already exist.  Create it.
+
+if [ -f $LOGFILE ] ; then
+   echo Log file $LOGFILE already exists.
+   exit 1
+else
+   touch $LOGFILE
+fi
+
+mt -f $TAPE_FILE rewind
+rm $VOLNO_FILE
+
+set $BACKUP_DIRS
+while [ $# -ne 0 ] ; do
+   host=`echo $1 | sed 's/:.*$//'`
+   fs=`echo $1 | sed 's/^.*://'`
+   date=`date`
+   fsname=`echo $1 | sed 's/\//:/g'`
+
+   TAR_PART2="--listed=/etc/tar-backup/temp.level-0"
+   TAR_PART3="--label='Full backup of $fs on $host at $date' -C $fs ."
+
+   echo Backing up $1 at $date | tee -a $LOGFILE
+
+   # Actually back things up.
+
+   if [ $HOST != $host ] ; then
+      # Removed 2>&1/dev/null cruft since that's incorrect sh syntax.
+      rsh $host mkdir /etc/tar-backup > /dev/null 2>&1
+      rsh $host rm -f /etc/tar-backup/temp.level-0
+      rsh $host $TAR_PART1 -f $HOST:$TAPE_FILE $TAR_PART2 $TAR_PART3 2>&1 | tee -a $LOGFILE
+   else
+      mkdir /etc/tar-backup > /dev/null 2>&1
+      rm -f /etc/tar-backup/temp.level-0
+# Using `sh -c exec' causes nested quoting and shell substitution
+# to be handled here in the same way rsh handles it.
+      sh -c "exec $TAR_PART1 -f $TAPE_FILE $TAR_PART2 $TAR_PART3" 2>&1 | tee -a $LOGFILE
+   fi
+   if [ $? -ne 0 ] ; then
+      echo Backup of $1 failed. | tee -a $LOGFILE
+      # I'm assuming that the tar will have written an empty
+      # file to the tape, otherwise I should do a cat here.
+   else
+      if [ $HOST != $host ] ; then
+	rsh $host "mv -f /etc/tar-backup/temp.level-0 /etc/tar-backup/$fsname.level-0" 2>&1 | tee -a $LOGFILE
+      else
+        mv -f /etc/tar-backup/temp.level-0 /etc/tar-backup/$fsname.level-0 2>&1 | tee -a $LOGFILE
+      fi
+   fi
+   $TAPE_STATUS | tee -a $LOGFILE
+   sleep 60
+   shift
+done
+
+# Dump any individual files requested.
+
+if [ x != "x$BACKUP_FILES" ] ; then
+   date=`date`
+
+   TAR_PART2="--listed=/etc/tar-backup/temp.level-0"
+   TAR_PART3="--label='Full backup of miscellaneous files at $date'"
+
+   mkdir /etc/tar-backup > /dev/null 2>&1
+   rm -f /etc/tar-backup/temp.level-0
+
+   echo Backing up miscellaneous files at $date | tee -a $LOGFILE
+# Using `sh -c exec' causes nested quoting and shell substitution
+# to be handled here in the same way rsh handles it.
+   sh -c "exec $TAR_PART1 -f $TAPE_FILE $TAR_PART2 $TAR_PART3 \
+    $BACKUP_FILES" 2>&1 | tee -a $LOGFILE
+   if [ $? -ne 0 ] ; then
+     echo Backup of miscellaneous files failed. | tee -a $LOGFILE
+     # I'm assuming that the tar will have written an empty
+     # file to the tape, otherwise I should do a cat here.
+   else
+     mv -f /etc/tar-backup/temp.level-0 /etc/tar-backup/misc.level-0 2>&1 | tee -a $LOGFILE
+   fi
+   $TAPE_STATUS | tee -a $LOGFILE
+else
+   echo No miscellaneous files specified | tee -a $LOGFILE
+   false
+fi
+
+mt -f $TAPE_FILE rewind
+mt -f $TAPE_FILE offl
+
+echo Sending the dump log to $ADMINISTRATOR
+cat $LOGFILE | sed -f logfile.sed > $LOGFILE.tmp
+/usr/ucb/mail -s "Results of backup on `date`" $ADMINISTRATOR < $LOGFILE.tmp
+
+# This is undesirable -- rms.
+#rsh albert /usr/local/adm/motd-backup-done &

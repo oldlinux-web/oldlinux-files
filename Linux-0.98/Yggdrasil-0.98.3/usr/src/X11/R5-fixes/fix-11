@@ -1,0 +1,997 @@
+		      Release 5 Public Patch #11
+			   MIT X Consortium
+
+To apply this patch:
+
+cd to the top of the source tree (to the directory containing the "mit"
+and "contrib" subdirectories) and do:
+	patch -p -s < ThisFile
+Patch will work silently unless an error occurs.
+If you want to watch patch do its thing, leave out the "-s" argument to patch.
+
+Finally, to rebuild after applying this patch, cd to the "mit" subdirectory
+and do:
+	make -k >& make.log
+
+
+Brief notes on what this patch fixes:
+
+config: make on SunOS 4.1.2 fails unless tree previously built in
+Xt: error in merging translations and accelerators
+Xt: code supporting display of translations can write out of bounds
+Xt: XtDisplayInstalledAccelerators action proc fails
+Xmu: XmuCvtStringToCursor fails for fontname/glyph index
+Xmu: XmuCvtStringToCursor passes an incorrect size to Xt
+server: (DE)ALLOCATE_LOCAL stack order consistency
+server: miZeroArcPts can overwrite memory, crash server
+xdm: crashes when X terminal without a name connects
+xdm: case-sensitive matching done on hostnames
+xdm: InitGreet "if" statement needs braces
+xdm: typo of a macroname for default userAuthDir 
+xrdb: screen-specific resources selected on tag only
+xterm: keyboard grabbing does not work consistently
+util: GNU make dies in util/scripts because it can't make makedepend
+util: unquoted pathname containing cpp symbol in Imakefile gets munged
+
+
+Prereq: public-patch-10
+
+*** /tmp/,RCSt1a18020	Fri Apr 24 13:00:14 1992
+--- mit/bug-report	Fri Apr 24 12:15:47 1992
+***************
+*** 2,8 ****
+  Subject: [area]: [synopsis]   [replace with actual area and short description]
+  
+  VERSION:
+!     R5, public-patch-10
+      [MIT public patches will edit this line to indicate the patch level]
+  
+  CLIENT MACHINE and OPERATING SYSTEM:
+--- 2,8 ----
+  Subject: [area]: [synopsis]   [replace with actual area and short description]
+  
+  VERSION:
+!     R5, public-patch-11
+      [MIT public patches will edit this line to indicate the patch level]
+  
+  CLIENT MACHINE and OPERATING SYSTEM:
+*** /tmp/da19157	Fri Apr 24 13:53:34 1992
+--- mit/config/Library.tmpl	Fri Apr 24 13:53:33 1992
+***************
+*** 6,12 ****
+   * DoNormalLib, DoSharedLib, DoDebugLib, DoProfileLib
+   */
+  
+! XCOMM $XConsortium: Library.tmpl,v 1.11 91/07/27 13:10:13 rws Exp $
+  
+  #ifndef LibraryCcCmd
+  #if DoSharedLib && defined(SharedLibraryCcCmd)
+--- 6,12 ----
+   * DoNormalLib, DoSharedLib, DoDebugLib, DoProfileLib
+   */
+  
+! XCOMM $XConsortium: Library.tmpl,v 1.12 92/03/20 15:05:19 rws Exp $
+  
+  #ifndef LibraryCcCmd
+  #if DoSharedLib && defined(SharedLibraryCcCmd)
+***************
+*** 79,84 ****
+--- 79,89 ----
+  #ifndef LibraryObjectRule
+  #define LibraryObjectRule()						@@\
+  all::									@@\
++ 	_DebuggedLibMkdir()						@@\
++ 	_ProfiledLibMkdir()						@@\
++ 	_SharedLibMkdir()						@@\
++ 									@@\
++ includes::								@@\
+  	_DebuggedLibMkdir()						@@\
+  	_ProfiledLibMkdir()						@@\
+  	_SharedLibMkdir()						@@\
+*** /tmp/da19179	Fri Apr 24 13:53:37 1992
+--- mit/lib/Xt/TMstate.c	Fri Apr 24 13:53:36 1992
+***************
+*** 1,4 ****
+! /* $XConsortium: TMstate.c,v 1.161 92/02/27 17:04:04 converse Exp $ */
+  /*LINTLIBRARY*/
+  
+  /***********************************************************
+--- 1,4 ----
+! /* $XConsortium: TMstate.c,v 1.162 92/03/25 16:47:39 converse Exp $ */
+  /*LINTLIBRARY*/
+  
+  /***********************************************************
+***************
+*** 865,871 ****
+  	    if (MatchIncomingEvent(curEventPtr, typeMatch, modMatch))
+  	      {
+  		  if (candState->actions) {
+- 		      PushContext(contextPtr, candState);
+  		      return candState;
+  		  }
+  		  else
+--- 865,870 ----
+***************
+*** 894,902 ****
+  			
+  			if ((tmRecPtr->lastEventTime + delta) >= time) {
+  			    if (nextState->actions) {
+! 				PushContext(contextPtr, candState);
+! 				PushContext(contextPtr, nextState);
+! 				return nextState;
+  			    }
+  			    else
+  			      matchState = candState;
+--- 893,899 ----
+  			
+  			if ((tmRecPtr->lastEventTime + delta) >= time) {
+  			    if (nextState->actions) {
+! 				return candState;
+  			    }
+  			    else
+  			      matchState = candState;
+***************
+*** 906,919 ****
+  	    }
+  	}
+      }
+-     if (matchState) {
+- 	typeMatch = TMGetTypeMatch(matchState->typeIndex);
+- 	if (typeMatch->eventType == _XtEventTimerEventType) {
+- 	    PushContext(contextPtr, matchState);
+- 	    matchState = matchState->nextLevel;
+- 	}
+- 	PushContext(contextPtr, matchState);
+-     }
+      return matchState;
+  }
+  
+--- 903,908 ----
+***************
+*** 924,931 ****
+  {
+      XtTranslations 	xlations = tmRecPtr->translations;
+      TMContext		*contextPtr = GetContextPtr(tmRecPtr);
+!     TMShortCard		i;
+!     StatePtr		candState;
+      TMComplexStateTree 	*stateTreePtr = 
+        (TMComplexStateTree *)&xlations->stateTreeTbl[0];
+      
+--- 913,920 ----
+  {
+      XtTranslations 	xlations = tmRecPtr->translations;
+      TMContext		*contextPtr = GetContextPtr(tmRecPtr);
+!     TMShortCard		i, matchTreeIndex;
+!     StatePtr		matchState = NULL, candState;
+      TMComplexStateTree 	*stateTreePtr = 
+        (TMComplexStateTree *)&xlations->stateTreeTbl[0];
+      
+***************
+*** 939,949 ****
+  	if (((*stateTreePtr)->isSimple == False) &&
+  	    (candState = TryCurrentTree(stateTreePtr,
+  				       tmRecPtr,
+! 				       curEventPtr)))
+! 	  break;
+      }
+! 
+!     if (candState == NULL){
+  	/* couldn't find it... */
+  	if (!Ignore(curEventPtr))
+  	  {
+--- 928,941 ----
+  	if (((*stateTreePtr)->isSimple == False) &&
+  	    (candState = TryCurrentTree(stateTreePtr,
+  				       tmRecPtr,
+! 				       curEventPtr))) {
+! 	    matchTreeIndex = i;
+! 	    matchState = candState;
+! 	    if (candState->actions)
+! 	      break;
+! 	}
+      }
+!     if (matchState == NULL){
+  	/* couldn't find it... */
+  	if (!Ignore(curEventPtr))
+  	  {
+***************
+*** 955,981 ****
+  	TMBindData	bindData = (TMBindData) tmRecPtr->proc_table;
+  	XtActionProc	*procs;
+  	Widget		accelWidget;
+  	
+  	tmRecPtr->lastEventTime = GetTime (tmRecPtr, curEventPtr->xev);
+  
+  	if (bindData->simple.isComplex) {
+  	    TMComplexBindProcs bindProcs =
+! 	      TMGetComplexBindEntry(bindData, i);
+  	    procs = bindProcs->procs;
+  	    accelWidget = bindProcs->widget;
+  	}
+  	else {
+  	    TMSimpleBindProcs bindProcs = 
+! 	      TMGetSimpleBindEntry(bindData, i);
+  	    procs = bindProcs->procs;
+  	    accelWidget = NULL;
+  	}
+  	HandleActions(w, 
+  		      curEventPtr->xev, 
+! 		      (TMSimpleStateTree)*stateTreePtr,
+  		      accelWidget,
+  		      procs,
+! 		      candState->actions);
+      }
+  }
+  
+--- 947,982 ----
+  	TMBindData	bindData = (TMBindData) tmRecPtr->proc_table;
+  	XtActionProc	*procs;
+  	Widget		accelWidget;
++ 	TMTypeMatch 	typeMatch;
+  	
++ 	typeMatch  = TMGetTypeMatch(matchState->typeIndex);
++ 
++ 	PushContext(contextPtr, matchState);
++ 	if (typeMatch->eventType == _XtEventTimerEventType) {
++ 	    matchState = matchState->nextLevel;
++ 	    PushContext(contextPtr, matchState);
++ 	}
+  	tmRecPtr->lastEventTime = GetTime (tmRecPtr, curEventPtr->xev);
+  
+  	if (bindData->simple.isComplex) {
+  	    TMComplexBindProcs bindProcs =
+! 	      TMGetComplexBindEntry(bindData, matchTreeIndex);
+  	    procs = bindProcs->procs;
+  	    accelWidget = bindProcs->widget;
+  	}
+  	else {
+  	    TMSimpleBindProcs bindProcs = 
+! 	      TMGetSimpleBindEntry(bindData, matchTreeIndex);
+  	    procs = bindProcs->procs;
+  	    accelWidget = NULL;
+  	}
+  	HandleActions(w, 
+  		      curEventPtr->xev, 
+! 		      (TMSimpleStateTree)
+! 		      xlations->stateTreeTbl[matchTreeIndex],
+  		      accelWidget,
+  		      procs,
+! 		      matchState->actions);
+      }
+  }
+  
+*** /tmp/da19201	Fri Apr 24 13:53:39 1992
+--- mit/lib/Xt/TMprint.c	Fri Apr 24 13:53:39 1992
+***************
+*** 1,4 ****
+! /* $XConsortium: TMprint.c,v 1.7 91/06/26 18:25:51 converse Exp $ */
+  /*LINTLIBRARY*/
+  
+  /***********************************************************
+--- 1,4 ----
+! /* $XConsortium: TMprint.c,v 1.9 92/04/03 15:45:50 converse Exp $ */
+  /*LINTLIBRARY*/
+  
+  /***********************************************************
+***************
+*** 88,100 ****
+--- 88,103 ----
+      PRINTMOD(ControlMask, "Ctrl");	/* name is not CtrlMask... */
+      PRINTMOD(LockMask, "Lock");
+      PRINTMOD(Mod1Mask, "Mod1");
++     CHECK_STR_OVERFLOW(sb);
+      PRINTMOD(Mod2Mask, "Mod2");
+      PRINTMOD(Mod3Mask, "Mod3");
+      PRINTMOD(Mod4Mask, "Mod4");
+      PRINTMOD(Mod5Mask, "Mod5");
++     CHECK_STR_OVERFLOW(sb);
+      PRINTMOD(Button1Mask, "Button1");
+      PRINTMOD(Button2Mask, "Button2");
+      PRINTMOD(Button3Mask, "Button3");
++     CHECK_STR_OVERFLOW(sb);
+      PRINTMOD(Button4Mask, "Button4");
+      PRINTMOD(Button5Mask, "Button5");
+  
+***************
+*** 630,636 ****
+      PrintRec		*prints;
+      TMStringBufRec	sbRec, *sb = &sbRec;
+      TMShortCard		numPrints, maxPrints;
+! 
+      if (xlations == NULL) return NULL;
+  
+      sb->current = sb->start = XtMalloc((Cardinal)1000);
+--- 633,642 ----
+      PrintRec		*prints;
+      TMStringBufRec	sbRec, *sb = &sbRec;
+      TMShortCard		numPrints, maxPrints;
+! #ifdef TRACE_TM
+!     TMBindData		bindData = (TMBindData)w->core.tm.proc_table;
+!     Boolean		hasAccel = (accelWidget ? True : False);
+! #endif /* TRACE_TM */
+      if (xlations == NULL) return NULL;
+  
+      sb->current = sb->start = XtMalloc((Cardinal)1000);
+***************
+*** 651,657 ****
+  	  xlations->stateTreeTbl[prints[i].tIndex];
+  	TMBranchHead branchHead = 
+  	  &stateTree->branchHeadTbl[prints[i].bIndex];
+! 	
+  	PrintState(sb, (TMStateTree)stateTree, branchHead,
+  		   includeRHS, accelWidget, XtDisplay(w));
+      }
+--- 657,673 ----
+  	  xlations->stateTreeTbl[prints[i].tIndex];
+  	TMBranchHead branchHead = 
+  	  &stateTree->branchHeadTbl[prints[i].bIndex];
+! #ifdef TRACE_TM	
+! 	TMComplexBindProcs	complexBindProcs;
+! 
+! 	if (hasAccel == False) {
+! 	    accelWidget = NULL;
+! 	    if (bindData->simple.isComplex) {
+! 		complexBindProcs = TMGetComplexBindEntry(bindData, 0);
+! 		accelWidget = complexBindProcs[prints[i].tIndex].widget;
+! 	    }
+! 	}
+! #endif /* TRACE_TM */
+  	PrintState(sb, (TMStateTree)stateTree, branchHead,
+  		   includeRHS, accelWidget, XtDisplay(w));
+      }
+***************
+*** 712,718 ****
+      PrintRec		stackPrints[STACKPRINTSIZE];
+      PrintRec		*prints;
+      TMShortCard		numPrints, maxPrints;
+!     TMBindData		bindData = (TMBindData)widget->core.tm.proc_table;
+      TMComplexBindProcs	complexBindProcs;
+  
+      if ((eventWidget == NULL) ||
+--- 728,734 ----
+      PrintRec		stackPrints[STACKPRINTSIZE];
+      PrintRec		*prints;
+      TMShortCard		numPrints, maxPrints;
+!     TMBindData	bindData = (TMBindData) eventWidget->core.tm.proc_table;
+      TMComplexBindProcs	complexBindProcs;
+  
+      if ((eventWidget == NULL) ||
+***************
+*** 721,726 ****
+--- 737,743 ----
+        return;
+  
+      sb->current = sb->start = XtMalloc((Cardinal)1000);
++     sb->start[0] = '\0';
+      sb->max = 1000;
+      maxPrints = 0;
+      for (i = 0; i < xlations->numStateTrees; i++)
+***************
+*** 735,741 ****
+      for (i = 0;
+  	 i < xlations->numStateTrees;
+  	 i++, complexBindProcs++) {
+! 	if (complexBindProcs->widget == eventWidget)
+  	  {
+  	      ProcessStateTree(prints, xlations, i, &numPrints);
+  	  }
+--- 752,758 ----
+      for (i = 0;
+  	 i < xlations->numStateTrees;
+  	 i++, complexBindProcs++) {
+! 	if (complexBindProcs->widget)
+  	  {
+  	      ProcessStateTree(prints, xlations, i, &numPrints);
+  	  }
+***************
+*** 745,753 ****
+  	  xlations->stateTreeTbl[prints[i].tIndex];
+  	TMBranchHead branchHead = 
+  	  &stateTree->branchHeadTbl[prints[i].bIndex];
+  	
+! 	PrintState(sb, (TMStateTree)stateTree, branchHead,
+! 		   True, widget, XtDisplay(widget));
+      }
+      XtStackFree((XtPointer)prints, (XtPointer)stackPrints);
+      printf("%s\n", sb->start);
+--- 762,773 ----
+  	  xlations->stateTreeTbl[prints[i].tIndex];
+  	TMBranchHead branchHead = 
+  	  &stateTree->branchHeadTbl[prints[i].bIndex];
++ 
++ 	complexBindProcs = TMGetComplexBindEntry(bindData, 0);
+  	
+! 	PrintState(sb, (TMStateTree)stateTree, branchHead, True, 
+! 		   complexBindProcs[prints[i].tIndex].widget, 
+! 		   XtDisplay(widget));
+      }
+      XtStackFree((XtPointer)prints, (XtPointer)stackPrints);
+      printf("%s\n", sb->start);
+*** /tmp/da19223	Fri Apr 24 13:53:42 1992
+--- mit/lib/Xmu/StrToCurs.c	Fri Apr 24 13:53:41 1992
+***************
+*** 1,4 ****
+! /* $XConsortium: StrToCurs.c,v 1.16 91/07/25 17:48:36 converse Exp $ */
+  
+  /***********************************************************
+  Copyright 1987, 1988 by Digital Equipment Corporation, Maynard, Massachusetts,
+--- 1,4 ----
+! /* $XConsortium: StrToCurs.c,v 1.19 92/03/19 15:22:29 converse Exp $ */
+  
+  /***********************************************************
+  Copyright 1987, 1988 by Digital Equipment Corporation, Maynard, Massachusetts,
+***************
+*** 24,31 ****
+  
+  ******************************************************************/
+  
+! #include	<X11/IntrinsicP.h>	/* 'cause CoreP.h needs it */
+! #include	<X11/CoreP.h>		/* just to do XtConvert() */
+  #include	<X11/StringDefs.h>
+  #include	<X11/Xmu/Converters.h>
+  #include	<X11/Xmu/Drawing.h>
+--- 24,30 ----
+  
+  ******************************************************************/
+  
+! #include	<X11/Intrinsic.h>
+  #include	<X11/StringDefs.h>
+  #include	<X11/Xmu/Converters.h>
+  #include	<X11/Xmu/Drawing.h>
+***************
+*** 41,53 ****
+--- 40,63 ----
+  #endif /* X_NOT_POSIX */
+  #ifndef PATH_MAX
+  #include <sys/param.h>
++ #ifndef PATH_MAX
+  #ifdef MAXPATHLEN
+  #define PATH_MAX MAXPATHLEN
+  #else
+  #define PATH_MAX 1024
+  #endif
++ #endif
+  #endif /* PATH_MAX */
+  
++ /* Kludge source to avoid encountering broken shared library linkers
++    which insist on resolving references unused by the application,
++    and broken object file formats that don't correctly distinguish
++    references to procedures from references to data.
++  */
++ #if defined(SUNSHLIB) || defined(SVR4)
++ #define XMU_KLUDGE
++ #endif
++ 
+  /*
+   * XmuConvertStringToCursor:
+   *
+***************
+*** 107,115 ****
+      if (0 == strncmp(FONTSPECIFIER, name, strlen(FONTSPECIFIER))) {
+  	char source_name[PATH_MAX], mask_name[PATH_MAX];
+  	int source_char, mask_char, fields;
+- 	WidgetRec widgetRec;
+  	Font source_font, mask_font;
+  	XrmValue fromString, toFont;
+  
+  	fields = sscanf(name, "FONT %s %d %s %d",
+  			source_name, &source_char,
+--- 117,130 ----
+      if (0 == strncmp(FONTSPECIFIER, name, strlen(FONTSPECIFIER))) {
+  	char source_name[PATH_MAX], mask_name[PATH_MAX];
+  	int source_char, mask_char, fields;
+  	Font source_font, mask_font;
+  	XrmValue fromString, toFont;
++ 	XrmValue cvtArg;
++ 	Boolean success;
++ 	Display *dpy = DisplayOfScreen(screen);
++ #ifdef XMU_KLUDGE
++ 	Cardinal num;
++ #endif
+  
+  	fields = sscanf(name, "FONT %s %d %s %d",
+  			source_name, &source_char,
+***************
+*** 119,135 ****
+  	    return;
+  	}
+  
+- 	/* widgetRec is stupid; we should just use XtDirectConvert,
+- 	 * but the names in Xt/Converters aren't public. */
+- 	widgetRec.core.screen = screen;
+  	fromString.addr = source_name;
+! 	fromString.size = strlen(source_name);
+! 	XtConvert(&widgetRec, XtRString, &fromString, XtRFont, &toFont);
+! 	if (toFont.addr == NULL) {
+  	    XtStringConversionWarning(name, XtRCursor);
+  	    return;
+  	}
+- 	source_font = *(Font*)toFont.addr;
+  
+  	switch (fields) {
+  	  case 2:		/* defaulted mask font & char */
+--- 134,159 ----
+  	    return;
+  	}
+  
+  	fromString.addr = source_name;
+! 	fromString.size = strlen(source_name) + 1;
+! 	toFont.addr = (XPointer) &source_font;
+! 	toFont.size = sizeof(Font);
+! 	cvtArg.addr = (XPointer) &dpy;
+! 	cvtArg.size = sizeof(Display *);
+! 	/* XXX using display of screen argument as message display */
+! #ifdef XMU_KLUDGE
+! 	/* XXX Sacrifice caching */
+! 	num = 1;
+! 	success = XtCvtStringToFont(dpy, &cvtArg, &num, &fromString, &toFont,
+! 				    NULL);
+! #else
+! 	success = XtCallConverter(dpy, XtCvtStringToFont, &cvtArg,
+! 				  (Cardinal)1, &fromString, &toFont, NULL);
+! #endif
+! 	if (!success) {
+  	    XtStringConversionWarning(name, XtRCursor);
+  	    return;
+  	}
+  
+  	switch (fields) {
+  	  case 2:		/* defaulted mask font & char */
+***************
+*** 144,156 ****
+  
+  	  case 4:		/* specified mask font & char */
+  	    fromString.addr = mask_name;
+! 	    fromString.size = strlen(mask_name);
+! 	    XtConvert(&widgetRec, XtRString, &fromString, XtRFont, &toFont);
+! 	    if (toFont.addr == NULL) {
+  		XtStringConversionWarning(name, XtRCursor);
+  		return;
+  	    }
+- 	    mask_font = *(Font*)toFont.addr;
+  	}
+  
+  	cursor = XCreateGlyphCursor( DisplayOfScreen(screen), source_font,
+--- 168,190 ----
+  
+  	  case 4:		/* specified mask font & char */
+  	    fromString.addr = mask_name;
+! 	    fromString.size = strlen(mask_name) + 1;
+! 	    toFont.addr = (XPointer) &mask_font;
+! 	    toFont.size = sizeof(Font);
+! 	    /* XXX using display of screen argument as message display */
+! #ifdef XMU_KLUDGE
+! 	    /* XXX Sacrifice caching */
+! 	    num = 1;
+! 	    success = XtCvtStringToFont(dpy, &cvtArg, &num, &fromString,
+! 					&toFont, NULL);
+! #else
+! 	    success = XtCallConverter(dpy, XtCvtStringToFont, &cvtArg,
+! 				      (Cardinal)1, &fromString, &toFont, NULL);
+! #endif
+! 	    if (!success) {
+  		XtStringConversionWarning(name, XtRCursor);
+  		return;
+  	    }
+  	}
+  
+  	cursor = XCreateGlyphCursor( DisplayOfScreen(screen), source_font,
+*** /tmp/da19245	Fri Apr 24 13:53:44 1992
+--- mit/server/ddx/mi/mizerarc.c	Fri Apr 24 13:53:43 1992
+***************
+*** 17,23 ****
+  
+  ********************************************************/
+  
+! /* $XConsortium: mizerarc.c,v 5.31 91/09/21 19:38:21 rws Exp $ */
+  
+  /* Derived from:
+   * "Algorithm for drawing ellipses or hyperbolae with a digital plotter"
+--- 17,23 ----
+  
+  ********************************************************/
+  
+! /* $XConsortium: mizerarc.c,v 5.33 92/04/21 19:05:01 rws Exp $ */
+  
+  /* Derived from:
+   * "Algorithm for drawing ellipses or hyperbolae with a digital plotter"
+***************
+*** 370,375 ****
+--- 370,376 ----
+  	/* kludge! */
+  	info->initialMask |= info->end.mask;
+  	info->initialMask |= info->initialMask << 1;
++ 	info->end.x = 0;
+  	info->end.mask = 0;
+      }
+      return FALSE;
+***************
+*** 813,821 ****
+  	    }
+  	}
+      }
+      if (dospans)
+      {
+  	DEALLOCATE_LOCAL(widths);
+      }
+-     DEALLOCATE_LOCAL(points);
+  }
+--- 814,822 ----
+  	    }
+  	}
+      }
++     DEALLOCATE_LOCAL(points);
+      if (dospans)
+      {
+  	DEALLOCATE_LOCAL(widths);
+      }
+  }
+*** /tmp/da19267	Fri Apr 24 13:53:46 1992
+--- mit/clients/xdm/access.c	Fri Apr 24 13:53:45 1992
+***************
+*** 1,5 ****
+  /*
+!  * $XConsortium: access.c,v 1.11 91/07/18 19:29:00 rws Exp $
+   *
+   * Copyright 1990 Massachusetts Institute of Technology
+   *
+--- 1,5 ----
+  /*
+!  * $XConsortium: access.c,v 1.13 92/04/21 11:33:37 gildea Exp $
+   *
+   * Copyright 1990 Massachusetts Institute of Technology
+   *
+***************
+*** 36,41 ****
+--- 36,42 ----
+  # include   <X11/Xdmcp.h>
+  # include   <X11/X.h>
+  # include   <stdio.h>
++ # include   <ctype.h>
+  # include   <netinet/in.h>
+  # include   <netdb.h>
+  # include   <sys/socket.h>
+***************
+*** 472,477 ****
+--- 473,480 ----
+      return haveLocalhost;
+  }
+  
++ /* Returns non-0 iff string is matched by pattern.  Does case folding.
++  */
+  static int
+  patternMatch (string, pattern)
+      char    *string, *pattern;
+***************
+*** 478,483 ****
+--- 481,489 ----
+  {
+      int	    p, s;
+  
++     if (!string)
++ 	string = "";
++ 
+      for (;;)
+      {
+  	s = *string++;
+***************
+*** 484,503 ****
+  	switch (p = *pattern++) {
+  	case '*':
+  	    if (!*pattern)
+! 		return TRUE;
+  	    for (string--; *string; string++)
+  		if (patternMatch (string, pattern))
+  		    return 1;
+  	    return 0;
+  	case '?':
+! 	    if (s == 0)
+  		return 0;
+  	    break;
+  	case '\0':
+! 	    return s == 0;
+  	case '\\':
+  	    p = *pattern++;
+  	default:
+  	    if (p != s)
+  		return 0;
+  	}
+--- 490,512 ----
+  	switch (p = *pattern++) {
+  	case '*':
+  	    if (!*pattern)
+! 		return 1;
+  	    for (string--; *string; string++)
+  		if (patternMatch (string, pattern))
+  		    return 1;
+  	    return 0;
+  	case '?':
+! 	    if (s == '\0')
+  		return 0;
+  	    break;
+  	case '\0':
+! 	    return s == '\0';
+  	case '\\':
+  	    p = *pattern++;
++ 	    /* fall through */
+  	default:
++ 	    if (isupper(p)) p = tolower(p);
++ 	    if (isupper(s)) s = tolower(s);
+  	    if (p != s)
+  		return 0;
+  	}
+*** /tmp/da19289	Fri Apr 24 13:53:49 1992
+--- mit/clients/xdm/xdmcp.c	Fri Apr 24 13:53:48 1992
+***************
+*** 1,7 ****
+  /*
+   * xdm - display manager daemon
+   *
+!  * $XConsortium: xdmcp.c,v 1.3 91/07/18 18:57:22 gildea Exp $
+   *
+   * Copyright 1988 Massachusetts Institute of Technology
+   *
+--- 1,7 ----
+  /*
+   * xdm - display manager daemon
+   *
+!  * $XConsortium: xdmcp.c,v 1.6 92/03/24 10:30:37 gildea Exp $
+   *
+   * Copyright 1988 Massachusetts Institute of Technology
+   *
+***************
+*** 269,274 ****
+--- 269,276 ----
+      *type = family;
+  }
+  
++ /* computes an X display name */
++ 
+  static char *
+  NetworkAddressToName(connectionType, connectionAddress, displayNumber)
+      CARD16	connectionType;
+***************
+*** 285,291 ****
+  	    char		*localhost, *localHostname();
+  
+  	    data = connectionAddress->data;
+! 	    hostent = gethostbyaddr (data,
+  				     connectionAddress->length, AF_INET);
+  
+  	    localhost = localHostname ();
+--- 287,293 ----
+  	    char		*localhost, *localHostname();
+  
+  	    data = connectionAddress->data;
+! 	    hostent = gethostbyaddr ((char *)data,
+  				     connectionAddress->length, AF_INET);
+  
+  	    localhost = localHostname ();
+***************
+*** 1034,1048 ****
+      case FamilyInternet:
+  	{
+  	    struct hostent	*hostent;
+  
+! 	    hostent = gethostbyaddr (connectionAddress->data,
+  				     connectionAddress->length, AF_INET);
+  
+! 	    if (!hostent)
+  		break;
+! 	    if (!getString (name, strlen (hostent->h_name)))
+! 		break;
+! 	    strcpy (name, hostent->h_name);
+  	    break;
+  	}
+  #ifdef DNET
+--- 1036,1061 ----
+      case FamilyInternet:
+  	{
+  	    struct hostent	*hostent;
++ 	    char dotted[20];
++ 	    char *local_name;
+  
+! 	    hostent = gethostbyaddr ((char *)connectionAddress->data,
+  				     connectionAddress->length, AF_INET);
+  
+! 	    if (hostent)
+! 		local_name = hostent->h_name;
+! 	    else {
+! 		/* can't get name, so use emergency fallback */
+! 		sprintf(dotted, "%d.%d.%d.%d",
+! 			connectionAddress->data[0],
+! 			connectionAddress->data[1],
+! 			connectionAddress->data[2],
+! 			connectionAddress->data[3]);
+! 		local_name = dotted;
+! 	    }
+! 	    if (!getString (name, strlen (local_name)))
+  		break;
+! 	    strcpy (name, local_name);
+  	    break;
+  	}
+  #ifdef DNET
+*** /tmp/da19311	Fri Apr 24 13:53:51 1992
+--- mit/clients/xdm/greet.c	Fri Apr 24 13:53:51 1992
+***************
+*** 1,7 ****
+  /*
+   * xdm - display manager daemon
+   *
+!  * $XConsortium: greet.c,v 1.29 91/04/02 11:58:51 rws Exp $
+   *
+   * Copyright 1988 Massachusetts Institute of Technology
+   *
+--- 1,7 ----
+  /*
+   * xdm - display manager daemon
+   *
+!  * $XConsortium: greet.c,v 1.30 92/04/15 10:52:33 rws Exp $
+   *
+   * Copyright 1988 Massachusetts Institute of Technology
+   *
+***************
+*** 127,133 ****
+--- 127,135 ----
+      i = 0;
+      XtSetArg (arglist[i], XtNnotifyDone, GreetDone); i++;
+      if (!d->authorize || d->authorizations || !d->authComplain)
++     {
+  	XtSetArg (arglist[i], XtNsecureSession, True); i++;
++     }
+      login = XtCreateManagedWidget ("login", loginWidgetClass, toplevel,
+  				    arglist, i);
+      XtRealizeWidget (toplevel);
+*** /tmp/da19333	Fri Apr 24 13:53:53 1992
+--- mit/clients/xdm/resource.c	Fri Apr 24 13:53:52 1992
+***************
+*** 1,7 ****
+  /*
+   * xdm - display manager daemon
+   *
+!  * $XConsortium: resource.c,v 1.44 91/07/24 00:06:52 keith Exp $
+   *
+   * Copyright 1988 Massachusetts Institute of Technology
+   *
+--- 1,7 ----
+  /*
+   * xdm - display manager daemon
+   *
+!  * $XConsortium: resource.c,v 1.45 92/04/15 11:12:41 rws Exp $
+   *
+   * Copyright 1988 Massachusetts Institute of Technology
+   *
+***************
+*** 218,224 ****
+  "failsafeClient","FailsafeClient",	DM_STRING,	boffset(failsafeClient),
+  				DEF_FAILSAFE_CLIENT,
+  "userAuthDir",	"UserAuthDir",	DM_STRING,	boffset(userAuthDir),
+! 				DEF_AUTH_DIR,
+  "chooser",	"Chooser",	DM_STRING,	boffset(chooser),
+  				DEF_CHOOSER,
+  };
+--- 218,224 ----
+  "failsafeClient","FailsafeClient",	DM_STRING,	boffset(failsafeClient),
+  				DEF_FAILSAFE_CLIENT,
+  "userAuthDir",	"UserAuthDir",	DM_STRING,	boffset(userAuthDir),
+! 				DEF_USER_AUTH_DIR,
+  "chooser",	"Chooser",	DM_STRING,	boffset(chooser),
+  				DEF_CHOOSER,
+  };
+*** /tmp/da19355	Fri Apr 24 13:53:55 1992
+--- mit/clients/xrdb/xrdb.c	Fri Apr 24 13:53:54 1992
+***************
+*** 1,7 ****
+  /*
+   * xrdb - X resource manager database utility
+   *
+!  * $XConsortium: xrdb.c,v 11.50 91/09/06 15:03:35 rws Exp $
+   */
+  
+  /*
+--- 1,7 ----
+  /*
+   * xrdb - X resource manager database utility
+   *
+!  * $XConsortium: xrdb.c,v 11.51 92/03/10 12:10:34 keith Exp $
+   */
+  
+  /*
+***************
+*** 970,985 ****
+      int *hits;
+      register int i, j, k;
+      Entries cur, cmp;
+!     char *curtag;
+  
+      hits = (int *)malloc(num * sizeof(int));
+      cur = dbs[0];
+      for (i = 0; i < cur.used; i++) {
+  	curtag = cur.entry[i].tag;
+  	for (j = 1; j < num; j++) {
+  	    cmp = dbs[j];
+  	    for (k = 0; k < cmp.used; k++) {
+! 		if (cmp.entry[k].usable && !strcmp(curtag, cmp.entry[k].tag)) {
+  		    hits[j] = k;
+  		    break;
+  		}
+--- 970,989 ----
+      int *hits;
+      register int i, j, k;
+      Entries cur, cmp;
+!     char *curtag, *curvalue;
+  
+      hits = (int *)malloc(num * sizeof(int));
+      cur = dbs[0];
+      for (i = 0; i < cur.used; i++) {
+  	curtag = cur.entry[i].tag;
++ 	curvalue = cur.entry[i].value;
+  	for (j = 1; j < num; j++) {
+  	    cmp = dbs[j];
+  	    for (k = 0; k < cmp.used; k++) {
+! 		if (cmp.entry[k].usable &&
+! 		    !strcmp(curtag, cmp.entry[k].tag) &&
+! 		    !strcmp(curvalue, cmp.entry[k].value))
+! 		{
+  		    hits[j] = k;
+  		    break;
+  		}
+*** /tmp/da19377	Fri Apr 24 13:53:58 1992
+--- mit/clients/xterm/menu.c	Fri Apr 24 13:53:57 1992
+***************
+*** 1,4 ****
+! /* $XConsortium: menu.c,v 1.60 91/06/25 19:49:28 gildea Exp $ */
+  /*
+  Copyright 1989 Massachusetts Institute of Technology
+  
+--- 1,4 ----
+! /* $XConsortium: menu.c,v 1.61 92/04/20 18:46:39 rws Exp $ */
+  /*
+  Copyright 1989 Massachusetts Institute of Technology
+  
+***************
+*** 325,331 ****
+  	ReverseVideo (term);
+  	screen->grabbedKbd = FALSE;
+      } else {
+! 	if (XGrabKeyboard (screen->display, term->core.parent->core.window,
+  			   True, GrabModeAsync, GrabModeAsync, time)
+  	    != GrabSuccess) {
+  	    XBell (screen->display, 100);
+--- 325,331 ----
+  	ReverseVideo (term);
+  	screen->grabbedKbd = FALSE;
+      } else {
+! 	if (XGrabKeyboard (screen->display, term->core.window,
+  			   True, GrabModeAsync, GrabModeAsync, time)
+  	    != GrabSuccess) {
+  	    XBell (screen->display, 100);
+*** /tmp/da19399	Fri Apr 24 13:54:00 1992
+--- mit/util/scripts/Imakefile	Fri Apr 24 13:53:59 1992
+***************
+*** 1,12 ****
+! XCOMM $XConsortium: Imakefile,v 1.21 91/07/29 19:59:55 gildea Exp $
+  #if UseCCMakeDepend
+! MDEP_DIR = makedepend
+  #endif
+!          PROGRAMS = xmkmf $(MDEP_DIR) mergelib
+  
+  all:: $(PROGRAMS)
+  
+! CppScriptTarget(xmkmf,xmkmf.cpp,-DCONFIGDIRSPEC=-I$(CONFIGDIR),$(ICONFIGFILES))
+  #if UseCCMakeDepend
+  CppScriptTarget(makedepend,mdepend.cpp,-DPREPROC='"'"$(PREPROCESSCMD)"'"',$(ICONFIGFILES))
+  #endif
+--- 1,12 ----
+! XCOMM $XConsortium: Imakefile,v 1.23 92/04/14 18:46:59 rws Exp $
+  #if UseCCMakeDepend
+! MDEP_PROG = makedepend
+  #endif
+!          PROGRAMS = xmkmf $(MDEP_PROG) mergelib
+  
+  all:: $(PROGRAMS)
+  
+! CppScriptTarget(xmkmf,xmkmf.cpp,-DCONFIGDIRSPEC='"'"-I$(CONFIGDIR)"'"',$(ICONFIGFILES))
+  #if UseCCMakeDepend
+  CppScriptTarget(makedepend,mdepend.cpp,-DPREPROC='"'"$(PREPROCESSCMD)"'"',$(ICONFIGFILES))
+  #endif

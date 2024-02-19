@@ -1,0 +1,1424 @@
+CKAPLM.DOC    The C-Kermit Version 5A Interface Definition             Aug 1992
+
+			     PROGRAM LOGIC MANUAL
+
+Author: F. da Cruz, Columbia University
+E-Mail: fdc@watsun.cc.columbia.edu, FDCCU@CUVMA.BITNET
+
+  Copyright (C) 1985, 1992, Trustees of Columbia University in the City of New
+  York.  Permission is granted to any individual or institution to use this
+  software as long as it is not sold for profit.  This copyright notice must be
+  retained.  This software may not be included in commercial products without
+  written permission of Columbia University.
+
+Last update: Sun Aug 23 14:16:56 1992
+As of edit:  183
+
+  THIS IS A DRAFT.  COMMENTS FROM THOSE WHO USE THIS DRAFT AS A 
+  GUIDE FOR PORTING C-KERMIT 5A TO NEW SYSTEMS ARE WELCOME.
+
+DOCUMENTATION
+
+C-Kermit 5A is documented in the book "Using C-Kermit" by Frank da Cruz
+and Christine M. Gianone, Digital Press, Burlington, MA, USA.  Publication
+date: Fall 1992.
+
+INTRODUCTION
+
+This is an attempt at describing the relationship among the modules and
+functions of C-Kermit version 5A.  Before reading this file, please read the
+file CKAAAA.HLP for an overview of C-Kermit file naming conventions.
+
+C-Kermit is designed to be portable to any kind of computer that has a C
+compiler.  The source code is broken into many files that are grouped
+according to their function.  There are several major groups: 1 (the protocol
+kernel), 2 (the user interface), 3 (system-dependent primitives), 4 (network
+support), and 5 (formatted screen support).
+
+FILES
+
+C-Kermit source files begin with the two letters CK (lowercase on UNIX
+systems, uppercase on most others).  The third character denotes something
+about the function group and the expected level of portability.  See the file
+CKAAAA.HLP for details of file naming conventions and organization.
+
+One hint before proceeding: functions are scattered all over the ckc*.c
+and ckuu*.c modules, where function size has begun to take precedence over
+the desirability of grouping related functions together, the aim being to
+keep any particular module from growing disproportionately large.  The easiest
+way (in UNIX) to find out what source file a given function is defined in is
+like this (where the desired function is foo()...):
+
+  grep ^foo ck*.c
+
+This works because the coding convention has been to make function names
+always start on the left margin, for example:
+
+static char *
+foo(x,y) int x, y; {
+  ...
+}
+
+
+SOURCE CODE PORTABILITY GUIDE
+
+When writing code for C-Kermit, please stick to the following coding
+conventions to ensure portability to small or old C compilers and linkers:
+
+. Keep variable, function, and symbol names unique within 6 characters.
+. Don't use the #if preprocessor construction, only use #ifdef.
+. Put tokens after #endif in comment brackets, e.g. #endif /* FOO */.
+. Don't use logical operators in preprocessor constructions.
+. Always cast strlen() to int, e.g. "if ((int)strlen(foo) < x)...".
+. Any variable whose value might exceed 16383 should be long.
+. Avoid the construction *++p -- the order of evaluation varies.
+. Reportedly, some compilers even mess up with *(++p).
+. Avoid huge switch() statements with many cases.
+. Don't make character-string constants longer than about 250.
+. Don't depend on '\r' being carriage return.
+. Don't depend on '\n' being linefeed.
+. Don't depend on '\r' and '\n' being different (e.g. in switch() statements).
+. Remember, in Sys V, signals must always be re-armed to be used again.
+
+(many, many more...  This section needs massive filling in.)
+
+CONTENTS:
+
+  GROUP 1    System-independent file transfer protocol
+  GROUP 1.5  Character set translation
+  GROUP 2    User Interface
+  GROUP 3    File & communications i/o and other system dependencies
+  GROUP 4    Network support
+  GROUP 5    Formatted screen support
+
+GROUP 1:
+
+The Kermit protocol kernel.  The filenames start with CKC.  C means that these
+files are supposed to be totally portable C, and are expected to compile
+correctly on any operating system.  "Portable" does not mean the same as as
+"ANSI" -- these modules must compile on 10- and 15-year old computers, with C
+preprocessors, compilers, and/or linkers that have all sorts of restrictions.
+The group 1 modules do not include any header files other than those that
+come with Kermit itself.  They do not contain any library calls (like printf)
+or any system calls (like open, close, read, write).  Files:
+
+  CKCSYM.H - For use by C compilers that don't allow -D on the command line.
+  CKCASC.H - ASCII character symbol definitions.
+  CKCDEB.H - Originally, debugging definitions.  Now this file also contains
+	     all compiler-dependent definitions (such as typedefs) that must
+	     be shared by all modules in all groups.
+  CKCKER.H - Kermit protocol symbol definitions.
+  CKCNET.H - Network-related symbol definitions.
+  CKCXLA.H - Character-set-related symbol definitions.
+
+  CKCMAI.C - The main program.  This module contains the declarations of all
+  the protocol-related global variables that are shared among the other
+  modules.  If you want to imbed Kermit protocol within another program,
+  you'll have to copy the declarations from ckcmai.c into your program.
+
+  CKCPRO.W - The protocol module itself, written in "wart", a lex-like
+  preprocessor that is distributed with Kermit under the name CKWART.C.
+
+  CKCFN*.C - The protocol support functions used by the protocol module.
+
+Group 1 modules may call upon functions from Group 3 modules, but not from
+Group 2 modules (with the single exception that the main program invokes the
+user interface, which is in Group 2).  (This last assertion is really only a
+conjecture.)
+
+GROUP 1.5
+
+Character set translation tables and functions.  Used by the Group I protocol
+modules, but may be specific to different computers.  (So far, all character
+character sets supported by C-Kermit are supported in CKUXLA.C and CKUXLA.H,
+including Macintosh and IBM character sets).
+
+  CKCXLA.H - Character-set definitions usable by all versions of C-Kermit.
+  CK?XLA.H - Character-set definitions for computer "?", e.g. U for UNIX.
+
+  CK?XLA.C - Character-set translation tables and functions for computer "?",
+  For example, CKUXLA.C for UNIX, CKMXLA.C for Macintosh.  So far, these are
+  the only two such modules.  The UNIX module is used for all versions of
+  C-Kermit except the Macintosh version.
+
+  Used for file transfer (SEND, RECEIVE, GET, REMOTE, etc), TRANSMIT,
+  CONNECT, etc.
+
+  Here's how to add a new file character set.  Assuming it is based on the
+  Roman (Latin) alphabet.  Let's call it "Barbarian".  First, in CK?XLA.H,
+  add a definition for FC_BARBA (8 chars maximum length) and increase
+  MAXFCSETS by 1.  Then, in CK?XLA.C:
+
+  . Add a barbarian entry into the fcsinfo array.
+  . Add a "barbarian" entry to file character set keyword table, fcstab.
+  . Add a "barbarian" entry to terminal character set keyword table, ttcstab.
+  . Add a translation table from Latin-1 to barbarian: yl1ba[].
+  . Add a translation table from barbarian to Latin-1: ybal1[].
+  . Add a translation function from Barbarian to ASCII: xbaas().
+  . Add a translation function from Barbarian to Latin-1: xbal1().
+  . Add a translation function from Latin-1 to Barbarian: xl1ba().
+  .  etc etc for each transfer character set...
+  . Add translation function pointers to the xls and xlr tables.
+
+  Other translations involving Barbarian (e.g. from Barbarian to
+  Latin-Cyrillic) are performed through these tables and functions.  See
+  CKUXLA.H and CKUXLA.C for extensive examples.
+
+GROUP 2:
+
+The user interface.  This is the code that communicates with the user, gets
+her commands, informs her of the results.  It may be command-line oriented,
+interactive prompting dialog, menus and arrow keys, windows and mice, speech
+recognition, telepathy, etc.  The user interface has three major functions:
+
+1. Sets the parameters for the file transfer and then start it.  This is done
+by setting certain (many) global variables, such as the protocol machine start
+state, the file specification, file type, communication parameters, packet
+length, window size, character set, etc.
+
+2. Displays messages on the user's screen during the file transfer, using the
+screen() function, which is called by the group-1 modules.
+
+3. Executes any commands directly that do not require Kermit protocol, such
+as the CONNECT command, local file management commands, parameter-setting
+commands, etc.
+
+If you plan to imbed the Group 1 files into a program with a different user
+interface, your interface must supply an appropriate screen() function, plus a
+couple related ones like chkint() and intmsg() for handling keyboard (or
+mouse, etc) interruptions during file transfer.  The best way to find out
+about this is to link all the C-Kermit modules together except the CKUU*.O
+and CKUCON.O modules, and see which missing symbols turn up.
+
+C-Kermit's character-oriented user interface (as opposed to the Macintosh
+version's graphical user interface) consists of the following modules.
+C-Kermit can be built with an interactive command parser, a
+command-line-option-only parser, or (most commonly) both:
+
+  CKUUSR.H - Definitions of symbols used in Kermit's commands.
+
+  CKUUSR.H, CKUUSR.C, CKUUS2.C, CKUUS3.C, CKUUS4.C, CKUUS5.C, ... -
+  Kermit's interactivbe command parser, including the script programming
+  language.
+
+  CKUUSY.C - The command-line-option parser.
+
+  CKUUSX.C - Functions that are common to both the interactive and 
+  command-line parsers.
+
+  CKUCMD.H, CKUCMD.C - The command parsing primitives used by the
+  interactive command parser to parse keywords, numbers, filenames, etc,
+  and to give help, complete fields, supply defaults, allow abbreviations
+  and editing, etc.  This package is totally independent of Kermit, but
+  does depend on the Group 3 functions.
+
+  CKUVER.H - Version heralds for different implementations.
+
+  CKUSCR.C - The (old, uucp-like) SCRIPT command.
+  CKUDIA.C - The DIAL command.
+
+  CK?CON.C - The CONNECT command.  Terminal connection, and in some cases
+             (Macintosh, OS/2) also terminal emulation.
+
+For other implementations, the files may, and probably do, have different
+names.  For example, the Macintosh graphical user interface filenames start
+with CKM.  OS/2 uses the CKUCMD and CKUUS* modules, but has its own CONNECT
+command in CKOCON.C.  And so on.
+
+Here is a brief description of C-Kermit's "user interface interface", from 
+CKUUSR.C:
+
+The ckuus*.c modules depend on the existence of C library features like fopen,
+fgets, feof, (f)printf, argv/argc, etc.  Other functions that are likely to
+vary among Unix implementations -- like setting terminal modes or interrupts
+-- are invoked via calls to functions that are defined in the system-
+dependent modules, ck?[ft]io.c.  The command line parser processes any
+arguments found on the command line, as passed to main() via argv/argc.  The
+interactive parser uses the facilities of the cmd package (developed for this
+program, but usable by any program).  Any command parser may be substituted
+for this one.  The only requirements for the Kermit command parser are these:
+
+1. Set parameters via global variables like duplex, speed, ttname, etc.  See
+   ckmain.c for the declarations and descriptions of these variables.
+
+2. If a command can be executed without the use of Kermit protocol, then
+   execute the command directly and set the variable sstate to 0.  Examples
+   include 'set' commands, local directory listings, the 'connect' command.
+
+3. If a command requires the Kermit protocol, set the following variables:
+
+   sstate                             string data
+     'x' (enter server mode)            (none)
+     'r' (send a 'get' command)         cmarg, cmarg2
+     'v' (enter receive mode)           cmarg2
+     'g' (send a generic command)       cmarg
+     's' (send files)                   nfils, cmarg & cmarg2 OR cmlist
+     'c' (send a remote host command)   cmarg
+
+   cmlist is an array of pointers to strings.
+   cmarg, cmarg2 are pointers to strings.
+   nfils is an integer.
+
+   cmarg can be a filename string (possibly wild), or
+      a pointer to a prefabricated generic command string, or
+      a pointer to a host command string.
+   cmarg2 is the name to send a single file under, or
+      the name under which to store an incoming file; must not be wild.
+      If it's the name for receiving, a null value means to store the
+      file under the name it arrives with.
+   cmlist is a list of nonwild filenames, such as passed via argv.
+   nfils is an integer, interpreted as follows:
+     -1: filespec (possibly wild) in cmarg, must be expanded internally.
+      0: send from stdin (standard input).
+     >0: number of files to send, from cmlist.
+
+The screen() function is used to update the screen during file transfer.
+The tlog() function writes to a transaction log (if TLOG is defined).
+The debug() function writes to a debugging log (if DLOG is defined).
+The intmsg() and chkint() functions provide the user i/o for interrupting
+file transfers.
+
+GROUP 3:
+
+System-dependent function definitions.  All the Kermit modules, including the
+command package, call upon these functions, which are designed to provide
+system-independent primitives for controlling and manipulating devices and
+files.  For UNIX, these functions are defined in the files CKUFIO.C (files)
+and CKUTIO.C (communication devices).  For VMS, the files are CKVFIO.C and
+CKVTIO.C.  For OS/2, CKOFIO.C, CKOTIO.C.  It doesn't really matter what the
+filenames are, except for Kermit distribution purposes (grouping related files
+together alphabetically), only that each function is provided with the name
+indicated, observes the same calling and return conventions, and has the same
+type.
+
+The Group 3 modules contain both functions and global variables that are
+accessed by modules in the other groups.  These are now described.  Changes
+since version 4E of C-Kermit are flagged by the symbol *NEW* (use grep).
+
+(By the way, I got this list by linking all the C-Kermit modules together
+except CKUTIO and CKUFIO.  These are the symbols that ld reported as undefined)
+
+A. Variables:
+
+char *DELCMD;
+  Pointer to string containing command for deleting files.
+  Example: char *DELCMD = "rm -f ";  (UNIX)
+  Example: char *DELCMD = "delete "; (VMS)
+  Note trailing space.  Filename is concatenated to end of this string.
+
+char *DIRCMD;
+  Pointer to string containing command for listing files when a filespec
+  is given.
+  Example: char *DIRCMD = "/bin/ls -l "; (UNIX)
+  Example: char *DIRCMD = "directory ";  (VMS)
+  Note trailing space.  Filename is concatenated to end of this string.
+
+char *DIRCM2;   *NEW*
+  Pointer to string containing command for listing files when a filespec
+  is not given.  (currently not used, handled in another way.)
+  Example: char *DIRCMD = "/bin/ls -ld *";
+  
+char *PWDCMD;
+  Pointer to string containing command to display current directory.
+  Example: char *PWDCMD = "pwd ";
+
+char *SPACMD;
+  Pointer to command to display free disk space in current device/directory. 
+  Example: char *SPACMD = "df .";
+
+char *SPACM2;
+  Pointer to command to display free disk space in another device/directory. 
+  Example: char *SPACM2 = "df ";
+  Note trailing space.  Device or directory name is added to this string.
+
+char *TYPCMD;
+  Pointer to command for displaying the contents of a file.
+  Example: char *TYPCMD = "cat ";
+  Note trailing space.  Device or directory name is added to this string.
+
+char *WHOCMD;
+  Pointer to command for displaying logged-in users.
+  Example: char *WHOCMD = "who ";
+  Note trailing space.  Specific user name may be added to this string.
+
+int backgrd = 0;
+  Flag for whether program is running in foreground (0) or background
+  (nonzero).  Background operation implies that screen output should not be
+  done and that all errors should be fatal.
+
+int ckxech;
+  Flag for who is to echo console typein:  
+  1 - The program (system is not echoing).
+  0 - The system, front end, terminal, etc (not this program)
+
+char *ckxsys;
+  Pointer to string that names the computer and operating system.
+  Example: char *ckxsys = " NeXT Mach 1.0";
+  Tells what computer system ckxv applies to.
+  In UNIX Kermit, this variable is also used to print the program herald, 
+  and in the SHOW VERSION command.
+
+char *ckxv;
+  Pointer to version/edit info of ck?tio.c module.
+  Example: char *ckxv = "Unix tty I/O, 5A(061), 13 Mar 90";
+  Used by SHOW VERSION command.
+
+char *ckzsys;
+  Like ckxsys, but briefer.
+  Example: char *ckzsys = " 4.3 BSD";
+  Tells what computer system ckzv applies to.
+  Used by the SHOW VERSION command.
+
+char *ckzv;
+  Pointer to version/edit info of ck?fio.c module.
+  Example: char *ckzv = "Unix file support, 5A(041) 27 Mar 90";
+  Used by SHOW VERSION command.
+
+int dfflow;
+  Default flow control.
+  0 = none, 1 = Xon/Xoff.
+  Set to by group 3 module.
+  Used by ckcmai.c to initialize flow control variable.
+
+int dfloc;
+  Default location.
+  0 = remote, 1 = local.
+  Set by group 3 module.
+  Used by ckcmai.c to initialize local variable.  Used in various places in
+  the user interface.
+
+int dfprty;
+  Default parity.
+  0 = none, 'e' = even, 'o' = odd, 'm' = mark, 's' = space.
+  Set by Group 3 module.  Used by ckcmai.c to initialize parity variable.
+
+char *dftty;
+  Default communication device.
+  Set by group 3 module.  Used in many places.
+  This variable should be initialized the the symbol CTTNAM, which is defined
+  in ckcdeb.h, e.g. as "/dev/tty" for UNIX, "TT:" for VAX/VMS, etc.
+  Example: char *dftty = CTTNAM;
+
+char *mtchs[];  *NEW*
+  Array of string pointers to filenames that matched the most recent
+  wildcard match, i.e. the most recent call to zxpand().  Used (at least) by
+  command parsing package for partial filename completion.
+
+int tilde_expand;  *NEW*
+  Flag for whether to attempt to expand leading tildes in directory names
+  (used in UNIX only, and then only when the symbol DTILDE is defined.
+
+int ttnproto;  *NEW*
+  The protocol being used to communicate over a network device.  Values are
+  defined in ckcnet.h.  Example: NP_TELNET is network protocol "telnet".
+
+int maxnam;  *NEW*
+  The maximum length for a filename, exclusive of any device or directory
+  information, in the format of the host operating system.
+
+int maxpath;  *NEW*
+  The maximum length for a fully specified filename, including device 
+  designator, directory name, network node name, etc, in the format of
+  the host operating system, and including all punctuation.
+
+B. Functions.
+
+These are divided into three categories: file-related functions (B.1),
+communication functions (B.2), and miscellaneous functions (B.3).
+
+B.1.  File-related functions.
+
+In most implementations, these are collected together into a module called
+CK?FIO.c, where ? = U (UNIX), V (VMS), O (OS/2), etc (see CKAAAA.HLP).  To be
+totally system-independent, C-Kermit maintains its own file numbers, and
+provides the functions described in this section to deal with the files
+associated with them.  The file numbers are referred to symbolically, and are
+defined as follows in CKCKER.H:
+
+#define ZCTERM      0	    	/* Console terminal */
+#define ZSTDIO      1		/* Standard input/output */
+#define ZIFILE	    2		/* Current input file for SEND command */
+#define ZOFILE      3	    	/* Current output file for RECEIVE command */
+#define ZDFILE      4	    	/* Current debugging log file */
+#define ZTFILE      5	    	/* Current transaction log file */
+#define ZPFILE      6	    	/* Current packet log file */
+#define ZSFILE      7		/* Current session log file */
+#define ZSYSFN	    8		/* Input from a system function (pipe) */
+#define ZRFILE      9           /* Local file for READ command */  (NEW)
+#define ZWFILE     10           /* Local file for WRITE command */ (NEW)
+#define ZNFILS     11	    	/* How many defined file numbers */
+
+In the descriptions below, fn refers to a filename, and n refers to one of
+these file numbers.  Functions are of type int unless otherwise noted, and are
+listed alphabetically.
+
+chkfn(n) int n;
+  Checks the file number n.  Returns:
+  -1: File number n is out of range
+   0: n is in range, but file is not open
+   1: n in range and file is open
+
+iswild(filspec) char *filespec; *NEW*
+  Checks if the file specification is "wild", i.e. contains metacharacters
+  or other notations intended to match multiple filenames.  Returns:
+   0: not wild
+   1: wild
+
+zchdir(dirnam) char *dirnam;
+  Change current or default directory to the one given in dirnam.
+  Returns 1 on success, 0 on failure.
+
+long zchki(fn) char *fn;
+  Check to see if file with name fn is a regular, readable, existing file,
+  suitable for Kermit to send -- not a directory, not a symbolic link, etc.
+  Returns:
+  -3 if file exists but is not accessible (e.g. read-protected)
+  -2 if file exists but is not of a readable type
+  -1 on error (e.g. file does not exist, or fn is garbage)
+  >= 0 (length of file) if file exists and is readable
+
+zchko(fn) char *fn;
+  Checks to see if a file of the given name can be created.  Returns:
+  -1 if file cannot be created, or on any kind of error.
+   0 if file can be created.
+
+zchkspa(fn,len) char *f; long len;       *NEW*
+  Check to see if there is sufficient space to store the file named fn,
+  which is len bytes long.  Returns:
+  -1 on error.
+   0 if there is not enough space.
+   1 if there is enough space.
+  If you can't write a function to do this, then just make a dummy that
+  always returns 1.  Higher level code will recover from disk-full errors.
+  The receiving Kermit uses this function to refuse an incoming file based
+  on its size, via the attribute mechanism.
+
+zchin(n,c) int n; int *c;
+  Get a character from file number n, return it in c (call with &c).
+  Returns:
+  -1 on failure, including EOF.
+   0 on success with character in c.
+
+zchout(n,c) int n; char c;
+  Write the character c to file number n.  Returns:
+  -1 error
+   0 OK
+
+zclose(n) int n;
+  Close file number n.  Returns:
+  -1 error
+   1 OK
+
+zdelet(fn) char *name;  *NEW*
+  Attempts to delete the named file.  Returns:
+  -1 on error
+   0 if file was deleted successfully
+
+char *
+zgtdir()  *NEW*
+  Returns a pointer to the name of the current directory, folder, etc, or a
+  NULL pointer if the current directory cannot be determined.  Most Kermit
+  versions currently do something like "system(PWDCMD)", but Macintoshes don't
+  support system().
+
+char *zhome()
+  Returns a pointer to a string containing the user's home directory, or NULL
+  upon error.
+
+zinfill()  *NEW*
+  This function is used by the macro zminchar(), which is defined in ckcker.h.
+  zminchar() manages its own buffer, and calls zinfill() to fill it whenever
+  it becomes empty.  It is only used for sending files, and reads characters
+  only from file number ZIFILE.  zinfill() returns -1 upon end of file,
+  otherwise it returns the first character from the buffer it just read.
+
+zkself()
+  Kills the current job, session, process, etc, logs out, disappears.  Used by
+  the Kermit server when it receives a BYE command.  On failure, returns -1.
+  On success, does not return at all!  This function should not be called
+  until all other steps have been taken to close files, etc.
+
+zstrip(fn,&fn2) char *fn1, **fn2;
+  Strip device and directory, etc, from file specification, leaving only the 
+  filename.  For example DUA0:[PROGRAMS]OOFA.C;3 becomes OOFA.C, or
+  /usr/fdc/oofa.c becomes oofa.c.  Returns pointer to result in fn2.
+
+zltor(fn,fn2) char *fn1, *fn2;
+  Local-To-Remote filename translation.  Translates the local filename fn into
+  a format suitable for transmission to an arbitrary type of computer, and
+  copies the result into the buffer pointed to by fn2.  Translation may involve
+  (a) stripping the device and/or directory/path name, (b) converting
+  lowercase to uppercase, (c) removing spaces and strange characters, or
+  converting them to some innocuous alphabetic character like X, (d)
+  discarding or converting extra periods (there should not be more than one).
+  Does its best.  Returns no value.  name2 is a pointer to a buffer, furnished
+  by the caller, into which zltor() writes the resulting name.  No length
+  checking is done.
+
+zmail(addr,fn) char *addr, fn;  *NEW*
+  Send the local, existing file fn as e-mail to the address addr.  Returns:
+  Returns 0 on success
+   2 if mail delivered but temp file can't be deleted
+  -2 if mail can't be delivered
+
+znewn(fn,s) char *fn, **s;
+  Transforms the name fn into a filename which is guaranteed to be unique.
+  If the file fn does not exist, then the new name will be the same as fn.
+  Otherwise, it will be different.  Does its best, returns no value.  New
+  name is created in caller's space.  Call like this: znewn(old,&new);.
+  The second parameter is a pointer to the new name.  This pointer is set
+  by znewn() to point to a static string in its own space.
+
+znext(fn) char *fn;
+  Copies the next file name from a file list created by zxpand() into the
+  string pointed to by fn (see zxpand).  If no more files, then the null
+  string is placed there.  Returns the number of files remaining in the list.
+
+zopeni(n,fn) int n; char *fn;
+  Opens the file named fn for input as file number n.  Returns:
+  0 on failure.
+  1 on success.
+
+*NEW* (zopeno - the second two parameters are new)
+zopeno(n,fn,zz,fcb) int n; char *name; struct zattr *zz; struct filinfo *fcb;
+  Attempts to open the named file for output as file number n.  zz is a Kermit
+  file attribute structure as defined in ckcdeb.h, containing various
+  information about the file, including its size, creation date, and so forth.
+  This function should attempt to honor as many of these as possible.  fcb is
+  a "file control block" in the traditional sense, defined in ckcdeb.h,
+  containing information of interest to complicated file systems like VAX/VMS,
+  IBM MVS, etc, like blocksize, record length, organization, record format,
+  carriage control, disposition (like create vs append), etc.  Returns:
+  0 on failure.
+  1 on success.
+
+zoutdump()  *NEW*
+  Dumps an output buffer.  Used with the macro zmchout() defined in ckcker.h.
+  Used only with file number ZOFILE, i.e. the file that is being received by
+  Kermit during file transfer.  Returns:
+  -1 on failure.
+   0 on success.
+
+zprint(p,fn) char *p, *f;  *NEW*
+  Prints the file with name fn on a local printer, with options p.  Returns:
+  Returns 0 on success
+   3 if file sent to printer but can't be deleted
+  -3 if file can't be printed
+
+zrename(fn,fn2) char *fn, *fn2;  *NEW*
+  Changes the name of file fn to fn2.  Returns:
+  -1 on failure.
+   0 on success.
+
+zrtol(fn,fn2) char *fn, *fn2;
+  Remote-To-Local filename translation.  Translates a "standard" filename
+  (see zrtol) to a local filename.  For example, in Unix this function
+  converts uppercase letters to lowercase.  Does its best, returns no value.
+  New name is in string pointed to by fn2.
+
+zsattr(xx) struct zattr *xx; {  *NEW*
+  Fills in a Kermit file attribute structure for the file which is to be sent,
+  namely the currently open ZIFILE.
+  Returns:
+  -1 on failure.
+   0 on success with the structure filled in.
+  If any string member is null, then it should be ignored by the caller.
+  If any numeric member is -1, then it should be ignored by the caller.
+
+zshcmd(s) char *s;
+  s contains to pointer to a command to be executed by the host computer's
+  shell, command parser, or operating system.  If the system allows the user
+  to choose from a variety of command processors (shells), then this function
+  should employ the user's preferred shell.  If possible, the user's job
+  (environment, process, etc) should be set up to catch keyboard interruption
+  signals to allow the user to halt the system command and return to Kermit.
+  The command must run in ordinary, unprivileged user mode.
+  If possible, this function should return -1 on failure to start the command,
+  or else it should return the command's return code, presumably a positive
+  value if the command succeeded.
+
+zsyscmd(s) char *s;  *NEW*
+  s contains to pointer to a command to be executed by the host computer's
+  shell, command parser, or operating system.  If the system allows the user
+  to choose from a variety of command processors (shells), then this function
+  should employ the system standard shell (e.g. /bin/sh for Unix), so that the
+  results will always be the same for everybody.  If possible, the user's job
+  (environment, process, etc) should be set up to catch keyboard interruption
+  signals to allow the user to halt the system command and return to Kermit.
+  The command must run in ordinary, unprivileged user mode.
+  If possible, this function should return -1 on failure to start the command,
+  or else it should return the command's return code, presumably a positive
+  value if the command succeeded.
+
+zsinl(n,s,x) int n, x; char *s;  *NEW*
+  Reads a line from file number n.
+  Writes the line into the address s provided by the caller.
+  Writing terminates when newline is read, but with newline discarded.
+  Writing also terminates upon EOF or if length x is exhausted.
+  Returns:
+  -1 on EOF or error.
+  0 on success.
+
+zsout(n,s) int n; char *s;
+  Writes the string s out to file number n.  Returns:
+  -1 on failure.
+   0 on success.
+
+zsoutl(n,s) int n; char *s;
+  Writes the string s out to file number n and adds a line (record) terminator 
+  (boundary) appropriate for the system and the file format.
+  Returns:
+  -1 on failure.
+   0 on success.
+
+zsoutx(n,s,x) int n, x; char *s;
+  Writes exactly x characters from string s to file number n.  If s has
+  fewer than x characters, then the entire string s is written.  Returns:
+  -1 on error.
+  >= 0 on success, the number of characters actually written.
+
+zstime(f,yy,x) char *f; struct zattr *yy; int x;  *NEW*
+  Sets the creation date of an existing file, or compares a file's creation
+  date with a given date.  Call with:
+  f  = pointer to name of existing file.
+  yy = pointer to a Kermit file attribute structure in which yy->date.val
+       is a date of the form yyyymmdd hh:mm:ss, e.g. 19900208 13:00:00, which
+       is to be used for setting the date.
+  x  = is a function code: 0 means to set the file's creation date as given.
+       1 means compare the given date with the file creation date.      
+  Returns:
+  -1 on any kind of error.
+   0 if x is 0 and the file date was set successfully.
+   0 if x is 1 and date from attribute structure > file creation date.
+   1 if x is 1 and date from attribute structure <= file creation date.
+
+VOID
+zstrip(name,name2) char *name, **name2;  *NEW*
+  Strips pathname from filename "name".  Constructs the resulting string
+  in a static buffer in its own space and returns a pointer to it in name2.
+  Also strips device name, file version numbers, and other "non-name" material.
+
+*NEW* (zxcmd - arguments are new, writing to a command is new)
+zxcmd(n,s) char *s;
+  Runs a system command so its output can be accessed as if it were file n.
+  The command is run in ordinary, unprivileged user mode.
+  If n is ZSTDIO or ZCTERM, returns -1.
+  If n is ZIFILE or ZRFILE, then Kermit reads from the command, otherwise
+  Kermit writes to the command.  Returns 0 on error, 1 on success.
+
+zxpand(fn) char *fn;
+  Expands a wildcard string into an array of strings.
+  Returns the number of files that match fn1, with data structures set up
+  so that first filename (if any) will be returned by the next znext() call.
+  If no files match, or if there is any kind of error, zxpand returns 0.
+
+xsystem(cmd) char *cmd;
+  Executes the system command without redirecting any of its i/o, similar
+  (well, identical) to system() in Unix.  But before passing the command to
+  the system, xsystem() ensures that all privileges are turned off, so that
+  the system command will execute in ordinary unprivileged user mode.
+
+B.1.5 Security/Privilege Functions (all *NEW*)
+
+These functions are used by C-Kermit to adapt itself to operating systems
+where the program can be made to run in a "privileged" mode.  C-Kermit
+should NOT read and write files or start subprocesses as a privileged program.
+This would present a serious threat to system security.  The security package
+has been installed to prevent such security breaches by turning off the
+program's special privileges at all times except when they are needed.
+
+In UNIX, the only need Kermit has for privileged status is access to the UUCP
+lockfile directory, in order to read, create, and destroy lockfiles, and to
+open communication devices that are normally protected against the user.
+Therefore, privileges should only be enabled for these operations and disabled
+at all other times.  This relieves the programmer of the responsibility of
+putting expensive and unreliable access checks around every file access and
+subprocess creation.
+
+Strictly speaking, these functions are not required in all C-Kermit
+implementations, because their use (so far, at least) is internal to the group
+3 modules.  However, they should be included in all C-Kermit implementations
+for operating systems that support the notion of a privileged program (UNIX,
+RSTS/E, what else?).
+
+priv_ini()  *NEW*
+  Determine whether the program is running in privileged status.  If so,
+  turn off the privileges, in such a way that they can be turned on again
+  when needed.  Called from sysinit() at program startup time.  Returns:
+    0 on success
+    nonzero on failure, in which case the program should halt immediately.
+
+priv_on()  *NEW*
+  If the program is not privileged, this function does nothing.  If the
+  program is privileged, this function returns it to privileged status.
+  priv_ini() must have been called first.  Returns:
+    0 on success
+    nonzero on failure
+
+priv_off()  *NEW*
+  Turns privileges off (if they are on) in such a way that they can be
+  turned back on again.  Returns:
+    0 on success
+    nonzero on failure
+
+priv_can()  *NEW*
+  Turns privileges off in such a way that they cannot be turned back on.
+  Returns:
+    0 on success
+    nonzero on failure
+
+priv_chk()  *NEW*
+  Attempts to turns privileges off in such a way that they can be turned on
+  again later.  Then checks to make sure that they were really turned off.
+  If they were not really turned off, then they are cancelled permanently.
+
+
+B.2.  Console-Related Functions.
+
+These relate to the program's "console", or controlling terminal, i.e. the
+terminal that the user is logged in on and types commands at, or on a PC or
+workstation, the actual keyboard and screen.
+
+int
+conbin(esc) char esc;
+  Puts the console into "binary" mode, so that Kermit's command parser can
+  control echoing and other treatment of characters that the user types.
+  esc is the character that will be used to get Kermit's attention during
+  packet mode; puts this in a global place.  Sets the ckxech variable.
+  Returns:
+  -1 on error.
+   0 on success.
+
+int
+concb(esc) char esc;
+  Put console in "cbreak" (single-character wakeup) mode.  That is, ensure
+  that each console character is available to the program immediately when the
+  user types it.  Otherwise just like conbin().  Returns:
+  -1 on error.
+   0 on success.
+
+int
+conchk()
+  Returns a number, 0 or greater, the number of characters waiting to be read
+  from the console, i.e. the number of characters that the user has typed that
+  have not been read yet.
+
+int
+congks(timo) int timo;   *NEW*
+  Get Keyboard Scancode.  Reads a keyboard scan code from the physical console
+  keyboard.  If the timo parameter is greater than zero, then times out and
+  returns -2 if no character appears within the given number of seconds.  Upon
+  any other kind of error, returns -1.  Upon success returns a scan code,
+  which may be any positive integer.  For situations where scan codes cannot
+  be read (for example, when an ASCII terminal is used as the job's
+  controlling terminal), this function is identical to coninc(), i.e. it
+  returns an 8-bit character value.  congks() is for use with workstations
+  whose keyboards have Alternate, Command, Option, and similar modifier keys,
+  and Function keys that generate codes greater than 255.
+
+int
+congm()
+  Console get modes.  Gets the current console terminal modes and saves them 
+  so that conres() can restore them later.  Returns 1 if it got the modes OK,
+  0 if it did nothing (e.g. because Kermit is not connected with any terminal),
+  -1 on error.
+
+int
+coninc(timo) int timo;
+  Console Input Character.  Reads a character from the console.  If the timo
+  parameter is greater than zero, then coninc() times out and returns -2 if no
+  character appears within the given number of seconds.  Upon any other kind
+  of error, returns -1.  Upon success, returns the character itself, with a
+  value in the range 0-255 decimal.
+
+VOID
+conint(f,s) SIGTYP (*f)(), (*s)();  *NEW*
+  Sets the console to generate an interrupt if the user types a keyboard
+  interrupt character, and to transfer control the signal-handling function f.
+  For systems with job control, s is the address of the function that suspends
+  the job.  Sets the global variable "backgrd" to zero if Kermit is running in
+  the foreground, and to nonzero if Kermit is running in the background.
+  See ckcdeb.h for the definition of SIGTYP.  No return value.
+
+VOID
+connoi()
+  Console no interrupts.  Disable keyboard interrupts on the console.
+  No return value.
+
+int
+conoc(c) char c;
+  Write character c to the console terminal.  Returns:
+  0 on failure, 1 on success.
+
+int
+conol(s) char *s;
+  Write string s to the console.  Returns -1 on error, 0 or greater on
+  success.
+
+int
+conola(s) char *s[]; {
+  Write an array of strings to the console.  Returns -1 on error, 0 or greater
+  on success.
+
+int
+conoll(s) char *s;
+  Write string s to the console, followed by the necessary line termination
+  characters to put the console cursor at the beginning of the next line.
+  Returns -1 on error, 0 or greater on success.
+
+int
+conres()
+  Restore the console terminal to the modes obtained by congm().  Returns:
+  -1 on error, 0 on success.
+
+int
+conxo(x,s) int x; char *s;
+  Write x characters from string s to the console.  Returns 0 or greater on
+  success, -1 on error.
+
+B.3 - Communication Device Functions
+
+The communication device is the device used for terminal emulation and file
+transfer.  It may or may not be the same device as the console, and it may
+or may not be a terminal device (it could also be a network device).  For
+brevity, the communication device is referred to here as the "tty".  When the
+communication device is the same as the console device, Kermit is said to be
+in remote mode.  When the two devices are different, Kermit is in local mode.
+
+int
+ttchk()
+  Returns the number of characters that have arrived at the communication
+  device but have not yet been read.  If communication input is buffered
+  (and it should be), this is the sum of the number of unread characters in
+  Kermit's buffer PLUS the number of unread characters in the operating
+  system's internal buffer.
+
+int
+ttclos()
+  Closes the communication device (tty or network).  If there were any kind of
+  exclusive access locks connected with the tty, these are released.  If the
+  tty has a modem connection, it is hung up.  For true tty devices, the
+  original tty device modes are restored.  Returns:
+  -1 on failure.
+   0 on success.
+
+int
+ttflui()
+  Flush communications input buffer.  If any characters have arrived but have
+  not yet been read, discard these characters.  If communications input is
+  buffered by Kermit (and it should be), this function flushes Kermit's buffer
+  as well as the operating system's internal input buffer.
+
+Returns:
+  -1 on failure.
+   0 on success.
+
+int
+ttfluo()  *NEW*
+  Flush tty output buffer.  If any characters have been written but not
+  actually transmitted (e.g. because the system has been flow-controlled),
+  remove them from the system's output buffer.  (Note, this function is
+  not actually used, but it is recommended that all C-Kermit programmers
+  add it for future use, even if it is only a dummy function that returns 0
+  always.)
+
+int
+ttgmdm()  *NEW*
+  Looks for the modem signals CTS, DSR, and CTS, and returns those that are
+  on in as its return value, in a bit mask as described for ttwmdm,
+  in which a bit is on (1) or off (0) according to whether the corresponding
+  signal is on (asserted) or off (not asserted).  Return values:
+  -3 Not implemented
+  -2 if the line does not have modem control
+  -1 on error
+  >= 0 on success, with bit mask containing the modem signals.
+
+long
+ttgspd()  *NEW*
+  Returns the current tty speed, or -1 if it is not known or if the tty is
+  really a network, or upon any kind of error.  On success, the speed returned
+  is the actual number of bits per second, like 1200, 9600, 19200, etc.
+
+int
+tthang()
+  Hang up the current tty device.  For real tty devices, turn off DTR for
+  about 1/3-1/2 second.  If the tty is really a network connection, close it.
+  Returns:
+  -1 on failure.
+   0 if it does not even try to hang up.
+   1 if it believes it hung up successfully.
+
+VOID
+ttimoff()  *NEW*
+  Turns off all pending timer interrupts.
+
+int
+ttinc(timo) int timo;  *NEW* (function is old, return codes are new)
+  Reads one character from the communication device.  If timo is greater than
+  zero, wait the given number of seconds and then time out if no character
+  arrives, otherwise wait forever for a character.  Returns:
+  -3 internal error (e.g. tty modes set wrong)
+  -2 communications disconnect
+  -1 timeout or other error
+  >= 0 the character that was read.
+  It is HIGHLY RECOMMENDED that ttinc() be internally buffered so that calls
+  to it are relatively inexpensive.  If it is possible to to implement ttinc()
+  as a macro, all the better, for example something like:
+
+  #define ttinc(t) ( (--txbufn >= 0) ? txbuf[ttbufp++] : txbufr(t) )
+
+  (see description of txbufr() below)
+
+*NEW* (ttinl - 5th arg, requirement not to destroy read-ahead characters)
+int
+ttinl(dest,max,timo,eol,start) int max,timo; CHAR *dest, eol, start; 
+  ttinl() is Kermit's packet reader.  Reads a packet from the tty device, or
+  up to max characters, whichever occurs first.  A line is a string of
+  characters starting with the start character up to and including the
+  character given in eol.  If timo is greater than zero, then this function
+  times out if the eol character is not encountered within the given number of
+  seconds.  The characters that were input are copied into "dest" with their
+  parity bits stripped if parity is not none.  The first character copied into
+  dest should be the start character, and the last should be the eol
+  character, followed by a null (0) character.  Returns the number of
+  characters read.  Characters after the eol must be available upon the next
+  call to this function.  (If they are discarded, sliding windows will not
+  work.)  Optionally, ttinl() can sense the parity of incoming packets.  If it
+  does this, then it should set the global variable ttprty accordingly.  This
+  function should be coded to be as efficient as possible, since it is at the
+  "inner loop" of packet reception.  Returns:
+   -2 Interrupted from keyboard.
+   -1 Timeout or other error.
+   >= 0 on success, the number of characters that were actually read
+        and placed in the dest buffer, not counting the trailing null.
+  NOTE: This description is somewhat obsolete.  To implement "Doomsday
+  Kermit", ttinl() (at least for UNIX and VMS) has got its fingers even more
+  deeply into the packet format.  I would like to get rid of this function
+  entirely, and move all packet-related operations to rpack() where they
+  belong.  rpack() would simply call ttinc() to get each character.  But
+  that demands that ttinc() be efficient and fully buffered, going to the
+  operating system with relative infrequency.  See ttinc() and txbufr().
+
+int
+ttoc(c) char c;
+  Outputs the character c to the communication line.  If the operation fails
+  to complete within two seconds, this function returns -1.  Otherwise it
+  returns the number of characters actually written to the tty (0 or 1).  This
+  function should only used for interactive, character-mode operations, like
+  terminal connection, script execution, dialer i/o, where the overhead of the
+  signals and alarms does not create a bottleneck.
+
+int
+ttol(s,n) int n; char *s;
+  Kermit's packet writer.  Writes the first n characters of the "line" pointed
+  to by s.  Returns:
+  -1 on error.
+  >= 0 on success, the actual number of characters written.
+
+*NEW* (ttopen - negative value for modem = network, new timeout feature)
+int
+ttopen(ttname,lcl,modem,timo) char *ttname; int *lcl, modem, timo;
+  Opens a tty device, if it is not already open.  ttopen must check to make
+  sure the SAME device is not already open; if it is, ttopen returns 
+  successfully without doing anything.  If a DIFFERENT device is currently
+  open, ttopen() must call ttclos() to close it before opening the new one.
+Parameters:
+    ttname: character string - device name or network host name.
+    lcl:   If called with lcl < 0, sets value of lcl as follows:
+      0: the terminal named by ttname is the job's controlling terminal.
+      1: the terminal named by ttname is not the job's controlling terminal.
+      If the line is already open, or if the requested line can't
+      be opened, then lcl remains (and is returned as) -1.
+    modem:
+      Less than zero: this is the negative of the network type,
+      and ttname is a network host name.  Network types (from ckcnet.h):
+        NET_TCPB 1   TCP/IP Berkeley (socket)  (implemented in ckutio.c)
+        NET_TCPA 2   TCP/IP AT&T (streams)     (not yet implemented)
+        NET_DEC  3   DECnet                    (not yet implemented)
+      Zero or greater: ttname is a terminal device name.    
+      Zero means a direct connection (don't use modem signals).
+      Positive means use modem signals depending on the current setting
+      of ttcarr ( see ttscarr() ).
+    timo:
+      > 0: number of seconds to wait for open() to return before timing out.
+      <=0: no timer, wait forever (e.g. for incoming call).
+    For real tty devices, ttopen() attempts to gain exclusive access to the
+    tty device, for example in UNIX by creating a "lockfile" (in other
+    operating systems, like VMS, exclusive access probably requires no special
+    action).
+  Side effects:
+    Copies its arguments and the tty file descriptor to global variables that
+    are available to the other tty-related functions, with the lcl value
+    altered as described above.   Gets all parameters and settings associated
+    with the line and puts them in a global area, so that they can be restored
+    by ttres(), e.g. when the device is closed.
+  Returns:
+    0 on success
+   -5 if device is in use
+   -4 if access to device is denied
+   -3 if access to lock mechanism denied
+   -2 upon timeout waiting for device to open
+   -1 on other error
+
+int
+ttpkt(speed,flow,parity) long speed; int flow, parity;
+  Puts the currently open tty device into the appropriate modes for
+  transmitting Kermit packets.  The arguments are interpreted as follows:
+  speed: if speed > -1, and the device is a true tty device, and Kermit is in
+         local mode, ttpkt also sets the speed.
+  flow:  if in the range 0-3, ttpkt selects the corresponding type of flow
+         control.  Currently 0 is defined as no flow control, 1 is Xon/Xoff,
+         and no other types are defined.  If (and this is a horrible hack, but
+         it goes back many years and will be hard to eradicate) flow is 4,
+         then the appropriate tty modes are set for modem dialing, a special
+         case in which we talk to a modem-controlled line without requiring
+         carrier.  If flow is 5, then we require carrier.
+  parity:  This is simply copied into a global variable so that other
+         functions (like ttinl, ttinc, etc) can use it.
+  Side effects: Copies its arguments to global variables, flushes the terminal
+         device input buffer.  
+  Returns:
+   -1 on error.
+    0 on success.
+
+int
+ttres()
+  Restores the tty device to the modes and settings that were in effect at
+  the time it was opened (see ttopen).  Returns:
+  -1 on error.
+   0 on success.
+
+int
+ttscarr(carrier) int carrier;  *NEW*
+  Copies its argument to a variable that is global to the other tty-related
+  functions, and then returns it.  The values for carrier are defined in
+  ckcdeb.h: CAR_ON, CAR_OFF, CAR_AUTO.  ttopen(), ttpkt(), and ttvt() use this
+  variable when deciding how to open the tty device and what modes to select.
+  The meanings are these:
+  CAR_OFF:  Ignore carrier at all times.
+  CAR_ON:   Require carrier at all times, except when dialing.
+            This means, for example, that ttopen() could hang forever waiting 
+            for carrier if it is not present.
+  CAR_AUTO: If the modem type is zero (i.e. the connection is direct), this
+            is the same as CAR_OFF.  If the modem type is positive, then heed
+            carrier during CONNECT (ttvt mode), but ignore it at other times
+            (packet mode, during SET LINE, etc).  Compatible with pre-5A
+            versions of C-Kermit.  This should be the default carrier mode.
+  Kermit's DIAL command ignores the carrier setting, but ttopen(), ttvt(), and
+  ttpkt() all honor the carrier option in effect at the time they are called.
+  None of this applies to remote mode (the tty device is the job's controlling
+  terminal) or to network host connections (modem type is negative).
+
+int
+ttsndb()
+  Send a BREAK signal on the tty device.  On a real tty device, send a real
+  BREAK lasting approximately 275 milliseconds.  If this is not possible,
+  simulate a BREAK by (for example) dropping down some very low baud rate,
+  like 50, and sending a bunch of null characters.  On a network connection,
+  do the appropriate network protocol for BREAK.  Returns:
+  -1 on error.
+   0 on success.
+
+int
+ttsndlb() *NEW*
+  Like ttsndb(), but sends a "Long BREAK" (approx 1.5 seconds).
+  For network connections, it is identical to ttsndb().
+  Currently, this function is used only if CK_LBRK is defined (as it is
+  for UNIX and VAX/VMS).
+
+int
+ttsspd(cps) int cps;  *NEW* (argument is now cps instead of bps)
+  For real tty devices only, set the device transmission speed to (note
+  carefully) ten times the argument.  The argument is in characters per
+  second, but transmission speeds are in bits per second.  cps are used rather
+  than bps because high speeds like 38400 are not expressible in a 16-bit int
+  but longs cannot be used for other reasons too complicated to explain.  If
+  the argument is 7, then the bps is 75, not 70.  If the argument is 888, this
+  is a special code for 75/1200 split-speed operation (75 bps out, 1200 bps
+  in).  Returns:
+  -1 on error, meaning the requested speed is not valid or available.
+  >= 0 on success (don't try to use this value for anything).
+
+int
+ttvt(speed,flow) long speed; int flow;
+  Puts the currently open tty device into the appropriate modes for terminal
+  emulation.  The arguments are interpreted as in ttpkt().  Side effects:
+  ttvt() stores its arguments in global variables, and sets a flag that it has
+  been called so that subsequent calls can be ignored so long as the arguments
+  are the same as in the last effective call.  Other functions, such as
+  ttopen(), ttclose(), ttres(), ttvt(), etc, that change the tty device in any
+  way must unset this flag.  In UNIX Kermit, this flag is called tvtflg.
+
+int
+ttwmdm(mdmsig,timo) int mdmsig, timo;  *NEW*
+  Waits up to timo seconds for all of the given modem signals to appear.
+  mdmsig is a bit mask, in which a bit is on (1) or off (0) according to
+  whether the corresponding signal is to be waited for.  These symbols are
+  defined in ckcdeb.h:
+     BM_CTS (bit 0) means wait for Clear To Send 
+     BM_DSR (bit 1) means wait for Data Set Ready
+     BM_DCD (bit 2) means wait for Carrier Detect
+  Returns:
+    -3 Not implemented.
+    -2 This line does not have modem control.
+    -1 Timeout: time limit exceeded before all signals were detected.
+     1 Success.
+
+int
+ttxin(n,buf) int n; CHAR *buf;
+  (note: CHAR is used throughout this program, and should be typedef'd to
+  unsigned char if your C compiler supports it.  See ckcdeb.h.)
+  Read x characters from the tty device into the specified buf, stripping
+  parity if parity is not none.  This call waits forever, there is no timeout.
+  This function is designed to be called only when you know that at least x
+  characters are waiting to be read (as determined, for example, by ttchk()). 
+  This function should use the same buffer as ttinc().
+
+int
+txbufr(timo) int timo; *NEW*
+  Read characters into the interal communications input buffer.  timo is a
+  timeout interval, in seconds.  0 means no timeout, wait forever.  Called by
+  ttinc() (and possibly ttxin() and ttinl()) when the communications input
+  buffer is empty.  The buffer should be called ttxbuf[], its length is
+  defined by the symbol TXBUFL.  The global variable txbufn is the number of
+  characters available to be read from ttxbuf[], and txbufp is the index of
+  the next character to be read.  Should not be called if txbufn > 0, in which
+  case the buffer does not need refilling.  This routine returns:
+   -2    Communications disconnect
+   -1    Timeout
+   >= 0  A character (0 - 255), the first character that was read, with
+         the variables txbufn and txbufp set appropriately.
+  NOTE: Currently this routine is used internally only by the UNIX and VMS
+  versions.  The aim is to make it available to all versions so there is one
+  single coherent and efficient way of reading from the communications device
+  or network.
+
+B.4 - Miscellaneous system-dependent functions.
+
+VOID
+ztime(s) char **s;
+  Write the date/time string for the current date and time into the string
+  pointed to by s.  This string should be in the fixed-field format associated
+  with the C language "asctime()" function, like: "Sun Sep 16 13:23:45 1973\n"
+  so that callers of this function can extract the different fields.
+  ztime() has no return value.
+    
+int
+gtimer()
+  Returns the current value of the elapsed time counter in seconds (see
+  rtimer), or 0 on any kind of error.
+
+int
+msleep(m) int m;
+  Sleeps (pauses, does nothing) for m milliseconds (a millisecond is one
+  thousandth of a second).  Returns:
+  -1 on failure.
+   0 on success.
+
+VOID
+rtimer()
+  Sets the elapsed time counter to zero.  If you want to time how long an
+  operation takes, call rtimer() when it starts and gtimer when it ends.
+  rtimer() has no return value.
+
+int
+sysinit()
+  Does whatever needs doing upon program start.  In particular, if the
+  program is running in any kind of privileged mode, turns off the privileges
+  (see priv_ini()).  Returns:
+  -1 on error.
+   0 on success.
+
+int
+syscleanup()
+  Does whatever needs doing upon program exit.  Returns:
+  -1 on error.
+   0 on success.
+
+int
+psuspend()   *NEW*
+  Suspends the Kermit process, puts it in the background so it can be
+  continued ("foregrounded") later.  Returns:
+  -1 if this function is not supported.
+   0 on success.
+
+GROUP 4 - Network Support.
+
+As of version 5A, C-Kermit includes support for several networks.  Originally,
+this was just worked into the ttopen(), ttclos(), ttinc(), ttinl(), and
+similar routines in CKUTIO.C.  However, this made it impossible to share this
+code with non-UNIX versions, like VMS.
+
+As of edit 168, this support has been separated out into its own module and
+header file, CKCNET.C and CKCNET.H.  The routines and variables in this module
+fall into two categories: (1) support for specific network packages like
+SunLink X.25 and TGV MultiNet, and (2) support for specific network virtual
+terminal protocols like CCITT X.3 and TCP/IP telnet.  Category (1) functions
+are analogs to the tt*() functions, and have names like netopen, netclos,
+nettinc, etc.  Group I and II modules do not (and must not) know anything
+about these functions -- they continue to call the old Group III functions
+(ttopen, ttinc, etc).  Category (2) functions are protocol specific and have
+names prefixed by a protocol identifier, like tn for telnet x25 for X.25.
+
+CKCNET.H contains prototypes for all these functions, as well as symbol
+definitions for network types, protocols, and network- and protocol- specific
+symbols, as well as #includes for the header files necessary for each network
+and protocol.
+
+The following functions are to be provided for networks that do not use normal
+system i/o (open, read, write, close):
+
+int
+netopen()
+  To be called from within ttopen() when a network connection is requested.
+  Calling conventions and purpose same as Group III ttopen().
+
+int
+netclos()
+  To be called from within ttclos() when a network connection is being closed.
+  Calling conventions and purpose same as Group III ttclos().
+
+int
+nettchk()
+  To be called from within ttchk().
+  Calling conventions and purpose same as Group III ttchk().
+
+int
+netflui()
+  To be called from within ttflui().
+  Calling conventions and purpose same as Group III ttflui().
+
+int
+netbreak()
+  To send a network break (attention) signal.
+  Calling conventions and purpose same as Group III ttsndbrk().
+
+int
+netinc()
+  To get a character from the network.
+  Calling conventions same as Group III ttsndbrk().
+
+int
+nettoc()
+  Send a "character" (byte) to the network.
+  Calling conventions same as Group III ttoc().
+
+int
+nettol()
+  Send a "line" (sequence of bytes) to the network.
+  Calling conventions same as Group III ttol().
+
+Conceivably, some systems support network connections simply by letting
+you open a device of a certain name and letting you do i/o to it.  Others
+(like the Berkeley sockets TCP/IP library on UNIX) require you to open the
+connection in a special way, but then do normal i/o (read, write).  In such
+a case, you would use netopen(), but you would not use nettinc, nettoc, etc.
+
+TGV MultiNET on VAX/VMS has its own set of functions for all network
+operations, so in that case the full range of netxxx() functions is used.
+
+The technique is to put a test in each corresponding ttxxx() function to
+see if a network connection is active (or is being requested), test for which
+kind of network it is, and if necessary route the call to the corresponding
+netxxx() function.  The netxxx() function must also contain code to test for
+the network type, which is available via the global variable ttnet.
+
+TELNET SUPPORT:
+
+The telnet protocol is supported by the following variables and routines:
+
+(global) int tn_init: nonzero if telnet protocol initialized, zero otherwise.
+
+int
+tn_init()
+  Initialize the telnet protocol (send initial options).
+
+int
+tn_sopt()
+  Send a telnet option.
+
+int
+tn_doop()
+  Receive and act on a telnet option from the remote.
+
+int
+tn_sttyp()
+  Send terminal type using telnet protocol.
+
+X.25 SUPPORT:
+
+These are presently specific to SunLink X.25, but it is hoped that they can
+be integrated better with the functions above, and made more general so they
+could be used, for instance, with VAX PSI.
+
+x25diag()
+  Read and print X.25 diagnostic
+
+x25oobh()
+  X.25 out of band signal handler
+
+x25intr()
+  Send X.25 interrupt packet
+
+x25reset()
+  Reset X.25 virtual circuit
+
+x25clear()
+  Clear X.25 virtual circuit
+
+x25stat()
+  X.25 status
+
+setqbit()
+  Set X.25 Q-bit
+
+resetqbit()
+  Reset X.25 Q-bit
+
+x25xin()
+  Read n characters from X.25 circuit.
+
+x25inl()
+  Read a Kermit packet from X.25 circuit.
+
+
+GROUP 5 - Formatted Screen Support
+
+So far, this is used only for the fullscreen local-mode file transfer display.
+In the future, it might be extended to other uses.  The fullscreen display
+code is in and around the routine screenc() in ckuusx.c.
+
+In the UNIX version, we use the curses library, plus one call from the termcap
+library.  In other versions (OS/2, VMS, etc) we insert dummy routines that
+have the same names as curses routines.  So far, there are two methods for
+simulating curses routines:
+
+ 1. In VMS, we use the Screen Management Library (SMG), and insert stubs
+    to convert curses calls into SMG calls.
+
+ 2. In OS/2 and AOS/VS, we use the MYCURSES code, in which the stub routines
+    actually emit the appropriate escape sequences themselves.
+
+Here are the stub routines:
+
+tgetent(char *buf, char *term)
+  Arguments are ignored.  Returns 1 if the user has a supported terminal
+  type, 0 otherwise.  Sets a global variable (for example, "isvt52" or
+  "isdasher") to indicate the terminal type.
+
+move(int row, int col)
+  Sends the escape sequence to position the cursor at the indicated row
+  and column.  The numbers are 0-based, e.g. the home position is 0,0.
+
+clear()
+  Sends the escape sequence to clear the screen.
+
+clrtoeol()
+  Sends the escape sequence to clear from the current cursor position to
+  the end of the line.
+
+In the MYCURSES case, code must be added to each of the last three routines
+to emit the appropriate escape sequences for a new terminal type.
+
+(End of CKAPLM.DOC)
+

@@ -1,0 +1,152 @@
+This describes a driver for QIC-02 tape drive support for Linux 0.96a.
+
+NOTE1: This will not work for the QIC-40/QIC-80 tape drives, like the
+well-known tape drives that attach to the floppy controller.
+NOTE2: If you are working on another (e.g. SCSI or QIC-40) tape driver,
+please try to use the same sys/mtio.h file! Also, join the TAPE mailing
+list!
+
+This code has not been tested in combination with the SCSI driver.
+If you do, make sure you use different interrupts, dma numbers 
+and IO addresses! You'll also have to copy the contents of config.dist.h
+into config.site.h.
+
++-------------------------------------------------------------+
+| WARNING: This code is still beta -- There *are* bugs in it! |
++-------------------------------------------------------------+
+
+NOTE: Make sure you get all the required files from this directory,
+just the patches aren't enough! There may be a tar file with additional
+source files. You'll also need the `mt' program. [Should be somewhere
+in this directory too. (util.tar.Z)]
+
+Instructions:
+
+	0) Read all of the README and the current `release' files.
+
+	1) Backup your entire system onto floppies. [Seriously ...]
+
+	2) Get a clean kernel source tree. [No other patches.]
+
+	3) Unpack the file tpqic02*.tar.Z in your Linux source dir.
+	   [Actual filenames may vary with versions.]
+
+	4) Apply the required patches:
+		patch -p0 <tpqic02.pat
+	   Update the config.site.h to reflect your hardware setup.
+	   Be careful to avoid DMA/IO/IRQ conflicts!
+	   Do a `make dep', followed by a `make clean'.
+
+	5) Make a new kernel, on floppy, that boots from floppy.
+	   This is for testing and recovery, after a hd-crash.
+
+	6) Compile GNU 'mt' (with minor patches by me). [Or use the pre-
+	   compiled binary.] Put them on the root floppy. Don't forget
+	   to link them statically if you're not using shared libs on
+	   the root floppy!
+
+	7) Make a new root floppy disk.
+	   'mk-tp-root.sh' is useful for this.
+	   [I once had my root fs wiped out -- fortunately it was just
+	    a test floppy... Turned out to be a bug in the floppy driver]
+	   You'll need to have the file tree from the 0.96 root disk online.
+	   If not everything fits, you probably haven't got the shared
+	   versions of the executables. If you have >=2 floppy drives, you
+	   may want to create a `bare bones' recovery disk and simpy use
+	   the standard root disk to boot from, then mount the recovery
+	   floppy on that. If you do that, make sure you put a copy
+	   of the root disk in a safe place too.
+
+	8) Make sure you have a good tar program. Check that it
+	   supports symbolic links. GNU tar is useful because it
+	   adds Volume headers (-V) and multivolume support, but it may
+	   not fit on your root disk.
+	   
+	9) Make the device files [Check tpqic02.h for the minor bits]
+		mknod /dev/rmt0 c 12 4		# QIC-24
+		mknod /dev/rmt8 c 12 6		# QIC-120
+		mknod /dev/rmt16 c 12 8		# QIC-150
+		mknod /dev/tape c 12 8		# or whatever appropriate
+		mknod /dev/tape-d c 12 `expr 128 + 8`	# ditto
+		mknod /dev/tape-reset c 12 255	# for resetting only
+
+	   Make /dev/tape a copy of the device file you prefer as
+	   the default device. The names /dev/rmt? are used mainly for
+	   historic reasons. (i.e. GNU tar uses them.)
+	   The actual major number (now 12) may be different.
+
+	10) insert a blank tape and boot the new kernel.
+
+	11) do a 'mt rewind'. Then the big test:
+		cd /; tar -cvf /dev/tape
+	    If your fs is slow, the drive will not `stream' continuously.
+	    In that case, use a buffer program like dd (or afio?)
+		cd /; tar -cvf - | dd ibs=10k obs=1500k of=/dev/tape
+
+
+	12) verify with:
+		mt rewind;
+		cd /; tar -dvf /dev/tape	[not sure if pax can do this]
+		[Maybe: ``cd /; tar -cvf - | cmp -'' for pax]
+
+When using tapes, it is important that the tape 'streams', i.e. doesn't
+start/stop all the time because that is bad for the tape as well as for
+the drive. If you are cursed with a slow hard disk, you should use dd/tar
+to buffer as much as you can to reduce the starting/stopping. I find I have
+to use a block size of 4kB on the tape driver side and a block size of
+1MB (or even more) on the other end. Hopefully this will no longer be
+required with later versions of Linux. When doing backups on heavely
+loaded systems however, you may experience similar problems. Other *nix
+variants seem to have special buffering programs to solve that.
+Hopefully someone will port those to Linux.
+
+NOTE: The QIC-02 controller will attempt to rewind the tape after
+power-on and also after it has been given a reset command. It will
+not rewind the tape immediately but instead it will will delay the
+rewind until it is given a command that requires actual tape movement.
+So, if you don't want any nasty surprises, get used to rewinding the 
+tape before/after using it. Otherwise you may insert a tape that has
+not been rewound and try to append to the end and discover that your
+data has just been overwritten.
+The driver sometimes rewinds the tape after reading or writing a file to
+the tape. [It should only do this when something goes wrong...] So always
+make sure you know the tape position before performing any command that
+will write to the tape!
+
+The QIC-02 standard specifies that all drives should support at
+least some basic commandset, and specifies some optional
+commands as well. I don't know which drives support which optional
+commands. Some optional commands are required for certain ioctl
+operations. In tpqic02.h you can specify which commands are supported
+by your drive using the TP_HAVE_... defines. You could first try it
+with all commands enabled and disable the ones that return an 'illegal
+command' exception status. The seek-to-end-of-recorded media is particulary
+useful as it avoids re-reading the entire tape, but it will only work
+correctly if you drive supports it and there is no data recorded beyond
+the end of the most recently written file.
+
+Please send me a note whether it works or not. Try to find out what 
+commands are supported by your drive. If I get enough feedback on
+this, I will include the TP_HAVEs in the distributed sources.
+Bug fixes and suggestions are of course welcome! I you send me a note
+about a problem or bug, make sure you specify what version of the driver,
+what version of Linux, what kind of hardware and any other relevant info.
+The version number of the driver should be printed on-screen when linux
+boots.
+
+Keep reading comp.os.linux and the tape mailing list. To join the
+mailing list, send mail to linux-activists-request@niksula.cs.hut.fi
+with the extra line 'X-Mn-Admin: join TAPE' in your mail message header
+or as the first line in your mail message.
+
+
+Enjoy!
+
+-Hennus Bergman
+a0356514@.let.rug.nl		[Until July 3 1992, later redirected to mod32]
+mod32@cs.rug.nl			[Last resort, may work for a few months...]
+csg279@wing2.cs.rug.nl		[No external email yet... :-(]
+[My csg279 account should remain valid for another year or so, but I can't 
+send/receive mail there. (Yet. Maybe RSN.)
+If you cannot reach me on any of the addresses above, try the TAPE mailing
+list.]

@@ -1,0 +1,216 @@
+#
+# Installation of packages from floppy
+# requires:  tar, sed, basename, compress/zcat, mount and umount.
+# copywrite Softlanding Software, 1992:  Distribute and use freely.
+
+INSTROOT=/
+INSTDEV=/dev/fd0
+
+while [ 0 ]; do
+	if [ $# -gt 1 -a "$1" = "-instdev" ]; then
+		INSTDEV=$2;
+		shift 2;
+		continue;
+	elif [ $# -gt 1 -a "$1" = "-instroot" ]; then
+		INSTROOT=$2;
+		shift 2;
+		continue;
+	else
+		break;
+	fi
+done;
+
+INSTDIR=$INSTROOT/install/installed
+#INSTTEST=/usr2/dist
+MNTDIR=/user
+
+function MountDisk() {
+	declare -i MountStat
+	if [ "$INSTTEST" != "" ]; then
+		test -d $INSTTEST;
+		MountStat=$?
+		return $MountStat;
+	fi
+	for j in 1 2 3; do
+		echo -n "Insert disk $1 into the floppy drive then hit enter, or q to quit"
+		read ans;
+		if [ "$ans" = "q" ]; then
+			exit 1;
+		fi;
+		mount $INSTDEV $MNTDIR  >& /dev/null
+		MountStat=$?
+		if [ $MountStat = 0 ]; then
+			return 0;
+		fi
+	done
+	exit 1
+}
+
+function UnmountDisk() {
+	if [ "$INSTTEST" = "" ]; then
+		umount $INSTDEV > /dev/null
+	fi;
+}
+
+function InstallPkg() {
+	if [ -f $1 ]; then
+		echo -n "installing `basename $1 .taz`..."
+		(cd $INSTROOT; tar -xzvf - | sed "/\/$/d" ) < $1 > $INSTDIR/`basename $1 .taz`
+		if [ -f /install/doinst.sh ]; then
+		        sh /install/doinst.sh ;
+			rm -rf /install/doinst.sh ;
+		fi
+		echo "done"
+	else
+		echo "$1 not found"
+	fi;
+}
+
+function InstallDisk() {
+	declare -i Status;
+	for k in 1 2 3; do
+		MountDisk $1
+		Status=$?
+		if [ $Status != 0 ]; then
+			return 1;
+		fi
+		if [ "$INSTEST" = "" ]; then
+			SRCDIR=$MNTDIR
+		else
+			SRCDIR=$INSTEST/$1
+		fi
+		if [ -e $SRCDIR/disk$1 -o $1 = Disk ]; then
+			for FileZ in $SRCDIR/*.taz; do
+				if [ $1 = Disk ]; then
+					echo -n "Install $FileZ (y/n/q)?"
+					read ans;
+					if [ "$ans" = "Y" -o  "$ans" = "y" ]; then
+						InstallPkg $FileZ;
+					elif [ "$ans" = "q" -o  "$ans" = "Q" ]; then
+						exit 0;
+					fi
+				else
+						InstallPkg $FileZ;
+				fi
+			done
+			UnmountDisk
+			return 0
+		else
+			UnmountDisk
+			echo -n "error: you may have inserted the wrong disk, try again (y/n)?"
+			read ans;
+			if [ "$ans" = "N" -o  "$ans" = "n" ]; then
+				return 1
+			fi
+		fi;
+	done
+}
+
+function RemovePkg() {
+	if [ -f $INSTDIR/$1 ]; then
+		(cd $INSTROOT; xargs /bin/rm -f ) < $INSTDIR/$1 
+		rm $INSTDIR/$1
+	else
+		echo "error: unknown package $1"
+	fi
+}
+
+function PrintUsage() {
+	echo "usage: sysinstall -all                * install everything: base + X11"
+	echo "       sysinstall -base               * install full base: no X11"
+	echo "       sysinstall -mini               * install a minimal base: ~3 Meg"
+	echo "       sysinstall -rest               * install the rest of the base"
+	echo "       sysinstall -X11                * install just X11"
+	echo "       sysinstall -install pkg.taz    * install a specific pkg file"
+	echo "       sysinstall -remove pkg         * uninstall a pkg"
+	echo "       sysinstall -extract pkg        * collect pkg files into new pkg.taz"
+	echo "       sysinstall -disk               * install all pkgs on a disk"
+	echo "       sysinstall -disk DISKNUM       * install pkgs on disk DISKNUM"
+	echo "       sysinstall -mount              * mount floppy"
+	echo "       sysinstall -unmount            * unmount floppy"
+	echo "       sysinstall -instdev INSTDEV    * device to install from"
+	echo "       sysinstall -instroot INSTROOT  * directory to use as root"
+}
+
+function InstallX11 {
+	for i in 11 12 13 14 15; do
+		InstallDisk $i;
+	done
+}
+
+function InstallRest() {
+	for i in 5 6 7 8 9 10 2; do
+		InstallDisk $i;
+	done
+}
+
+function InstallMini() {
+	for i in 3 4;  do
+		InstallDisk $i;
+	done
+}
+
+function InstallBase() {
+	InstallMini;
+	InstallRest;
+}
+
+function InstallAll() {
+	InstallBase;
+	InstallX11;
+}
+
+function ShowInstalled() {
+	for i in $INSTDIR/*; do
+		echo "`basename $i`";
+	done;
+}
+
+#if [ "/" != $INSTROOT ]; then
+#	mount $INSTROOT &> /dev/null
+#	MNTSTAT=$?;
+#	if [ $MNTSTAT != 1 ]; then
+#		echo "error: $INSTROOT must have a partition mounted on it.  First use:"
+#		echo "       mount /dev/?d?? $INSTROOT"
+#		echo "       For example: mount /dev/hda2 $INSTROOT"
+#		exit 1;
+#	fi
+#fi
+
+if [ $# = 0 ]; then
+	PrintUsage;
+elif [ $1 = "-view" ]; then 
+	ShowInstalled;
+elif [ $1 = "-all" ]; then 
+	InstallAll;
+elif [ $1 = "-base" ]; then 
+	InstallBase;
+elif [ $1 = "-mini" ]; then 
+	InstallMini;
+elif [ $1 = "-rest" ]; then 
+	InstallRest;
+elif [ $1 = "-X11" ]; then 
+	InstallX11;
+elif [ $1 = "-remove" -a $# = 2 ]; then
+	RemovePkg $2
+elif [ $1 = "-install" -a $# = 2 ]; then
+	InstallPkg $2
+elif [ $1 = "-extract" -a $# = 2 ]; then
+	if [ -f $INSTDIR/$2 ]; then
+		(cd $INSTROOT; tar -czf - -T $INSTDIR/$2 ) > $2.taz
+	else
+		echo "$2 not found";
+	fi;
+elif [ $1 = "-disk" ]; then
+	if [ $# = 1 ] ; then
+		InstallDisk Disk
+	else
+		InstallDisk $2
+	fi
+elif [ $1 = "-mount ]; then
+	MountDisk;
+elif [ $1 = "-unmount ]; then
+	UnmountDisk;
+else
+	PrintUsage;
+fi;

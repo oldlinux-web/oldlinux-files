@@ -1,0 +1,137 @@
+#!/bin/sh
+echo 'x - catbytes.c'
+sed 's/^        //' <<'EOF' >'catbytes.c'
+        #include <stdio.h>
+        #include <ctype.h>
+        
+        /*
+         * catbytes n
+         *
+         * Copies ``n'' bytes from stdin to stdout. Unlike ``dd'' it doesn't
+         * care how stdin comes in buffered; unlike everything else I can find
+         * it doesn't gobble any excess bytes from stdin. Why does this have
+         * to be so hard?
+         */
+        
+        #define BS 65536
+        
+        static char msg1[] = "syntax: catbytes count\n";
+        static char msg2[] = "short input\n";
+        static char msg3[] = "short write\n";
+        
+        int main(int argc, char **argv) {
+          static char buffer[BS];
+          int i, n, total;
+          extern int read(int, char *, int);
+          extern int write(int, char *, int);
+          extern int atoi(char *);
+        
+          if (argc != 2 || !isdigit(argv[1][0])) {
+            (void) write(2, msg1, sizeof(msg1));
+            exit(1);
+          }
+          total = atoi(argv[1]);
+        
+          while (total > 0) {
+            i = (total > BS) ? BS : total;
+            if ((n = read(0, buffer, i)) <= 0) {
+              (void) write(2, msg2, sizeof(msg2));
+              exit(1);
+            }
+            if (write(1, buffer, n) != n) {
+              (void) write(2, msg3, sizeof(msg3));
+              exit(1);
+            }
+            total -= n;
+          }
+          return(0);
+        }
+EOF
+echo 'x - wrflops'
+sed 's/^        //' <<'EOF' >'wrflops'
+        #!/bin/sh
+        
+        progname=`basename $0`
+        syntax="syntax: $progname device"
+        die(){
+                echo "$progname: $*" 1>&2
+                exit 1
+        }
+        
+        case $# in
+                1)      device="$1" ;;
+                *)      die "$syntax" ;;
+        esac
+        
+        follow(){
+                [ $# -eq 1 ] || die "fn follow: syntax: follow dirname"
+                cd `dirname $1`
+                f=`basename $1`
+                (
+                    while [ -h "$f" ] ; do
+                        cd `dirname "$f"`
+                        f=`ls -l "$f" | sed 's/^.* -> //'`
+                    done
+                    echo `pwd`/`basename $f`
+                )
+        }
+        
+        f=`follow $1`
+        [ -b $f ] || die "I only know about block devices"
+        id=`ls -l $f | awk '{print $5 " " $6}' | tr -d '        '`
+        case "$id" in
+                '2,28') secs=18;;
+                '2,29') secs=18;;
+                '2,8')  secs=15;;
+                '2,9')  secs=15;;
+                *)      die "I don't know that device, sorry."
+        esac
+        
+        count=$[ $secs * 80 * 1024 ]
+        
+        while catbytes $count | cat >"$device" ; do
+                echo -n 'Insert another floppy: ' >/dev/tty
+                read ans </dev/tty >/dev/null
+        done
+EOF
+echo 'x - dirname'
+sed 's/^        //' <<'EOF' >'dirname'
+        #!/bin/sh
+        
+        progname=`basename $1`
+        syntax="syntax: $progname name"
+        die(){
+                echo "$progname: $*" 1>&2
+                exit 1
+        }
+        [ $# -eq 1 ] || die "$syntax"
+        s=`echo "$1" | sed 's,/[^/]*$,,'`
+        if [ "$s" = "$1" -o -z "$s" ] ; then
+                echo .
+        else
+                echo "$s"
+        fi
+EOF
+echo 'x - rdflops'
+sed 's/^        //' <<'EOF' >'rdflops'
+        #!/bin/sh
+        
+        progname=`basename $0`
+        syntax="syntax: $progname device"
+        die(){
+                echo "$progname: $*" 1>&2
+                exit 1
+        }
+        
+        case $# in
+                1)      device="$1" ;;
+                *)      die "$syntax" ;;
+        esac
+        
+        while cat "$device"; do
+                echo -n 'Insert another floppy: ' >/dev/tty
+                read ans </dev/tty >/dev/null
+        done
+EOF
+exit 0
+

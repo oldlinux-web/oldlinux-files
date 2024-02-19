@@ -1,0 +1,185 @@
+ +---------------------------------------------------------------------------+
+ |  wm-FPU-emu   an FPU emulator for 80386 and 80486SX microprocessors.      |
+ |                                                                           |
+ | Copyright (C) 1992    W. Metzenthen, 22 Parker St, Ormond, Vic 3163,      |
+ |                       Australia.  E-mail apm233m@vaxc.cc.monash.edu.au    |
+ |                                                                           |
+ |    This program is free software; you can redistribute it and/or modify   |
+ |    it under the terms of the GNU General Public License version 2 as      |
+ |    published by the Free Software Foundation.                             |
+ |                                                                           |
+ |    This program is distributed in the hope that it will be useful,        |
+ |    but WITHOUT ANY WARRANTY; without even the implied warranty of         |
+ |    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the          |
+ |    GNU General Public License for more details.                           |
+ |                                                                           |
+ |    You should have received a copy of the GNU General Public License      |
+ |    along with this program; if not, write to the Free Software            |
+ |    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.              |
+ |                                                                           |
+ +---------------------------------------------------------------------------+
+
+
+***NOTE***       THIS SHOULD BE REGARDED AS AN ALPHA TEST VERSION
+                 (although the beta version may be identical)
+
+
+wm-FPU-emu is an FPU emulator for Linux. It is derived from wm-emu387
+which is my 80387 emulator for djgpp (gcc under msdos); wm-emu387 was
+in turn based upon emu387 which was written by DJ Delorie for djgpp.
+The interface to the Linux kernel is based upon the original Linux
+math emulator.
+
+My target FPU for wm-FPU-emu is that described in the Intel486
+Programmer's Reference Manual (1992 edition). Numerous facets of the
+functioning of the FPU are not well covered in the Reference Manual;
+in the absence of clear details I have made guesses about the most
+reasonable behaviour.
+
+wm-FPU-emu does not implement all of the behaviour of the 80486 FPU. 
+See "Limitations" later in this file for a partial list of some
+differences.  I believe that the missing features are never used by
+normal C or FORTRAN programs. 
+
+Please report bugs, etc to me at:
+       apm233m@vaxc.cc.monash.edu.au
+
+
+--Bill Metzenthen
+  Oct 1992
+
+----------------------- Internals of wm-FPU-emu -----------------------
+
+Numeric algorithms:
+(1) Add, subtract, and multiply. Nothing remarkable in these.
+(2) Divide has been tuned to get reasonable performance. The algorithm
+    is not the obvious one which most people seem to use, but is designed
+    to take advantage of the characteristics of the 80386. I expect that
+    it has been invented many times before I discovered it, but I have not
+    seen it. It is based upon one of those ideas which one carries around
+    for years without ever bothering to check it out.
+(3) The sqrt function has been tuned to get good performance. It is based
+    upon Newton's classic method. Performance was improved by capitalizing
+    upon the properties of Newton's method, and the code is once again
+    structured taking account of the 80386 characteristics.
+(4) The trig, log, and exp functions are based in each case upon quasi-
+    "optimal" polynomial approximations. My definition of "optimal" was
+    based upon getting good accuracy with reasonable speed.
+
+
+--Bill Metzenthen
+
+----------------------- Limitations of wm-FPU-emu -----------------------
+
+There are a number of differences between the current wm-FPU-emu
+(version ALPHA 0.5) and the 80486 FPU (apart from bugs). Some of the
+more important differences are listed below:
+
+Internal computations do not use de-normal numbers (but External
+de-normals ARE recognised and generated). The design of wm-FPU-emu
+allows a larger exponent range than the 80486 FPU for internal
+computations.
+
+All computations are performed at full 64 bit precision (the PC bits
+of the FPU control word are ignored). Under Linux, the FPU normally
+runs at 64 bits precision.
+
+The precision flag (PE of the FPU status word) is not implemented.
+Does anyone write code which uses this feature?
+
+The Roundup flag (C1) is not implemented.
+
+The functions which load/store the FPU state are partially implemented,
+but the implementation should be sufficient for handling FPU errors etc
+in 32 bit protected mode.
+
+
+--Bill Metzenthen
+  October 1992
+
+----------------------- Performance of wm-FPU-emu -----------------------
+
+Speed.
+-----
+
+The speed of floating point computation with the emulator will depend
+upon instruction mix. Relative performance is best for the instructions
+which require most computation. The simple instructions are adversely
+affected by the fpu instruction trap overhead.
+
+
+Timing: Some simple timing tests have been made on the emulator functions.
+The times include load/store instructions. All times are in microseconds
+measured on a 33MHz 386 with 64k cache. The Turbo C tests were under
+ms-dos, the next two columns are for emulators running with the djgpp
+ms-dos extender. The final column is for wm-FPU-emu in Linux 0.97,
+using libm4.0 (hard).
+
+function      Turbo C        djgpp 1.06        WM-emu387     wm-FPU-emu
+
+   +          60.5           154.8              76.5          139.4
+   -          61.1-65.5      157.3-160.8        76.2-79.5     142.9-144.7
+   *          71.0           190.8              79.6          146.6
+   /          61.2-75.0      261.4-266.9        75.3-91.6     142.2-158.1
+
+ sin()        310.8          4692.0            319.0          398.5
+ cos()        284.4          4855.2            308.0          388.7
+ tan()        495.0          8807.1            394.9          504.7
+ atan()       328.9          4866.4            601.1          419.5-491.9
+
+ sqrt()       128.7          crashed           145.2          227.0
+ log()        413.1-419.1    5103.4-5354.21    254.7-282.2    409.4-437.1
+ exp()        479.1          6619.2            469.1          850.8
+
+
+The performance under Linux can be improved if look-ahead code is used.
+WM-emu387 uses such code. The following results show the improvement
+which can be obtained under Linux. Also given are the times for the
+original Linux emulator with the 4.1 'soft' lib.
+
+ [ Linus' note: I changed look-ahead to be the default under linux, as
+   there was no reason not to use it after I had edited it to be
+   disabled during tracing ]
+
+            wm-FPU-emu w     original w
+            look-ahead       'soft' lib
+   +         106.4             190.2
+   -         108.6-111.6      192.4-216.2
+   *         113.4             193.1
+   /         108.8-124.4      700.1-706.2
+
+ sin()       390.5            2642.0
+ cos()       381.5            2767.4
+ tan()       496.5            3153.3
+ atan()      367.2-435.5     2439.4-3396.8
+
+ sqrt()      195.1            4732.5
+ log()       358.0-387.5     3359.2-3390.3
+ exp()       619.3            4046.4
+
+
+----------------------- Accuracy of wm-FPU-emu -----------------------
+
+
+Accuracy: The following table gives the accuracy of the sqrt(), trig
+and log functions. Each function was tested at about 400 points. Ideal
+results would be 64 bits. The reduced accuracy of cos() and tan() for
+arguments greater than pi/4 can be thought of as being due to the
+precision of the argument x; e.g. an argument of pi/2-(1e-10) which is
+accurate to 64 bits can result in a relative accuracy in cos() of about
+64 + log2(cos(x)) = 31 bits. Results for the Turbo C emulator are given
+in the last column.
+
+
+Function      Tested x range            Worst result (bits)         Turbo C
+
+sqrt(x)       1 .. 2                    64.1                         63.2
+atan(x)       1e-10 .. 200              62.6                         62.8
+cos(x)        0 .. pi/2-(1e-10)         63.2 (x <= pi/4)             62.4
+                                        35.2 (x = pi/2-(1e-10))      31.9
+sin(x)        1e-10 .. pi/2             63.0                         62.8
+tan(x)        1e-10 .. pi/2-(1e-10)     62.4 (x <= pi/4)             62.1
+                                        35.2 (x = pi/2-(1e-10))      31.9
+exp(x)        0 .. 1                    63.1                         62.9
+log(x)        1+1e-6 .. 2               62.4                         62.1
+

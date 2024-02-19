@@ -1,0 +1,395 @@
+\input texinfo @c -*- texinfo -*-
+@c %**start of header
+@setfilename dld.info
+@settitle Dld
+@c %**end of header
+
+@ifinfo
+This file documents dld, a dynamic link/unlink editor.
+
+This is edition 1.0 of the dld documentation.
+
+Copyright (C) 1990 W. Wilson Ho.
+
+Permission is granted to make and distribute verbatim copies of
+this manual provided the copyright notice and this permission notice
+are preserved on all copies.
+
+Permission is granted to copy and distribute modified versions of this
+manual under the conditions for verbatim copying, provided that the entire
+resulting derived work is distributed under the terms of a permission
+notice identical to this one.
+@end ifinfo
+
+@iftex
+@titlepage
+@title Dld
+@subtitle A Dynamic Link/Unlink Editor
+@subtitle Copyright @copyright{} 1990 W. Wilson Ho.
+@author by W. Wilson Ho
+@end titlepage
+@setchapternewpage off
+@headings off
+@everyheading @| @thispage @|
+@end iftex
+
+@node Top, dld_init, (dir), (dir)
+@comment  node-name,  next,  previous,  up
+@chapter What is dld?
+
+@dfn{Dld} is a library package of C functions that performs @dfn{dynamic
+link editing}.  Programs that use dld can add compiled object
+code to or remove such code from a process anytime during its execution.
+Loading modules, searching libraries, resolving external references, and
+allocating storage for global and static data structures are all
+performed at run time.
+
+Dld is now available for VAX, Sun 3, and SPARCstation machines.
+
+This text describes how the dld functions can be called and some
+technical details that should be aware of.  For the internals of
+dld and sample applications, please refer to the technical report
+@cite{An Approach to Genuine Dynamic Linking}, CSE-90-25, Division of
+Computer Science, University of California at Davis, CA 95616 (email:
+@code{how@@ivy.ucdavis.edu)}.
+
+@menu
+* dld_init::			Initializing Dld
+* dld_link::			Dynamically Linking in New Modules
+* dld_unlink::			Unlinking a Module
+* dld_get_func::		Invoking Dynamically Linked Functions
+* Executability::		Determining If a Function is Executable
+* Error Codes::			Definition of Error Codes
+@end menu
+
+@node dld_init, dld_link, Top, Top
+@comment  node-name,  next,  previous,  up
+@section Initializing Dld
+
+To use any of the dld functions, you must include the header file
+@code{dld.h} for declaration of the functions and definition of the
+error code constants.
+
+The function @code{dld_init} must be called before any other dld
+functions.  It has the following syntax:
+
+@example
+int dld_init (char *@var{path})
+@end example
+
+@noindent
+where @var{path} is a string containing the path name of the executable
+file of the executing process.
+
+This function initializes internal data structures of dld and
+loads into memory symbol definitions of the executing process.  By doing
+so, other dynamically loaded functions can reference symbols already
+defined or share functions already exist in the executing process.
+
+@code{dld_init} returns 0 when successful; otherwise, it returns an
+error code that is non-zero (@pxref{Error Codes, , Definition of Error
+Codes}).  
+
+@menu
+* dld_find_executable::		Locating the Executable File
+@end menu
+
+@node dld_find_executable,  , dld_init, dld_init
+@comment  node-name,  next,  previous,  up
+@subsection Locating the Executable File
+
+The path name of the executing process as required by @code{dld_init}
+might not be easily obtained all the time.  Not all systems passes the
+entire path name of the executable file as the first argument
+(@code{argv[0]}) to @code{main}.  In order to obtain the full path of
+the executable file, the @code{dld_find_executable} function can be
+used.  This function has the following syntax:
+
+@example
+char *dld_find_executable (char *@var{command})
+@end example
+
+@noindent
+@code{dld_find_executable} returns the absolute path name of the file
+that would be executed if @var{command} were given as a command.  It
+looks up the environment variable @var{PATH}, searches in each of the
+directory listed for @var{command}, and returns the absolute path name
+for the first occurrence.  Thus, it is advisable to invoke
+@code{dld_init} as:
+
+@example
+main (int argc, char **argv)
+@{
+    @dots{}
+    if (dld_init (dld_find_executable (argv[0]))) @{
+        @dots{}
+    @}
+    @dots{}
+@}
+@end example
+
+@quotation
+@strong{Note:} If the current process is executed using the
+@code{execve} call without passing the correct path name as argument
+0, @code{dld_find_executable (argv[0]) } will also fail to locate the executable
+file.
+@end quotation
+
+@code{dld_find_executable} returns zero if @code{command} is not found
+in any of the directories listed in @code{PATH}.
+
+@node dld_link, dld_unlink, dld_init, Top
+@comment  node-name,  next,  previous,  up
+@section Dynamically Linking in New Modules
+
+The function @code{dld_link} dynamically links in the named relocatable
+object or library file into memory.  It has the following syntax:
+
+@example
+int dld_link (char *@var{filename})
+@end example
+
+@noindent
+where @var{filename} is the path name of the file to be linked.
+Specifically, if the named file is a relocatable object file, it is
+completely loaded into memory.  If it is a library file, only those
+modules defining an unresolved external reference are loaded.  Since a
+module in the library may itself reference other routines in the
+library, loading it may generate more unresolved external references.
+Therefore, a library file is searched repeatedly until a scan through
+all library members is made without having to load any new modules.
+
+Storage for the text and data of the dynamically linked modules is
+allocated using @code{malloc}.  In other words, they are kept in the
+@emph{heap} of the executing process.
+
+After all modules are loaded, @code{dld_link} resolves as many external
+references as possible.  Note that some symbols might still be undefined
+at this stage, because the modules defining them have not yet been
+loaded.
+
+If the specified module is linked successfully, @code{dld_link} returns
+0; otherwise, it returns a non-zero error code (@pxref{Error Codes, ,
+Definition of Error Codes}).
+
+@node dld_unlink, dld_get_func, dld_link, Top
+@comment  node-name,  next,  previous,  up
+@section Unlinking a Module
+
+The major difference between dld and other dynamic linker is that
+dld allows object modules to be removed from the process anytime
+during execution.  Unlinking a module is simply the reverse of the link
+operation (@pxref{Side Effect, , Important Points in Using Unlink}).
+The specified module is removed and the memory allocated to it is
+reclaimed.  Additionally, resolution of external references must be
+undone.
+
+There are two unlink functions:
+
+@example
+int dld_unlink_by_file (char *@var{path}, int @var{hard})
+
+int dld_unlink_by_symbol (char *@var{id}, int @var{hard})
+@end example
+
+@noindent
+The two unlink functions are basically the same except that
+@code{dld_unlink_by_file} takes as argument the path name (@var{path})
+of a file corresponding to a module previously linked in by
+@code{dld_link}, but @code{dld_unlink_by_symbol} unlinks the module that
+defines the specified symbol (@var{id}).
+
+Both functions take a second argument @var{hard}.  When @var{hard}
+is non-zero (@dfn{hard unlink}), the specified module is removed from
+memory unconditionally.  On the other hand, if @var{hard} is zero
+(@dfn{soft unlink}), this module is removed from memory only if it is
+not referenced by any other modules.  Furthermore, if unlinking a module
+results in leaving some other modules being unreferenced, these
+unreferenced modules are also removed.
+
+Hard unlink is usually used when you want to explicitly remove a module
+and probably replace it by a different module with the same name.  For
+example, you may want to replace the system's @code{printf} by your own
+version.  When you link in your version of @code{printf}, dld
+will automatically redirect all references to @code{printf} to the new
+version.
+
+Soft unlink should be used when you are not sure if the specified module
+is still needed.  If you just want to clean up unnecessary functions, it
+is always safe to use soft unlink.
+
+Both unlink functions returns 0 if the specified object file or symbol
+is previously loaded.  Otherwise, they return a non-zero error code
+(@pxref{Error Codes, , Definition of Error Codes}).
+
+@menu
+* Side Effect::			Important Points in Using Unlink.
+@end menu
+
+@node Side Effect,  , dld_unlink, dld_unlink
+@comment  node-name,  next,  previous,  up
+@subsection Important Points in Using Unlink
+
+When a module is being unlinked, dld tries to clean up as much as
+it can to restore the executing process to a state as if this module has
+never been linked.  This clean up includes removing and reclaiming the
+memory for storing the text and data segment of the module, and
+@dfn{un-defining} any global symbols defined by this module.
+
+However, side effects---such as modification of global variables,
+input/output operations, and allocations of new memory blocks---caused
+by the execution of any function in this module are not reversed.  Thus,
+it is the responsibility of the programmer to explicitly carry out all
+necessary clean up operations before unlinking a module.
+
+@node dld_get_func, Executability, dld_unlink, Top
+@comment  node-name,  next,  previous,  up
+@section Invoking Dynamically Linked Functions
+
+Dynamically linked functions may still be invoked from modules (e.g.,
+@code{main}) that do not contain references to such functions.  The
+function @code{dld_get_func} returns the entry point of the named
+function.  This returned value can later be used as a pointer to the
+function.  Similarly, the address of a global variable can be obtained
+by the function @code{dld_get_symbol}:
+
+@group
+@example
+unsigned long dld_get_symbol (char *@var{id})
+
+unsigned long dld_get_func (char *@var{func})
+@end example
+@end group
+
+@noindent
+A typical use of @code{dld_get_func} would be:
+
+@group
+@example
+@{
+    void (*func) ();
+    int error_code;
+
+    @dots{}
+
+    /* First, link in the object file "my_object_file.o".
+       Proceed only if the link operation is successful, i.e. it returns 0.
+       "my_new_func" is a function defined in "my_object_file.o".
+       Set func to point at the entry point of this function and then
+       Invoke it indirectly through func. */
+
+    if ((error_code = dld_link ("my_object_file.o")) == 0) @{
+        if ((func = (void (*) ()) get_func ("my_new_func")) != 0)
+            (*func) ();
+        @dots{}
+    @} else @{
+
+    @dots{}
+    @}
+@}
+@end example
+@end group
+
+Both @code{dld_get_func} and @code{dld_get_symbol} return zero if the
+named function or symbol cannot be found.
+
+@node Executability, Error Codes, dld_get_func, Top
+@comment  node-name,  next,  previous,  up
+@section Determining If a Function is Executable
+
+Since dld allows modules to be added to or removed from an executing
+process dynamically, some global symbols may not be defined.  As a
+result, an invocation of a function might reference an undefined symbol.
+We say that a function is @dfn{executable} if and only if all its
+external references have been fully resolved and all functions that it
+might call are executable.
+
+The predicate function @code{dld_function_executable_p} helps solve this
+problem by tracing the cross references between modules and returns
+non-zero only if the named function is executable.  It has the following
+syntax:
+
+@example
+int dld_function_executable_p (char *@var{func})
+@end example
+
+Note that the implementation of @code{dld_function_executable_p} is not
+complete according to the (recursive) definition of executability.
+External references through pointers are not traced.  That is,
+@code{dld_function_executable_p} will still return non-zero if the named
+function uses a pointer to indirectly call another function which has
+already been unlinked.  Furthermore, if one external reference of a
+object module is unresolved, all functions defined in this module are
+considered unexecutable.  Therefore, @code{dld_function_executable_p} is
+usually too conservative.
+
+However, it is advisable to use @code{dld_function_executable_p} to
+check if a function is executable before its invocation.  In such a
+dynamic environment where object modules are being added and removed, a
+function that is executable at one point in time might not be executable
+at another.  Under most circumstances, @code{dld_function_exectable_p}
+is accurate.  Also, the implementation of this function has been
+optimized and it is relatively cheap to use.
+
+@node Error Codes,  , Executability, Top
+@comment  node-name,  next,  previous,  up
+@section Definition of Error Codes
+
+The dld functions return a non-zero error code when they fail.  The
+definitions of these error codes are:
+
+@quotation
+@iftex
+@tableindent = 1.5in
+@end iftex
+@table @code
+@item DLD_ENOFILE
+cannot open file.
+
+@item DLD_EBADMAGIC
+bad magic number.
+
+@item DLD_EBADHEADER
+failure reading header.
+
+@item DLD_ENOTEXT
+premature eof in text section.
+
+@item DLD_ENOSYMBOLS
+premature eof in symbols.
+
+@item DLD_ENOSTRINGS
+bad string table.
+
+@item DLD_ENOTXTRELOC
+premature eof in text relocation.
+
+@item DLD_ENODATA
+premature eof in data section.
+
+@item DLD_ENODATRELOC
+premature eof in data relocation.
+
+@item DLD_EMULTDEFS
+multiple definitions of symbol.
+
+@item DLD_EBADLIBRARY
+malformed library archive.
+
+@item DLD_EBADCOMMON
+common block not supported.
+
+@item DLD_EBADOBJECT
+malformed input file (not object file or archive).
+
+@item DLD_EBADRELOC
+bad relocation info.
+
+@item DLD_ENOMEMORY
+virtual memory exhausted.
+
+@item DLD_EUNDEFSYM
+undefined symbol.
+@end table
+@end quotation
+@bye

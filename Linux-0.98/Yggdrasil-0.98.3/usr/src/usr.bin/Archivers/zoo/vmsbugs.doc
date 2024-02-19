@@ -1,0 +1,482 @@
+
+
+                           Zoo 2.0 on VAX/VMS
+                                   by
+                              Rahul Dhesi
+
+
+The zoo archiver is used to create and maintain archives containing mul-
+tiple files that may be stored in compressed format.  Consult the zoo
+manual for more details.  This document describes those features of
+VAX/VMS zoo that are specific to the VAX/VMS implementation.
+
+
+                              INSTALLATION
+
+The file "descrip.mms" is a makefile suitable for use with DEC's imple-
+mentation of make, called MMS.  To avoid any confusion, delete the file
+called "makefile" as that is not for VAX/VMS systems and it might con-
+fuse MMS.  With all source files in the current directory, simply type
+MMS and wait while all files get compiled and linked.  Then give the
+command "mms fiz" to build "fiz.exe", and "mms blif" to build "bilf.exe".
+
+If your system does not have MMS, execute the "vmsbuild.com" script.
+
+The result should be the executable program, "zoo.exe", "fiz.exe",
+and "bilf.exe".
+
+Optionally, the command "mms zoobig.exe" will create a version of the
+executable that is linked without the shareable library.  This may be
+more portable if you intend to transfer it to an VMS system that does
+not have its own C compiler.  But "zoobig.exe" will be about twice the
+size of "zoo.exe".
+
+To run zoo, bilf, and fiz, you will need to set up symbols by giving
+commands similar to the following, either by typing them at the system
+prompt or by putting them in your "login.com" file.
+
+     $ zoo  :== $ user$disk:[userdir]zoo.exe
+     $ fiz  :== $ user$disk:[userfir]fiz.exe
+     $ bilf :== $ user$disk:[userdir]bilf.exe
+
+In place of "user$disk" use the name of the device on which
+your login directory is located, and instead of "userdir" use
+the name of the directory in which you have placed the executable
+programs "zoo.exe" and "fiz.exe".
+
+
+                          WARNING -- VMS BUGS
+
+VAX/VMS peculiarities cause unusual bahavior.
+
+   - VMS C does not preserve uppercase characters in a command line.  To
+     specify a command containing an uppercase character, enclose the
+     command in double quotes.  For example, the command
+
+          zoo aM stuff *
+
+     will not work under VMS.  To make this command work under VMS, use
+     double quotes like this:
+
+          zoo "aM" stuff *
+
+   - For most text files that are not in stream-LF format, VMS returns
+     an incorrect file size to zoo.  This will be evident if you use the
+     "f" modifier to tell zoo to archive files without compression.
+     Files that were in stream-LF format will be stored with the correct
+     size;  other text files will be stored with an incorrect value for
+     the original size of the file.
+
+     When such files are extracted, however, they are extracted in
+     stream-LF format, which is the only file format that VMS seems to
+     handle correctly.  Thus, so far as I can determine, no file con-
+     tents are actually lost, and the only evidence of the problem is
+     that in archive listings, files stored without compression may
+     still appear to be compressed by about 1 to 5 percent, or occasion-
+     ally by some meaningless value.
+
+   - VAX/VMS uses many different types of file structures.  Zoo creates
+     archives in stream-LF format, and all archives used by zoo in any
+     way must be in this format.  It is dangerous to use zoo on an
+     archive that is in any other format, because it may permanently
+     corrupt the archive contents.  Thus, if you have uploaded an
+     archive to a VMS system using Kermit, do not try to manipulate it
+     with zoo until you have converted it to stream-LF format.  File
+     conversion instructions are given later in this document.
+
+   - The VAX/VMS batch system causes the C statement
+
+          fflush(stdout);
+
+     to become equivalent to:
+
+          printf("\n");
+
+     The result is that if files are added to a zoo archive from a batch
+     run, the batch log will look very strange and contain spurious new-
+     lines.
+
+
+                        ARCHIVING SELECTED FILES
+
+Zoo can read filenames from standard input.  This allows you to use an
+external program to generate a list of files to be archived.  When this
+list is fed to zoo, it will archive only the selected files.
+
+For this example, assume that files are to be archived in an archive
+called "backups.zoo".
+
+To achieve redirection of input under VAX/VMS, the following steps are
+necessary:
+
+ 1.  Create a file containing the filenames to be archived.  Suppose
+     this file is called "names.lis".
+
+ 2.  Redirect zoo's standard input thus:
+
+          $ define /user_mode SYS$INPUT names.lis
+
+
+ 3.  Invoke zoo thus:
+
+          $ zoo "aI" backups
+
+     This command line will cause zoo to read a list of filenames from
+     its standard input, and archive them into "backups.zoo".  Since the
+     logical name SYS$INPUT was changed to refer to the file
+     "names.lis", zoo will read filenames from that file.
+
+A good way of creating a list of files to be archived is to use the vms
+"directory" command.  Include at least the switches shown:
+
+     $ directory /noheading /notrailing /column=1 /output=names.lis
+
+This tells VMS to produce a list of filenames, one per line, and to
+store the resulting output in the file "names.lis".  You can also add
+additional selection options.  For example, to select all files that
+have been modified in the last 12 hours:
+
+     $ dir/nohead/notrail/col=1/out=names.lis/since=-12:00/modified
+
+A good way to decrease the effort is to create a symbol as follows:
+
+     $ select:=="dir/nohead/notrail/col=1/out=names.lis/modified/since="
+
+Now you can archive all *.c files modified in the last 60 minutes by
+giving the following commands:
+
+     $ select -1:00:00 *.c
+     $ define/user sys$input names.lis
+     $ zoo "aI" backups
+
+
+                       FILE TRANSFERS WITH KERMIT
+
+Zoo archives can be uploaded to a VAX/VMS system and downloaded from it
+using Kermit.  Due to VMS limitations, some file conversions must be
+done to avoid a corrupted zoo archive.
+
+Zoo always expects zoo archives to be in stream-LF format.  However, the
+standard VAX/VMS Kermit does not create stream-LF files, and treats them
+as text files when it reads them, resulting in corrupted downloads.
+Thus you must handle Kermit transfers with care. The following discus-
+sions refers solely to the standard Kermit-32, which I believe is from
+the Stevens Institute of Technology.  If the following instructions are
+carefully followed, you should be able to transfer zoo archives between
+a VAX/VMS system and a microcomputer running Kermit.
+
+KERMIT UPLOADS:  To transfer a zoo archive from a microcomputer to a
+VAX/VMS system, do the following.
+
+ 1.  Invoke VAX/VMS Kermit as shown below.  It will prompt you with the
+     string "Kermit-32>".  Give it a command as shown to tell it to
+     receive a binary file:
+
+          $ kermit
+          Kermit-32> set file type binary
+          Kermit-32> set block-check 3
+          Kermit-32> receive
+
+     Note:  Do not use the command "set file type fixed".  In most cases
+     it will not work.
+
+     The command to set the block-check is optional, but tells Kermit to
+     use a 16-bit CRC, which is much more reliable than the default 6-
+     bit CRC.  Use this command if your version of Kermit does not use a
+     16-bit CRC by default.
+
+ 2.  At this point, VAX/VMS Kermit is waiting for you to send it a file.
+     Now tell your local Kermit to send the file.  On an MS-DOS system,
+     using MS-Kermit, you would do this by first typing the local escape
+     sequence to get to the local mode, where the prompt is "MS-
+     Kermit>", then telling your local Kermit to send the zoo archive as
+     a binary file.  A typical sequence of commands is:
+
+          (type escape sequence to get back to local mode)
+          MS-Kermit> set eof noctrl-z
+          MS-Kermit> send stuff.zoo
+
+     It is important that your local Kermit send the zoo archive as a
+     binary file, not a text file.  How you do this depends on your sys-
+     tem;  on MS-DOS systems it suffices to give say "set eof noctrl-z".
+
+ 3.  Wait until the Kermit upload is complete.  Then tell your local
+     Kermit to go into terminal mode (usually by giving the command CON-
+     NECT), and exit from VAX/VMS Kermit with the command EXIT.  A typi-
+     cal sequence is:
+
+          MS-Kermit> connect
+          (stuff from MS-Kermit printed...)
+          (hit carriage return if necessary to get the next prompt)
+          Kermit-32> exit
+          $
+
+     Now you are back at the VAX/VMS prompt.  At this point, you must
+     convert the uploaded zoo archive, which is currently in binary for-
+     mat, to stream-LF format so that it can be used by VAX/VMS zoo.
+     You do this by using the Bilf utility, which can convert files
+     between binary and stream-LF formats.  Give the command:
+
+          $ bilf l stuff.zoo
+
+ 4.  After Bilf has done the conversion, you will have a new generation
+     of stuff.zoo that is in stream-LF format.  Now you can manipulate
+     it normally with VAX/VMS zoo.
+
+DON'T TRY TO USE ZOO TO MANIPULATE AN UPLOADED ARCHIVE WITHOUT PERFORM-
+ING THE CONVERSION TO STREAM-LF FORMAT, ELSE YOU MAY PERMANENTLY DESTROY
+ARCHIVE CONTENTS.
+
+KERMIT DOWNLOADS:  Before downloading a zoo archive from VAX/VMS to a
+microcomputer, you must convert it to binary format.    Then use VMS
+Kermit normally.  A sample sequence is shown.
+
+ 1.  Convert the zoo archive to binary format.
+
+          $ bilf b stuff.zoo
+
+ 2.  Invoke VMS Kermit and tell it to send the file.
+
+          $ kermit
+          Kermit-32> set block-check 3
+          Kermit-32> send stuff.zoo
+
+ 3.  Get back to your local Kermit and tell it to receive a binary file.
+
+          (type escape sequence to get into local mode)
+          MS-Kermit> set eof noctrl-z
+          MS-Kermit> receive
+          (transfer takes place)
+
+
+                         FILE TRANSFER SUMMARY
+
+Here are pictorial summaries of the steps involved in performing file
+transfers of zoo archives using Kermit.
+
+======================================================================
+
+DOWNLOADS:
+                                           files on a VMS
+                                         system to be archived
+                                               using zoo
+                                                    |
+                                   archive created  |
+                                   using zoo.exe    |
+                                   or zoobig.exe    |
+                                   on a VMS system  |
+                                                    v
+
+zoo archive on VMS      bilf b           zoo archive on VMS, in
+in fixed-length     <----------------    in stream-LF format
+binary format
+      |
+      |
+      | archive transferred
+      | from VMS to microcomputer
+      | using Kermit; receiving
+      | Kermit must be told this
+      | is a binary file; sending
+      | Kermit may need to be told too
+      |
+      v
+zoo archive
+on microcomputer
+system
+
+======================================================================
+
+UPLOADS:
+
+zoo archive
+on microcomputer
+system
+    |
+    |
+    | archive uploaded to VMS using Kermit;
+    | receiving Kermit on VMS must be given
+    | command "set file type binary"
+    | (NOTE:  "set file type fixed" will
+    | usually not work);  sending Kermit
+    | must be told this is a binary file
+    |
+    v
+zoo archive on VMS,       bilf l         zoo archive on VMS, in
+in variable-length    ---------------->    in stream-LF format
+binary format                                      |
+                                                   | extract
+                                                   | normally using
+                                                   | zoo on VMS
+                                                   |
+                                                   v
+                                         files extracted from zoo
+                                          archive on a VMS system
+
+======================================================================
+
+
+                       ENSURING ARCHIVE INTEGRITY
+
+After performing a transfer of a zoo archive using Kermit (and perform-
+ing any file conversion necessary for VMS), make it a habit to immedi-
+ately test the integrity of the transferred archive with the -test com-
+mand of zoo, illustrated for VMS:
+
+     $ zoo -test stuff
+
+In addition, also get a listing of the archive contents:
+
+     $ zoo -list stuff
+
+If neither command reports an error, it is reasonable to assume that
+archive integrity was not harmed by the Kermit transfer.
+
+The -test command tests the integrity of each stored file.  The -list
+command tests the integrity of the internal archive structure.  Both are
+checked using separate cyclic redundancy codes, one for each archived
+file, and one for each directory entry in the archived. (Actually, the
+-list command ignores deleted entries, so if the archive contains any,
+use the "ld" command instead.)
+
+
+                               WILDCARDS
+
+All implementations of zoo on all systems use the same wildcard charac-
+ters:  "*" matches any sequence of zero or more characters, and "?"
+matches any one character.
+
+ADDING FILES:  For specifying directory names when adding files, use the
+usual VAX/VMS syntax.  Thus, to recursively archive all files in the
+current directory and all its subdirectories, the command syntax is:
+
+     $ zoo a stuff [...]*
+
+ The character range wildcard of the form "c-c" is also available, which
+ will select all files beginning with the specified character range.
+ For example,
+
+      $ zoo a stuff [...]a-d [...]x-z
+
+ will archive all files beginning with the characters a through d, and
+ with the characters x through z, in the current directory and all its
+ subdirectories.  A side-effect of this is that during addition to
+ archives, dots in filenames must be explicitly matched.  Thus to add
+ all files with an extension of DOC, you would type:
+
+      $ zoo a stuff *.doc
+
+ and "*doc" will not work.  As a special case, a trailing "*.*" in any
+ filename you specify can always be replaced by just a trailing "*".
+ The safest rule to follow when adding files is to always specify the
+ dot in each filename.
+
+ EXTRACTING FILES:  During extraction, both the directory name and the
+ filename must be specified according to zoo syntax.  Thus you could say
+
+      $ zoo x stuff [*xyz*]*.doc
+
+ to extract all archived files with filenames that match "*.doc" and
+ that contain the string "xyz" in the directory name.  Note that VMS
+ syntax for selecting directories won't work here:
+
+      $ zoo x stuff [...]*.doc        ! won't work for extraction
+
+ If you do not specify the directory name at all, zoo will only perform
+ the match against filenames;  thus
+
+      $ zoo x stuff *.doc
+
+ will extract all files matching *.doc regardless of the directory name.
+
+ Also note that if you specify extraction of "*.*", as in
+
+      $ zoo x stuff *.*
+
+ it will result in the extraction of files whose filename contains at
+ least one dot.  Similarly, the command
+
+      $ zoo x stuff *_*
+
+ will select all filename containing at least one underscore.
+
+ To extract all files, specify no filename, e.g.
+
+      $ zoo x stuff
+
+ or use "*" rather than "*.*".
+
+ SAFEST RULE OF THUMB:  WHEN SELECTING FILES ON DISK, SPECIFY THE DOT IN
+ EACH FILENAME;  WHEN SELECTING FILES INSIDE A ZOO ARCHIVE, SPECIFY A
+ DOT ONLY IF YOU NEED ONE.  But to select all files, you can always just
+ use "*".
+
+
+                            FILE GENERATIONS
+
+ When a file is added to an archive, the generation number (if any) that
+ it is given in the archive is not related to the generation number it
+ had in the VAX/VMS filesystem.  At extraction time a new version is
+ always created for an extracted file.  The overwrite option ("O") does
+ not cause overwriting, but simply suppresses the warning message that
+ zoo normally gives when it finds that a file about to be extracted
+ already exists.
+
+
+                             FILE STRUCTURES
+
+ At extraction time, zoo preserves all data bytes in binary files, and
+ stores all text files as lines of text terminated with linefeeds. The
+ internal file structure maintained by DEC's RMS is not currently
+ preserved.  (Support for this is planned for the distant future.)
+ Thus, the following two types of files can be safely archived and
+ restored:
+
+    - All text files are extracted in stream-LF format.  Most VMS utili-
+      ties that accept text files will accept such files.  The EDT edi-
+      tor may complain, but will still work.
+
+    - VMS executable files, when stored and then extracted, are
+      extracted in stream-LF format.  Such files can be restored to
+      their original state using Bilf with the "b" option.  (However,
+      current versions of VAX/VMS seem to be able to load and execute
+      stream-LF files, so conversion may not be necessary.)
+
+ HANDLING VMS EXECUTABLE FILES.  You can archive an executable program
+ called "xyz.exe":
+
+      $ zoo a stuff xyz.exe
+      $ delete xyz.exe;*
+
+ Now the only copy of xyz.exe is in the archive "stuff.zoo".  Extract
+ it:
+
+      $ zoo x stuff xyz.exe
+
+ The extracted copy of "xyz.exe" is in stream-LF format and VMS may or
+ may not execute it.  Now we convert it back to fixed-length record for-
+ mat thus:
+
+      $ bilf b xyz.exe
+      $ purge xyz.exe
+
+ Now "xyz.exe" has been converted to binary format and can be executed.
+ It should be identical to the original copy of "xyz.exe" that was
+ archived.
+
+ TEXT FILES FROM OTHER SYSTEMS.  A text file archived on a different
+ computer system will use either linefeeds, or carriage returns plus
+ linefeeds, as line terminators.  Text files with linfeeds only can be
+ be extracted and used exactly as if they had been archived on a VAX/VMS
+ system.  Text files containing carriage returns plus linefeeds will,
+ when extracted, contain a spurious carriage return at the end of each
+ line.  This extra carriage return can be removed using EDT's "substi-
+ tute" command while in screen mode.  Simply replace all carriage returns
+ with nothing.  The VMS C compiler currently appears to accept trailing
+ carriage returns in files without any trouble.
+
+ Text files trasnferred from MS-DOS or CP/M or similar systems may con-
+ tain a trailing control Z character.  This may cause problems on VMS
+ and should be edited out with a text editor.
+
+                                     -- Rahul Dhesi 1988/02/04
+                                            Revised 1991/07/07

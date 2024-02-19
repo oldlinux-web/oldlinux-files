@@ -1,0 +1,241 @@
+; used variables:
+;
+; k-r-x-1 k-r-y-1 position of domain-start
+; k-r-x-2 k-r-y-2 position of domain-end
+; k-r-started     start is given
+; k-r-del         if pick then 1
+;                 if copypick then 0
+; k-r-help        help-position
+; k-r-counter     help
+;
+{{{  set-mark
+(deffun set-mark (
+  if not(test-text) (exit) fi
+  store-pos k-r-x-1
+  store-line k-r-y-1
+  set-counter k-r-started 1
+  message-exit "mark-set
+))
+}}}
+{{{  pick-domain-all
+(deffun pick-domain-all (
+  if counter-0 k-r-started (message-exit "no-mark-set!) fi
+  if not(test-text) (exit) fi
+  store-pos k-r-x-2
+  store-line k-r-y-2
+  {{{  maybe change 1<-> (1 befor 2)
+  set-counter k-r-help 0
+  sum-counter k-r-help k-r-y-1
+  inv-counter k-r-help
+  sum-counter k-r-help k-r-y-2
+  case
+    (counter>0 k-r-help ())      ; line 1 before line 2 => ok
+    (counter-0 k-r-help (        ; line 1 = line 2      => test x
+      {{{  test x positions
+      set-counter k-r-help 0
+      sum-counter k-r-help k-r-x-1
+      inv-counter k-r-help
+      sum-counter k-r-help k-r-x-2
+      if counter>0 k-r-help ()   ; x2-x1>0 => ok
+      else (
+        {{{  change x
+        set-counter k-r-help 0
+        sum-counter k-r-help k-r-x-1
+        set-counter k-r-x-1 0
+        sum-counter k-r-x-1 k-r-x-2
+        set-counter k-r-x-2 0
+        sum-counter k-r-x-2 k-r-help
+        }}}
+      ) fi)
+      }}}
+    )
+    (not(counter-0 k-r-help) (   ; line 2 before line 1 => change
+      {{{  change x
+      set-counter k-r-help 0
+      sum-counter k-r-help k-r-x-1
+      set-counter k-r-x-1 0
+      sum-counter k-r-x-1 k-r-x-2
+      set-counter k-r-x-2 0
+      sum-counter k-r-x-2 k-r-help
+      }}}
+      {{{  change y
+      set-counter k-r-help 0
+      sum-counter k-r-help k-r-y-1
+      set-counter k-r-y-1 0
+      sum-counter k-r-y-1 k-r-y-2
+      set-counter k-r-y-2 0
+      sum-counter k-r-y-2 k-r-help
+      }}}
+     )
+    )
+  esac
+  }}}
+  {{{  twist line end
+  goto-line-counter k-r-y-2
+  goto-counter k-r-x-2
+  O_RIGHT
+  "$$
+  O_LEFT
+  O_RETURN
+  O_RETURN
+  O_UP
+  O_START_OF_LINE
+  O_DEL_LINE
+  delspaces
+  store-pos k-r-x-2
+  }}}
+  {{{  twist line begin
+  goto-line-counter k-r-y-1
+  goto-counter k-r-x-1
+  "$
+  O_RETURN
+  store-pos k-r-x-1
+  store-line k-r-y-1
+  add-counter k-r-y-2 1
+  }}}
+  {{{  counter = #picks -1/ help = first pick
+  set-counter k-r-help 0
+  sum-counter k-r-help k-r-y-1
+  set-counter k-r-counter 0
+  sum-counter k-r-counter k-r-y-1
+  inv-counter k-r-counter
+  sum-counter k-r-counter k-r-y-2
+  }}}
+  {{{  pick counter lines
+  while counter>0 k-r-counter (
+    goto-line-counter k-r-help
+    if test-text (O_COPY_PICK) else (set-counter k-r-del 0) fi
+    add-counter k-r-help 1
+    add-counter k-r-counter -1
+  )
+  }}}
+  {{{  pick last line
+  goto-line-counter k-r-help
+  O_END_OF_LINE
+  O_DELETE
+  O_COPY_PICK
+  "$
+  }}}
+  if counter-0 k-r-del (
+    {{{  copy-pick-handling
+    goto-line-counter k-r-y-2
+    goto-counter k-r-x-2
+    O_DOWN
+    O_DELETE
+    O_DELETE
+    O_DEL_CHAR_RIGHT
+    goto-line-counter k-r-y-1
+    O_UP
+    O_START_OF_LINE
+    O_DOWN
+    "$
+    O_LEFT
+    O_RETURN
+    O_UP
+    O_START_OF_LINE
+    O_DEL_LINE
+    delspaces
+    O_DEL_CHAR_RIGHT
+    O_DELETE
+    O_DELETE
+    }}}
+  ) else (
+    {{{  pick-handling
+    set-counter k-r-counter -1
+    sum-counter k-r-counter k-r-y-1
+    inv-counter k-r-counter
+    sum-counter k-r-counter k-r-y-2
+    goto-line-counter k-r-y-1
+    while counter>0 k-r-counter (
+      O_DEL_LINE
+      add-counter k-r-counter -1
+    )
+    goto-counter k-r-x-2
+    O_DELETE
+    O_DELETE
+    O_DEL_CHAR_RIGHT
+    }}}
+  ) fi
+))
+}}}
+{{{  copy-region
+(deffun copy-region (
+  set-counter k-r-del 0
+  pick-domain-all
+))
+}}}
+{{{  kill-region
+(deffun kill-region (
+  set-counter k-r-del 1
+  pick-domain-all
+  if counter-0 k-r-del (message-exit "fold-found->copy-region) fi
+))
+}}}
+{{{  yank
+(deffun yank (
+ if not(test-text) (exit) fi
+ {{{  split line and put pick
+ store-line p-p-y-1
+ "$$
+ O_LEFT
+ O_RETURN
+ O_PUT_PICK
+ }}}
+ if test-fold-line (
+   {{{  there was a pick
+   {{{  remove \n at end of pick
+   O_DOWN
+   store-line p-p-y-2
+   O_UP
+   O_REMOVE_FOLD
+   add-counter p-p-y-2 -2
+   goto-line-counter p-p-y-2
+   O_START_OF_LINE
+   O_RETURN
+   O_UP
+   O_START_OF_LINE
+   O_DEL_LINE
+   delspaces
+   O_DELETE
+   O_DEL_CHAR_RIGHT
+   }}}
+   {{{  remove \n at begin of pick
+   goto-line-counter p-p-y-1
+   O_END_OF_LINE
+   O_RETURN
+   O_START_OF_LINE
+   O_DEL_LINE
+   delspaces
+   O_DELETE
+   O_DELETE
+   }}}
+   }}}
+ ) else (
+   {{{  undo the split
+   O_START_OF_LINE
+   O_RETURN
+   O_UP
+   O_START_OF_LINE
+   O_DEL_LINE
+   delspaces
+   O_DELETE
+   O_DELETE
+   O_DEL_CHAR_RIGHT
+   }}}
+ ) fi
+))
+}}}
+{{{  exchange-point-and-mark
+(deffun exchange-point-and-mark (
+  if not(test-text) (exit) fi
+  if or(counter-0 k-r-x-1,counter-0 k-r-y-1) (message-exit "no-mark-set!) fi
+  store-pos k-r-x-2
+  store-line k-r-y-2
+  goto-line-counter k-r-y-1
+  goto-counter k-r-x-1
+  set-counter k-r-y-1 0
+  sum-counter k-r-y-1 k-r-y-2
+  set-counter k-r-x-1 0
+  sum-counter k-r-x-1 k-r-x-2
+))
+}}}

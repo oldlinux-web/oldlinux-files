@@ -1,0 +1,2215 @@
+                      Release 5 Public Patch #14
+                           MIT X Consortium
+
+To apply this patch:
+
+cd to the top of the source tree (to the directory containing the "mit"
+and "contrib" subdirectories) and do:
+        patch -p -s < ThisFile
+Patch will work silently unless an error occurs.
+If you want to watch patch do its thing, leave out the "-s" argument to patch.
+
+Finally, to rebuild after applying this patch, cd to the "mit" subdirectory
+and do:
+        make -k >& make.log
+
+
+Brief notes on what this patch fixes:
+
+An enhancement to Xlib for the X Consortium's Xlib and X Protocol Test Suite:
+the test suite can now use the internal interface _XConnectDisplay to obtain
+raw connections to the X server, thus allowing maximum portable protocol test
+coverage.  In order to ensure this coverage, set XP_OPEN_DIS to XlibXtst.c
+when configuring the Xlib and X Protocol Test Suite.
+
+Xlib: IO error during connect may dereference NULL
+Xlib: duplicate free() in XCloseDisplay from IO error handler
+Xlib: could use better _XConnectDisplay interface for test suite
+Xlib: XCloseDisplay does not free memory
+Xlib: endian definition is missing when compiling XConnDis.c for OSF1
+Xlib and Xt: LATIN2 keysyms are not handled correctly in ConvertCase
+Xlib and Xt: Latin-3 case converter
+Xt: XIM w/ keycode 0 (as defined by Xlib I18N) does not work with Xt
+Xt: XtCreateWidget errs when parent is an Object, not a Widget
+Xt: SetValues on TopLevelShell's iconic resource when popped_up is True
+Xt: set values on iconic resource should not affect initialState
+Xt: identifyWindows hack clobbers real information
+Xt: frees memory returned by Xlib with Xt interface
+Xt: unintentional reference inside Display structure
+Xt: geometry requests with SetValues 
+Xt: release of passive grab not recognized
+Xt: XtOpenDisplay ignores -name when appl_name parameter is present
+Xt: XtOpenDisplay should check that argv[0] isn't the empty string
+Xt: XtCloseDisplay frees NULL per-display keysyms
+Xext: XShmPutImage missing gc update
+fonts: missing copyright for Bitstream Courier Speedo fonts
+
+
+Prereq: public-patch-13
+
+*** /tmp/da4676	Thu Jul 23 17:28:01 1992
+--- mit/bug-report	Thu Jul 23 17:28:00 1992
+***************
+*** 2,8 ****
+  Subject: [area]: [synopsis]   [replace with actual area and short description]
+  
+  VERSION:
+!     R5, public-patch-13
+      [MIT public patches will edit this line to indicate the patch level]
+  
+  CLIENT MACHINE and OPERATING SYSTEM:
+--- 2,8 ----
+  Subject: [area]: [synopsis]   [replace with actual area and short description]
+  
+  VERSION:
+!     R5, public-patch-14
+      [MIT public patches will edit this line to indicate the patch level]
+  
+  CLIENT MACHINE and OPERATING SYSTEM:
+*** /tmp/,RCSt1a12623	Wed Jul 22 16:13:32 1992
+--- mit/lib/X/XClDisplay.c	Wed Jul 22 16:13:32 1992
+***************
+*** 1,4 ****
+! /* $XConsortium: XClDisplay.c,v 11.22 90/12/09 16:27:45 rws Exp $ */
+  /*
+  
+  Copyright 1985, 1990 by the Massachusetts Institute of Technology
+--- 1,4 ----
+! /* $XConsortium: XClDisplay.c,v 11.24 91/12/19 18:06:28 rws Exp $ */
+  /*
+  
+  Copyright 1985, 1990 by the Massachusetts Institute of Technology
+***************
+*** 19,27 ****
+  
+  /* 
+   * XCloseDisplay - XSync the connection to the X Server, close the connection,
+!  * and free all associated storage.  This is the only routine that can be
+!  * called from or after an IOError handler, so the lower levels need to be able
+!  * to deal with broken connections.  Extension close procs should only free
+   * memory and must be careful about the types of requests they generate.
+   */
+  
+--- 19,25 ----
+  
+  /* 
+   * XCloseDisplay - XSync the connection to the X Server, close the connection,
+!  * and free all associated storage.  Extension close procs should only free
+   * memory and must be careful about the types of requests they generate.
+   */
+  
+***************
+*** 32,54 ****
+  	register int i;
+  	extern void _XFreeQ();
+  
+! 	dpy->flags |= XlibDisplayClosing;
+! 	for (i = 0; i < dpy->nscreens; i++) {
+! 		register Screen *sp = &dpy->screens[i];
+! 		XFreeGC (dpy, sp->default_gc);
+  	}
+- 	if (dpy->cursor_font != None) {
+- 	    XUnloadFont (dpy, dpy->cursor_font);
+- 	}
+- 	XSync(dpy, 1);  /* throw away pending input events */
+- 	ext = dpy->ext_procs;
+- 	while (ext) {		/* call out to any extensions interested */
+- 		if (ext->close_display != NULL) 
+- 			(*ext->close_display)(dpy, &ext->codes);
+- 		ext = ext->next;
+- 	}    
+-         LockDisplay(dpy);
+  	_XDisconnectDisplay(dpy->fd);
+  	_XFreeQ ();
+  	return;
+  }
+--- 30,55 ----
+  	register int i;
+  	extern void _XFreeQ();
+  
+! 	if (!(dpy->flags & XlibDisplayClosing))
+! 	{
+! 	    dpy->flags |= XlibDisplayClosing;
+! 	    for (i = 0; i < dpy->nscreens; i++) {
+! 		    register Screen *sp = &dpy->screens[i];
+! 		    XFreeGC (dpy, sp->default_gc);
+! 	    }
+! 	    if (dpy->cursor_font != None) {
+! 		XUnloadFont (dpy, dpy->cursor_font);
+! 	    }
+! 	    ext = dpy->ext_procs;
+! 	    while (ext) {	/* call out to any extensions interested */
+! 		    if (ext->close_display != NULL) 
+! 			    (*ext->close_display)(dpy, &ext->codes);
+! 		    ext = ext->next;
+! 	    }    
+! 	    XSync(dpy, 1);  /* throw away pending input events */
+  	}
+  	_XDisconnectDisplay(dpy->fd);
++ 	_XFreeDisplayStructure (dpy);
+  	_XFreeQ ();
+  	return;
+  }
+*** /tmp/,RCSt1a12630	Wed Jul 22 16:13:34 1992
+--- mit/lib/X/XConnDis.c	Wed Jul 22 16:13:34 1992
+***************
+*** 1,5 ****
+  /*
+!  * $XConsortium: XConnDis.c,v 11.86 91/09/09 18:54:35 rws Exp $
+   *
+   * Copyright 1989 Massachusetts Institute of Technology
+   *
+--- 1,5 ----
+  /*
+!  * $XConsortium: XConnDis.c,v 11.88 91/12/17 17:55:57 rws Exp $
+   *
+   * Copyright 1989 Massachusetts Institute of Technology
+   *
+***************
+*** 58,63 ****
+--- 58,64 ----
+  extern int _XMakeStreamsConnection();
+  #endif
+  
++ static void GetAuthorization();
+  
+  static char *copystring (src, len)
+      char *src;
+***************
+*** 91,105 ****
+   *     o  TCP to local host
+   */
+  int _XConnectDisplay (display_name, fullnamep, dpynump, screenp,
+! 		      familyp, saddrlenp, saddrp)
+      char *display_name;
+      char **fullnamep;			/* RETURN */
+      int *dpynump;			/* RETURN */
+      int *screenp;			/* RETURN */
+!     int *familyp;			/* RETURN */
+!     int *saddrlenp;			/* RETURN */
+!     char **saddrp;			/* RETURN, freed by caller */
+  {
+      char *lastp, *p;			/* char pointers */
+      char *phostname = NULL;		/* start of host of display */
+      char *pdpynum = NULL;		/* start of dpynum of display */
+--- 92,110 ----
+   *     o  TCP to local host
+   */
+  int _XConnectDisplay (display_name, fullnamep, dpynump, screenp,
+! 		      auth_namep, auth_namelenp, auth_datap, auth_datalenp)
+      char *display_name;
+      char **fullnamep;			/* RETURN */
+      int *dpynump;			/* RETURN */
+      int *screenp;			/* RETURN */
+!     char **auth_namep;			/* RETURN */
+!     int *auth_namelenp;			/* RETURN */
+!     char **auth_datap;			/* RETURN */
+!     int *auth_datalenp;			/* RETURN */
+  {
++     int family;
++     int saddrlen;
++     char *saddr;
+      char *lastp, *p;			/* char pointers */
+      char *phostname = NULL;		/* start of host of display */
+      char *pdpynum = NULL;		/* start of dpynum of display */
+***************
+*** 113,120 ****
+  
+      p = display_name;
+  
+!     *saddrlenp = 0;			/* set so that we can clear later */
+!     *saddrp = NULL;
+  
+      /*
+       * Step 1, find the hostname.  This is delimited by the required 
+--- 118,125 ----
+  
+      p = display_name;
+  
+!     saddrlen = 0;			/* set so that we can clear later */
+!     saddr = NULL;
+  
+      /*
+       * Step 1, find the hostname.  This is delimited by the required 
+***************
+*** 250,263 ****
+  	char hostnamebuf[256];
+  	int len = _XGetHostname (hostnamebuf, sizeof hostnamebuf);
+  
+! 	*familyp = FamilyLocal;
+  	if (len > 0) {
+! 	    *saddrp = Xmalloc (len + 1);
+! 	    if (*saddrp) {
+! 		strcpy (*saddrp, hostnamebuf);
+! 		*saddrlenp = len;
+  	    } else {
+! 		*saddrlenp = 0;
+  	    }
+  	}
+      }
+--- 255,268 ----
+  	char hostnamebuf[256];
+  	int len = _XGetHostname (hostnamebuf, sizeof hostnamebuf);
+  
+! 	family = FamilyLocal;
+  	if (len > 0) {
+! 	    saddr = Xmalloc (len + 1);
+! 	    if (saddr) {
+! 		strcpy (saddr, hostnamebuf);
+! 		saddrlen = len;
+  	    } else {
+! 		saddrlen = 0;
+  	    }
+  	}
+      }
+***************
+*** 272,278 ****
+       * too many times).
+       */
+      if ((fd = (*connfunc) (phostname, idisplay, X_CONNECTION_RETRIES,
+! 			   familyp, saddrlenp, saddrp)) < 0)
+        goto bad;
+      if (fd >= OPEN_MAX)
+  	goto bad;
+--- 277,283 ----
+       * too many times).
+       */
+      if ((fd = (*connfunc) (phostname, idisplay, X_CONNECTION_RETRIES,
+! 			   &family, &saddrlen, &saddr)) < 0)
+        goto bad;
+      if (fd >= OPEN_MAX)
+  	goto bad;
+***************
+*** 306,311 ****
+--- 311,319 ----
+      if (phostname) Xfree (phostname);
+      if (pdpynum) Xfree (pdpynum);
+      if (pscrnum) Xfree (pscrnum);
++ 
++     GetAuthorization(fd, family, saddr, saddrlen, idisplay,
++ 		     auth_namep, auth_namelenp, auth_datap, auth_datalenp);
+      return fd;
+  
+  
+***************
+*** 314,324 ****
+       */
+    bad:
+      if (fd >= 0) (void) close (fd);
+!     if (*saddrp) {
+! 	Xfree (*saddrp);
+! 	*saddrp = NULL;
+!     }
+!     *saddrlenp = 0;
+      if (phostname) Xfree (phostname);
+      if (pdpynum) Xfree (pdpynum);
+      if (pscrnum) Xfree (pscrnum);
+--- 322,328 ----
+       */
+    bad:
+      if (fd >= 0) (void) close (fd);
+!     if (saddr) Xfree (saddr);
+      if (phostname) Xfree (phostname);
+      if (pdpynum) Xfree (pdpynum);
+      if (pscrnum) Xfree (pscrnum);
+***************
+*** 358,363 ****
+--- 362,370 ----
+  #endif
+  #endif
+  #ifndef NO_TCP_H
++ #ifdef __OSF1__
++ #include <sys/param.h>
++ #endif
+  #include <netinet/tcp.h>
+  #endif
+  #endif /* NEED_BSDISH */
+***************
+*** 421,426 ****
+--- 428,434 ----
+  #ifdef UNIXCONN
+  #include <sys/un.h>
+  
++ /*ARGSUSED*/
+  static int MakeUNIXSocketConnection (phostname, idisplay, retries,
+  				     familyp, saddrlenp, saddrp)
+      char *phostname;
+***************
+*** 670,677 ****
+  
+  
+  
+- #undef NULL
+- #define NULL ((char *) 0)
+  /*
+   * This is an OS dependent routine which:
+   * 1) returns as soon as the connection can be written on....
+--- 678,683 ----
+***************
+*** 693,699 ****
+          BITSET(w_mask, dpy->fd);
+  
+  	do {
+! 	    nfound = select (dpy->fd + 1, r_mask, w_mask, NULL, NULL);
+  	    if (nfound < 0 && errno != EINTR)
+  		_XIOError(dpy);
+  	} while (nfound <= 0);
+--- 699,706 ----
+          BITSET(w_mask, dpy->fd);
+  
+  	do {
+! 	    nfound = select (dpy->fd + 1, r_mask, w_mask,
+! 			     (char *)NULL, (char *)NULL);
+  	    if (nfound < 0 && errno != EINTR)
+  		_XIOError(dpy);
+  	} while (nfound <= 0);
+***************
+*** 746,752 ****
+      CLEARBITS(r_mask);
+      do {
+  	BITSET(r_mask, dpy->fd);
+! 	result = select(dpy->fd + 1, r_mask, NULL, NULL, NULL);
+  	if (result == -1 && errno != EINTR) _XIOError(dpy);
+      } while (result <= 0);
+  }
+--- 753,760 ----
+      CLEARBITS(r_mask);
+      do {
+  	BITSET(r_mask, dpy->fd);
+! 	result = select(dpy->fd + 1, r_mask,
+! 			(char *)NULL, (char *)NULL, (char *)NULL);
+  	if (result == -1 && errno != EINTR) _XIOError(dpy);
+      } while (result <= 0);
+  }
+***************
+*** 816,819 ****
+--- 824,1154 ----
+  #endif
+  #endif
+      return len == 0;
++ }
++ 
++ 
++ #ifdef STREAMSCONN
++ #ifdef SVR4
++ #include <tiuser.h>
++ #else
++ #undef HASXDMAUTH
++ #endif
++ #endif
++ 
++ #ifdef SECURE_RPC
++ #include <rpc/rpc.h>
++ #ifdef ultrix
++ #include <time.h>
++ #include <rpc/auth_des.h>
++ #endif
++ #endif
++ 
++ /*
++  * First, a routine for setting authorization data
++  */
++ static int xauth_namelen = 0;
++ static char *xauth_name = NULL;	 /* NULL means use default mechanism */
++ static int xauth_datalen = 0;
++ static char *xauth_data = NULL;	 /* NULL means get default data */
++ 
++ /*
++  * This is a list of the authorization names which Xlib currently supports.
++  * Xau will choose the file entry which matches the earliest entry in this
++  * array, allowing us to prioritize these in terms of the most secure first
++  */
++ 
++ static char *default_xauth_names[] = {
++ #ifdef SECURE_RPC
++     "SUN-DES-1",
++ #endif
++ #ifdef HASXDMAUTH
++     "XDM-AUTHORIZATION-1",
++ #endif
++     "MIT-MAGIC-COOKIE-1"
++ };
++ 
++ static int default_xauth_lengths[] = {
++ #ifdef SECURE_RPC
++     9,	    /* strlen ("SUN-DES-1") */
++ #endif
++ #ifdef HASXDMAUTH
++     19,	    /* strlen ("XDM-AUTHORIZATION-1") */
++ #endif
++     18	    /* strlen ("MIT-MAGIC-COOKIE-1") */
++ };
++ 
++ #define NUM_DEFAULT_AUTH    (sizeof (default_xauth_names) / sizeof (default_xauth_names[0]))
++     
++ static char **xauth_names = default_xauth_names;
++ static int  *xauth_lengths = default_xauth_lengths;
++ 
++ static int  xauth_names_length = NUM_DEFAULT_AUTH;
++ 
++ void XSetAuthorization (name, namelen, data, datalen)
++     int namelen, datalen;		/* lengths of name and data */
++     char *name, *data;			/* NULL or arbitrary array of bytes */
++ {
++     char *tmpname, *tmpdata;
++ 
++     if (xauth_name) Xfree (xauth_name);	 /* free any existing data */
++     if (xauth_data) Xfree (xauth_data);
++ 
++     xauth_name = xauth_data = NULL;	/* mark it no longer valid */
++     xauth_namelen = xauth_datalen = 0;
++ 
++     if (namelen < 0) namelen = 0;	/* check for bogus inputs */
++     if (datalen < 0) datalen = 0;	/* maybe should return? */
++ 
++     if (namelen > 0)  {			/* try to allocate space */
++ 	tmpname = Xmalloc ((unsigned) namelen);
++ 	if (!tmpname) return;
++ 	bcopy (name, tmpname, namelen);
++     } else {
++ 	tmpname = NULL;
++     }
++ 
++     if (datalen > 0)  {
++ 	tmpdata = Xmalloc ((unsigned) datalen);
++ 	if (!tmpdata) {
++ 	    if (tmpname) (void) Xfree (tmpname);
++ 	    return;
++ 	}
++ 	bcopy (data, tmpdata, datalen);
++     } else {
++ 	tmpdata = NULL;
++     }
++ 
++     xauth_name = tmpname;		/* and store the suckers */
++     xauth_namelen = namelen;
++     if (tmpname)
++     {
++ 	xauth_names = &xauth_name;
++ 	xauth_lengths = &xauth_namelen;
++ 	xauth_names_length = 1;
++     }
++     else
++     {
++ 	xauth_names = default_xauth_names;
++ 	xauth_lengths = default_xauth_lengths;
++ 	xauth_names_length = NUM_DEFAULT_AUTH;
++     }
++     xauth_data = tmpdata;
++     xauth_datalen = datalen;
++     return;
++ }
++ 
++ #ifdef SECURE_RPC
++ /*
++  * Create a credential that we can send to the X server.
++  */
++ static int
++ auth_ezencode(servername, window, cred_out, len)
++         char           *servername;
++         int             window;
++ 	char	       *cred_out;
++         int            *len;
++ {
++         AUTH           *a;
++         XDR             xdr;
++ 
++         a = authdes_create(servername, window, NULL, NULL);
++         if (a == (AUTH *)NULL) {
++                 perror("auth_create");
++                 return 0;
++         }
++         xdrmem_create(&xdr, cred_out, *len, XDR_ENCODE);
++         if (AUTH_MARSHALL(a, &xdr) == FALSE) {
++                 perror("auth_marshall");
++                 AUTH_DESTROY(a);
++                 return 0;
++         }
++         *len = xdr_getpos(&xdr);
++         AUTH_DESTROY(a);
++ 	return 1;
++ }
++ #endif
++ 
++ static void
++ GetAuthorization(fd, family, saddr, saddrlen, idisplay,
++ 		 auth_namep, auth_namelenp, auth_datap, auth_datalenp)
++     int fd;
++     int family;
++     int saddrlen;
++     int idisplay;
++     char *saddr;
++     char **auth_namep;			/* RETURN */
++     int *auth_namelenp;			/* RETURN */
++     char **auth_datap;			/* RETURN */
++     int *auth_datalenp;			/* RETURN */
++ {
++ #ifdef SECURE_RPC
++     char rpc_cred[MAX_AUTH_BYTES];
++ #endif
++ #ifdef HASXDMAUTH
++     char xdmcp_data[192/8];
++ #endif
++     char *auth_name;
++     int auth_namelen;
++     char *auth_data;
++     int auth_datalen;
++     Xauth *authptr = NULL;
++ 
++ /*
++  * Look up the authorization protocol name and data if necessary.
++  */
++     if (xauth_name && xauth_data) {
++ 	auth_namelen = xauth_namelen;
++ 	auth_name = xauth_name;
++ 	auth_datalen = xauth_datalen;
++ 	auth_data = xauth_data;
++     } else {
++ 	char dpynumbuf[40];		/* big enough to hold 2^64 and more */
++ 	(void) sprintf (dpynumbuf, "%d", idisplay);
++ 
++ 	authptr = XauGetBestAuthByAddr ((unsigned short) family,
++ 				    (unsigned short) saddrlen,
++ 				    saddr,
++ 				    (unsigned short) strlen (dpynumbuf),
++ 				    dpynumbuf,
++ 				    xauth_names_length,
++ 				    xauth_names,
++ 				    xauth_lengths);
++ 	if (authptr) {
++ 	    auth_namelen = authptr->name_length;
++ 	    auth_name = (char *)authptr->name;
++ 	    auth_datalen = authptr->data_length;
++ 	    auth_data = (char *)authptr->data;
++ 	} else {
++ 	    auth_namelen = 0;
++ 	    auth_name = NULL;
++ 	    auth_datalen = 0;
++ 	    auth_data = NULL;
++ 	}
++     }
++ #ifdef HASXDMAUTH
++     /*
++      * build XDM-AUTHORIZATION-1 data
++      */
++     if (auth_namelen == 19 && !strncmp (auth_name, "XDM-AUTHORIZATION-1", 19))
++     {
++ 	int     j;
++ 	long    now;
++ 	for (j = 0; j < 8; j++)
++ 	    xdmcp_data[j] = auth_data[j];
++ #ifdef STREAMSCONN /* && SVR4 */
++ 	{
++ 	    int			i;
++ 	    struct netbuf	netb;
++ 	    char		addrret[1024];
++ 
++ 	    netb.maxlen = sizeof addrret;
++ 	    netb.buf = addrret;
++ 	    if (t_getname (fd, &netb, LOCALNAME) == -1)
++ 		t_error ("t_getname");
++ 	    /*
++ 	     * XXX - assumes that the return data
++ 	     * are in a struct sockaddr_in, and that
++ 	     * the data structure is layed out in
++ 	     * the normal fashion.  This WILL NOT WORK
++ 	     * on a non 32-bit machine (same in Xstreams.c)
++ 	     */
++ 	    for (i = 4; i < 8; i++)
++ 		xdmcp_data[j++] = netb.buf[i];
++ 	    for (i = 2; i < 4; i++)
++ 		xdmcp_data[j++] = netb.buf[i];
++ 	}
++ #else
++ 	{
++ 	    unsigned long	addr;
++ 	    unsigned short	port;
++ #ifdef TCPCONN
++ 	    int	    addrlen;
++ 	    struct sockaddr_in	in_addr;
++ 
++ 	    addrlen = sizeof (in_addr);
++ 	    if (getsockname (fd,
++ 			     (struct sockaddr *) &in_addr,
++ 			     &addrlen) != -1 &&
++ 		addrlen >= sizeof in_addr &&
++ 		in_addr.sin_family == AF_INET)
++ 	    {
++ 		addr = ntohl (in_addr.sin_addr.s_addr);
++ 		port = ntohs (in_addr.sin_port);
++ 	    }
++ 	    else
++ #endif
++ 	    {
++ 		static unsigned long	unix_addr = 0xFFFFFFFF;
++ 		addr = unix_addr--;
++ 		port = getpid ();
++ 	    }
++ 	    xdmcp_data[j++] = (addr >> 24) & 0xFF;
++ 	    xdmcp_data[j++] = (addr >> 16) & 0xFF;
++ 	    xdmcp_data[j++] = (addr >>  8) & 0xFF;
++ 	    xdmcp_data[j++] = (addr >>  0) & 0xFF;
++ 	    xdmcp_data[j++] = (port >>  8) & 0xFF;
++ 	    xdmcp_data[j++] = (port >>  0) & 0xFF;
++ 	}
++ #endif
++ 	time (&now);
++ 	xdmcp_data[j++] = (now >> 24) & 0xFF;
++ 	xdmcp_data[j++] = (now >> 16) & 0xFF;
++ 	xdmcp_data[j++] = (now >>  8) & 0xFF;
++ 	xdmcp_data[j++] = (now >>  0) & 0xFF;
++ 	while (j < 192 / 8)
++ 	    xdmcp_data[j++] = 0;
++ 	XdmcpWrap (xdmcp_data, auth_data + 8,
++ 		      xdmcp_data, j);
++ 	auth_data = xdmcp_data;
++ 	auth_datalen = j;
++     }
++ #endif /* HASXDMAUTH */
++ #ifdef SECURE_RPC
++     /*
++      * The SUN-DES-1 authorization protocol uses the
++      * "secure RPC" mechanism in SunOS 4.0+.
++      */
++     if (auth_namelen == 9 && !strncmp(auth_name, "SUN-DES-1", 9)) {
++ 	char servernetname[MAXNETNAMELEN + 1];
++ 
++ 	/*
++ 	 * Copy over the server's netname from the authorization
++ 	 * data field filled in by XauGetAuthByAddr().
++ 	 */
++ 	if (auth_datalen > MAXNETNAMELEN) {
++ 	    auth_datalen = 0;
++ 	    auth_data = NULL;
++ 	} else {
++ 	    bcopy(auth_data, servernetname, auth_datalen);
++ 	    servernetname[auth_datalen] = '\0';
++ 
++ 	    auth_datalen = sizeof (rpc_cred);
++ 	    if (auth_ezencode(servernetname, 100, rpc_cred,
++ 			      &auth_datalen))
++ 		auth_data = rpc_cred;
++ 	    else
++ 		auth_data = NULL;
++ 	}
++     }
++ #endif
++     if (saddr) Xfree (saddr);
++     if (*auth_namelenp = auth_namelen)
++     {
++ 	if (*auth_namep = Xmalloc(auth_namelen))
++ 	    bcopy(auth_name, *auth_namep, auth_namelen);
++ 	else
++ 	    *auth_namelenp = 0;
++     }
++     else
++ 	*auth_namep = NULL;
++     if (*auth_datalenp = auth_datalen)
++     {
++ 	if (*auth_datap = Xmalloc(auth_datalen))
++ 	    bcopy(auth_data, *auth_datap, auth_datalen);
++ 	else
++ 	    *auth_datalenp = 0;
++     }
++     else
++ 	*auth_datap = NULL;
++     if (authptr) XauDisposeAuth (authptr);
+  }
+*** /tmp/,RCSt1a12637	Wed Jul 22 16:13:36 1992
+--- mit/lib/X/XFont.c	Wed Jul 22 16:13:36 1992
+***************
+*** 1,4 ****
+! /* $XConsortium: XFont.c,v 11.37 91/01/06 11:45:39 rws Exp $ */
+  /* Copyright    Massachusetts Institute of Technology    1986	*/
+  
+  /*
+--- 1,4 ----
+! /* $XConsortium: XFont.c,v 11.38 91/12/19 18:14:14 rws Exp $ */
+  /* Copyright    Massachusetts Institute of Technology    1986	*/
+  
+  /*
+***************
+*** 81,86 ****
+--- 81,88 ----
+  	ext = ext->next;
+  	}    
+      GetResReq (CloseFont, fs->fid, req);
++     UnlockDisplay(dpy);
++     SyncHandle();
+      _XFreeExtData(fs->ext_data);
+      if (fs->per_char)
+         Xfree ((char *) fs->per_char);
+***************
+*** 87,94 ****
+      if (fs->properties)
+         Xfree ((char *) fs->properties);
+      Xfree ((char *) fs);
+-     UnlockDisplay(dpy);
+-     SyncHandle();
+  }
+  
+  /*
+--- 89,94 ----
+*** /tmp/,RCSt1a12644	Wed Jul 22 16:13:37 1992
+--- mit/lib/X/XFreeGC.c	Wed Jul 22 16:13:38 1992
+***************
+*** 1,4 ****
+! /* $XConsortium: XFreeGC.c,v 11.11 91/05/02 18:16:02 rws Exp $ */
+  /* Copyright    Massachusetts Institute of Technology    1986	*/
+  
+  /*
+--- 1,4 ----
+! /* $XConsortium: XFreeGC.c,v 11.12 91/12/19 18:13:13 rws Exp $ */
+  /* Copyright    Massachusetts Institute of Technology    1986	*/
+  
+  /*
+***************
+*** 22,36 ****
+      register xResourceReq *req;
+      register _XExtension *ext;
+      LockDisplay(dpy);
+-     GetResReq (FreeGC, gc->gid, req);
+      ext = dpy->ext_procs;
+      while (ext) {		/* call out to any extensions interested */
+  	if (ext->free_GC != NULL) (*ext->free_GC)(dpy, gc, &ext->codes);
+  	ext = ext->next;
+  	}    
+!     _XFreeExtData(gc->ext_data);
+!     Xfree ((char *) gc);
+      UnlockDisplay(dpy);
+      SyncHandle();
+      }
+      
+--- 22,36 ----
+      register xResourceReq *req;
+      register _XExtension *ext;
+      LockDisplay(dpy);
+      ext = dpy->ext_procs;
+      while (ext) {		/* call out to any extensions interested */
+  	if (ext->free_GC != NULL) (*ext->free_GC)(dpy, gc, &ext->codes);
+  	ext = ext->next;
+  	}    
+!     GetResReq (FreeGC, gc->gid, req);
+      UnlockDisplay(dpy);
+      SyncHandle();
++     _XFreeExtData(gc->ext_data);
++     Xfree ((char *) gc);
+      }
+      
+*** /tmp/,RCSt1a12651	Wed Jul 22 16:13:39 1992
+--- mit/lib/X/XOpenDis.c	Wed Jul 22 16:13:40 1992
+***************
+*** 1,5 ****
+  /*
+!  * $XConsortium: XOpenDis.c,v 11.120 91/09/09 14:47:58 rws Exp $
+   */
+  
+  /* Copyright    Massachusetts Institute of Technology    1985, 1986	*/
+--- 1,5 ----
+  /*
+!  * $XConsortium: XOpenDis.c,v 11.123 91/12/20 16:04:29 rws Exp $
+   */
+  
+  /* Copyright    Massachusetts Institute of Technology    1985, 1986	*/
+***************
+*** 16,50 ****
+  without express or implied warranty.
+  */
+  
+- /* Converted to V11 by jg */
+- 
+  #include <X11/Xlibint.h>
+  #include <X11/Xos.h>
+- #ifdef HASXDMAUTH
+- #include "Xlibnet.h"
+- #if TCPCONN
+- #include <sys/socket.h>
+- #endif
+- #endif
+- #include <X11/Xauth.h>
+  #include <X11/Xatom.h>
+- 
+- #ifdef STREAMSCONN
+- #ifdef SVR4
+- #include <tiuser.h>
+- #else
+- #undef HASXDMAUTH
+- #endif
+- #endif
+- 
+- #ifdef SECURE_RPC
+- #include <rpc/rpc.h>
+- #ifdef ultrix
+- #include <time.h>
+- #include <rpc/auth_des.h>
+- #endif
+- #endif
+- 
+  #include <stdio.h>
+  
+  #ifdef X_NOT_STDC_ENV
+--- 16,24 ----
+***************
+*** 61,193 ****
+  	0, 0, 0
+  };
+  
+- /*
+-  * First, a routine for setting authorization data
+-  */
+- static int xauth_namelen = 0;
+- static char *xauth_name = NULL;	 /* NULL means use default mechanism */
+- static int xauth_datalen = 0;
+- static char *xauth_data = NULL;	 /* NULL means get default data */
+- 
+- /*
+-  * This is a list of the authorization names which Xlib currently supports.
+-  * Xau will choose the file entry which matches the earliest entry in this
+-  * array, allowing us to prioritize these in terms of the most secure first
+-  */
+- 
+- static char *default_xauth_names[] = {
+- #ifdef SECURE_RPC
+-     "SUN-DES-1",
+- #endif
+- #ifdef HASXDMAUTH
+-     "XDM-AUTHORIZATION-1",
+- #endif
+-     "MIT-MAGIC-COOKIE-1"
+- };
+- 
+- static int default_xauth_lengths[] = {
+- #ifdef SECURE_RPC
+-     9,	    /* strlen ("SUN-DES-1") */
+- #endif
+- #ifdef HASXDMAUTH
+-     19,	    /* strlen ("XDM-AUTHORIZATION-1") */
+- #endif
+-     18	    /* strlen ("MIT-MAGIC-COOKIE-1") */
+- };
+- 
+- #define NUM_DEFAULT_AUTH    (sizeof (default_xauth_names) / sizeof (default_xauth_names[0]))
+-     
+- static char **xauth_names = default_xauth_names;
+- static int  *xauth_lengths = default_xauth_lengths;
+- 
+- static int  xauth_names_length = NUM_DEFAULT_AUTH;
+- 
+  static OutOfMemory();
+  
+- void XSetAuthorization (name, namelen, data, datalen)
+-     int namelen, datalen;		/* lengths of name and data */
+-     char *name, *data;			/* NULL or arbitrary array of bytes */
+- {
+-     char *tmpname, *tmpdata;
+- 
+-     if (xauth_name) Xfree (xauth_name);	 /* free any existing data */
+-     if (xauth_data) Xfree (xauth_data);
+- 
+-     xauth_name = xauth_data = NULL;	/* mark it no longer valid */
+-     xauth_namelen = xauth_datalen = 0;
+- 
+-     if (namelen < 0) namelen = 0;	/* check for bogus inputs */
+-     if (datalen < 0) datalen = 0;	/* maybe should return? */
+- 
+-     if (namelen > 0)  {			/* try to allocate space */
+- 	tmpname = Xmalloc ((unsigned) namelen);
+- 	if (!tmpname) return;
+- 	bcopy (name, tmpname, namelen);
+-     } else {
+- 	tmpname = NULL;
+-     }
+- 
+-     if (datalen > 0)  {
+- 	tmpdata = Xmalloc ((unsigned) datalen);
+- 	if (!tmpdata) {
+- 	    if (tmpname) (void) Xfree (tmpname);
+- 	    return;
+- 	}
+- 	bcopy (data, tmpdata, datalen);
+-     } else {
+- 	tmpdata = NULL;
+-     }
+- 
+-     xauth_name = tmpname;		/* and store the suckers */
+-     xauth_namelen = namelen;
+-     if (tmpname)
+-     {
+- 	xauth_names = &xauth_name;
+- 	xauth_lengths = &xauth_namelen;
+- 	xauth_names_length = 1;
+-     }
+-     else
+-     {
+- 	xauth_names = default_xauth_names;
+- 	xauth_lengths = default_xauth_lengths;
+- 	xauth_names_length = NUM_DEFAULT_AUTH;
+-     }
+-     xauth_data = tmpdata;
+-     xauth_datalen = datalen;
+-     return;
+- }
+- 
+- #ifdef SECURE_RPC
+- /*
+-  * Create a credential that we can send to the X server.
+-  */
+- static int
+- auth_ezencode(servername, window, cred_out, len)
+-         char           *servername;
+-         int             window;
+- 	char	       *cred_out;
+-         int            *len;
+- {
+-         AUTH           *a;
+-         XDR             xdr;
+- 
+-         a = authdes_create(servername, window, NULL, NULL);
+-         if (a == (AUTH *)NULL) {
+-                 perror("auth_create");
+-                 return 0;
+-         }
+-         xdrmem_create(&xdr, cred_out, *len, XDR_ENCODE);
+-         if (AUTH_MARSHALL(a, &xdr) == FALSE) {
+-                 perror("auth_marshall");
+-                 AUTH_DESTROY(a);
+-                 return 0;
+-         }
+-         *len = xdr_getpos(&xdr);
+-         AUTH_DESTROY(a);
+- 	return 1;
+- }
+- #endif
+- 
+  extern Bool _XWireToEvent();
+  extern Status _XUnknownNativeEvent();
+  extern Bool _XUnknownWireEvent();
+--- 35,42 ----
+***************
+*** 211,217 ****
+  	xConnClientPrefix client;	/* client information */
+  	xConnSetupPrefix prefix;	/* prefix information */
+  	int vendorlen;			/* length of vendor string */
+! 	char *setup;			/* memory allocated at startup */
+  	char *fullname = NULL;		/* expanded name of display */
+  	int idisplay;			/* display number */
+  	int iscreen;			/* screen number */
+--- 60,66 ----
+  	xConnClientPrefix client;	/* client information */
+  	xConnSetupPrefix prefix;	/* prefix information */
+  	int vendorlen;			/* length of vendor string */
+! 	char *setup = NULL;		/* memory allocated at startup */
+  	char *fullname = NULL;		/* expanded name of display */
+  	int idisplay;			/* display number */
+  	int iscreen;			/* screen number */
+***************
+*** 225,247 ****
+  		xVisualType *vp;
+  	} u;				/* proto data returned from server */
+  	long setuplength;	/* number of bytes in setup message */
+- 	Xauth *authptr = NULL;
+- 	char *server_addr = NULL;
+- 	int server_addrlen = 0;
+  	char *conn_auth_name, *conn_auth_data;
+  	int conn_auth_namelen, conn_auth_datalen;
+- 	int conn_family;
+  	unsigned long mask;
+  	extern Bool _XSendClientPrefix();
+  	extern int _XConnectDisplay();
+  	extern XID _XAllocID();
+- #ifdef SECURE_RPC
+- 	char	rpc_cred[MAX_AUTH_BYTES];
+- #endif
+-  
+- #ifdef HASXDMAUTH
+- 	char    xdmcp_data[192/8];
+- #endif
+  
+  	/*
+  	 * If the display specifier string supplied as an argument to this 
+--- 74,85 ----
+***************
+*** 286,435 ****
+   */
+  
+  	if ((dpy->fd = _XConnectDisplay (display_name, &fullname, &idisplay,
+! 					 &iscreen, &conn_family,
+! 					 &server_addrlen, &server_addr)) < 0) {
+  		Xfree ((char *) dpy);
+  		UnlockMutex(&lock);
+  		return(NULL);
+  	}
+  
+  /*
+!  * Look up the authorization protocol name and data if necessary.
+   */
+! 	if (xauth_name && xauth_data) {
+! 	    conn_auth_namelen = xauth_namelen;
+! 	    conn_auth_name = xauth_name;
+! 	    conn_auth_datalen = xauth_datalen;
+! 	    conn_auth_data = xauth_data;
+! 	} else {
+! 	    char dpynumbuf[40];		/* big enough to hold 2^64 and more */
+! 	    (void) sprintf (dpynumbuf, "%d", idisplay);
+  
+! 	    authptr = XauGetBestAuthByAddr ((unsigned short) conn_family,
+! 					(unsigned short) server_addrlen,
+! 					server_addr,
+! 					(unsigned short) strlen (dpynumbuf),
+! 					dpynumbuf,
+! 					xauth_names_length,
+! 					xauth_names,
+! 					xauth_lengths);
+! 	    if (authptr) {
+! 		conn_auth_namelen = authptr->name_length;
+! 		conn_auth_name = (char *)authptr->name;
+! 		conn_auth_datalen = authptr->data_length;
+! 		conn_auth_data = (char *)authptr->data;
+! 	    } else {
+! 		conn_auth_namelen = 0;
+! 		conn_auth_name = NULL;
+! 		conn_auth_datalen = 0;
+! 		conn_auth_data = NULL;
+! 	    }
+  	}
+! #ifdef HASXDMAUTH
+! 	/*
+! 	 * build XDM-AUTHORIZATION-1 data
+! 	 */
+! 	if (conn_auth_namelen == 19 &&
+! 	    !strncmp (conn_auth_name, "XDM-AUTHORIZATION-1", 19))
+! 	{
+! 	    int	    i, j;
+! 	    long    now;
+! 	    for (j = 0; j < 8; j++)
+! 		xdmcp_data[j] = conn_auth_data[j];
+! #ifdef STREAMSCONN /* && SVR4 */
+! 	    {
+! 	    	struct netbuf	netb;
+! 	    	char		addrret[1024];
+!     
+! 	    	netb.maxlen = sizeof addrret;
+! 	    	netb.buf = addrret;
+! 	    	if (t_getname (dpy->fd, &netb, LOCALNAME) == -1)
+! 		    t_error ("t_getname");
+! 		/*
+! 		 * XXX - assumes that the return data
+! 		 * are in a struct sockaddr_in, and that
+! 		 * the data structure is layed out in
+! 		 * the normal fashion.  This WILL NOT WORK
+! 		 * on a non 32-bit machine (same in Xstreams.c)
+! 		 */
+! 		for (i = 4; i < 8; i++)
+! 		    xdmcp_data[j++] = netb.buf[i];
+! 		for (i = 2; i < 4; i++)
+! 		    xdmcp_data[j++] = netb.buf[i];
+! 	    }
+! #else
+! 	    {
+! 	    	unsigned long	addr;
+! 	    	unsigned short	port;
+! #ifdef TCPCONN
+! 	    	int	    addrlen;
+! 	    	struct sockaddr_in	in_addr;
+!     
+! 	    	addrlen = sizeof (in_addr);
+! 	    	if (getsockname (dpy->fd,
+! 				 (struct sockaddr *) &in_addr,
+!  				 &addrlen) != -1 &&
+! 		    addrlen >= sizeof in_addr &&
+! 		    in_addr.sin_family == AF_INET)
+! 	    	{
+! 		    addr = ntohl (in_addr.sin_addr.s_addr);
+! 		    port = ntohs (in_addr.sin_port);
+! 	    	}
+! 	    	else
+! #endif
+! 	    	{
+! 		    static unsigned long	unix_addr = 0xFFFFFFFF;
+! 		    addr = unix_addr--;
+! 		    port = getpid ();
+! 	    	}
+! 	    	xdmcp_data[j++] = (addr >> 24) & 0xFF;
+! 	    	xdmcp_data[j++] = (addr >> 16) & 0xFF;
+! 	    	xdmcp_data[j++] = (addr >>  8) & 0xFF;
+! 	    	xdmcp_data[j++] = (addr >>  0) & 0xFF;
+! 	    	xdmcp_data[j++] = (port >>  8) & 0xFF;
+! 	    	xdmcp_data[j++] = (port >>  0) & 0xFF;
+! 	    }
+! #endif
+! 	    time (&now);
+! 	    xdmcp_data[j++] = (now >> 24) & 0xFF;
+! 	    xdmcp_data[j++] = (now >> 16) & 0xFF;
+! 	    xdmcp_data[j++] = (now >>  8) & 0xFF;
+! 	    xdmcp_data[j++] = (now >>  0) & 0xFF;
+! 	    while (j < 192 / 8)
+! 		xdmcp_data[j++] = 0;
+! 	    XdmcpWrap (xdmcp_data, conn_auth_data + 8,
+! 			  xdmcp_data, j);
+! 	    conn_auth_data = xdmcp_data;
+! 	    conn_auth_datalen = j;
+  	}
+- #endif /* HASXDMAUTH */
+- #ifdef SECURE_RPC
+-         /*
+-          * The SUN-DES-1 authorization protocol uses the
+-          * "secure RPC" mechanism in SunOS 4.0+.
+-          */
+-         if (conn_auth_namelen == 9 && !strncmp(conn_auth_name,
+-             "SUN-DES-1", 9)) {
+-             static char servernetname[MAXNETNAMELEN + 1];
+  
+-             /*
+-              * Copy over the server's netname from the authorization
+-              * data field filled in by XauGetAuthByAddr().
+-              */
+-             if (conn_auth_datalen > MAXNETNAMELEN) {
+-                 return 0;
+-             }
+-             bcopy(conn_auth_data, servernetname, conn_auth_datalen);
+-             servernetname[conn_auth_datalen] = '\0';
+- 
+- 	    conn_auth_datalen = sizeof (rpc_cred);
+-             if (auth_ezencode(servernetname, 100, rpc_cred, &conn_auth_datalen))
+- 		conn_auth_data = rpc_cred;
+- 	    else
+- 		conn_auth_data = NULL;
+-         }
+- #endif
+- 	if (server_addr) (void) Xfree (server_addr);
+  /*
+   * The xConnClientPrefix describes the initial connection setup information
+   * and is followed by the authorization information.  Sites that are interested
+--- 124,211 ----
+   */
+  
+  	if ((dpy->fd = _XConnectDisplay (display_name, &fullname, &idisplay,
+! 					 &iscreen, &conn_auth_name,
+! 					 &conn_auth_namelen, &conn_auth_data,
+! 					 &conn_auth_datalen)) < 0) {
+  		Xfree ((char *) dpy);
+  		UnlockMutex(&lock);
+  		return(NULL);
+  	}
+  
++ 	/* Initialize as much of the display structure as we can */
++ 	dpy->display_name	= fullname;
++ 	dpy->keysyms		= (KeySym *) NULL;
++ 	dpy->modifiermap	= NULL;
++ 	dpy->lock_meaning	= NoSymbol;
++ 	dpy->keysyms_per_keycode = 0;
++ 	dpy->current		= None;
++ 	dpy->xdefaults		= (char *)NULL;
++ 	dpy->scratch_length	= 0L;
++ 	dpy->scratch_buffer	= NULL;
++ 	dpy->key_bindings	= NULL;
++ 	dpy->ext_procs		= (_XExtension *)NULL;
++ 	dpy->ext_data		= (XExtData *)NULL;
++ 	dpy->ext_number 	= 0;
++ 	dpy->event_vec[X_Error] = _XUnknownWireEvent;
++ 	dpy->event_vec[X_Reply] = _XUnknownWireEvent;
++ 	dpy->wire_vec[X_Error]  = _XUnknownNativeEvent;
++ 	dpy->wire_vec[X_Reply]  = _XUnknownNativeEvent;
++ 	for (i = KeyPress; i < LASTEvent; i++) {
++ 	    dpy->event_vec[i] 	= _XWireToEvent;
++ 	    dpy->wire_vec[i] 	= NULL;
++ 	}
++ 	for (i = LASTEvent; i < 128; i++) {
++ 	    dpy->event_vec[i] 	= _XUnknownWireEvent;
++ 	    dpy->wire_vec[i] 	= _XUnknownNativeEvent;
++ 	}
++ 	dpy->resource_id	= 0;
++ 	dpy->db 		= (struct _XrmHashBucketRec *)NULL;
++ 	dpy->cursor_font	= None;
++ 	dpy->flags		= 0;
++ /* 
++  * Initialize pointers to NULL so that XFreeDisplayStructure will
++  * work if we run out of memory
++  */
++ 
++ 	dpy->screens = NULL;
++ 	dpy->vendor = NULL;
++ 	dpy->buffer = NULL;
++ 	dpy->atoms = NULL;
++ 	dpy->error_vec = NULL;
++ 	dpy->context_db = NULL;
++ 
+  /*
+!  * Setup other information in this display structure.
+   */
+! 	dpy->vnumber = X_PROTOCOL;
+! 	dpy->resource_alloc = _XAllocID;
+! 	dpy->synchandler = NULL;
+! 	dpy->request = 0;
+! 	dpy->last_request_read = 0;
+! 	dpy->default_screen = iscreen;  /* Value returned by ConnectDisplay */
+! 	dpy->last_req = (char *)&_dummy_request;
+  
+! 	/* Set up the output buffers. */
+! 	if ((dpy->bufptr = dpy->buffer = Xmalloc(BUFSIZE)) == NULL) {
+! 	        OutOfMemory (dpy, setup);
+! 		UnlockMutex(&lock);
+! 		return(NULL);
+  	}
+! 	dpy->bufmax = dpy->buffer + BUFSIZE;
+!  
+! 	/* Set up the input event queue and input event queue parameters. */
+! 	dpy->head = dpy->tail = NULL;
+! 	dpy->qlen = 0;
+! 
+! 	/* Set up free-function record */
+! 	if ((dpy->free_funcs = (_XFreeFuncRec *)Xcalloc(1,
+! 							sizeof(_XFreeFuncRec)))
+! 	    == NULL) {
+! 	    OutOfMemory (dpy, setup);
+! 	    UnlockMutex(&lock);
+! 	    return(NULL);
+  	}
+  
+  /*
+   * The xConnClientPrefix describes the initial connection setup information
+   * and is followed by the authorization information.  Sites that are interested
+***************
+*** 452,458 ****
+  	    UnlockMutex(&lock);
+  	    return(NULL);
+  	}	    
+! 	if (authptr) XauDisposeAuth (authptr);
+  /*
+   * Now see if connection was accepted...
+   */
+--- 228,235 ----
+  	    UnlockMutex(&lock);
+  	    return(NULL);
+  	}	    
+! 	if (conn_auth_name) Xfree(conn_auth_name);
+! 	if (conn_auth_data) Xfree(conn_auth_data);
+  /*
+   * Now see if connection was accepted...
+   */
+***************
+*** 490,498 ****
+  		(void) fwrite (u.failure, sizeof(char),
+  			(int)prefix.lengthReason, stderr);
+  		(void) fwrite ("\r\n", sizeof(char), 2, stderr);
+! 		_XDisconnectDisplay (dpy->fd);
+! 		Xfree ((char *)dpy);
+! 		Xfree (setup);
+  		UnlockMutex(&lock);
+  		return (NULL);
+  	}
+--- 267,273 ----
+  		(void) fwrite (u.failure, sizeof(char),
+  			(int)prefix.lengthReason, stderr);
+  		(void) fwrite ("\r\n", sizeof(char), 2, stderr);
+! 		OutOfMemory(dpy, setup);
+  		UnlockMutex(&lock);
+  		return (NULL);
+  	}
+***************
+*** 508,522 ****
+  	dpy->resource_mask	= u.setup->ridMask;
+  	dpy->min_keycode	= u.setup->minKeyCode;
+  	dpy->max_keycode	= u.setup->maxKeyCode;
+- 	dpy->keysyms		= (KeySym *) NULL;
+- 	dpy->modifiermap	= NULL;
+- 	dpy->lock_meaning	= NoSymbol;
+- 	dpy->keysyms_per_keycode = 0;
+- 	dpy->current		= None;
+- 	dpy->xdefaults		= (char *)NULL;
+- 	dpy->scratch_length	= 0L;
+- 	dpy->scratch_buffer	= NULL;
+- 	dpy->key_bindings	= NULL;
+  	dpy->motion_buffer	= u.setup->motionBufferSize;
+  	dpy->nformats		= u.setup->numFormats;
+  	dpy->nscreens		= u.setup->numRoots;
+--- 283,288 ----
+***************
+*** 525,546 ****
+  	dpy->bitmap_pad		= u.setup->bitmapScanlinePad;
+  	dpy->bitmap_bit_order   = u.setup->bitmapBitOrder;
+  	dpy->max_request_size	= u.setup->maxRequestSize;
+- 	dpy->ext_procs		= (_XExtension *)NULL;
+- 	dpy->ext_data		= (XExtData *)NULL;
+- 	dpy->ext_number 	= 0;
+- 	dpy->event_vec[X_Error] = _XUnknownWireEvent;
+- 	dpy->event_vec[X_Reply] = _XUnknownWireEvent;
+- 	dpy->wire_vec[X_Error]  = _XUnknownNativeEvent;
+- 	dpy->wire_vec[X_Reply]  = _XUnknownNativeEvent;
+- 	for (i = KeyPress; i < LASTEvent; i++) {
+- 	    dpy->event_vec[i] 	= _XWireToEvent;
+- 	    dpy->wire_vec[i] 	= NULL;
+- 	}
+- 	for (i = LASTEvent; i < 128; i++) {
+- 	    dpy->event_vec[i] 	= _XUnknownWireEvent;
+- 	    dpy->wire_vec[i] 	= _XUnknownNativeEvent;
+- 	}
+- 	dpy->resource_id	= 0;
+  	mask = dpy->resource_mask;
+  	dpy->resource_shift	= 0;
+  	while (!(mask & 1)) {
+--- 291,296 ----
+***************
+*** 547,568 ****
+  	    dpy->resource_shift++;
+  	    mask = mask >> 1;
+  	}
+- 	dpy->db 		= (struct _XrmHashBucketRec *)NULL;
+- 	dpy->cursor_font	= None;
+- 	dpy->flags		= 0;
+- /* 
+-  * Initialize pointers to NULL so that XFreeDisplayStructure will
+-  * work if we run out of memory
+-  */
+- 
+- 	dpy->screens = NULL;
+- 	dpy->display_name = NULL;
+- 	dpy->vendor = NULL;
+- 	dpy->buffer = NULL;
+- 	dpy->atoms = NULL;
+- 	dpy->error_vec = NULL;
+- 	dpy->context_db = NULL;
+- 
+  /*
+   * now extract the vendor string...  String must be null terminated,
+   * padded to multiple of 4 bytes.
+--- 297,302 ----
+***************
+*** 687,727 ****
+  		
+  
+  /*
+-  * Setup other information in this display structure.
+-  */
+- 	dpy->vnumber = X_PROTOCOL;
+- 	dpy->resource_alloc = _XAllocID;
+- 	dpy->synchandler = NULL;
+- 	dpy->request = 0;
+- 	dpy->last_request_read = 0;
+- 	dpy->default_screen = iscreen;  /* Value returned by ConnectDisplay */
+- 	dpy->last_req = (char *)&_dummy_request;
+- 
+- 	/* Salt away the host:display string for later use */
+- 	dpy->display_name = fullname;
+-  
+- 	/* Set up the output buffers. */
+- 	if ((dpy->bufptr = dpy->buffer = Xmalloc(BUFSIZE)) == NULL) {
+- 	        OutOfMemory (dpy, setup);
+- 		UnlockMutex(&lock);
+- 		return(NULL);
+- 	}
+- 	dpy->bufmax = dpy->buffer + BUFSIZE;
+-  
+- 	/* Set up the input event queue and input event queue parameters. */
+- 	dpy->head = dpy->tail = NULL;
+- 	dpy->qlen = 0;
+- 
+- 	/* Set up free-function record */
+- 	if ((dpy->free_funcs = (_XFreeFuncRec *)Xcalloc(1,
+- 							sizeof(_XFreeFuncRec)))
+- 	    == NULL) {
+- 	    OutOfMemory (dpy, setup);
+- 	    UnlockMutex(&lock);
+- 	    return(NULL);
+- 	}
+- 
+- /*
+   * Now start talking to the server to setup all other information...
+   */
+  
+--- 421,426 ----
+***************
+*** 827,832 ****
+--- 526,555 ----
+  _XFreeDisplayStructure(dpy)
+  	register Display *dpy;
+  {
++ 	while (dpy->ext_procs) {
++ 	    _XExtension *ext = dpy->ext_procs;
++ 	    dpy->ext_procs = ext->next;
++ 	    if (ext->name)
++ 		Xfree (ext->name);
++ 	    Xfree ((char *)ext);
++ 	}
++ 	if (dpy->im_filters)
++ 	   (*dpy->free_funcs->im_filters)(dpy);
++ 	if (dpy->cms.clientCmaps)
++ 	   (*dpy->free_funcs->clientCmaps)(dpy);
++ 	if (dpy->cms.defaultCCCs)
++ 	   (*dpy->free_funcs->defaultCCCs)(dpy);
++ 	if (dpy->cms.perVisualIntensityMaps)
++ 	   (*dpy->free_funcs->intensityMaps)(dpy);
++ 	if (dpy->atoms)
++ 	    (*dpy->free_funcs->atoms)(dpy);
++ 	if (dpy->modifiermap)
++ 	   (*dpy->free_funcs->modifiermap)(dpy->modifiermap);
++ 	if (dpy->key_bindings)
++ 	   (*dpy->free_funcs->key_bindings)(dpy);
++ 	if (dpy->context_db)
++ 	   (*dpy->free_funcs->context_db)(dpy);
++ 
+  	if (dpy->screens) {
+  	    register int i;
+  
+***************
+*** 872,907 ****
+  
+          if (dpy->buffer)
+  	   Xfree (dpy->buffer);
+- 	if (dpy->atoms)
+- 	    (*dpy->free_funcs->atoms)(dpy);
+  	if (dpy->keysyms)
+  	   Xfree ((char *) dpy->keysyms);
+- 	if (dpy->modifiermap)
+- 	   (*dpy->free_funcs->modifiermap)(dpy->modifiermap);
+  	if (dpy->xdefaults)
+  	   Xfree (dpy->xdefaults);
+- 	if (dpy->key_bindings)
+- 	   (*dpy->free_funcs->key_bindings)(dpy);
+  	if (dpy->error_vec)
+  	    Xfree ((char *)dpy->error_vec);
+- 	if (dpy->context_db)
+- 	   (*dpy->free_funcs->context_db)(dpy);
+- 	if (dpy->cms.defaultCCCs)
+- 	   (*dpy->free_funcs->defaultCCCs)(dpy);
+- 	if (dpy->cms.clientCmaps)
+- 	   (*dpy->free_funcs->clientCmaps)(dpy);
+- 	if (dpy->cms.perVisualIntensityMaps)
+- 	   (*dpy->free_funcs->intensityMaps)(dpy);
+- 	if (dpy->im_filters)
+- 	   (*dpy->free_funcs->im_filters)(dpy);
+- 
+- 	while (dpy->ext_procs) {
+- 	    _XExtension *ext = dpy->ext_procs;
+- 	    dpy->ext_procs = ext->next;
+- 	    if (ext->name)
+- 		Xfree (ext->name);
+- 	    Xfree ((char *)ext);
+- 	}
+  
+  	_XFreeExtData (dpy->ext_data);
+  	Xfree ((char *)dpy->free_funcs);
+--- 595,606 ----
+*** /tmp/,RCSt1a12658	Wed Jul 22 16:13:41 1992
+--- mit/lib/X/XcmsCCC.c	Wed Jul 22 16:13:41 1992
+***************
+*** 1,4 ****
+! /* $XConsortium: XcmsCCC.c,v 1.10 91/07/25 01:08:25 rws Exp $" */
+  
+  /*
+   * Code and supporting documentation (c) Copyright 1990 1991 Tektronix, Inc.
+--- 1,4 ----
+! /* $XConsortium: XcmsCCC.c,v 1.11 91/12/20 15:58:21 rws Exp $" */
+  
+  /*
+   * Code and supporting documentation (c) Copyright 1990 1991 Tektronix, Inc.
+***************
+*** 237,243 ****
+   *
+   */
+  {
+!     if (ccc == XcmsDefaultCCC(ccc->dpy, ccc->screenNumber)) {
+  	/* do not allow clients to free DefaultCCC's */
+  	return;
+      }
+--- 237,244 ----
+   *
+   */
+  {
+!     if (ccc->dpy->cms.defaultCCCs &&
+! 	ccc == ((XcmsCCC)ccc->dpy->cms.defaultCCCs) + ccc->screenNumber) {
+  	/* do not allow clients to free DefaultCCC's */
+  	return;
+      }
+*** /tmp/da3910	Thu Jul 23 16:56:56 1992
+--- mit/lib/X/XKeyBind.c	Thu Jul 23 16:56:54 1992
+***************
+*** 1,4 ****
+! /* $XConsortium: XKeyBind.c,v 11.66 91/05/04 13:51:17 rws Exp $ */
+  /* Copyright 1985, 1987, Massachusetts Institute of Technology */
+  
+  /*
+--- 1,4 ----
+! /* $XConsortium: XKeyBind.c,v 11.67 92/05/19 11:23:14 converse Exp $ */
+  /* Copyright 1985, 1987, Massachusetts Institute of Technology */
+  
+  /*
+***************
+*** 275,283 ****
+  	    *upper -= (XK_scaron - XK_Scaron);
+  	else if (sym >= XK_zcaron && sym <= XK_zabovedot)
+  	    *upper -= (XK_zcaron - XK_Zcaron);
+! 	else if (sym <= XK_Racute && sym <= XK_Tcedilla)
+  	    *lower += (XK_racute - XK_Racute);
+! 	else if (sym <= XK_racute && sym <= XK_tcedilla)
+  	    *upper -= (XK_racute - XK_Racute);
+  	break;
+  #endif
+--- 275,283 ----
+  	    *upper -= (XK_scaron - XK_Scaron);
+  	else if (sym >= XK_zcaron && sym <= XK_zabovedot)
+  	    *upper -= (XK_zcaron - XK_Zcaron);
+! 	else if (sym >= XK_Racute && sym <= XK_Tcedilla)
+  	    *lower += (XK_racute - XK_Racute);
+! 	else if (sym >= XK_racute && sym <= XK_tcedilla)
+  	    *upper -= (XK_racute - XK_Racute);
+  	break;
+  #endif
+***************
+*** 295,301 ****
+  	else if (sym >= XK_Cabovedot && sym <= XK_Scircumflex)
+  	    *lower += (XK_cabovedot - XK_Cabovedot);
+  	else if (sym >= XK_cabovedot && sym <= XK_scircumflex)
+! 	    *lower += (XK_cabovedot - XK_Cabovedot);
+  	break;
+  #endif
+  #ifdef XK_LATIN4
+--- 295,301 ----
+  	else if (sym >= XK_Cabovedot && sym <= XK_Scircumflex)
+  	    *lower += (XK_cabovedot - XK_Cabovedot);
+  	else if (sym >= XK_cabovedot && sym <= XK_scircumflex)
+! 	    *upper -= (XK_cabovedot - XK_Cabovedot);
+  	break;
+  #endif
+  #ifdef XK_LATIN4
+*** /tmp/da3946	Thu Jul 23 16:57:02 1992
+--- mit/lib/Xt/Create.c	Thu Jul 23 16:57:01 1992
+***************
+*** 1,4 ****
+! /* $XConsortium: Create.c,v 1.87 91/05/09 18:09:13 swick Exp $ */
+  
+  /***********************************************************
+  Copyright 1987, 1988 by Digital Equipment Corporation, Maynard, Massachusetts,
+--- 1,4 ----
+! /* $XConsortium: Create.c,v 1.88 92/05/11 16:38:19 converse Exp $ */
+  
+  /***********************************************************
+  Copyright 1987, 1988 by Digital Equipment Corporation, Maynard, Massachusetts,
+***************
+*** 167,173 ****
+      char        *name, *class;
+      WidgetClass widget_class;
+      Widget      parent;
+!     Screen*     default_screen;
+      ArgList     args;		/* must be NULL if typed_args is non-NULL */
+      Cardinal    num_args;
+      XtTypedArgList typed_args;	/* must be NULL if args is non-NULL */
+--- 167,173 ----
+      char        *name, *class;
+      WidgetClass widget_class;
+      Widget      parent;
+!     Screen*     default_screen; /* undefined when creating a nonwidget */
+      ArgList     args;		/* must be NULL if typed_args is non-NULL */
+      Cardinal    num_args;
+      XtTypedArgList typed_args;	/* must be NULL if args is non-NULL */
+***************
+*** 355,360 ****
+--- 355,362 ----
+  			      params, &num_params);
+  	    }
+  	}
++     } else {
++ 	default_screen = parent->core.screen;
+      }
+  
+      if (XtIsConstraint(parent)) {
+***************
+*** 362,368 ****
+      } else {
+  	cwc = NULL;
+      }
+-     default_screen = parent->core.screen;
+      widget = _XtCreate(name, (char *)NULL, widget_class, parent,
+  		       default_screen, args, num_args,
+  		       typed_args, num_typed_args, cwc);
+--- 364,369 ----
+*** /tmp/da3982	Thu Jul 23 16:57:09 1992
+--- mit/lib/Xt/Display.c	Thu Jul 23 16:57:08 1992
+***************
+*** 1,4 ****
+! /* $XConsortium: Display.c,v 1.81 91/07/12 13:45:00 rws Exp $ */
+  
+  /***********************************************************
+  Copyright 1987, 1988 by Digital Equipment Corporation, Maynard, Massachusetts,
+--- 1,4 ----
+! /* $XConsortium: Display.c,v 1.85 92/06/08 11:24:21 converse Exp $ */
+  
+  /***********************************************************
+  Copyright 1987, 1988 by Digital Equipment Corporation, Maynard, Massachusetts,
+***************
+*** 176,188 ****
+  	String language = NULL;
+  
+  	/* parse the command line for name, display, and/or language */
+! 	if (!applName || !displayName || app->process->globalLangProcRec.proc)
+! 	    db = _XtPreparseCommandLine(urlist, num_urs, *argc, argv,
+! 					&applName, &displayName, &language);
+  	d = XOpenDisplay(displayName);
+  
+  	if (! applName && !(applName = getenv("RESOURCE_NAME"))) {
+! 	    if (*argc > 0 && argv[0]) {
+  		char *ptr = rindex(argv[0], '/');
+  		if (ptr) applName = ++ptr;
+  		else applName = argv[0];
+--- 176,189 ----
+  	String language = NULL;
+  
+  	/* parse the command line for name, display, and/or language */
+! 	db = _XtPreparseCommandLine(urlist, num_urs, *argc, argv, &applName,
+! 				    (displayName ? NULL : &displayName),
+! 				    (app->process->globalLangProcRec.proc ?
+! 				     &language : NULL));
+  	d = XOpenDisplay(displayName);
+  
+  	if (! applName && !(applName = getenv("RESOURCE_NAME"))) {
+! 	    if (*argc > 0 && argv[0] && *argv[0]) {
+  		char *ptr = rindex(argv[0], '/');
+  		if (ptr) applName = ++ptr;
+  		else applName = argv[0];
+***************
+*** 486,492 ****
+  	    if (xtpd->mapping_callbacks != NULL)
+  		_XtRemoveAllCallbacks(&xtpd->mapping_callbacks);
+  	    XtDeleteFromAppContext(dpy, xtpd->appContext);
+!             XtFree((char *) xtpd->keysyms);
+              XtFree((char *) xtpd->modKeysyms);
+              XtFree((char *) xtpd->modsToKeysyms);
+              xtpd->keysyms_per_keycode = 0;
+--- 487,494 ----
+  	    if (xtpd->mapping_callbacks != NULL)
+  		_XtRemoveAllCallbacks(&xtpd->mapping_callbacks);
+  	    XtDeleteFromAppContext(dpy, xtpd->appContext);
+! 	    if (xtpd->keysyms)
+! 		XFree((char *) xtpd->keysyms);
+              XtFree((char *) xtpd->modKeysyms);
+              XtFree((char *) xtpd->modsToKeysyms);
+              xtpd->keysyms_per_keycode = 0;
+*** /tmp/da4019	Thu Jul 23 16:57:16 1992
+--- mit/lib/Xt/Initialize.c	Thu Jul 23 16:57:14 1992
+***************
+*** 1,4 ****
+! /* $XConsortium: Initialize.c,v 1.200 91/12/19 19:30:59 rws Exp $ */
+  
+  /***********************************************************
+  Copyright 1987, 1988 by Digital Equipment Corporation, Maynard, Massachusetts,
+--- 1,4 ----
+! /* $XConsortium: Initialize.c,v 1.201 92/06/08 11:15:22 converse Exp $ */
+  
+  /***********************************************************
+  Copyright 1987, 1988 by Digital Equipment Corporation, Maynard, Massachusetts,
+***************
+*** 580,602 ****
+      name_list[0] = class_list[0] = XrmPermStringToQuark(".");
+      name_list[2] = class_list[2] = NULLQUARK;
+      XrmParseCommand(&db, options, num_options, ".", &targc, targv);
+!     if (applName && ! *applName) {
+  	name_list[1] = XrmPermStringToQuark("name");
+  	if (XrmQGetResource(db, name_list, name_list, &type, &val) &&
+  	    type == _XtQString)
+  	    *applName = val.addr;
+      }
+!     if (displayName && ! *displayName) {
+  	name_list[1] = XrmPermStringToQuark("display");
+  	if (XrmQGetResource(db, name_list, name_list, &type, &val) &&
+  	    type == _XtQString)
+  	    *displayName = val.addr;
+      }
+!     name_list[1] = XrmPermStringToQuark("xnlLanguage");
+!     class_list[1] = XrmPermStringToQuark("XnlLanguage");
+!     if (XrmQGetResource(db, name_list, class_list, &type, &val) &&
+! 	type == _XtQString)
+! 	*language = val.addr;
+  
+      XtFree((char *)targv);
+      XtFree((char *)options);
+--- 580,604 ----
+      name_list[0] = class_list[0] = XrmPermStringToQuark(".");
+      name_list[2] = class_list[2] = NULLQUARK;
+      XrmParseCommand(&db, options, num_options, ".", &targc, targv);
+!     if (applName) {
+  	name_list[1] = XrmPermStringToQuark("name");
+  	if (XrmQGetResource(db, name_list, name_list, &type, &val) &&
+  	    type == _XtQString)
+  	    *applName = val.addr;
+      }
+!     if (displayName) {
+  	name_list[1] = XrmPermStringToQuark("display");
+  	if (XrmQGetResource(db, name_list, name_list, &type, &val) &&
+  	    type == _XtQString)
+  	    *displayName = val.addr;
+      }
+!     if (language) {
+! 	name_list[1] = XrmPermStringToQuark("xnlLanguage");
+! 	class_list[1] = XrmPermStringToQuark("XnlLanguage");
+! 	if (XrmQGetResource(db, name_list, class_list, &type, &val) &&
+! 	    type == _XtQString)
+! 	    *language = val.addr;
+!     }
+  
+      XtFree((char *)targv);
+      XtFree((char *)options);
+*** /tmp/da4055	Thu Jul 23 16:57:23 1992
+--- mit/lib/Xt/Intrinsic.c	Thu Jul 23 16:57:22 1992
+***************
+*** 1,4 ****
+! /* $XConsortium: Intrinsic.c,v 1.171 91/07/16 18:30:20 converse Exp $ */
+  
+  /***********************************************************
+  Copyright 1987, 1988 by Digital Equipment Corporation, Maynard, Massachusetts,
+--- 1,4 ----
+! /* $XConsortium: Intrinsic.c,v 1.172 92/04/15 19:15:24 rws Exp $ */
+  
+  /***********************************************************
+  Copyright 1987, 1988 by Digital Equipment Corporation, Maynard, Massachusetts,
+***************
+*** 28,33 ****
+--- 28,36 ----
+  
+  #include "IntrinsicI.h"
+  #include "StringDefs.h"
++ #ifndef NO_IDENTIFY_WINDOWS
++ #include <X11/Xatom.h>
++ #endif
+  #ifndef VMS
+  #include <sys/stat.h>
+  #endif /* VMS */
+***************
+*** 225,235 ****
+      window = XtWindow(widget);
+  #ifndef NO_IDENTIFY_WINDOWS
+      if (_XtGetPerDisplay(XtDisplay(widget))->appContext->identify_windows) {
+! 	XClassHint classhint;
+  
+! 	classhint.res_name = widget->core.name;
+! 	classhint.res_class = widget->core.widget_class->core_class.class_name;
+! 	XSetClassHint (XtDisplay(widget), window, &classhint);
+      }
+  #endif
+  #ifdef notdef
+--- 228,250 ----
+      window = XtWindow(widget);
+  #ifndef NO_IDENTIFY_WINDOWS
+      if (_XtGetPerDisplay(XtDisplay(widget))->appContext->identify_windows) {
+! 	int len_nm, len_cl;
+! 	char *s;
+  
+! 	len_nm = widget->core.name ? strlen(widget->core.name) : 0;
+! 	len_cl = strlen(widget->core.widget_class->core_class.class_name);
+! 	s = XtMalloc((unsigned) (len_nm + len_cl + 2));
+! 	s[0] = '\0';
+! 	if (len_nm)
+! 	    strcpy(s, widget->core.name);
+! 	strcpy(s + len_nm + 1,
+! 	       widget->core.widget_class->core_class.class_name);
+! 	XChangeProperty(XtDisplay(widget), window,
+! 			XInternAtom(XtDisplay(widget), "_MIT_OBJ_CLASS",
+! 				    False),
+! 			XA_STRING, 8, PropModeReplace, (unsigned char *) s, 
+! 			len_nm + len_cl + 2);
+! 	XtFree(s);
+      }
+  #endif
+  #ifdef notdef
+*** /tmp/da4091	Thu Jul 23 16:57:29 1992
+--- mit/lib/Xt/Keyboard.c	Thu Jul 23 16:57:27 1992
+***************
+*** 1,4 ****
+! /* $XConsortium: Keyboard.c,v 1.24 91/07/21 16:55:01 converse Exp $ */
+  
+  /********************************************************
+  
+--- 1,4 ----
+! /* $XConsortium: Keyboard.c,v 1.25 92/04/22 16:49:33 rws Exp $ */
+  
+  /********************************************************
+  
+***************
+*** 273,279 ****
+  		       * focus 
+  		       */
+  		      if (
+! 			  (event->type != KeyPress)
+  			  )
+  			dspWidget = focusWidget;
+  		      else
+--- 273,280 ----
+  		       * focus 
+  		       */
+  		      if (
+! 			  (event->type != KeyPress) ||
+! 			  (event->keycode == 0) /* Xlib XIM composed input */
+  			  )
+  			dspWidget = focusWidget;
+  		      else
+***************
+*** 341,347 ****
+        {
+  	case KeyPress:
+  	  {
+! 	      if (!IsServerGrab(device->grabType) && 
+  		  (newGrab = CheckServerGrabs((XEvent*)event,
+  					      pdi->trace,
+  					      pdi->traceDepth)))
+--- 342,349 ----
+        {
+  	case KeyPress:
+  	  {
+! 	      if (event->keycode != 0 && /* Xlib XIM composed input */
+! 		  !IsServerGrab(device->grabType) && 
+  		  (newGrab = CheckServerGrabs((XEvent*)event,
+  					      pdi->trace,
+  					      pdi->traceDepth)))
+*** /tmp/da4127	Thu Jul 23 16:57:35 1992
+--- mit/lib/Xt/PassivGrab.c	Thu Jul 23 16:57:33 1992
+***************
+*** 1,4 ****
+! /* $XConsortium: PassivGrab.c,v 1.19 91/07/21 16:04:41 converse Exp $ */
+  
+  /********************************************************
+  
+--- 1,4 ----
+! /* $XConsortium: PassivGrab.c,v 1.20 92/05/11 17:44:00 converse Exp $ */
+  
+  /********************************************************
+  
+***************
+*** 536,544 ****
+  
+  /*
+   * This handler is needed to guarantee that we see releases on passive
+!  * grabs for widgets that haven't selected for keyrelease. Also
+!  * potentially for tracking focusOuts in order to know that the grab
+!  * widget has been unmapped.
+   */
+  
+  /*ARGSUSED*/
+--- 536,542 ----
+  
+  /*
+   * This handler is needed to guarantee that we see releases on passive
+!  * button grabs for widgets that haven't selected for button release.
+   */
+  
+  /*ARGSUSED*/
+***************
+*** 562,573 ****
+      XtPerDisplayInput	pdi;
+      XtPerWidgetInput	pwi;
+  {
+!     if (!pwi->active_handler_added)
+!     {
+! 	Mask mask = (isKeyboard ? 
+! 		     (KeyPressMask | KeyReleaseMask) :
+! 		     (ButtonPressMask | ButtonReleaseMask));
+! 	XtAddEventHandler(grab->widget, mask, FALSE,
+  			  ActiveHandler, (XtPointer)pdi);
+  	pwi->active_handler_added = TRUE;
+      }
+--- 560,567 ----
+      XtPerDisplayInput	pdi;
+      XtPerWidgetInput	pwi;
+  {
+!     if (!isKeyboard && !pwi->active_handler_added) {
+! 	XtAddEventHandler(grab->widget, ButtonReleaseMask, FALSE,
+  			  ActiveHandler, (XtPointer)pdi);
+  	pwi->active_handler_added = TRUE;
+      }
+*** /tmp/da4163	Thu Jul 23 16:57:42 1992
+--- mit/lib/Xt/SetValues.c	Thu Jul 23 16:57:41 1992
+***************
+*** 1,4 ****
+! /* $XConsortium: SetValues.c,v 1.13 91/05/02 16:11:33 swick Exp $ */
+  
+  /***********************************************************
+  Copyright 1987, 1988 by Digital Equipment Corporation, Maynard, Massachusetts,
+--- 1,4 ----
+! /* $XConsortium: SetValues.c,v 1.15 92/05/22 09:50:27 rws Exp $ */
+  
+  /***********************************************************
+  Copyright 1987, 1988 by Digital Equipment Corporation, Maynard, Massachusetts,
+***************
+*** 25,30 ****
+--- 25,31 ----
+  ******************************************************************/
+  
+  #include "IntrinsicI.h"
++ #include "StringDefs.h"
+  
+  /*
+   *	XtSetValues(), XtSetSubvalues()
+***************
+*** 222,227 ****
+--- 223,255 ----
+  	}
+      
+  	if (geoReq.request_mode != 0) {
++ 	    /* Pass on any requests for unchanged geometry values */
++ 	    if (geoReq.request_mode !=
++ 		(CWX | CWY | CWWidth | CWHeight | CWBorderWidth)) {
++ 		for ( ; num_args != 0; num_args--, args++) {
++ 		    if (! (geoReq.request_mode & CWX) &&
++ 			strcmp(XtNx, args->name) == 0) {
++ 			geoReq.x = w->core.x;
++ 			geoReq.request_mode |= CWX;
++ 		    } else if (! (geoReq.request_mode & CWY) &&
++ 			       strcmp(XtNy, args->name) == 0) {
++ 			geoReq.y = w->core.y;
++ 			geoReq.request_mode |= CWY;
++ 		    } else if (! (geoReq.request_mode & CWWidth) &&
++ 			       strcmp(XtNwidth, args->name) == 0) {
++ 			geoReq.width = w->core.width;
++ 			geoReq.request_mode |= CWWidth;
++ 		    } else if (! (geoReq.request_mode & CWHeight) &&
++ 			       strcmp(XtNheight, args->name) == 0) {
++ 			geoReq.height = w->core.height;
++ 			geoReq.request_mode |= CWHeight;
++ 		    } else if (! (geoReq.request_mode & CWBorderWidth) &&
++ 			       strcmp(XtNborderWidth, args->name) == 0) {
++ 			geoReq.border_width = w->core.border_width;
++ 			geoReq.request_mode |= CWBorderWidth;
++ 		    }
++ 		}
++ 	    }
+  	    do {
+  		result = _XtMakeGeometryRequest(w, &geoReq, &geoReply, 
+  						&cleared_rect_obj);
+*** /tmp/da4199	Thu Jul 23 16:57:49 1992
+--- mit/lib/Xt/Shell.c	Thu Jul 23 16:57:47 1992
+***************
+*** 1,4 ****
+! /* $XConsortium: Shell.c,v 1.124 92/02/21 12:34:32 converse Exp $ */
+  
+  /***********************************************************
+  Copyright 1987, 1988 by Digital Equipment Corporation, Maynard, Massachusetts,
+--- 1,4 ----
+! /* $XConsortium: Shell.c,v 1.127 92/06/08 14:28:33 converse Exp $ */
+  
+  /***********************************************************
+  Copyright 1987, 1988 by Digital Equipment Corporation, Maynard, Massachusetts,
+***************
+*** 1046,1055 ****
+  
+  	hintp->flags = StateHint | InputHint;
+  
+- 	if (XtIsTopLevelShell((Widget)w)
+- 	    && ((TopLevelShellWidget)w)->topLevel.iconic) {
+- 	    hintp->initial_state = IconicState;
+- 	}
+  	if (hintp->icon_x == XtUnspecifiedShellInt)
+  	    hintp->icon_x = -1;
+  	else
+--- 1046,1051 ----
+***************
+*** 1360,1365 ****
+--- 1356,1391 ----
+  	        }
+  		return;
+  
++ 	      case UnmapNotify:
++ 		{
++ 		    XtPerDisplayInput	pdi;
++ 		    XtDevice		device;
++ 		    Widget		p;
++ 
++ 		    pdi = _XtGetPerDisplayInput(event->xunmap.display);
++ 
++ 		    device = &pdi->pointer;
++ 		    if (device->grabType == XtPassiveServerGrab) {
++ 			p = device->grab.widget;
++ 			while (p && !(XtIsShell(p)))
++ 			    p = p->core.parent;
++ 			if (p == wid)
++ 			    device->grabType = XtNoServerGrab;
++ 		    }
++ 
++ 		    device = &pdi->keyboard;
++ 		    if (IsEitherPassiveGrab(device->grabType)) {
++ 			p = device->grab.widget;
++ 			while (p && !(XtIsShell(p)))
++ 			    p = p->core.parent;
++ 			if (p == wid) {
++ 			    device->grabType = XtNoServerGrab;
++ 			    pdi->activatingKey = 0;
++ 			}
++ 		    }
++ 
++ 		    return;
++ 		}
+  	      default:
+  		 return;
+  	 } 
+***************
+*** 2016,2023 ****
+  			       XtWindow(newW),
+  			       XScreenNumberOfScreen(XtScreen(newW))
+  			       );
+! 	    else
+  		XtPopup(newW, XtGrabNone);
+  	}
+  
+  	if (!new->shell.override_redirect &&
+--- 2042,2052 ----
+  			       XtWindow(newW),
+  			       XScreenNumberOfScreen(XtScreen(newW))
+  			       );
+! 	    else {
+! 		Boolean map = new->shell.popped_up;
+  		XtPopup(newW, XtGrabNone);
++ 		if (map) XMapWindow(XtDisplay(newW), XtWindow(newW));
++ 	    }
+  	}
+  
+  	if (!new->shell.override_redirect &&
+*** /tmp/da4235	Thu Jul 23 16:57:56 1992
+--- mit/lib/Xt/TMkey.c	Thu Jul 23 16:57:54 1992
+***************
+*** 1,4 ****
+! /* $XConsortium: TMkey.c,v 1.12 91/07/05 15:04:12 rws Exp $ */
+  /*LINTLIBRARY*/
+  
+  /***********************************************************
+--- 1,4 ----
+! /* $XConsortium: TMkey.c,v 1.16 92/05/19 11:16:48 converse Exp $ */
+  /*LINTLIBRARY*/
+  
+  /***********************************************************
+***************
+*** 90,96 ****
+  { \
+      int _i_ = (((key) - (pd)->min_keycode + modmix[(mod) & 0xff]) & \
+  	       (TMKEYCACHESIZE-1)); \
+!     if ((ctx)->keycache.keycode[_i_] == (key) && \
+  	(ctx)->keycache.modifiers[_i_] == (mod)) { \
+  	mod_ret = (ctx)->keycache.modifiers_return; \
+  	sym_ret = (ctx)->keycache.keysym[_i_]; \
+--- 90,97 ----
+  { \
+      int _i_ = (((key) - (pd)->min_keycode + modmix[(mod) & 0xff]) & \
+  	       (TMKEYCACHESIZE-1)); \
+!     if ((key) != 0 && /* Xlib XIM composed input */ \
+! 	(ctx)->keycache.keycode[_i_] == (key) && \
+  	(ctx)->keycache.modifiers[_i_] == (mod)) { \
+  	mod_ret = (ctx)->keycache.modifiers_return; \
+  	sym_ret = (ctx)->keycache.keysym[_i_]; \
+***************
+*** 307,313 ****
+  
+      FLUSHKEYCACHE(pd->tm_context);
+      if (pd->keysyms)
+! 	XtFree( (char *)pd->keysyms );
+      XDisplayKeycodes(dpy, &pd->min_keycode, &pd->max_keycode);
+      pd->keysyms_serial = NextRequest(dpy);
+      pd->keysyms = XGetKeyboardMapping(dpy, pd->min_keycode,
+--- 308,314 ----
+  
+      FLUSHKEYCACHE(pd->tm_context);
+      if (pd->keysyms)
+! 	XFree( (char *)pd->keysyms );
+      XDisplayKeycodes(dpy, &pd->min_keycode, &pd->max_keycode);
+      pd->keysyms_serial = NextRequest(dpy);
+      pd->keysyms = XGetKeyboardMapping(dpy, pd->min_keycode,
+***************
+*** 448,454 ****
+  	else
+  	    *keysym_return = syms[0];
+      } else if (!(modifiers & LockMask) ||
+! 	       (dpy->lock_meaning != XK_Caps_Lock)) {
+  	if ((per == 1) || ((usym = syms[1]) == NoSymbol))
+  	    XtConvertCase(dpy, syms[0], &lsym, &usym);
+  	*keysym_return = usym;
+--- 449,455 ----
+  	else
+  	    *keysym_return = syms[0];
+      } else if (!(modifiers & LockMask) ||
+! 	       (pd->lock_meaning != XK_Caps_Lock)) {
+  	if ((per == 1) || ((usym = syms[1]) == NoSymbol))
+  	    XtConvertCase(dpy, syms[0], &lsym, &usym);
+  	*keysym_return = usym;
+***************
+*** 552,560 ****
+  	    *upper -= (XK_scaron - XK_Scaron);
+  	else if (sym >= XK_zcaron && sym <= XK_zabovedot)
+  	    *upper -= (XK_zcaron - XK_Zcaron);
+! 	else if (sym <= XK_Racute && sym <= XK_Tcedilla)
+  	    *lower += (XK_racute - XK_Racute);
+! 	else if (sym <= XK_racute && sym <= XK_tcedilla)
+  	    *upper -= (XK_racute - XK_Racute);
+  	break;
+  #endif
+--- 553,561 ----
+  	    *upper -= (XK_scaron - XK_Scaron);
+  	else if (sym >= XK_zcaron && sym <= XK_zabovedot)
+  	    *upper -= (XK_zcaron - XK_Zcaron);
+! 	else if (sym >= XK_Racute && sym <= XK_Tcedilla)
+  	    *lower += (XK_racute - XK_Racute);
+! 	else if (sym >= XK_racute && sym <= XK_tcedilla)
+  	    *upper -= (XK_racute - XK_Racute);
+  	break;
+  #endif
+***************
+*** 572,578 ****
+  	else if (sym >= XK_Cabovedot && sym <= XK_Scircumflex)
+  	    *lower += (XK_cabovedot - XK_Cabovedot);
+  	else if (sym >= XK_cabovedot && sym <= XK_scircumflex)
+! 	    *lower += (XK_cabovedot - XK_Cabovedot);
+  	break;
+  #endif
+  #ifdef XK_LATIN4
+--- 573,579 ----
+  	else if (sym >= XK_Cabovedot && sym <= XK_Scircumflex)
+  	    *lower += (XK_cabovedot - XK_Cabovedot);
+  	else if (sym >= XK_cabovedot && sym <= XK_scircumflex)
+! 	    *upper -= (XK_cabovedot - XK_Cabovedot);
+  	break;
+  #endif
+  #ifdef XK_LATIN4
+*** /tmp/da4271	Thu Jul 23 16:58:01 1992
+--- mit/extensions/lib/XShm.c	Thu Jul 23 16:58:00 1992
+***************
+*** 1,5 ****
+  /*
+!  * $XConsortium: XShm.c,v 1.14 91/07/12 09:54:02 rws Exp $
+   *
+   * Copyright 1989 Massachusetts Institute of Technology
+   *
+--- 1,5 ----
+  /*
+!  * $XConsortium: XShm.c,v 1.15 92/04/22 16:04:26 rws Exp $
+   *
+   * Copyright 1989 Massachusetts Institute of Technology
+   *
+***************
+*** 339,344 ****
+--- 339,345 ----
+      if (!shminfo) return 0;
+  
+      LockDisplay(dpy);
++     FlushGC(dpy, gc);
+      GetReq(ShmPutImage, req);
+      req->reqType = info->codes->major_opcode;
+      req->shmReqType = X_ShmPutImage;
+*** /tmp/da4307	Thu Jul 23 16:58:07 1992
+--- mit/fonts/scaled/Speedo/COPYRIGHT	Thu Jul 23 16:58:06 1992
+***************
+*** 1,10 ****
+  Copyright 1989-1991, Bitstream Inc., Cambridge, MA.
+  You are hereby granted permission under all Bitstream propriety rights to
+  use, copy, modify, sublicense, sell, and redistribute the Bitstream Speedo
+! software and the Bitstream Charter outline font for any purpose and without
+! restrictions; provided, that this notice is left intact on all copies of such
+! software or font and that Bitstream's trademark is acknowledged as shown below
+! on all unmodified copies of such font.
+  
+  BITSTREAM CHARTER is a registered trademark of Bitstream Inc.
+  
+--- 1,10 ----
+  Copyright 1989-1991, Bitstream Inc., Cambridge, MA.
+  You are hereby granted permission under all Bitstream propriety rights to
+  use, copy, modify, sublicense, sell, and redistribute the Bitstream Speedo
+! software and the Bitstream Charter and Courier outline fonts for any purpose
+! and without restrictions; provided, that this notice is left intact on all
+! copies of such software or font and that Bitstream's trademark is acknowledged
+! as shown below on all unmodified copies of such font.
+  
+  BITSTREAM CHARTER is a registered trademark of Bitstream Inc.
+  

@@ -1,0 +1,2098 @@
+Article 1477 of comp.sources.misc:
+Path: ucunix.san.uc.edu!uceng.uc.edu!news.cs.indiana.edu!spool.mu.edu!uunet!sparky!kent
+From: jfh@rpp386.cactus.org (John F Haugh II)
+Newsgroups: comp.sources.misc
+Subject: v29i047:  shadow - Shadow Login Suite, Patch04a/3
+Message-ID: <csm-v29i047=shadow.142525@sparky.IMD.Sterling.COM>
+Date: 3 Apr 92 20:27:23 GMT
+Article-I.D.: sparky.csm-v29i047=shadow.142525
+Sender: kent@sparky.imd.sterling.com (Kent Landfield)
+Followup-To: comp.sources.d
+Organization: Sterling Software
+Lines: 2081
+Approved: kent@sparky.imd.sterling.com
+X-Md4-Signature: 99fd634501ccdecc9d773b63c7e01497
+
+Submitted-by: jfh@rpp386.cactus.org (John F Haugh II)
+Posting-number: Volume 29, Issue 47
+Archive-name: shadow/patch04a
+Environment: UNIX
+Patch-To: shadow: Volume 26, Issue 54-64
+
+This is the first part of a three part patch.  It brings the shadow password
+suite from version 3.1.3 to 3.1.4 (patchlevel 17).  You must collect all
+three parts before attempting to re-compile everything.  The most significant
+change, other than the usual collection of incremental bug fixes, is the
+addition of initial support for SVR4.
+
+Here is a summary of the other changes -
+
+Correct problems which prevent code from compiling on SunOS 4.1.1
+
+Login sets UID to user's value before executing /bin/passwd when password
+    had expired.  Forces user to adhere to password policy.
+
+chage command now accepts account expiration and last password changed
+    dates in MM/DD/YY format (optionally compilable for DD/MM/YY or YY/MM/DD
+    as well)
+
+chage command is now installed set-uid root with non-root users only being
+    able to view password aging information.  Intended to aid in knowing
+    when account or password is due to expire.
+
+Added concept of a "tty" group.  Allows login to set the group ownership of
+    user's TTY at login time.
+
+Added support to define value of arg[0] after su.  Fixes problems with
+    certain shells.
+--
+Prereq: "3.1.3"
+Index: patchlevel.h
+*** rel3/patchlevel.h	Fri Mar 27 10:25:49 1992
+--- patchlevel.h	Fri Mar 27 10:26:02 1992
+***************
+*** 1,5 ****
+  /*
+!  * Copyright 1991, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+--- 1,5 ----
+  /*
+!  * Copyright 1991, 1992, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+***************
+*** 15,22 ****
+   *		Bugs found by users
+   *	12/28/91	3.1.3	patchlevel 16
+   *		Changes for SunOS 4.1.1
+   */
+  
+  #define	RELEASE		3
+! #define	PATCHLEVEL	16
+! #define	VERSION		"3.1.3"
+--- 15,24 ----
+   *		Bugs found by users
+   *	12/28/91	3.1.3	patchlevel 16
+   *		Changes for SunOS 4.1.1
++  *	02/08/92	3.1.4	patchlevel 17
++  *		Changes for SVR4, plus bug fixes
+   */
+  
+  #define	RELEASE		3
+! #define	PATCHLEVEL	17
+! #define	VERSION		"3.1.4"
+Index: age.c
+*** rel3/age.c	Fri Mar 27 10:22:37 1992
+--- age.c	Fri Mar 27 10:26:12 1992
+***************
+*** 1,5 ****
+  /*
+!  * Copyright 1989, 1990, 1991, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+--- 1,5 ----
+  /*
+!  * Copyright 1989, 1990, 1991, 1992, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+***************
+*** 17,23 ****
+  #include "shadow.h"
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)age.c	3.5	07:43:04	9/17/91";
+  #endif
+  
+  #define	DAY	(24L*3600L)
+--- 17,23 ----
+  #include "shadow.h"
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)age.c	3.6	11:09:33	2/8/92";
+  #endif
+  
+  #define	DAY	(24L*3600L)
+***************
+*** 228,236 ****
+  	 */
+  
+  	if ((pid = fork ()) == 0) {
+  		execl ("/bin/passwd", "passwd", pw->pw_name, (char *) 0);
+  		puts ("Can't execute /bin/passwd");
+! 		exit (errno);
+  	} else if (pid == -1) {
+  		perror ("passwd");
+  		exit (errno);
+--- 228,248 ----
+  	 */
+  
+  	if ((pid = fork ()) == 0) {
++ 
++ 		/*
++ 		 * Set the UID to be that of the user.  This causes
++ 		 * passwd to work just like it would had they executed
++ 		 * it from the command line while logged in.
++ 		 */
++ 
++ 		if (setuid (pw->pw_uid))
++ 			_exit (errno);
++ 
+  		execl ("/bin/passwd", "passwd", pw->pw_name, (char *) 0);
+  		puts ("Can't execute /bin/passwd");
+! 		fflush (stdout);
+! 
+! 		_exit (errno);
+  	} else if (pid == -1) {
+  		perror ("passwd");
+  		exit (errno);
+Index: faillog.c
+*** rel3/faillog.c	Fri Mar 27 10:22:58 1992
+--- faillog.c	Fri Mar 27 10:26:14 1992
+***************
+*** 1,5 ****
+  /*
+!  * Copyright 1989, 1990, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+--- 1,5 ----
+  /*
+!  * Copyright 1989, 1990, 1992, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+***************
+*** 22,45 ****
+  #define	strchr	index
+  #define	strrchr	rindex
+  #endif
+  #include "config.h"
+  #include "faillog.h"
+  
+  #ifndef	lint
+! static	char	_sccsid[] = "@(#)faillog.c	3.2	08:44:11	9/12/91";
+  #endif
+  
+  FILE	*fail;		/* failure file stream */
+! off_t	user;		/* one single user, specified on command line */
+  int	days;		/* number of days to consider for print command */
+  time_t	seconds;	/* that number of days in seconds */
+  int	max;		/* maximum failure count for fail_max */
+  
+  int	uflg;		/* set if user is a valid user id */
+  int	tflg;		/* print is restricted to most recent days */
+- struct	faillog	faillog; /* scratch structure to play with ... */
+  struct	stat	statbuf; /* fstat buffer for file size */
+  
+  extern	int	optind;
+  extern	char	*optarg;
+  extern	char	*asctime ();
+--- 22,52 ----
+  #define	strchr	index
+  #define	strrchr	rindex
+  #endif
++ #ifdef	STDLIB_H
++ #include <stdlib.h>
++ #endif
++ #ifdef	UNISTD_H
++ #include <unistd.h>
++ #endif
+  #include "config.h"
+  #include "faillog.h"
+  
+  #ifndef	lint
+! static	char	_sccsid[] = "@(#)faillog.c	3.3	20:36:23	3/7/92";
+  #endif
+  
+  FILE	*fail;		/* failure file stream */
+! uid_t	user;		/* one single user, specified on command line */
+  int	days;		/* number of days to consider for print command */
+  time_t	seconds;	/* that number of days in seconds */
+  int	max;		/* maximum failure count for fail_max */
+  
++ int	aflg;		/* set if all users are to be printed always */
+  int	uflg;		/* set if user is a valid user id */
+  int	tflg;		/* print is restricted to most recent days */
+  struct	stat	statbuf; /* fstat buffer for file size */
+  
++ #if !defined(UNISTD_H) && !defined(STDLIB_H)
+  extern	int	optind;
+  extern	char	*optarg;
+  extern	char	*asctime ();
+***************
+*** 47,56 ****
+--- 54,81 ----
+  extern	struct	passwd	*getpwnam ();
+  extern	struct	passwd	*getpwent ();
+  extern	struct	tm	*localtime ();
++ #endif
++ 
++ #if	__STDC__
++ void	print(void);
++ void	print_one(struct faillog *faillog, uid_t uid);
++ void	reset(void);
++ int	reset_one(uid_t uid);
++ void	setmax(void);
++ void	setmax_one(uid_t uid);
++ #else
++ void	print();
++ void	print_one();
++ void	reset();
++ int	reset_one();
++ void	setmax();
++ void	setmax_one();
++ #endif /* __STDC__ */
+  
+  #define	DAY	(24L*3600L)
+  #define	NOW	(time ((time_t *) 0))
+  
++ void
+  main (argc, argv)
+  int	argc;
+  char	**argv;
+***************
+*** 68,75 ****
+  		perror (FAILFILE);
+  		exit (1);
+  	}
+! 	while ((c = getopt (argc, argv, "m:pru:t:")) != EOF) {
+  		switch (c) {
+  			case 'm':
+  				max = atoi (optarg);
+  				setmax ();
+--- 93,104 ----
+  		perror (FAILFILE);
+  		exit (1);
+  	}
+! 	while ((c = getopt (argc, argv, "am:pru:t:")) != EOF) {
+  		switch (c) {
++ 			case 'a':
++ 				aflg++;
++ 				uflg = 0;
++ 				break;
+  			case 'm':
+  				max = atoi (optarg);
+  				setmax ();
+***************
+*** 87,92 ****
+--- 116,122 ----
+  					exit (1);
+  				}
+  				uflg++;
++ 				aflg = 0;
+  				user = pwent->pw_uid;
+  				break;
+  			case 't':
+***************
+*** 101,110 ****
+  	/*NOTREACHED*/
+  }
+  
+  print ()
+  {
+! 	int	uid;
+  	off_t	offset;
+  
+  	if (uflg) {
+  		offset = user * sizeof faillog;
+--- 131,142 ----
+  	/*NOTREACHED*/
+  }
+  
++ void
+  print ()
+  {
+! 	uid_t	uid;
+  	off_t	offset;
++ 	struct	faillog	faillog;
+  
+  	if (uflg) {
+  		offset = user * sizeof faillog;
+***************
+*** 122,131 ****
+  			fread ((char *) &faillog, sizeof faillog, 1, fail) == 1;
+  				uid++) {
+  
+! 			if (faillog.fail_cnt == 0)
+  				continue;
+  
+! 			if (tflg && NOW - faillog.fail_time > seconds)
+  				continue;
+  
+  			print_one (&faillog, uid);
+--- 154,167 ----
+  			fread ((char *) &faillog, sizeof faillog, 1, fail) == 1;
+  				uid++) {
+  
+! 			if (aflg == 0 && faillog.fail_cnt == 0)
+! 				continue;
+! 
+! 			if (aflg == 0 && tflg &&
+! 					NOW - faillog.fail_time > seconds)
+  				continue;
+  
+! 			if (aflg && faillog.fail_time == 0)
+  				continue;
+  
+  			print_one (&faillog, uid);
+***************
+*** 133,140 ****
+  	}
+  }
+  
+! print_one (uid)
+! int	uid;
+  {
+  	static	int	once;
+  	char	*cp;
+--- 169,178 ----
+  	}
+  }
+  
+! void
+! print_one (faillog, uid)
+! struct	faillog	*faillog;
+! uid_t	uid;
+  {
+  	static	int	once;
+  	char	*cp;
+***************
+*** 146,165 ****
+  		once++;
+  	}
+  	pwent = getpwuid (uid);
+! 	tm = localtime (&faillog.fail_time);
+  	cp = asctime (tm);
+  	cp[24] = '\0';
+  
+  	if (pwent) {
+  		printf ("%-16s    %4d       %4d",
+! 			pwent->pw_name, faillog.fail_cnt, faillog.fail_max);
+! 		if (faillog.fail_time)
+! 			printf ("     %s on %s\n", cp, faillog.fail_line);
+  		else
+  			putchar ('\n');
+  	}
+  }
+  
+  reset ()
+  {
+  	int	uid = 0;
+--- 184,204 ----
+  		once++;
+  	}
+  	pwent = getpwuid (uid);
+! 	tm = localtime (&faillog->fail_time);
+  	cp = asctime (tm);
+  	cp[24] = '\0';
+  
+  	if (pwent) {
+  		printf ("%-16s    %4d       %4d",
+! 			pwent->pw_name, faillog->fail_cnt, faillog->fail_max);
+! 		if (faillog->fail_time)
+! 			printf ("     %s on %s\n", cp, faillog->fail_line);
+  		else
+  			putchar ('\n');
+  	}
+  }
+  
++ void
+  reset ()
+  {
+  	int	uid = 0;
+***************
+*** 171,180 ****
+  			;
+  }
+  
+  reset_one (uid)
+! int	uid;
+  {
+  	off_t	offset;
+  
+  	offset = uid * sizeof faillog;
+  	fstat (fileno (fail), &statbuf);
+--- 210,221 ----
+  			;
+  }
+  
++ int
+  reset_one (uid)
+! uid_t	uid;
+  {
+  	off_t	offset;
++ 	struct	faillog	faillog;
+  
+  	offset = uid * sizeof faillog;
+  	fstat (fileno (fail), &statbuf);
+***************
+*** 206,211 ****
+--- 247,253 ----
+  	return (0);
+  }
+  
++ void
+  setmax ()
+  {
+  	struct	passwd	*pwent;
+***************
+*** 219,228 ****
+  	}
+  }
+  
+  setmax_one (uid)
+! int	uid;
+  {
+  	off_t	offset;
+  
+  	offset = uid * sizeof faillog;
+  
+--- 261,272 ----
+  	}
+  }
+  
++ void
+  setmax_one (uid)
+! uid_t	uid;
+  {
+  	off_t	offset;
++ 	struct	faillog	faillog;
+  
+  	offset = uid * sizeof faillog;
+  
+***************
+*** 235,241 ****
+  			perror (FAILFILE);
+  	} else {
+  #ifndef	BSD
+! 		memset ((char *) &faillog, '\0', sizeof faillog);
+  #else
+  		bzero ((char *) &faillog, sizeof faillog);
+  #endif
+--- 279,285 ----
+  			perror (FAILFILE);
+  	} else {
+  #ifndef	BSD
+! 		memset ((char *) &faillog, 0, sizeof faillog);
+  #else
+  		bzero ((char *) &faillog, sizeof faillog);
+  #endif
+Index: faillog.h
+*** rel3/faillog.h	Fri Mar 27 10:23:24 1992
+--- faillog.h	Fri Mar 27 10:26:15 1992
+***************
+*** 1,22 ****
+  /*
+!  * Copyright 1989, 1990, John F. Haugh II
+   * All rights reserved.
+   *
+!  * Use, duplication, and disclosure prohibited without
+!  * the express written permission of the author.
+   */
+  
+  /*
+   * faillog.h - login failure logging file format
+   *
+!  *	@(#)faillog.h	2.2	19:23:46	7/29/90
+   *
+!  * The login failure file is maintained by login(1) and fail(1L)
+   * Each record in the file represents a separate UID and the file
+   * is indexed in that fashion.
+   */
+  
+  #define	FAILFILE	"/usr/adm/faillog"
+  
+  struct	faillog {
+  	short	fail_cnt;	/* failures since last success */
+--- 1,29 ----
+  /*
+!  * Copyright 1989, 1990, 1992, John F. Haugh II
+   * All rights reserved.
+   *
+!  * Permission is granted to copy and create derivative works for any
+!  * non-commercial purpose, provided this copyright notice is preserved
+!  * in all copies of source code, or included in human readable form
+!  * and conspicuously displayed on all copies of object code or
+!  * distribution media.
+   */
+  
+  /*
+   * faillog.h - login failure logging file format
+   *
+!  *	@(#)faillog.h	3.1	20:36:28	3/7/92
+   *
+!  * The login failure file is maintained by login(1) and faillog(8)
+   * Each record in the file represents a separate UID and the file
+   * is indexed in that fashion.
+   */
+  
++ #ifdef	SVR4
++ #define	FAILFILE	"/var/adm/faillog"
++ #else
+  #define	FAILFILE	"/usr/adm/faillog"
++ #endif
+  
+  struct	faillog {
+  	short	fail_cnt;	/* failures since last success */
+Index: failure.c
+*** rel3/failure.c	Fri Mar 27 10:23:47 1992
+--- failure.c	Fri Mar 27 10:26:16 1992
+***************
+*** 1,5 ****
+  /*
+!  * Copyright 1989, 1990, 1991, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+--- 1,5 ----
+  /*
+!  * Copyright 1989, 1990, 1991, 1992, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+***************
+*** 12,17 ****
+--- 12,18 ----
+  #include <sys/types.h>
+  #include <fcntl.h>
+  #include <time.h>
++ #include <stdio.h>
+  #ifndef	BSD
+  #include <string.h>
+  #include <memory.h>
+***************
+*** 20,25 ****
+--- 21,29 ----
+  #define	strchr	index
+  #define	strrchr	rindex
+  #endif
++ #ifdef	UNISTD_H
++ #include <unistd.h>
++ #endif
+  #include "faillog.h"
+  #include "config.h"
+  
+***************
+*** 26,32 ****
+  #include <utmp.h>
+  
+  #ifndef	lint
+! static	char	_sccsid[] = "@(#)failure.c	3.1	08:26:45	9/17/91";
+  #endif
+  
+  #define	DAY	(24L*3600L)
+--- 30,36 ----
+  #include <utmp.h>
+  
+  #ifndef	lint
+! static	char	_sccsid[] = "@(#)failure.c	3.2	20:36:32	3/7/92";
+  #endif
+  
+  #define	DAY	(24L*3600L)
+***************
+*** 57,63 ****
+  	if (read (fd, (char *) faillog, sizeof *faillog)
+  			!= sizeof *faillog)
+  #ifndef	BSD
+! 		memset ((void *) faillog, '\0', sizeof *faillog);
+  #else
+  		bzero ((char *) faillog, sizeof *faillog);
+  #endif
+--- 61,67 ----
+  	if (read (fd, (char *) faillog, sizeof *faillog)
+  			!= sizeof *faillog)
+  #ifndef	BSD
+! 		memset ((void *) faillog, 0, sizeof *faillog);
+  #else
+  		bzero ((char *) faillog, sizeof *faillog);
+  #endif
+***************
+*** 83,88 ****
+--- 87,93 ----
+  failcheck (uid, faillog, failed)
+  int	uid;
+  struct	faillog	*faillog;
++ int	failed;
+  {
+  	int	fd;
+  	int	okay = 1;
+***************
+*** 118,129 ****
+  struct	faillog	*fail;
+  {
+  	struct	tm	*tp;
+  	char	*lasttime;
+  
+  	if (fail->fail_cnt == 0)
+  		return;
+  
+! 	tp = localtime (&fail->fail_time);
+  	lasttime = asctime (tp);
+  	lasttime[24] = '\0';
+  
+--- 123,158 ----
+  struct	faillog	*fail;
+  {
+  	struct	tm	*tp;
++ #ifdef	SVR4
++ 	char	lasttime[32];
++ #else
+  	char	*lasttime;
++ #endif
+  
+  	if (fail->fail_cnt == 0)
+  		return;
+  
+! 	tp = localtime (&(fail->fail_time));
+! 
+! #if __STDC__
+! 	/*
+! 	 * Only print as much date and time info as it needed to
+! 	 * know when the failure was.
+! 	 */
+! 
+! 	if (NOW - fail->fail_time >= YEAR)
+! 	    strftime(lasttime, sizeof lasttime, NULL, tp);
+! 	else if (NOW - fail->fail_time >= DAY)
+! 	    strftime(lasttime, sizeof lasttime, "%A %T", tp);
+! 	else
+! 	    strftime(lasttime, sizeof lasttime, "%T", tp);
+! #else
+! 
+! 	/*
+! 	 * Do the same thing, but don't use strftime since it
+! 	 * probably doesn't exist on this system
+! 	 */
+! 
+  	lasttime = asctime (tp);
+  	lasttime[24] = '\0';
+  
+***************
+*** 134,140 ****
+  
+  	if (*lasttime == ' ')
+  		lasttime++;
+! 
+  	printf ("%d %s since last login.  Last was %s on %s.\n",
+  		fail->fail_cnt, fail->fail_cnt > 1 ? "failures":"failure",
+  		lasttime, fail->fail_line);
+--- 163,169 ----
+  
+  	if (*lasttime == ' ')
+  		lasttime++;
+! #endif	/* __STDC__ */
+  	printf ("%d %s since last login.  Last was %s on %s.\n",
+  		fail->fail_cnt, fail->fail_cnt > 1 ? "failures":"failure",
+  		lasttime, fail->fail_line);
+Index: grent.c
+*** rel3/grent.c	Fri Mar 27 10:23:42 1992
+--- grent.c	Fri Mar 27 10:26:19 1992
+***************
+*** 1,5 ****
+  /*
+!  * Copyright 1990, 1991, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+--- 1,5 ----
+  /*
+!  * Copyright 1990, 1991, 1992, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+***************
+*** 32,38 ****
+  #endif	/* NDBM */
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)grent.c	3.10	08:45:25	9/12/91";
+  #endif	/* !lint */
+  
+  #define	NFIELDS	4
+--- 32,38 ----
+  #endif	/* NDBM */
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)grent.c	3.11	20:36:44	3/7/92";
+  #endif	/* !lint */
+  
+  #define	NFIELDS	4
+***************
+*** 176,181 ****
+--- 176,183 ----
+  	return 0;
+  }
+  
++ #ifdef	GETGRENT
++ 
+  /*
+   * fgetgrent - get a group file entry from a stream
+   *
+***************
+*** 204,215 ****
+   * endgrent() closes the group file if open.
+   */
+  
+! int	endgrent ()
+  {
+  	if (grpfp)
+  		if (fclose (grpfp))
+  			return -1;
+! 
+  	grpfp = 0;
+  #ifdef	NDBM
+  	if (dbmopened && gr_dbm) {
+--- 206,225 ----
+   * endgrent() closes the group file if open.
+   */
+  
+! #ifdef	SVR4
+! void
+! #else
+! int
+! #endif
+! endgrent ()
+  {
+  	if (grpfp)
+  		if (fclose (grpfp))
++ #ifdef	SVR4
++ 			return;
++ #else
+  			return -1;
+! #endif
+  	grpfp = 0;
+  #ifdef	NDBM
+  	if (dbmopened && gr_dbm) {
+***************
+*** 219,225 ****
+--- 229,237 ----
+  	dbmopened = 0;
+  	dbmerror = 0;
+  #endif	/* NDBM */
++ #ifndef	SVR4
+  	return 0;
++ #endif
+  }
+  
+  /*
+***************
+*** 232,240 ****
+  
+  struct	group	*getgrent ()
+  {
+  	if (! grpfp && setgrent ())
+  		return 0;
+! 
+  	return fgetgrent (grpfp);
+  }
+  
+--- 244,256 ----
+  
+  struct	group	*getgrent ()
+  {
++ #ifdef	SVR4
++ 	if (! grpfp)
++ 		setgrent ();
++ #else
+  	if (! grpfp && setgrent ())
+  		return 0;
+! #endif
+  	return fgetgrent (grpfp);
+  }
+  
+***************
+*** 263,271 ****
+  	struct	sgrp	*sgrp;
+  #endif	/* AUTOSHADOW */
+  
+  	if (setgrent ())
+  		return 0;
+! 
+  #ifdef NDBM
+  
+  	/*
+--- 279,290 ----
+  	struct	sgrp	*sgrp;
+  #endif	/* AUTOSHADOW */
+  
++ #ifdef	SVR4
++ 	setgrent ();
++ #else
+  	if (setgrent ())
+  		return 0;
+! #endif
+  #ifdef NDBM
+  
+  	/*
+***************
+*** 360,368 ****
+  	struct	sgrp	*sgrp;
+  #endif	/* AUTOSHADOW */
+  
+  	if (setgrent ())
+  		return 0;
+! 
+  #ifdef NDBM
+  
+  	/*
+--- 379,390 ----
+  	struct	sgrp	*sgrp;
+  #endif	/* AUTOSHADOW */
+  
++ #ifdef	SVR4
++ 	setgrent ();
++ #else
+  	if (setgrent ())
+  		return 0;
+! #endif
+  #ifdef NDBM
+  
+  	/*
+***************
+*** 446,452 ****
+--- 468,478 ----
+   * open already.
+   */
+  
++ #ifdef	SVR4
++ void
++ #else
+  int
++ #endif
+  setgrent ()
+  {
+  #ifdef	NDBM
+***************
+*** 455,464 ****
+--- 481,498 ----
+  
+  	if (! grpfp) {
+  		if (! (grpfp = fopen (grpfile, "r")))
++ #ifdef	SVR4
++ 			return;
++ #else
+  			return -1;
++ #endif
+  	} else {
+  		if (fseek (grpfp, 0L, 0) != 0)
++ #ifdef	SVR4
++ 			return;
++ #else
+  			return -1;
++ #endif
+  	}
+  
+  	/*
+***************
+*** 485,489 ****
+--- 519,527 ----
+  			dbmopened = 1;
+  	}
+  #endif	/* NDBM */
++ #ifndef	SVR4
+  	return 0;
++ #endif
+  }
++ 
++ #endif	/* GRENT */
+Index: id.c
+*** rel3/id.c	Fri Mar 27 10:22:40 1992
+--- id.c	Fri Mar 27 10:26:20 1992
+***************
+*** 1,5 ****
+  /*
+!  * Copyright 1991, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+--- 1,5 ----
+  /*
+!  * Copyright 1991, 1992, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+***************
+*** 23,29 ****
+  #include "pwd.h"
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)id.c	3.4	08:43:37	9/12/91";
+  #endif
+  
+  usage ()
+--- 23,29 ----
+  #include "pwd.h"
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)id.c	3.5	20:36:50	3/7/92";
+  #endif
+  
+  usage ()
+***************
+*** 114,119 ****
+--- 114,120 ----
+  	 */
+  
+  	if (aflg && (ngroups = getgroups (0, 0)) != -1) {
++ 		int	i;
+  
+  #if NGROUPS > 100
+  		/*
+Index: lmain.c
+*** rel3/lmain.c	Fri Mar 27 10:25:54 1992
+--- lmain.c	Fri Mar 27 10:26:23 1992
+***************
+*** 30,36 ****
+  #else
+  #include <sgtty.h>
+  #endif
+! #include <lastlog.h>
+  #include "faillog.h"
+  #include "shadow.h"
+  
+--- 30,43 ----
+  #else
+  #include <sgtty.h>
+  #endif
+! #ifdef	STDLIB_H
+! #include <stdlib.h>
+! #endif
+! #ifdef	UNISTD_H
+! #include <unistd.h>
+! #endif
+! 
+! #include "lastlog.h"
+  #include "faillog.h"
+  #include "shadow.h"
+  
+***************
+*** 47,53 ****
+  #endif
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)lmain.c	3.18	21:49:57	1/19/92";
+  #endif
+  
+  					/* danger - side effects */
+--- 54,60 ----
+  #endif
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)lmain.c	3.19	20:36:55	3/7/92";
+  #endif
+  
+  					/* danger - side effects */
+***************
+*** 150,155 ****
+--- 157,163 ----
+   * login -f name	(for pre-authenticated login: datakit, xterm, etc.)
+   */
+  
++ void
+  usage ()
+  {
+  	fprintf (stderr, "usage: login [ -p ] [ name ]\n");
+***************
+*** 249,254 ****
+--- 257,264 ----
+  	int	subroot = 0;
+  	char	*fname;
+  	char	*cp;
++ 	char	*tmp;
++ 	char	buff[128];
+  	struct	passwd	*pwd;
+  	struct	spwd	*spwd;
+  	struct	spwd	*getspnam();
+***************
+*** 350,360 ****
+  
+  	termio.c_cc[VERASE] = getdef_num("ERASECHAR", '\b');
+  	termio.c_cc[VKILL] = getdef_num("KILLCHAR", '\025');
+! 	(void) ioctl (0, TCSETAF, &termio);
+  #endif	/* !BSD */
+  	umask (getdef_num("UMASK", 0));
+  #ifdef HAVE_ULIMIT
+! 	ulimit (2, getdef_long("ULIMIT", 2097152L));
+  #endif
+  
+  	/*
+--- 360,391 ----
+  
+  	termio.c_cc[VERASE] = getdef_num("ERASECHAR", '\b');
+  	termio.c_cc[VKILL] = getdef_num("KILLCHAR", '\025');
+! #ifdef SVR4
+! 	/*
+! 	 * ttymon invocation prefers this, but these settings won't come into
+! 	 * effect after the first username login 
+! 	 */
+! 
+! 	(void) ioctl (0, TCSETA, &termio);
+! #else
+!  	(void) ioctl (0, TCSETAF, &termio);
+! #endif
+  #endif	/* !BSD */
+  	umask (getdef_num("UMASK", 0));
+  #ifdef HAVE_ULIMIT
+! 	{
+! 		/* 
+! 		 * Use the ULIMIT in the login.defs file, and if
+! 		 * there isn't one, use the default value.  The
+! 		 * user may have one for themselves, but otherwise,
+! 		 * just take what you get.
+! 		 */
+! 
+! 		long limit = getdef_long("ULIMIT", -1L);
+! 
+! 		if (limit != -1)
+! 			ulimit (2, limit);
+! 	}
+  #endif
+  
+  	/*
+***************
+*** 370,378 ****
+  	if (term[5] != '\0')		/* see if anything after "TERM=" */
+  		addenv (term);
+  #endif
+! 	if (! getenv("TZ") && (cp = getdef_str("ENV_TZ")))
+! 		addenv (*cp == '/' ? tz(cp) : cp);
+! 	if (! getenv("HZ") && (cp = getdef_str("ENV_HZ")))
+  		addenv (cp);
+  
+  	if (optind < argc) {		/* get the user name */
+--- 401,426 ----
+  	if (term[5] != '\0')		/* see if anything after "TERM=" */
+  		addenv (term);
+  #endif
+! 	/*
+! 	 * Add the timezone environmental variable so that time functions
+! 	 * work correctly.
+! 	 */
+! 
+! 	if (tmp = getenv ("TZ")) {
+! 		strcat (strcpy (buff, "TZ="), tmp);
+! 		addenv (buff);
+! 	} else if (cp = getdef_str ("ENV_TZ"))
+! 		addenv (*cp == '/' ? tz (cp):cp);
+! 
+! 	/* 
+! 	 * Add the clock frequency so that profiling commands work
+! 	 * correctly.
+! 	 */
+! 
+! 	if (tmp = getenv("HZ")) {
+! 		strcat (strcpy (buff, "HZ="), tmp);
+! 		addenv (buff);
+! 	} else if (cp = getdef_str("ENV_HZ"))
+  		addenv (cp);
+  
+  	if (optind < argc) {		/* get the user name */
+***************
+*** 382,387 ****
+--- 430,449 ----
+  		STRFCPY (name, argv[optind]);
+  		++optind;
+  	}
++ #ifdef SVR4
++ 	/*
++ 	 * check whether ttymon has done the prompt for us already
++ 	 */
++ 
++ 	{
++ 	    char *ttymon_prompt;
++ 
++ 	    if ((ttymon_prompt = getenv("TTYPROMPT")) != NULL &&
++ 		    (*ttymon_prompt != 0)) {
++ 		login(name, 0);	/* read name, without prompt */
++ 	    }
++ 	}
++ #endif /* SVR4 */
+  	if (optind < argc)		/* now set command line variables */
+  		    setenv (argc - optind, &argv[optind]);
+  
+***************
+*** 403,409 ****
+  #ifdef	RLOGIN
+  			preauth_flag = 0;
+  #endif
+! 			login (name);
+  			continue;
+  		}
+  		if (! (pwd = getpwnam (name)))
+--- 465,471 ----
+  #ifdef	RLOGIN
+  			preauth_flag = 0;
+  #endif
+! 			login (name, "login: ");
+  			continue;
+  		}
+  		if (! (pwd = getpwnam (name)))
+Index: log.c
+*** rel3/log.c	Fri Mar 27 10:23:41 1992
+--- log.c	Fri Mar 27 10:26:25 1992
+***************
+*** 1,5 ****
+  /*
+!  * Copyright 1989, 1990, 1991, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+--- 1,5 ----
+  /*
+!  * Copyright 1989, 1990, 1991, 1992, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+***************
+*** 25,35 ****
+  #include "config.h"
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)log.c	3.2	07:43:10	9/17/91";
+  #endif
+  
+  #include "lastlog.h"
+  
+  extern	struct	utmp	utent;
+  extern	struct	passwd	pwent;
+  extern	struct	lastlog	lastlog;
+--- 25,43 ----
+  #include "config.h"
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)log.c	3.3	20:37:03	3/7/92";
+  #endif
+  
+  #include "lastlog.h"
+  
++ #ifndef	LASTLOG_FILE
++ #ifdef	SVR4
++ #define	LASTLOG_FILE	"/var/adm/lastlog"
++ #else
++ #define	LASTLOG_FILE	"/usr/adm/lastlog"
++ #endif	/* SVR4 */
++ #endif	/* LASTLOG_FILE */
++ 
+  extern	struct	utmp	utent;
+  extern	struct	passwd	pwent;
+  extern	struct	lastlog	lastlog;
+***************
+*** 44,50 ****
+  	off_t	offset;
+  	struct	lastlog	newlog;
+  
+! 	if ((fd = open ("/usr/adm/lastlog", O_RDWR)) == -1)
+  		return;
+  
+  	offset = pwent.pw_uid * sizeof lastlog;
+--- 52,58 ----
+  	off_t	offset;
+  	struct	lastlog	newlog;
+  
+! 	if ((fd = open (LASTLOG_FILE, O_RDWR)) == -1)
+  		return;
+  
+  	offset = pwent.pw_uid * sizeof lastlog;
+Index: login.c
+*** rel3/login.c	Fri Mar 27 10:23:33 1992
+--- login.c	Fri Mar 27 10:26:26 1992
+***************
+*** 1,5 ****
+  /*
+!  * Copyright 1989, 1990, 1991, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+--- 1,5 ----
+  /*
+!  * Copyright 1989, 1990, 1991, 1992, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+***************
+*** 21,27 ****
+  #endif
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)login.c	3.1	20:54:10	9/18/91";
+  #endif
+  
+  void	setenv ();
+--- 21,27 ----
+  #endif
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)login.c	3.2	20:37:17	3/7/92";
+  #endif
+  
+  void	setenv ();
+***************
+*** 35,42 ****
+   */
+  
+  void
+! login (name)
+  char	*name;
+  {
+  	char	buf[BUFSIZ];
+  	char	*envp[32];
+--- 35,43 ----
+   */
+  
+  void
+! login (name, prompt)
+  char	*name;
++ char	*prompt;
+  {
+  	char	buf[BUFSIZ];
+  	char	*envp[32];
+***************
+*** 47,71 ****
+  
+  	/*
+  	 * See if the user has configured the /etc/issue file to
+! 	 * be displayed.
+  	 */
+  
+! 	if (getdef_bool ("ISSUE_FILE_ENAB")) {
+! 		if (fp = fopen ("/etc/issue", "r")) {
+! 			while ((i = getc (fp)) != EOF)
+! 				putc (i, stdout);
+  
+! 			fflush (stdout);
+! 			fclose (fp);
+  		}
+  	}
+  #ifndef	BSD
+  	(void) memset (buf, '\0', sizeof buf);
+  #else
+  	bzero (buf, sizeof buf);
+  #endif
+- 	fputs ("login: ", stdout);
+- 
+  	if (fgets (buf, BUFSIZ, stdin) != buf)
+  		exit (1);
+  
+--- 48,79 ----
+  
+  	/*
+  	 * See if the user has configured the /etc/issue file to
+! 	 * be displayed and display it before the prompt.
+  	 */
+  
+! 	if (prompt) {
+! 		if (getdef_bool ("ISSUE_FILE_ENAB")) {
+! 			if (fp = fopen ("/etc/issue", "r")) {
+! 				while ((i = getc (fp)) != EOF)
+! 					putc (i, stdout);
+  
+! 				fflush (stdout);
+! 				fclose (fp);
+! 			}
+  		}
++ 		fputs (prompt, stdout);
+  	}
++ 
++ 	/* 
++ 	 * Read the user's response.  The trailing newline will be
++ 	 * removed.
++ 	 */
++ 
+  #ifndef	BSD
+  	(void) memset (buf, '\0', sizeof buf);
+  #else
+  	bzero (buf, sizeof buf);
+  #endif
+  	if (fgets (buf, BUFSIZ, stdin) != buf)
+  		exit (1);
+  
+Index: obscure.c
+*** rel3/obscure.c	Fri Mar 27 10:22:36 1992
+--- obscure.c	Fri Mar 27 10:26:27 1992
+***************
+*** 1,5 ****
+  /*
+!  * Copyright 1989, 1990, 1991, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+--- 1,5 ----
+  /*
+!  * Copyright 1989, 1990, 1991, 1992, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+***************
+*** 21,27 ****
+  #include "config.h"
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)obscure.c	3.5	07:43:55	9/17/91";
+  #endif
+  
+  extern	int	getdef_bool();
+--- 21,27 ----
+  #include "config.h"
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)obscure.c	3.6	20:37:32	3/7/92";
+  #endif
+  
+  extern	int	getdef_bool();
+***************
+*** 201,206 ****
+  	if (size <= i)
+  		return 0;
+  
+! 	printf ("Too Simple.  ");
+  	return 1;
+  }
+--- 201,207 ----
+  	if (size <= i)
+  		return 0;
+  
+! 	printf ("Too Simple.  Use a longer password, or a mix of upper\n");
+! 	printf ("and lower case letters and numerics.  ");
+  	return 1;
+  }
+Index: passwd.c
+*** rel3/passwd.c	Fri Mar 27 10:25:45 1992
+--- passwd.c	Fri Mar 27 10:26:29 1992
+***************
+*** 1,5 ****
+  /*
+!  * Copyright 1989, 1990, 1991, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+--- 1,5 ----
+  /*
+!  * Copyright 1989, 1990, 1991, 1992, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+***************
+*** 17,23 ****
+  #include <signal.h>
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)passwd.c	3.7	12:04:36	12/28/91";
+  #endif
+  
+  /*
+--- 17,23 ----
+  #include <signal.h>
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)passwd.c	3.8	20:37:37	3/7/92";
+  #endif
+  
+  /*
+***************
+*** 35,40 ****
+--- 35,54 ----
+  #define	strrchr	rindex
+  #endif
+  
++ #ifdef	STDLIB_H
++ #include <stdlib.h>
++ #endif
++ #ifdef	UNISTD_H
++ #include <unistd.h>
++ #endif
++ #ifdef	ULIMIT_H
++ #include <ulimit.h>
++ #endif
++ 
++ #ifndef UL_SFILLIM
++ #define UL_SFILLIM	2
++ #endif
++ 
+  #include "pwd.h"
+  #include "lastlog.h"
+  #include "shadow.h"
+***************
+*** 60,66 ****
+--- 74,82 ----
+   *	SCALE - convert from clock to aging units
+   */
+  
++ #ifndef	DAY
+  #define	DAY	(24L*3600L)
++ #endif
+  #define	WEEK	(7L*DAY)
+  
+  #ifdef	ITI_AGING
+***************
+*** 103,109 ****
+  	"       %s { -l | -d | -S } name\n"
+  #define	OLDPASS		"Old Password:"
+  #define	NEWPASSMSG \
+! "Enter the new password (minimum of 5 characters)\n\
+  Please use a combination of upper and lower case letters and numbers.\n"
+  #define	CHANGING	"Changing password for %s\n"
+  #define NEWPASS		"New Password:"
+--- 119,125 ----
+  	"       %s { -l | -d | -S } name\n"
+  #define	OLDPASS		"Old Password:"
+  #define	NEWPASSMSG \
+! "Enter the new password (minimum of %d characters)\n\
+  Please use a combination of upper and lower case letters and numbers.\n"
+  #define	CHANGING	"Changing password for %s\n"
+  #define NEWPASS		"New Password:"
+***************
+*** 203,209 ****
+  	 * for initial login passwords.
+  	 */
+  
+! 	printf (NEWPASSMSG);
+  	for (i = 0;i < 3;i++) {
+  		if (! (cp = getpass (NEWPASS))) {
+  			bzero (orig, sizeof orig);
+--- 219,225 ----
+  	 * for initial login passwords.
+  	 */
+  
+! 	printf (NEWPASSMSG, getdef_num ("PASS_MIN_LEN", 5));
+  	for (i = 0;i < 3;i++) {
+  		if (! (cp = getpass (NEWPASS))) {
+  			bzero (orig, sizeof orig);
+***************
+*** 556,564 ****
+--- 572,586 ----
+  				Sflg++;
+  				break;
+  			case 'd':
++ 				if (getuid ())
++ 					usage ();
++ 
+  				dflg++;
+  				break;
+  			case 'l':
++ 				if (getuid ())
++ 					usage ();
++ 
+  				lflg++;
+  				break;
+  			case 'u':
+***************
+*** 724,730 ****
+  	 */
+  
+  #ifdef	HAVE_ULIMIT
+! 	ulimit (2, 30000);
+  #endif
+  #ifdef	HAVE_RLIMIT
+  	setrlimit (RLIMIT_FSIZE, &rlimit_fsize);
+--- 746,752 ----
+  	 */
+  
+  #ifdef	HAVE_ULIMIT
+! 	ulimit (UL_SFILLIM, 30000);
+  #endif
+  #ifdef	HAVE_RLIMIT
+  	setrlimit (RLIMIT_FSIZE, &rlimit_fsize);
+Index: pwd.h.m4
+*** rel3/pwd.h.m4	Fri Mar 27 10:25:42 1992
+--- pwd.h.m4	Fri Mar 27 10:26:31 1992
+***************
+*** 1,5 ****
+  /*
+!  * Copyright 1990, 1991, John F. Haugh II and Steve Simmons
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+--- 1,5 ----
+  /*
+!  * Copyright 1990, 1991, 1992, John F. Haugh II and Steve Simmons
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+***************
+*** 13,21 ****
+   * Standard definitions for password files.  This is an independant
+   * reimplementation of the definitions used by AT&T, BSD, and POSIX.
+   * It is not derived from any of those sources.  Note that it can be
+!  * site-defined to have non-POSIX features as well.
+   *
+!  *	@(#)pwd.h.m4	3.2	12:04:43	12/28/91
+   */
+  
+  #ifndef	PWD_H
+--- 13,23 ----
+   * Standard definitions for password files.  This is an independant
+   * reimplementation of the definitions used by AT&T, BSD, and POSIX.
+   * It is not derived from any of those sources.  Note that it can be
+!  * site-defined to have non-POSIX features as well.  Ideally this file
+!  * is simply replaced by the standard system supplied /usr/include/pwd.h
+!  * file.
+   *
+!  *	@(#)pwd.h.m4	3.4	13:22:36	3/9/92
+   */
+  
+  #ifndef	PWD_H
+***************
+*** 26,33 ****
+  typedef int gid_t;
+  #endif
+  
+! #ifdef	SUN
+  #include <sys/types.h>
+  #endif
+  
+  ifdef(`SUN4', `#define	ATT_AGE')
+--- 28,41 ----
+  typedef int gid_t;
+  #endif
+  
+! #if defined(SUN) || defined(SUN4)
+  #include <sys/types.h>
++ #endif
++ 
++ #ifdef	SVR4
++ #include <sys/types.h>
++ #include <limits.h>
++ #define NGROUPS NGROUPS_MAX
+  #endif
+  
+  ifdef(`SUN4', `#define	ATT_AGE')
+Index: pwent.c
+*** rel3/pwent.c	Fri Mar 27 10:25:41 1992
+--- pwent.c	Fri Mar 27 10:26:33 1992
+***************
+*** 1,5 ****
+  /*
+!  * Copyright 1989, 1990, 1991 John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+--- 1,5 ----
+  /*
+!  * Copyright 1989, 1990, 1991, 1992, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+***************
+*** 60,66 ****
+  #endif
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)pwent.c	3.7	12:04:47	12/28/91";
+  #endif
+  
+  #define	SBUFSIZ	64
+--- 60,66 ----
+  #endif
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)pwent.c	3.8	20:37:54	3/7/92";
+  #endif
+  
+  #define	SBUFSIZ	64
+***************
+*** 76,82 ****
+  static	char	*pwdfields[NFIELDS];
+  static	struct	passwd	pwent;
+  
+! #if defined(AUTOSHADOW) && defined(ATT_AGE)
+  /*
+   * sptopwage - convert shadow ages to AT&T-style pw_age ages
+   *
+--- 76,82 ----
+  static	char	*pwdfields[NFIELDS];
+  static	struct	passwd	pwent;
+  
+! #if defined(AUTOSHADOW) && defined(ATT_AGE) && defined(GETPWENT)
+  /*
+   * sptopwage - convert shadow ages to AT&T-style pw_age ages
+   *
+***************
+*** 192,197 ****
+--- 192,199 ----
+  	return (&pwent);
+  }
+  
++ #ifdef	GETPWENT
++ 
+  /*
+   * fgetpwent - get a password file entry from a stream
+   *
+***************
+*** 511,513 ****
+--- 513,517 ----
+  	return status;
+  }
+  #endif /* NEED_PUTPWENT */
++ 
++ #endif /* GETPWENT */
+Index: utmp.c
+*** rel3/utmp.c	Fri Mar 27 10:25:38 1992
+--- utmp.c	Fri Mar 27 10:26:36 1992
+***************
+*** 1,5 ****
+  /*
+!  * Copyright 1989, 1990, 1991, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+--- 1,5 ----
+  /*
+!  * Copyright 1989, 1990, 1991, 1992, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+***************
+*** 22,29 ****
+--- 22,39 ----
+  #define	strrchr	rindex
+  #endif
+  #include <stdio.h>
++ #ifdef	STDLIB_H
++ #include <stdlib.h>
++ #endif
++ #ifdef	UNISTD_H
++ #include <unistd.h>
++ #endif
+  #include "config.h"
+  
++ #ifndef	UTMP_FILE
++ #define	UTMP_FILE	"/etc/utmp"
++ #endif
++ 
+  #if defined(SUN) || defined(BSD) || defined(SUN4)
+  #ifndef	WTMP_FILE
+  #define WTMP_FILE "/usr/adm/wtmp"
+***************
+*** 31,37 ****
+  #endif	/* SUN || BSD */
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)utmp.c	3.13	11:58:53	12/28/91";
+  #endif
+  
+  extern	struct	utmp	utent;
+--- 41,47 ----
+  #endif	/* SUN || BSD */
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)utmp.c	3.15	23:57:02	3/7/92";
+  #endif
+  
+  extern	struct	utmp	utent;
+***************
+*** 92,102 ****
+  
+  		endutent ();
+  
+! 		if (! ut || utent.ut_pid != pid) {
+   			(void) puts (NO_UTENT);
+  			exit (1);
+  		}
+! 		if (utent.ut_line[0] == '\0') {
+  			if (! (line = ttyname (0))) {
+  				(void) puts (NO_TTY);
+  				exit (1);
+--- 102,123 ----
+  
+  		endutent ();
+  
+! 		if (! ut) {
+   			(void) puts (NO_UTENT);
+  			exit (1);
+  		}
+! #ifndef	UNIXPC
+! 
+! 		/*
+! 		 * If there is no ut_line value in this record, fill
+! 		 * it in by getting the TTY name and stuffing it in
+! 		 * the structure.  The UNIX/PC is broken in this regard
+! 		 * and needs help ...
+! 		 */
+! 
+! 		if (utent.ut_line[0] == '\0')
+! #endif
+! 		{
+  			if (! (line = ttyname (0))) {
+  				(void) puts (NO_TTY);
+  				exit (1);
+***************
+*** 156,166 ****
+  char	*name;
+  char	*line;
+  {
+  	struct	utmp	utmp;
+  	int	fd;
+  	int	found = 0;
+  
+! 	if (! (fd = open ("/etc/utmp", O_RDWR)))
+  		return;
+  
+  #if !defined(SUN) && !defined(BSD) && !defined(SUN4)
+--- 177,237 ----
+  char	*name;
+  char	*line;
+  {
++ #ifdef SVR4
++ 	struct	utmp	utmp;
++ 	struct	utmpx	*utmpx, utxline;
++ 	extern int gettimeofday (struct timeval *tp);
++ 
++ 	/*
++ 	 * Update utmpx.  We create an empty entry in case there is
++ 	 * no matching entry in the utmpx file.
++ 	 */
++ 
++ 	utmpxname (UTMPX_FILE);
++ 	memset (&utxline, 0, sizeof utxline);
++ 	strncpy (utxline.ut_line, line, sizeof utxline.ut_line);
++ 	utmpx = getutxline (&utxline);
++ 
++ 	if (!utmpx)
++ 		utmpx = &utxline;
++ 
++ 	/*
++ 	 * Fill in the fields in the utmpx entry and write it out.
++ 	 */
++ 
++ 	strncpy (utmpx->ut_user, name, sizeof utmpx->ut_user);
++ 	utmpx->ut_pid = getpid ();
++ 	utmpx->ut_type = USER_PROCESS;
++ 	gettimeofday (&(utmpx->ut_tv));
++ 
++ 	pututxline (utmpx);
++ 
++ 	/*
++ 	 * Now fill-in the regular utmp file entry.  All the information
++ 	 * it needs is in utmpx.  We scribble it out as well.
++ 	 */
++ 
++ 	utmpname (UTMP_FILE);
++ 	getutmp (utmpx, &utmp);
++ 	pututline (&utmp);
++ 	endutent ();
++ 
++ 	/* 
++ 	 * Update the WTMP and WTMPX files and end access to UTMPX.  The
++ 	 * endutxent() can't be done until now since utmpx is still needed
++ 	 * and endutext() trashes the contents.
++ 	 */
++ 
++ 	updwtmpx(WTMPX_FILE, utmpx);
++ 	endutxent();
++ 
++  	utent = utmp;
++ #else /* !SVR4 */
+  	struct	utmp	utmp;
+  	int	fd;
+  	int	found = 0;
+  
+! 	if (! (fd = open (UTMP_FILE, O_RDWR)))
+  		return;
+  
+  #if !defined(SUN) && !defined(BSD) && !defined(SUN4)
+***************
+*** 235,238 ****
+--- 306,310 ----
+  		(void) close (fd);
+  	}
+   	utent = utmp;
++ #endif /* SVR4 */
+  }
+Index: faillog.8
+*** rel3/faillog.8	Fri Mar 27 10:25:18 1992
+--- faillog.8	Fri Mar 27 10:26:38 1992
+***************
+*** 1,18 ****
+! .\" Copyright 1989, 1990, John F. Haugh II
+  .\" All rights reserved.
+  .\"
+  .\" Use, duplication, and disclosure prohibited without
+  .\" the express written permission of the author.
+  .\"
+! .\"	@(#)faillog.8	3.1	09:34:20	11/21/90
+  .\"
+  .TH FAILLOG 8
+  .SH NAME
+  faillog \- examine faillog and set login failure limits
+  .SH SYNOPSIS
+! /etc/faillog [ -u uid ] [ -t days ] [ -m max ] [ -pr ] 
+  .SH DESCRIPTION
+! \fIPlastlog\fR formats the contents of the failure log,
+  \fI/usr/adm/faillog\fR, and maintains failure counts and
+  limits.
+  The order of the arguments to \fIfaillog\fR is significant.
+--- 1,18 ----
+! .\" Copyright 1989, 1990, 1992, John F. Haugh II
+  .\" All rights reserved.
+  .\"
+  .\" Use, duplication, and disclosure prohibited without
+  .\" the express written permission of the author.
+  .\"
+! .\"	@(#)faillog.8	3.2	20:36:19	3/7/92
+  .\"
+  .TH FAILLOG 8
+  .SH NAME
+  faillog \- examine faillog and set login failure limits
+  .SH SYNOPSIS
+! /etc/faillog [ -u uid ] [ -a ] [ -t days ] [ -m max ] [ -pr ] 
+  .SH DESCRIPTION
+! \fIfaillog\fR formats the contents of the failure log,
+  \fI/usr/adm/faillog\fR, and maintains failure counts and
+  limits.
+  The order of the arguments to \fIfaillog\fR is significant.
+***************
+*** 25,30 ****
+--- 25,34 ----
+  Entering \fB-t days\fR will cause only the
+  failures more recent than \fBdays\fR to be printed.
+  The \fB-t\fR flag overrides the use of \fB-u\fR.
++ The \fB-a\fR flag causes all users to be selected.
++ When used with the \fB-p\fR flag, this option selects all users
++ who have ever had a login failure.
++ It is meaningless with the \fB-r\fR flag.
+  .PP
+  The \fB-r\fR flag is used to reset the count of login failures.
+  Write access to \fI/usr/adm/faillog\fR is required for
+***************
+*** 49,54 ****
+--- 53,64 ----
+  Options may be combined in virtually any fashion.
+  Each \fB-p\fR, \fB-r\fR, and \fB-m\fR option will cause
+  immediate execution using any \fB-u\fR or \fB-t\fR modifier.
++ .SH Bugs
++ \fIfaillog\fR only prints out users with no successful login since
++ the last failure.
++ To print out a user who has had a successful login since their last
++ failure, you must explicitly request the user with the \fB-u\fR flag,
++ or print out all users with the \fB-a\fR flag.
+  .SH Files
+  /usr/adm/faillog \- failure logging file
+  .SH See Also
+Index: chage.c
+*** rel3/chage.c	Mon Mar 30 08:29:42 1992
+--- chage.c	Mon Mar 30 10:09:20 1992
+***************
+*** 1,5 ****
+  /*
+!  * Copyright 1989, 1990, 1991, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+--- 1,5 ----
+  /*
+!  * Copyright 1989, 1990, 1991, 1992, John F. Haugh II
+   * All rights reserved.
+   *
+   * Permission is granted to copy and create derivative works for any
+***************
+*** 17,23 ****
+  #include <time.h>
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)chage.c	3.9	10:14:30	8/15/91";
+  #endif
+  
+  /*
+--- 17,23 ----
+  #include <time.h>
+  
+  #ifndef	lint
+! static	char	sccsid[] = "@(#)chage.c	3.10	10:08:53	3/30/92";
+  #endif
+  
+  /*
+***************
+*** 98,103 ****
+--- 98,111 ----
+  #define	SCALE	(DAY)
+  #endif
+  
++ #if !defined(MDY_DATE) && !defined(DMY_DATE) && !defined(YMD_DATE)
++ #define	MDY_DATE	1
++ #endif
++ #if (defined (MDY_DATE) && (defined (DMY_DATE) || defined (YMD_DATE))) || \
++     (defined (DMY_DATE) && (defined (MDY_DATE) || defined (YMD_DATE)))
++ Error: You must only define one of MDY_DATE, DMY_DATE, or YMD_DATE
++ #endif
++ 
+  /*
+   * days and juldays are used to compute the number of days in the
+   * current month, and the cummulative number of days in the preceding
+***************
+*** 139,144 ****
+--- 147,167 ----
+  #define	OPEN_FAIL	"failed opening %s\n"
+  #define	WRITE_FAIL	"failed updating %s\n"
+  #define	CLOSE_FAIL	"failed rewriting %s\n"
++ #ifdef	MDY_DATE
++ #define	LAST_CHG	"Last Password Change (MM/DD/YY)"
++ #define	ACCT_EXP	"Account Expiration Date (MM/DD/YY)"
++ #define	EPOCH		"12/31/69"
++ #endif
++ #ifdef	DMY_DATE
++ #define	LAST_CHG	"Last Password Change (DD/MM/YY)"
++ #define	ACCT_EXP	"Account Expiration Date (DD/MM/YY)"
++ #define	EPOCH		"31/12/69"
++ #endif
++ #ifdef	YMD_DATE
++ #define	LAST_CHG	"Last Password Change (YY/MM/DD)"
++ #define	ACCT_EXP	"Account Expiration Date (YY/MM/DD)"
++ #define	EPOCH		"69/12/31"
++ #endif
+  
+  /*
+   * usage - print command line syntax and exit
+***************
+*** 171,183 ****
+  	long	total;
+  
+  	/*
+! 	 * start by separating the month, day and year.  this is
+! 	 * a chauvanistic program - it only takes date input in
+! 	 * the standard USA format.
+  	 */
+  
+  	if (sscanf (str, "%d/%d/%d%c", &month, &day, &year, slop) != 3)
+  		return -1;
+  
+  	/*
+  	 * the month, day of the month, and year are checked for
+--- 194,215 ----
+  	long	total;
+  
+  	/*
+! 	 * start by separating the month, day and year.  the order
+! 	 * is compiled in ...
+  	 */
+  
++ #ifdef	MDY_DATE
+  	if (sscanf (str, "%d/%d/%d%c", &month, &day, &year, slop) != 3)
+  		return -1;
++ #endif
++ #ifdef	DMY_DATE
++ 	if (sscanf (str, "%d/%d/%d%c", &day, &month, &year, slop) != 3)
++ 		return -1;
++ #endif
++ #ifdef	YMD_DATE
++ 	if (sscanf (str, "%d/%d/%d%c", &year, &month, &day, slop) != 3)
++ 		return -1;
++ #endif
+  
+  	/*
+  	 * the month, day of the month, and year are checked for
+***************
+*** 253,261 ****
+  	value = lastday * SCALE;
+  	tp = gmtime (&value);
+  	sprintf (buf, "%02d/%02d/%02d",
+! 		tp->tm_mon + 1, tp->tm_mday, tp->tm_year);
+! 	change_field (buf, "Last Password Change (MM/DD/YY)");
+! 	if (strcmp (buf, "12/31/69") == 0)
+  		lastday = -1;
+  	else if ((lastday = strtoday (buf)) == -1)
+  		return 0;
+--- 285,303 ----
+  	value = lastday * SCALE;
+  	tp = gmtime (&value);
+  	sprintf (buf, "%02d/%02d/%02d",
+! #ifdef	MDY_DATE
+! 		tp->tm_mon + 1, tp->tm_mday, tp->tm_year
+! #endif
+! #ifdef	DMY_DATE
+! 		tp->tm_mday, tp->tm_mon + 1, tp->tm_year
+! #endif
+! #ifdef	YMD_DATE
+! 		tp->tm_year, tp->tm_mon + 1, tp->tm_mday
+! #endif
+! 		);
+! 
+! 	change_field (buf, LAST_CHG);
+! 	if (strcmp (buf, EPOCH) == 0)
+  		lastday = -1;
+  	else if ((lastday = strtoday (buf)) == -1)
+  		return 0;
+***************
+*** 273,281 ****
+  	value = expdays * SCALE;
+  	tp = gmtime (&value);
+  	sprintf (buf, "%02d/%02d/%02d",
+! 		tp->tm_mon + 1, tp->tm_mday, tp->tm_year);
+! 	change_field (buf, "Account Expiration Date (MM/DD/YY)");
+! 	if (strcmp (buf, "12/31/69") == 0)
+  		expdays = -1;
+  	else if ((expdays = strtoday (buf)) == -1)
+  		return 0;
+--- 315,333 ----
+  	value = expdays * SCALE;
+  	tp = gmtime (&value);
+  	sprintf (buf, "%02d/%02d/%02d",
+! #ifdef	MDY_DATE
+! 		tp->tm_mon + 1, tp->tm_mday, tp->tm_year
+! #endif
+! #ifdef	DMY_DATE
+! 		tp->tm_mday, tp->tm_mon + 1, tp->tm_year
+! #endif
+! #ifdef	YMD_DATE
+! 		tp->tm_year, tp->tm_mon + 1, tp->tm_mday
+! #endif
+! 		);
+! 
+! 	change_field (buf, ACCT_EXP);
+! 	if (strcmp (buf, EPOCH) == 0)
+  		expdays = -1;
+  	else if ((expdays = strtoday (buf)) == -1)
+  		return 0;
+***************
+*** 460,466 ****
+  				break;
+  			case 'd':
+  				dflg++;
+! 				lastday = strtol (optarg, 0, 10);
+  				break;
+  			case 'W':
+  				Wflg++;
+--- 512,521 ----
+  				break;
+  			case 'd':
+  				dflg++;
+! 				if (strchr (optarg, '/'))
+! 					lastday = strtoday (optarg);
+! 				else
+! 					lastday = strtol (optarg, 0, 10);
+  				break;
+  			case 'W':
+  				Wflg++;
+***************
+*** 472,478 ****
+  				break;
+  			case 'E':
+  				Eflg++;
+! 				expdays = strtol (optarg, 0, 10);
+  				break;
+  			default:
+  				usage ();
+--- 527,536 ----
+  				break;
+  			case 'E':
+  				Eflg++;
+! 				if (strchr (optarg, '/'))
+! 					expdays = strtoday (optarg);
+! 				else
+! 					expdays = strtol (optarg, 0, 10);
+  				break;
+  			default:
+  				usage ();
+-- 
+John F. Haugh II        | Every 56 days.   | UUCP: ...!cs.utexas.edu!rpp386!jfh
+Ma Bell: (512) 251-2151 | Give Blood, often.    | Domain: jfh@rpp386.cactus.org
+"A countryman between two lawyers is like a fish between two cats."
+		-- Benjamin Franklin
+
+exit 0 # Just in case...
+
+
